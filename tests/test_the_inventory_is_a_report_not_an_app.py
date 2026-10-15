@@ -16,8 +16,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from db_ops.common import config_upgrade
-from db_ops.reports import metrics_reports
+from dbabrain.common import config_upgrade
+from dbabrain.reports import metrics_reports
 
 
 class _State:
@@ -37,7 +37,7 @@ def _run(monkeypatch, *, raises=None):
             raise raises
         return {"status": "SUCCESS", "stamp": "20260923_000000"}
 
-    import db_ops.reports.inventory_summary as inventory_summary
+    import dbabrain.reports.inventory_summary as inventory_summary
     monkeypatch.setattr(inventory_summary, "build_inventory_workflow", fake_workflow)
     state = _State()
     result = metrics_reports._run_inventory_report(
@@ -65,13 +65,13 @@ def test_a_failed_inventory_is_recorded_and_does_not_raise_through_the_pass(monk
 
 def test_the_shipped_reports_include_the_inventory_and_no_app_command_builds_it():
     root = Path(__file__).resolve().parents[1]
-    for folder in ("db_ops/reports/catalogue", "data"):
+    for folder in ("dbabrain/reports/catalogue", "data"):
         for name in ("reports_config.json", "reports_config.example.json"):
             path = root / folder / name
             if path.is_file():
                 codes = {e["report_code"] for e in json.loads(path.read_text(encoding="utf-8"))["reports"]}
                 assert metrics_reports.INVENTORY_CODE in codes, path
-    for path in (root / "db_ops/jobs/catalogue/app_commands.json", root / "data/app_commands.example.json"):
+    for path in (root / "dbabrain/jobs/catalogue/app_commands.json", root / "data/app_commands.example.json"):
         if path.is_file():
             assert config_upgrade.INVENTORY_APP not in path.read_text(encoding="utf-8"), path
 
@@ -82,7 +82,7 @@ def _estate(tmp_path: Path) -> Path:
     (data / "app_commands.json").write_text(json.dumps({"app_commands": [
         {"app_code": "APP-REPORTS-CREATE", "time_window": {"repeat_interval": 120, "timeout": 600}},
         {"app_code": "APP-REPORTS-INVENTORY-WORKFLOW", "active": False,
-         "command_text": "python -m db_ops.reports.cli inventory-workflow --days 3 --beauty 1",
+         "command_text": "python -m dbabrain.reports.cli inventory-workflow --days 3 --beauty 1",
          "time_window": {"from_hour": 1, "to_hour": 5, "repeat_interval": 3600, "timeout": 1200}},
     ]}, indent=2) + "\n", encoding="utf-8")
     (data / "reports_config.json").write_text(json.dumps({"reports": [

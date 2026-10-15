@@ -15,7 +15,7 @@
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: dbops_quickstart_mssql
+    container_name: dbabrain_quickstart_mssql
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Quickstart_not_a_real_password_1"

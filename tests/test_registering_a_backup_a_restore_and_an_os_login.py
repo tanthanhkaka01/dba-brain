@@ -29,10 +29,10 @@ import json
 
 import pytest
 
-from db_ops.backup_restore import registration
-from db_ops.backup_restore.backup import load_backup_jobs
-from db_ops.common import instance_admin, remote_credential_admin
-from db_ops.lib import cmd_access, json_io, secret_text
+from dbabrain.backup_restore import registration
+from dbabrain.backup_restore.backup import load_backup_jobs
+from dbabrain.common import instance_admin, remote_credential_admin
+from dbabrain.lib import cmd_access, json_io, secret_text
 
 KEY = "a-test-passphrase"
 
@@ -161,7 +161,7 @@ def test_the_platform_goes_on_the_record_and_never_inside_the_block(tmp_path):
 
 
 def test_method_local_on_a_remote_host_is_refused(tmp_path):
-    """It runs inside the db_ops container and reports the container's CPU under the host's name.
+    """It runs inside the dbabrain container and reports the container's CPU under the host's name.
     A wrong answer is worse than a failure, because nothing about it looks wrong."""
     instance_admin.add_instance({"server_id": "ACME-HOST-5", "ip": "192.0.2.64",
                                  "db_type": "host"}, data_dir=tmp_path)
@@ -525,7 +525,7 @@ def test_check_credentials_does_not_demand_a_database_login_from_a_host(tmp_path
     spelling this release documents and `instance-add` now writes. Two layers recognising the same
     thing by two different tests, which is why the answer moved into `lib.sql_access`.
     """
-    from db_ops.lib import sql_access
+    from dbabrain.lib import sql_access
 
     assert sql_access.is_host_only("host") is True
     assert sql_access.is_host_only(None) is True, "the older spelling still reads as a host"
@@ -537,8 +537,8 @@ def test_check_credentials_does_not_demand_a_database_login_from_a_host(tmp_path
 
 def test_the_host_only_db_type_has_one_definition():
     """It had two, briefly, and the second was the one that decided whether a host was checked."""
-    from db_ops.common import instance_admin
-    from db_ops.lib import sql_access
+    from dbabrain.common import instance_admin
+    from dbabrain.lib import sql_access
 
     assert instance_admin.HOST_ONLY_DB_TYPE is sql_access.HOST_ONLY_DB_TYPE
 
@@ -847,7 +847,7 @@ def test_a_script_driven_restore_is_checked_by_the_loader_that_runs_it(tmp_path)
 
 
 def test_a_script_driven_restore_the_runner_accepts_is_written(tmp_path):
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     registration.add_restore(_script_restore(), data_dir=tmp_path, key=KEY)
 

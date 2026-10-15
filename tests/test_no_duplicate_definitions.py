@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 
 
-DB_OPS_ROOT = Path(__file__).resolve().parents[1] / "db_ops"
+DBABRAIN_ROOT = Path(__file__).resolve().parents[1] / "dbabrain"
 
 #: Names whose repetition carries no meaning.
 IGNORED_NAMES = frozenset({"__all__"})
@@ -47,13 +47,13 @@ KNOWN_DUPLICATES: dict[str, frozenset[str]] = {
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(DB_OPS_ROOT).as_posix()
+    return path.relative_to(DBABRAIN_ROOT).as_posix()
 
 
 def _definitions() -> dict[str, set[str]]:
     """``name -> files`` for every top-level definition that is byte-identical across files."""
     seen: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
-    for path in DB_OPS_ROOT.rglob("*.py"):
+    for path in DBABRAIN_ROOT.rglob("*.py"):
         if "__pycache__" in path.parts:
             continue
         try:
@@ -120,7 +120,7 @@ def test_the_baseline_has_no_entries_that_are_already_fixed() -> None:
 #
 # The check above matches on **(name, body)**, so it sees a function copied verbatim and misses
 # one copied and renamed. That is not a theoretical gap: `db/queue_message.py` held a private copy
-# of "spawn a db_ops CLI, read JSON back" that differed from `lib/common_cli` only in the module
+# of "spawn a dbabrain CLI, read JSON back" that differed from `lib/common_cli` only in the module
 # string, and `lib` held the same four-line float parser three times as `to_number`, `_num` and
 # `_float_or_none`. None of the five was visible here.
 #
@@ -161,7 +161,7 @@ KNOWN_BODY_DUPLICATES: dict[str, frozenset[str]] = {
 def _bodies() -> dict[str, set[str]]:
     """``body -> {file::name}`` for every function body shared by two or more definitions."""
     seen: dict[str, set[str]] = collections.defaultdict(set)
-    for path in DB_OPS_ROOT.rglob("*.py"):
+    for path in DBABRAIN_ROOT.rglob("*.py"):
         if "__pycache__" in path.parts:
             continue
         try:

@@ -21,9 +21,9 @@ import re
 
 import pytest
 
-from db_ops.common import cli
-from db_ops.lib import request_check
-from db_ops.lib.paths import PACKAGED_CATALOGUE
+from dbabrain.common import cli
+from dbabrain.lib import request_check
+from dbabrain.lib.paths import PACKAGED_CATALOGUE
 
 REFERENCE = json.loads((PACKAGED_CATALOGUE / "shared_config_objects.json").read_text(encoding="utf-8-sig"))
 COMMANDS = sorted({command for entry in REFERENCE["shared_config_objects"] if entry.get("kind") == "input"

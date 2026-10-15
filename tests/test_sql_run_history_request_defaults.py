@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.db.cli import REQUEST_LISTING_LIMIT, REQUEST_LISTING_MAX
+from dbabrain.db.cli import REQUEST_LISTING_LIMIT, REQUEST_LISTING_MAX
 
 
 def _normalise(request: dict) -> tuple[int, int | None]:
@@ -55,7 +55,7 @@ def test_a_count_above_the_cap_is_clamped_not_refused():
 
 def test_the_chat_cap_is_below_the_api_ceiling():
     """`sql_run_history.MAX_LIMIT` still bounds a direct API caller; the chat's cap is its own."""
-    from db_ops.db import sql_run_history
+    from dbabrain.db import sql_run_history
 
     assert REQUEST_LISTING_MAX < sql_run_history.MAX_LIMIT
 
@@ -65,7 +65,7 @@ def test_the_command_passes_both_parameters_through_to_the_cli():
     from pathlib import Path
 
     packaged = (Path(__file__).resolve().parents[1]
-                / "db_ops/telegram/catalogue/telegram_support_commands.json")
+                / "dbabrain/telegram/catalogue/telegram_support_commands.json")
     doc = json.loads(packaged.read_bytes().decode("utf-8-sig"))
     commands = doc.get("telegram_support_commands", doc)
     entry = next(c for c in commands if c["command_text"] == "spbot_list_sql_runs")

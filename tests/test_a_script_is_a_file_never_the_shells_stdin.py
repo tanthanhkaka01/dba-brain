@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-from db_ops.common import remote_exec as rx
+from dbabrain.common import remote_exec as rx
 
 
 def _local():

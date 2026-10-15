@@ -4,7 +4,7 @@ file instead of pasting text. Regression: the fetch query filtered out empty-tex
 was not null-safe on the command filter, so a file upload never advanced the state (bot silent).
 """
 
-from db_ops.db import DbOpsStore
+from dbabrain.db import DbaBrainStore
 
 
 def _msg(message_id, *, text="", raw=None):
@@ -21,7 +21,7 @@ def _msg(message_id, *, text="", raw=None):
 
 
 def test_fetch_next_message_accepts_document_only(tmp_path):
-    store = DbOpsStore(tmp_path / "r.sqlite")
+    store = DbaBrainStore(tmp_path / "r.sqlite")
     store.upsert_telegram_messages(
         [
             _msg(10, text="/spbot_sql_to_xlsx"),
@@ -34,19 +34,19 @@ def test_fetch_next_message_accepts_document_only(tmp_path):
 
 
 def test_fetch_next_message_skips_empty_non_document(tmp_path):
-    store = DbOpsStore(tmp_path / "r.sqlite")
+    store = DbaBrainStore(tmp_path / "r.sqlite")
     store.upsert_telegram_messages([_msg(11, raw={})])  # empty text, no document
     assert store.fetch_next_telegram_message_for_state(chat_id="5", user_id="5", after_message_id=10) is None
 
 
 def test_fetch_next_message_skips_command_message(tmp_path):
-    store = DbOpsStore(tmp_path / "r.sqlite")
+    store = DbaBrainStore(tmp_path / "r.sqlite")
     store.upsert_telegram_messages([_msg(11, text="/spbot_status")])
     assert store.fetch_next_telegram_message_for_state(chat_id="5", user_id="5", after_message_id=10) is None
 
 
 def test_fetch_next_message_returns_plain_text(tmp_path):
-    store = DbOpsStore(tmp_path / "r.sqlite")
+    store = DbaBrainStore(tmp_path / "r.sqlite")
     store.upsert_telegram_messages([_msg(11, text="SELECT 1")])
     row = store.fetch_next_telegram_message_for_state(chat_id="5", user_id="5", after_message_id=10)
     assert row is not None and str(row["text"]) == "SELECT 1"

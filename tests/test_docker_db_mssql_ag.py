@@ -16,10 +16,10 @@ import types
 import pytest
 import yaml
 
-from db_ops.common.docker_db import compose as compose_mod
-from db_ops.common.docker_db import provisioner, templates
-from db_ops.lib.docker_db_spec import DockerDbSpec
-from db_ops.common.docker_db.provisioner import ProvisionError
+from dbabrain.common.docker_db import compose as compose_mod
+from dbabrain.common.docker_db import provisioner, templates
+from dbabrain.lib.docker_db_spec import DockerDbSpec
+from dbabrain.common.docker_db.provisioner import ProvisionError
 
 
 def _spec(name="mssql_ag_lab", replicas=2, host_port=15433):

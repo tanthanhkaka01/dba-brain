@@ -1,19 +1,19 @@
 # 11. Control App & Docker Deployment
 
-The **control** app (`db_ops/control/`) holds the master-side operations that drive a
+The **control** app (`dbabrain/control/`) holds the master-side operations that drive a
 master-worker deployment: build and deploy the worker image, bump the version, and orchestrate the
 worker. It follows the same layout as every other app — a self-contained package with a CLI
-(`python -m db_ops.control.cli`).
+(`python -m dbabrain.control.cli`).
 
 > **You do not need this app to run the toolkit.** A single-machine install runs the scheduler
 > locally and never builds an image. Control exists for the deployment where configuration is
 > edited on one machine — the **master** — and the scheduled apps run on another, close to the
 > databases — the **worker**. Which role a process plays is declared per node by
-> `DB_OPS_NODE_ROLE`, so a configuration file copied between machines can never mislabel one.
+> `DBABRAIN_NODE_ROLE`, so a configuration file copied between machines can never mislabel one.
 
 > ### ⚠ Scope decision — control is a *control plane*, not a report producer
 >
-> **Target architecture:** `db_ops.control` is **only** the cluster control/CI plane —
+> **Target architecture:** `dbabrain.control` is **only** the cluster control/CI plane —
 > things that *operate* the master and worker nodes:
 >
 > - **deploy** (build image → copy bundle → start/restart the worker daemon),
@@ -22,7 +22,7 @@ worker. It follows the same layout as every other app — a self-contained packa
 >
 > **Report generation does NOT belong here.** Producing the inventory health overlay, the
 > inventory summary, or the styled HTML/Markdown inventory report is the **reports app's**
-> job (`db_ops.reports.cli`), which already builds them locally on the worker from the
+> job (`dbabrain.reports.cli`), which already builds them locally on the worker from the
 > metrics already collected into the runtime store — see [06_reports_app.md](06_reports_app.md). The worker-side,
 > Store-local `inventory-workflow` (with `--beauty 1` for the HTML + Markdown report) is the
 > supported path.
@@ -36,7 +36,7 @@ worker. It follows the same layout as every other app — a self-contained packa
 
 Previously the deploy/version scripts were standalone, under a scripts tree that no longer exists; they
 were rewritten into this app so the master operations live in the same package as the rest of
-db_ops. Like the other apps it is decoupled: it invokes the reports app's
+dbabrain. Like the other apps it is decoupled: it invokes the reports app's
 `build-inventory-health` command over SSH rather than importing it.
 
 The control app is the **high-level interface**; the Docker deployment runbook in
@@ -62,14 +62,14 @@ The worker host is read from `config.json`'s `worker` array, so most commands ne
 - A **worker** node runs entries with `node_role` = `worker` or `all`.
 - `all` (legacy aliases `both`/`any`/empty) runs on every node.
 
-**How a node knows its own role — `DB_OPS_NODE_ROLE` only.** Each node *declares* its role at
-run time via the `DB_OPS_NODE_ROLE` env, the same mechanism on both sides:
+**How a node knows its own role — `DBABRAIN_NODE_ROLE` only.** Each node *declares* its role at
+run time via the `DBABRAIN_NODE_ROLE` env, the same mechanism on both sides:
 
 ```bash
 # worker (the deploy/start-daemon default)
-docker compose run -e DB_OPS_NODE_ROLE=worker -d --name db_ops_daemon db_ops daemon <key>
+docker compose run -e DBABRAIN_NODE_ROLE=worker -d --name dbabrain_daemon dbabrain daemon <key>
 # master, run the identical way with the role flipped
-docker compose run -e DB_OPS_NODE_ROLE=master -d --name db_ops_daemon db_ops daemon <key>
+docker compose run -e DBABRAIN_NODE_ROLE=master -d --name dbabrain_daemon dbabrain daemon <key>
 ```
 
 There is **no host autodetection** and **no role baked into `config.json`** — a config copied
@@ -83,16 +83,17 @@ control app) — they do **not** decide this node's role. Each daemon tick logs 
 
 | Command | What it does |
 | --- | --- |
-| `bump-version [--part patch\|minor\|major] [--set X.Y.Z] [--dry-run]` | Bump `db_ops/__init__.py` `__version__`. |
+| `bump-version [--part patch\|minor\|major] [--set X.Y.Z] [--dry-run]` | Bump `dbabrain/__init__.py` `__version__`. |
 | `request-types [--write]` | Say whether `lib/cli_types.py` and `transport/common_cli.pyi` are the reference rendered (exit 1 when stale); `--write` renders them again. Master-side tooling, run where the source is; it reads the packaged copy of the reference. |
-| `build-image [--platform] [--no-cache] [--skip-build]` | Build `db_ops:<version>` + `db_ops:latest` and assemble the deploy bundle locally. |
-| `copy [--host --user --password --remote-dir]` | Upload the bundle to the worker (small files as one tar, the image tar on its own, each hash-checked) (overwrites config/data/assets/image; keeps `logs/` and `runtime/db_ops.sqlite`). The bundle also carries the canonical `architecture/database-inventory.json` (repo copy, where static blocks like `sqlserver_resources`/`deployment` are edited) into the worker's `runtime/reports/database-inventory.json` — the worker-side canonical the reports app merges health into. Health blocks are rebuilt from the runtime store on the next `inventory-workflow` run, so the overwrite loses nothing durable. After the upload it also **moves aside any top-level directory under `data/` or `assets/` that the bundle no longer carries** — see [Directories the bundle owns](#directories-the-bundle-owns). |
-| `start-daemon [... --key-base64/--key --container --node-role]` | `docker load`, replace the container, start the daemon with `DB_OPS_NODE_ROLE` (default `worker`), set `restart=unless-stopped`, verify the version, then **prune the images this deploy superseded** (see below). |
+| `build-image [--platform] [--no-cache] [--skip-build]` | Build `dbabrain:<version>` + `dbabrain:latest` and assemble the deploy bundle locally. |
+| `copy [--host --user --password --remote-dir]` | Upload the bundle to the worker (small files as one tar, the image tar on its own, each hash-checked) (overwrites config/data/assets/image; keeps `logs/` and `runtime/dbabrain.sqlite`). The bundle also carries the canonical `architecture/database-inventory.json` (repo copy, where static blocks like `sqlserver_resources`/`deployment` are edited) into the worker's `runtime/reports/database-inventory.json` — the worker-side canonical the reports app merges health into. Health blocks are rebuilt from the runtime store on the next `inventory-workflow` run, so the overwrite loses nothing durable. After the upload it also **moves aside any top-level directory under `data/` or `assets/` that the bundle no longer carries** — see [Directories the bundle owns](#directories-the-bundle-owns). |
+| `start-daemon [... --key-base64/--key --container --node-role]` | `docker load`, replace the container, start the daemon with `DBABRAIN_NODE_ROLE` (default `worker`), set `restart=unless-stopped`, verify the version, then **prune the images this deploy superseded** (see below). |
 | `deploy [... all of the above ...] [--merge]` | `build-image` → `copy` → `start-daemon` in one shot. **Master → worker**: the master's `data/` and `assets/` overwrite the worker's, so anything registered through the bot since the last deploy is deleted. `--merge` prepends **merge worker secrets** → **merge worker config** → pull `*.sql`, which pulls what the bot created on the worker (SQL tasks/targets, Telegram groups/users, new secret refs) into the master first; a secret ref that differs on both sides then aborts the deploy before anything is built. See [Syncing worker-side config](#syncing-worker-side-config-back-to-the-master). |
+| `deploy-code [--apply] [--skip-build] [--remote-dir --container --platform]` | **Ship the code only** (0.29.0): build `dbabrain:<version>` here, send it as a tar, `docker load` it and compare its id, keep the worker's compose file and a tar of `data/`, `assets/` and `config.json` under `runtime/pre_deploy_<version>_<stamp>/`, point the compose file's tool image at it - with the environment names and container paths the 0.29.0 rename moved (`lib.package_rename`) and nothing else - stop and remove the running container, run `upgrade-config` and `sync-config` in the new image, start, read it back. The worker's own `data/`, `assets/` and `config.json` are never replaced. **Without `--apply` it reads the worker's compose file and prints the plan; nothing is built.** See [Shipping the code only](#shipping-the-code-only). |
 | `deploy --type <what> [--file-name NAME ...] [--dry-run]` | **Push only what changed.** Uploads the named files into the worker's `data/`/`assets/` bind mounts and stops there - no image build, no bundle, no container restart. `--type config` is the catalogued `data/*.json`, `--type assets` (or `assets/tasks`, `assets\tasks`, `data/ssh_keys`) is a directory; `--file-name` narrows it by filename, path or glob and may be repeated. The config-drift gate still runs, scoped to the files being pushed. See [Pushing one file instead of deploying](#pushing-one-file-instead-of-deploying). |
-| `worker-status [--host --user --key... --container --json --no-metrics]` | Read-only health check: is the daemon container up?, which db_ops version it runs, and — via the in-container `python -m db_ops.jobs.status` — every app command on that node (active?, last run time/status, due now?, last error) plus metric freshness per target. If the deployed image predates the status module the command **says so and exits** — it does not fall back to an inline query. The old fallback hard-coded a SQLite path, so against a PostgreSQL node it reported "no data" for a healthy worker; see the note at `db_ops/control/worker_status.py:17`. It closes with **container network reservations** — see below. |
-| `worker-run [--host --user --key... --container --on-host --sudo] -- <command...>` | Run an **arbitrary command inside the worker container** from the master. The command after `--` is passed through verbatim (each token shell-quoted), so any `python -m db_ops.<app>.cli ...` can be triggered on the worker without hard-coding. Exit code + stdout/stderr are returned. **`--on-host`** runs it on the worker **host** instead (compose file, `docker pull`, the bind mounts) with the same login; one quoted argument is a shell line. **`--sudo`** runs that under sudo, fed the SSH password. An image upgrade is `worker-run --on-host -- 'cd /opt/dbabrain && docker compose pull && docker compose up -d'`. The line it echoes (`[remote] $ ...`) and the one a failure names are shown with every passphrase hidden - the value after `--key` / `--key-base64` / `--key_base64` and an assigned `DB_OPS_SECRET_KEY=` / `DB_OPS_KEY_BASE64=`, quoted values whole (`lib.secret_text.redact_key_arguments`); the line run on the host is unchanged. |
-| `worker-create-db-docker [--host --user --key...] --name --engine --version --mode --replicas --host-port --password-ref [--password-text --overwrite-secret --worker-host --containers-dir --network-subnet --install-docker --no-register --force --dry-run]` | Builds a lab database **on the worker's host**: `common.cli create-db-docker` with the worker's SSH login as `remote`, the login and the database password on stdin (see `docs/10_sre_app.md` for what gets built). The password (`--password-text`, stored only after the build succeeds) and the connection record are written **here, on this node**, with `created_by: db_ops.control.worker-create-db-docker`; the worker has them after the next deploy. Since 0.24.0 - it used to run `sre.cli create-db-docker` inside the worker container (one app driving another's CLI, rules R42, with the passphrase on that command line), so `--container` and `--pull-config` are accepted and do nothing. The SSH user runs `docker` itself; `--install-docker` prepares a host where it cannot (sudo, with the SSH password). |
+| `worker-status [--host --user --key... --container --json --no-metrics]` | Read-only health check: is the daemon container up?, which dbabrain version it runs, and — via the in-container `python -m dbabrain.jobs.status` — every app command on that node (active?, last run time/status, due now?, last error) plus metric freshness per target. If the deployed image predates the status module the command **says so and exits** — it does not fall back to an inline query. The old fallback hard-coded a SQLite path, so against a PostgreSQL node it reported "no data" for a healthy worker; see the note at `dbabrain/control/worker_status.py:17`. It closes with **container network reservations** — see below. |
+| `worker-run [--host --user --key... --container --on-host --sudo] -- <command...>` | Run an **arbitrary command inside the worker container** from the master. The command after `--` is passed through verbatim (each token shell-quoted), so any `python -m dbabrain.<app>.cli ...` can be triggered on the worker without hard-coding. Exit code + stdout/stderr are returned. **`--on-host`** runs it on the worker **host** instead (compose file, `docker pull`, the bind mounts) with the same login; one quoted argument is a shell line. **`--sudo`** runs that under sudo, fed the SSH password. An image upgrade is `worker-run --on-host -- 'cd /opt/dbabrain && docker compose pull && docker compose up -d'`. The line it echoes (`[remote] $ ...`) and the one a failure names are shown with every passphrase hidden - the value after `--key` / `--key-base64` / `--key_base64` and an assigned `DBABRAIN_SECRET_KEY=` / `DBABRAIN_KEY_BASE64=`, quoted values whole (`lib.secret_text.redact_key_arguments`); the line run on the host is unchanged. |
+| `worker-create-db-docker [--host --user --key...] --name --engine --version --mode --replicas --host-port --password-ref [--password-text --overwrite-secret --worker-host --containers-dir --network-subnet --install-docker --no-register --force --dry-run]` | Builds a lab database **on the worker's host**: `common.cli create-db-docker` with the worker's SSH login as `remote`, the login and the database password on stdin (see `docs/10_sre_app.md` for what gets built). The password (`--password-text`, stored only after the build succeeds) and the connection record are written **here, on this node**, with `created_by: dbabrain.control.worker-create-db-docker`; the worker has them after the next deploy. Since 0.24.0 - it used to run `sre.cli create-db-docker` inside the worker container (one app driving another's CLI, rules R42, with the passphrase on that command line), so `--container` and `--pull-config` are accepted and do nothing. The SSH user runs `docker` itself; `--install-docker` prepares a host where it cannot (sudo, with the SSH password). |
 | `pull-node-config --from <node>/data [--merge-secrets --key... --dry-run]` | **Carry back what a LOCAL node created.** The sibling of `worker-pull-data-config` for a node that is an ordinary directory on a PC rather than the worker container - which is what the estate is since it moved off the container. Same merge rules, because it is the same function underneath: union by key with the master winning a shared key, named leaves only for field-merged files, and a secret ref that differs on both sides refuses and writes nothing. `store_config.json` and `telegram_config.json` are never carried back - a node's own store declaration and its `getUpdates` cursor are per-node state, and copying either back breaks the node it came from or the one it lands on. |
 | `worker-pull-data-config [--host --user --key... --from-worker-path --to-master-path --files --all-json --include-secrets --merge-secrets --plaintext-secret-path --overwrite --dry-run]` | Copy updated `data/` config files from the worker back to the master over SFTP (the worker's `data/` is bind-mounted on the host at `<remote-dir>/data`). Defaults to just `docker_db_connections.json`; `--all-json` widens to every `*.json` (still excluding the encrypted secret store unless `--include-secrets`). Existing master files are skipped unless `--overwrite`; `--dry-run` prints the plan. |
 
@@ -100,16 +101,16 @@ control app) — they do **not** decide this node's role. Each daemon tick logs 
 
 ```powershell
 # after the bot created a lab database on the worker
-python -m db_ops.control.cli worker-pull-data-config `
+python -m dbabrain.control.cli worker-pull-data-config `
     --key-base64 "<base64-passphrase>" --all-json --merge-secrets --overwrite
 ```
 | `inventory-health [--host --user --password --days --date --container ...]` | **(legacy — moving to reports app)** Trigger the reports app's `build-inventory-health` inside the worker container, copy the dated overlay into `runtime/reports/`, and merge its health blocks into `architecture/database-inventory.json` (servers without metrics — e.g. lab VMs — are left untouched). |
 
 ### `start-daemon` prunes what it replaced
 
-Every deploy ends in `docker load`, which adds `db_ops:<version>` and repoints `db_ops:latest`.
+Every deploy ends in `docker load`, which adds `dbabrain:<version>` and repoints `dbabrain:latest`.
 Nothing removed the version it superseded, so the pile grew once per deploy. Measured on the worker
-on 2026-08-18: **383 `db_ops` tags and 526 dangling images**, on a host whose root volume had
+on 2026-08-18: **383 `dbabrain` tags and 526 dangling images**, on a host whose root volume had
 already been extended once from 293 GB to 589 GB. Deploy frequency is what made this a *daily*
 cost rather than a one-off — 2.85.32 through 2.85.49 is seventeen versions in two days — because
 each build changes the layer holding the project source, so every version carries its own delta
@@ -117,7 +118,7 @@ even where the base layers are shared.
 
 `_prune_old_images` now runs as step 5, after the daemon is up and verified:
 
-- `db_ops:latest` is **never** removed — it is what the running container was created from.
+- `dbabrain:latest` is **never** removed — it is what the running container was created from.
 - The newest `KEEP_IMAGE_VERSIONS` (5) version tags stay, so rolling back a bad release is a
   `docker run` away and needs no rebuild. Ordering is `sort -V`, not `sort`: a lexical sort puts
   `2.85.10` before `2.85.9` and would keep an arbitrary set rather than the newest.
@@ -130,7 +131,7 @@ even where the base layers are shared.
 
 `worker-status` ends by reading the worker's own `docker network` subnets and checking them against
 [`data/network_reservations.json`](../data/network_reservations.json), via
-[`db_ops.lib.network_policy`](./14_lib.md). It answers a question no other check on this worker can:
+[`dbabrain.lib.network_policy`](./14_lib.md). It answers a question no other check on this worker can:
 **can this host still reach the databases it monitors?**
 
 Docker's default address pool is `172.17.0.0/16`–`172.31.0.0/16`, and this estate routes real
@@ -143,14 +144,14 @@ SQL Server (2026-08-05, 2026-08-14, 2026-08-26) and was diagnosed by hand every 
 ===== container network reservations =====
 HIJACK: container network bridge (172.18.0.0/16) contains 172.18.99.10 (DB-172-18-99-10) — this
 host routes it into a local bridge, so the target is unreachable from here while healthy everywhere else
-Pin the host's allocation: db_ops/sre/host_config/README.md
+Pin the host's allocation: dbabrain/sre/host_config/README.md
 ```
 
 `HIJACK` is the outage in progress. `OVERLAP` is a routed range with nothing monitored in it yet.
 **`UNCONFINED`** is the one worth running this for — a network Docker chose rather than the operator,
 on a host where nothing is broken yet. That is the state a freshly built worker is in, and the only
 moment the fix costs nothing. Pinning it is still an operator step:
-[`db_ops/sre/host_config/README.md`](../db_ops/sre/host_config/README.md).
+[`dbabrain/sre/host_config/README.md`](../dbabrain/sre/host_config/README.md).
 
 ### Authentication — only `--key-base64`, no `--password`
 
@@ -165,24 +166,24 @@ SSH auth is not configured for the worker, so the password path is what authenti
 
 ```powershell
 # Deploy a new build to the worker (host/user/password all from config + secret store)
-python -m db_ops.control.cli bump-version --part patch
-python -m db_ops.control.cli deploy --key-base64 "<base64-passphrase>"
+python -m dbabrain.control.cli bump-version --part patch
+python -m dbabrain.control.cli deploy --key-base64 "<base64-passphrase>"
 
 # check worker status
-python -m db_ops.control.cli worker-status --key-base64 "<base64-passphrase>"
+python -m dbabrain.control.cli worker-status --key-base64 "<base64-passphrase>"
 
 # run any command inside the worker container from the master (command after `--`, verbatim)
-python -m db_ops.control.cli worker-run `
+python -m dbabrain.control.cli worker-run `
     --key-base64 "<base64-passphrase>" `
     -- `
-    python -m db_ops.backup_restore.cli restore-workflow `
+    python -m dbabrain.backup_restore.cli restore-workflow `
     --config config.json `
     --restore-id ACME_TO_MSSQL2025_DOCKER `
     --point-in-time "2026-06-08 12:00:00 +07:00" `
     --key-base64 "<base64-passphrase>"
 
 # build a lab DB container on the worker's host, register it here; deploy to give it to the worker
-python -m db_ops.control.cli worker-create-db-docker `
+python -m dbabrain.control.cli worker-create-db-docker `
     --key-base64 "<base64-passphrase>" `
     --name pg_lab_01 --engine postgres --version 16 --mode single `
     --host-port 5433 --password-ref POSTGRES_PASSWORD
@@ -193,8 +194,8 @@ python -m db_ops.control.cli worker-create-db-docker `
 ### Notes
 
 - Secrets travel **encrypted** in the bundle (`data/encrypted_secret_text.json`); the
-  passphrase reaches the daemon in `DB_OPS_SECRET_KEY` - exported by a start script sent on stdin,
-  handed to the container by name only (`-e DB_OPS_SECRET_KEY`) - and is never bundled and never an
+  passphrase reaches the daemon in `DBABRAIN_SECRET_KEY` - exported by a start script sent on stdin,
+  handed to the container by name only (`-e DBABRAIN_SECRET_KEY`) - and is never bundled and never an
   argument: as `--key_base64` it sat in the container's command for its whole life, readable with
   `docker inspect` and `ps` (review 0.25.0, B2.4/F6.1). The `--key-base64` you pass to the control
   commands here stays on this machine; it also decrypts the worker SSH password for them.
@@ -203,6 +204,30 @@ python -m db_ops.control.cli worker-create-db-docker `
 - The host key is auto-accepted (`AutoAddPolicy`); intended for trusted hosts.
 
 ---
+
+## Shipping the code only
+
+A worker that is a soak node (from 0.28.0) or that holds configuration the bot created runs a new
+version without taking the master's `data/` or `assets/`: `deploy` would replace them - on
+2026-10-09 the master's `restore_config.json` had the worker's nightly restore switched off - and
+`build-image` opens the store for the config-drift gate. 0.28.0's soak was therefore deployed by
+hand; `deploy-code` is that run:
+
+```bash
+python -m dbabrain.control.cli deploy-code --key-base64 "<key>"            # the plan, nothing changed
+python -m dbabrain.control.cli deploy-code --key-base64 "<key>" --apply    # build, ship, switch
+```
+
+- **The compose file stays the worker's.** Only the tool's `image:` line is replaced (exactly one
+  must be there), and the environment-variable names and `/app/tools/...` paths are moved by the
+  same rules `upgrade-config` applies to `data/`. A host folder, a docker network and another
+  service's image are left alone.
+- **The way back is written first**: `runtime/pre_deploy_<version>_<stamp>/docker-compose.yml.before`
+  and `data.tgz` (`data/`, `assets/`, `config.json`). The previous image stays loaded.
+- **The passphrase** reaches `docker compose` through a script on stdin, base64 on its second line
+  and decoded by a shell builtin - never on an argv, never on the line the remote gate echoes.
+- **The estate is without a scheduler** from the stop until `up -d`: the `upgrade-config` plan and
+  apply and a `sync-config` run in between (76 s on 0.28.0's hand run).
 
 ## Pushing one file instead of deploying
 
@@ -217,15 +242,15 @@ reads. `--type` uploads exactly what is named and stops:
 
 ```powershell
 # one config file
-python -m db_ops.control.cli deploy --key-base64 <K> --type config --file-name sql_targets.json
+python -m dbabrain.control.cli deploy --key-base64 <K> --type config --file-name sql_targets.json
 
 # every SQL task (or one subtree, or one script)
-python -m db_ops.control.cli deploy --key-base64 <K> --type assets\tasks
-python -m db_ops.control.cli deploy --key-base64 <K> --type assets\tasks --file-name "oracle/*.sql"
+python -m dbabrain.control.cli deploy --key-base64 <K> --type assets\tasks
+python -m dbabrain.control.cli deploy --key-base64 <K> --type assets\tasks --file-name "oracle/*.sql"
 
 # all catalogued config, and a plan run that uploads nothing
-python -m db_ops.control.cli deploy --key-base64 <K> --type config
-python -m db_ops.control.cli deploy --key-base64 <K> --type assets --dry-run
+python -m dbabrain.control.cli deploy --key-base64 <K> --type config
+python -m dbabrain.control.cli deploy --key-base64 <K> --type assets --dry-run
 ```
 
 `--file_name` is accepted as a spelling of `--file-name`.
@@ -241,7 +266,7 @@ command's clothes:
 
 | Not done | Why, and what to run instead |
 | --- | --- |
-| build or load an image | a change under `db_ops/` is code; run the full `deploy`. |
+| build or load an image | a change under `dbabrain/` is code; run the full `deploy`. |
 | restart the container | nothing needs it - the next scheduled run reads the file. A change to `config.json` or to the compose file does, and neither is pushable. |
 | merge the worker's own config back | that is `deploy --merge`, in the other direction. `--merge` with `--type` is refused rather than half-honoured. |
 | retire a directory the bundle stopped carrying | [`superseded_dirs`](#directories-the-bundle-owns) can only conclude that from a whole bundle. A push says nothing about files it does not name. |
@@ -300,8 +325,8 @@ prompt without reading it.
 Unattended runs declare the answer instead of being asked:
 
 ```powershell
-python -m db_ops.control.cli deploy --key-base64 <K> --on-config-drift adopt
-python -m db_ops.control.cli deploy --key-base64 <K> --on-config-drift keep
+python -m dbabrain.control.cli deploy --key-base64 <K> --on-config-drift adopt
+python -m dbabrain.control.cli deploy --key-base64 <K> --on-config-drift keep
 ```
 
 With **no terminal and no `--on-config-drift`** the deploy aborts with exit code 3. Guessing which
@@ -363,7 +388,7 @@ write, and rewriting it would only move the mtime.
 >
 > `DEFAULT_REMOTE_DIR` and `DEFAULT_CONTAINER` in `control/_support.py` moved with it, so
 > `worker-status`, `worker-run`, `worker-pull-data-config` and `deploy --type` reach the live node
-> with no flags. The retired pair (`/opt/db_ops`, `db_ops_daemon`) is still reachable through
+> with no flags. The retired pair (`/opt/db_ops`, `dbabrain_daemon`) is still reachable through
 > `--remote-dir` / `--container`, and the stopped container is the rollback.
 >
 > Every name from these flags reaches the worker's shell quoted (0.26.0, review 0.25.0 F6.3): a
@@ -385,16 +410,16 @@ bottom when running steps by hand.
 **The image contains only the engine:**
 
 ```
-db_ops:<version>  (Docker image; also tagged db_ops:latest)
+dbabrain:<version>  (Docker image; also tagged dbabrain:latest)
 ├── Ubuntu 24.04 base
 ├── msodbcsql17 + msodbcsql18 + unixODBC + mssql-tools18  (SQL Server drivers; 17 for legacy SQL 2008 R2)
 ├── PowerShell 7 (pwsh), openssh-client, rsync, smbclient
 ├── Python venv + requirements.txt           (incl. cryptography)
-└── db_ops/ package source                    ← your application code
+└── dbabrain/ package source                    ← your application code
 ```
 
-The version comes from `db_ops/__init__.py` (`__version__`); the build tags the
-image `db_ops:<version>` and `db_ops:latest`. Bump `__version__` on every change.
+The version comes from `dbabrain/__init__.py` (`__version__`); the build tags the
+image `dbabrain:<version>` and `dbabrain:latest`. Bump `__version__` on every change.
 
 **The image does NOT contain your config or secrets.** Those are *bind-mounted*
 at run time:
@@ -413,7 +438,7 @@ So a deployment is three things:
 
 | Artifact | What it is | Rebuild to change? |
 | --- | --- | --- |
-| `db_ops_image.tar` | the engine (code + drivers + runtime) | yes — rebuild on code/dependency change |
+| `dbabrain_image.tar` | the engine (code + drivers + runtime) | yes — rebuild on code/dependency change |
 | deploy bundle (`config.json`, `data/`, `assets/`) | your environment, incl. the **encrypted** secret file | no — edit and restart |
 | `--key` passphrase | decrypts the secret file at runtime | never stored; supplied each start |
 
@@ -484,7 +509,7 @@ passphrase:
 
 ```powershell
 # from the repository root
-.venv\Scripts\python.exe -m db_ops.control.cli encrypt-secret-text --key-base64 "<base64-passphrase>"
+.venv\Scripts\python.exe -m dbabrain.control.cli encrypt-secret-text --key-base64 "<base64-passphrase>"
 ```
 
 - Reads plaintext `secrets\secret_text.json` (ignored, never committed/shipped).
@@ -503,7 +528,7 @@ not stored anywhere; if you lose it, re-encrypt with a new one.
 > # base64 of the passphrase (PowerShell) — use your own, do not commit it:
 > [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('<your-passphrase>'))
 > # -> <base64-string>
-> python -m db_ops.control.cli encrypt-secret-text --key-base64 "<base64-string>"
+> python -m dbabrain.control.cli encrypt-secret-text --key-base64 "<base64-string>"
 > ```
 >
 > The examples below use `--key_base64 "<base64-passphrase>"`. Plain `--key
@@ -519,19 +544,19 @@ From the repository root:
 
 It will:
 
-1. `docker build --platform linux/amd64 -t db_ops:<version> -t db_ops:latest .` (version read from `db_ops/__init__.py`, also stamped as the `org.opencontainers.image.version` label)
+1. `docker build --platform linux/amd64 -t dbabrain:<version> -t dbabrain:latest .` (version read from `dbabrain/__init__.py`, also stamped as the `org.opencontainers.image.version` label)
 2. `docker save` both tags to a tar,
-3. assemble a self-contained bundle at `deploy\db_ops_deploy\` (repo root, gitignored):
+3. assemble a self-contained bundle at `deploy\dbabrain_deploy\` (repo root, gitignored):
 
 ```
-deploy\db_ops_deploy\
-├── db_ops_image.tar          (~190 MB; ~750 MB once loaded/uncompressed)
+deploy\dbabrain_deploy\
+├── dbabrain_image.tar          (~190 MB; ~750 MB once loaded/uncompressed)
 ├── docker-compose.yml        (runtime version, no build step)
 ├── config.json
 ├── data\                     (your *.json configs + encrypted_secret_text.json)
 ├── assets\                   (metric SQL + OS/docker scripts, SQL tasks, telegram SQL)
 ├── logs\                     (empty)
-└── runtime\                  (empty; db_ops.sqlite is created here on first run)
+└── runtime\                  (empty; dbabrain.sqlite is created here on first run)
 ```
 
 The script aborts if `data\encrypted_secret_text.json` is missing (step B2 not
@@ -543,9 +568,9 @@ done). Note: the **encrypted** secret file is included; the **passphrase** is no
 
 ```powershell
 # from the repository root
-docker build --platform linux/amd64 -t db_ops:latest .
-docker save db_ops:latest -o db_ops_image.tar
-# then copy db_ops_image.tar + docker-compose.runtime.yml (as docker-compose.yml)
+docker build --platform linux/amd64 -t dbabrain:latest .
+docker save dbabrain:latest -o dbabrain_image.tar
+# then copy dbabrain_image.tar + docker-compose.runtime.yml (as docker-compose.yml)
 #   + config.json + data\ + sql\ to a folder
 ```
 
@@ -563,7 +588,7 @@ Then copy the bundle contents from Windows. (The control app's `copy` automates 
 
 - **SSH key auth** — OpenSSH `scp` works:
   ```powershell
-  scp -r .\deploy\db_ops_deploy\*  user@ubuntu-host:/opt/db_ops/
+  scp -r .\deploy\dbabrain_deploy\*  user@ubuntu-host:/opt/db_ops/
   ```
 
 - **Password auth on Windows** — OpenSSH `scp` cannot take a password
@@ -571,7 +596,7 @@ Then copy the bundle contents from Windows. (The control app's `copy` automates 
   `winget install PuTTY.PuTTY`):
   ```powershell
   & "C:\Program Files\PuTTY\pscp.exe" -pw "<password>" -r `
-      .\deploy\db_ops_deploy\*  user@ubuntu-host:/opt/db_ops/
+      .\deploy\dbabrain_deploy\*  user@ubuntu-host:/opt/db_ops/
   ```
   On the first connection accept the host key (pscp prompts once; PuTTY caches it).
 
@@ -585,32 +610,32 @@ copy is needed** — and the passphrase is never sent in a file.
 cd /opt/db_ops
 
 # 1. import the image built on Windows
-docker load -i db_ops_image.tar
-docker image ls | grep db_ops          # should show db_ops:latest
+docker load -i dbabrain_image.tar
+docker image ls | grep dbabrain          # should show dbabrain:latest
 
 # 2. sanity-check config + key before going live (dry-run, no daemon).
 #    This decrypts secrets, so a wrong key fails here immediately.
-docker compose run --rm db_ops \
-  python -m db_ops.metrics.cli --config config.json collect --dry-run --key_base64 "<base64-passphrase>"
+docker compose run --rm dbabrain \
+  python -m dbabrain.metrics.cli --config config.json collect --dry-run --key_base64 "<base64-passphrase>"
 
 # 3. start the daemon with the passphrase in its ENVIRONMENT + the worker node role
-#    (read it without echo; `-e DB_OPS_SECRET_KEY` names the variable, the value is not on any command line)
-read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY
-docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY db_ops daemon
+#    (read it without echo; `-e DBABRAIN_SECRET_KEY` names the variable, the value is not on any command line)
+read -rs DBABRAIN_SECRET_KEY && export DBABRAIN_SECRET_KEY
+docker compose run -d --name dbabrain_daemon -e DBABRAIN_NODE_ROLE=worker -e DBABRAIN_SECRET_KEY dbabrain daemon
 
 # 4. confirm it is running
-docker ps | grep db_ops_daemon
+docker ps | grep dbabrain_daemon
 ```
 
 The passphrase is given in the environment only (0.25.0 review, B2.4/F6.1). On a command line
 (`daemon --key_base64 …`) it was readable by every user on the host for the container's whole
 life (`ps`, `/proc/<pid>/cmdline`, `docker inspect`), and the daemon used to copy it onto every
-child's command line too; it now hands it to children in `DB_OPS_SECRET_KEY` only. `daemon --key`
+child's command line too; it now hands it to children in `DBABRAIN_SECRET_KEY` only. `daemon --key`
 / `--key_base64` still work for a one-off by hand. `control deploy` does the same as step 3 for
 you: the key travels to the worker on stdin. It is still visible to the `docker` group through
 `docker inspect` (root-equivalent anyway).
 
-`DB_OPS_NODE_ROLE=worker` makes the daemon run only `app_commands.json` entries with
+`DBABRAIN_NODE_ROLE=worker` makes the daemon run only `app_commands.json` entries with
 `node_role` of `worker` or `all`. The control app's `start-daemon` sets this for you
 (default `worker`, override with `--node-role`).
 
@@ -618,7 +643,7 @@ you: the key travels to the worker on stdin. It is still visible to the `docker`
 > cannot auto-restart with the key. Re-run the step-3 command to restart. (If you
 > accept the key living in Docker's container metadata — visible via
 > `docker inspect` — you may instead export it as in step 3 and use
-> `docker run -d --restart unless-stopped -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY <mounts> db_ops:latest daemon`
+> `docker run -d --restart unless-stopped -e DBABRAIN_NODE_ROLE=worker -e DBABRAIN_SECRET_KEY <mounts> dbabrain:latest daemon`
 > so it survives reboots; the strict "nothing stored" option is the `compose run`
 > command above. The control app's `start-daemon` uses `restart=unless-stopped`.)
 
@@ -628,9 +653,9 @@ you: the key travels to the worker on stdin. It is still visible to the `docker`
 
 ```bash
 docker ps                                       # Up / Exited?
-docker logs -f db_ops_daemon                     # live stdout/stderr of the daemon
-docker logs --tail=100 db_ops_daemon             # last 100 lines
-docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' db_ops_daemon
+docker logs -f dbabrain_daemon                     # live stdout/stderr of the daemon
+docker logs --tail=100 dbabrain_daemon             # last 100 lines
+docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' dbabrain_daemon
 ```
 
 **Application logs** (written to the mounted `logs/` folder — readable directly
@@ -651,30 +676,30 @@ read `worker`.
 **Runtime history** (the runtime store; the paths below apply when the backend is `sqlite`):
 
 ```bash
-ls -la /opt/db_ops/runtime/db_ops.sqlite
+ls -la /opt/db_ops/runtime/dbabrain.sqlite
 ```
 
 **Get a shell inside the container** to debug interactively:
 
 ```bash
-docker compose run --rm db_ops shell
+docker compose run --rm dbabrain shell
 # then, inside (one-off commands that read secrets need the key):
-python -m db_ops.backup_restore.cli restore-latest --config config.json --dry-run --key_base64 "<base64-passphrase>"
+python -m dbabrain.backup_restore.cli restore-latest --config config.json --dry-run --key_base64 "<base64-passphrase>"
 pwsh -v          # confirm PowerShell 7 is present
 odbcinst -q -d   # confirm ODBC drivers
 ```
 
 ### B7. One-off commands
 
-Any documented `python -m db_ops.<app>` command runs through the same image.
+Any documented `python -m dbabrain.<app>` command runs through the same image.
 Commands that read secrets (most do) need the key:
 
 ```bash
-docker compose run --rm db_ops \
-  python -m db_ops.metrics.cli --config config.json collect --dry-run --key_base64 "<base64-passphrase>"
+docker compose run --rm dbabrain \
+  python -m dbabrain.metrics.cli --config config.json collect --dry-run --key_base64 "<base64-passphrase>"
 
-docker compose run --rm db_ops \
-  python -m db_ops.reports.cli --config config.json run-scheduled --summary-limit 150
+docker compose run --rm dbabrain \
+  python -m dbabrain.reports.cli --config config.json run-scheduled --summary-limit 150
 ```
 
 ### B8. Updating later
@@ -683,9 +708,9 @@ docker compose run --rm db_ops \
 `/opt/db_ops/{config.json,data/...}`, then stop and re-run the daemon:
 
 ```bash
-docker rm -f db_ops_daemon
-read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY     # the passphrase, typed, never an argument
-docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY db_ops daemon
+docker rm -f dbabrain_daemon
+read -rs DBABRAIN_SECRET_KEY && export DBABRAIN_SECRET_KEY     # the passphrase, typed, never an argument
+docker compose run -d --name dbabrain_daemon -e DBABRAIN_NODE_ROLE=worker -e DBABRAIN_SECRET_KEY dbabrain daemon
 ```
 
 **Changed a secret value**: re-run the encrypt step on Windows, re-copy
@@ -695,27 +720,27 @@ docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_
 **Changed code/dependencies**: rebuild on Windows, re-copy the tar, then on Ubuntu:
 
 ```bash
-docker load -i db_ops_image.tar
-docker rm -f db_ops_daemon
-read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY     # the passphrase, typed, never an argument
-docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY db_ops daemon
+docker load -i dbabrain_image.tar
+docker rm -f dbabrain_daemon
+read -rs DBABRAIN_SECRET_KEY && export DBABRAIN_SECRET_KEY     # the passphrase, typed, never an argument
+docker compose run -d --name dbabrain_daemon -e DBABRAIN_NODE_ROLE=worker -e DBABRAIN_SECRET_KEY dbabrain daemon
 ```
 
-> From the master PC, all three updates are a single `python -m db_ops.control.cli deploy --user <user>`.
+> From the master PC, all three updates are a single `python -m dbabrain.control.cli deploy --user <user>`.
 
 ### B9. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | Jobs error `Failed to decrypt secret text: wrong key or corrupted file` | wrong `--key` | restart with the exact passphrase used to encrypt |
-| Jobs error `No decryption key provided` | daemon started without a key | restart it with `DB_OPS_SECRET_KEY` exported and `-e DB_OPS_SECRET_KEY` (step 3) |
+| Jobs error `No decryption key provided` | daemon started without a key | restart it with `DBABRAIN_SECRET_KEY` exported and `-e DBABRAIN_SECRET_KEY` (step 3) |
 | `password ref not found ...` for every target | `data/encrypted_secret_text.json` missing/empty | re-run the encrypt step and re-copy the file |
-| Worker runs no commands (tick shows `active_commands=0`) | all entries tagged `node_role: master`, or node resolved as `master` | tag worker entries `worker`/`all`; confirm `DB_OPS_NODE_ROLE=worker` is set on the container |
+| Worker runs no commands (tick shows `active_commands=0`) | all entries tagged `node_role: master`, or node resolved as `master` | tag worker entries `worker`/`all`; confirm `DBABRAIN_NODE_ROLE=worker` is set on the container |
 | `docker build` fails: apt `403 Forbidden` or `Hash Sum mismatch` | a transparent HTTP proxy on the build network corrupts apt traffic | the Dockerfile defaults to an HTTPS mirror to bypass it; for a different network override `docker build --build-arg UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu ...` |
 | `exec format error` on `docker load`/run | image arch ≠ host arch | rebuild with `--platform linux/amd64` |
 | `Config file not found: config.json` | config not mounted / wrong cwd | confirm `./config.json` exists next to the compose file |
-| `Can't open lib 'ODBC Driver 18 for SQL Server'` | ran host Python, not the image | use the container: `docker compose run --rm db_ops odbcinst -q -d` |
-| `working_dir not found: tools/db_ops` | layout mismatch | use the provided compose; the image expects `/app/tools/db_ops` |
+| `Can't open lib 'ODBC Driver 18 for SQL Server'` | ran host Python, not the image | use the container: `docker compose run --rm dbabrain odbcinst -q -d` |
+| `working_dir not found: tools/dbabrain` | layout mismatch | use the provided compose; the image expects `/app/tools/dbabrain` |
 | Legacy SQL Server (e.g. 2008 R2) fails with `SSL routines::unsupported protocol` | the server only offers TLS 1.0, which OpenSSL 3 blocks by default | the image enables legacy TLS (openssl.cnf `MinProtocol=TLSv1.0`, `CipherString=DEFAULT@SECLEVEL=0`); set that target's `sqlserver_driver` to `ODBC Driver 17 for SQL Server` in `db_instances.json`. Note `pymssql`/FreeTDS does **not** honor this OpenSSL setting, so for TLS-1.0-only hosts use an ODBC driver, not pymssql |
 | Permission denied writing `logs/`/`runtime/` | host dir owned by root | `sudo chown -R $USER:$USER /opt/db_ops/logs /opt/db_ops/runtime` |
 
@@ -729,40 +754,40 @@ docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_
 | `powershell` (`pwsh`) | Windows-target remote operations (WinRM/`Invoke-Command`) from Linux. |
 | `openssh-client`, `rsync`, `smbclient` | Linux-target copy/exec and SMB copy paths. |
 | Python venv at `/opt/venv` + `requirements.txt` | App runtime (incl. `cryptography` for secret decryption). |
-| `db_ops/` under `/app/tools/db_ops` | App source. `tools/db_ops` is kept inside the image as a fixed layout, not as a repo path. |
+| `dbabrain/` under `/app/tools/dbabrain` | App source. `tools/dbabrain` is kept inside the image as a fixed layout, not as a repo path. |
 
 #### Layout mirroring
 
-The container places the package at `/app/tools/db_ops/db_ops`. `tools/db_ops` is a
+The container places the package at `/app/tools/dbabrain/dbabrain`. `tools/dbabrain` is a
 **logical alias for the tool root**, not a folder in this repository (which is standalone,
-with `db_ops/` at its root). Keeping the alias fixed is what lets the same
+with `dbabrain/` at its root). Keeping the alias fixed is what lets the same
 `app_commands.json` work on the Windows master and in the container:
 
-- the daemon's `REPO_ROOT=/app` and `TOOL_ROOT=/app/tools/db_ops`;
-- `app_commands.json` `working_dir: "tools/db_ops"` → `/app/tools/db_ops` in the image, and the
-  repository root on a local checkout (resolved in `db_ops/jobs/daemon.py`);
-- secrets read from `/app/tools/db_ops/data/encrypted_secret_text.json` (mounted).
+- the daemon's `REPO_ROOT=/app` and `TOOL_ROOT=/app/tools/dbabrain`;
+- `app_commands.json` `working_dir: "tools/dbabrain"` → `/app/tools/dbabrain` in the image, and the
+  repository root on a local checkout (resolved in `dbabrain/jobs/daemon.py`);
+- secrets read from `/app/tools/dbabrain/data/encrypted_secret_text.json` (mounted).
 
 #### Environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DB_OPS_CONFIG` | `config.json` | Config path handed to the daemon. |
-| `DB_OPS_DAEMON_DELAY` | `1` | Daemon scan delay (seconds). |
-| `DB_OPS_NODE_ROLE` | `master` | This node's role (`master`/`worker`) — the *only* thing that decides it. Set `worker` on the deployed container (`start-daemon`/`deploy` do this by default); set `master` to run a master daemon the same way. Unset → defaults to `master`. No host autodetection; the shared `config.json` never sets the role. |
-| `DB_OPS_SECRET_KEY` | _(unset)_ | Decryption passphrase. Normally supplied via `--key`; the daemon exports it for child app commands. Set it directly only for a non-daemon one-off. |
-| `DB_OPS_POWERSHELL` | _(auto)_ | Force a PowerShell executable; otherwise `pwsh` is auto-detected. |
+| `DBABRAIN_CONFIG` | `config.json` | Config path handed to the daemon. |
+| `DBABRAIN_DAEMON_DELAY` | `1` | Daemon scan delay (seconds). |
+| `DBABRAIN_NODE_ROLE` | `master` | This node's role (`master`/`worker`) — the *only* thing that decides it. Set `worker` on the deployed container (`start-daemon`/`deploy` do this by default); set `master` to run a master daemon the same way. Unset → defaults to `master`. No host autodetection; the shared `config.json` never sets the role. |
+| `DBABRAIN_SECRET_KEY` | _(unset)_ | Decryption passphrase. Normally supplied via `--key`; the daemon exports it for child app commands. Set it directly only for a non-daemon one-off. |
+| `DBABRAIN_POWERSHELL` | _(auto)_ | Force a PowerShell executable; otherwise `pwsh` is auto-detected. |
 
 #### Cross-platform PowerShell
 
 Windows-target operations resolve the PowerShell binary at runtime via
-`db_ops/lib/shell.py`: `DB_OPS_POWERSHELL` → `pwsh` (installed) →
+`dbabrain/lib/shell.py`: `DBABRAIN_POWERSHELL` → `pwsh` (installed) →
 `powershell.exe` on a native Windows host. This lets the previously Windows-only
 code paths run from the Ubuntu container.
 
 #### Linux source reads, and the remaining Windows-target limit
 
-When db_ops itself runs on Linux (this container) and restores to a **Linux** SQL
+When dbabrain itself runs on Linux (this container) and restores to a **Linux** SQL
 Server target, the full path works end-to-end and needs no Windows machine: it
 reads the Windows SMB backup **source** via `smbclient` (auth file, recursive
 `mget`, with the backup mtime recovered from the file name so the log chain
@@ -775,7 +800,7 @@ Still limited: restoring **to a Windows target from a Linux host**. SQL executio
 and certificate import work via `pwsh` + WinRM, but the backup **copy onto** a
 Windows SMB share (`vm_import_unc`) still uses the Windows-native `robocopy` /
 `cmdkey` / UNC write path in
-`db_ops/backup_restore/{copy_backup,delete_backup,preflight}.py`. From Linux,
+`dbabrain/backup_restore/{copy_backup,delete_backup,preflight}.py`. From Linux,
 prefer Linux restore targets; validate any Windows-target copy/restore against a
 real share before relying on it.
 
@@ -788,9 +813,9 @@ the server:
 # copy the repository (code + Dockerfile + config + data + sql) to /opt/db_ops-src
 cd /opt/db_ops-src
 docker compose build                                   # uses docker-compose.yml (with build:)
-read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY     # the passphrase, typed, never an argument
-docker compose run -d --name db_ops_daemon -e DB_OPS_NODE_ROLE=worker -e DB_OPS_SECRET_KEY db_ops daemon
-docker logs -f db_ops_daemon
+read -rs DBABRAIN_SECRET_KEY && export DBABRAIN_SECRET_KEY     # the passphrase, typed, never an argument
+docker compose run -d --name dbabrain_daemon -e DBABRAIN_NODE_ROLE=worker -e DBABRAIN_SECRET_KEY dbabrain daemon
+docker logs -f dbabrain_daemon
 ```
 
 `data/encrypted_secret_text.json` must already exist (run the encrypt step first).
@@ -831,7 +856,7 @@ a file merges at all, and `tests/test_data_files_manifest.py` fails if the two d
 sets. Adding a `data/*.json` without listing it fails the same test, in both directions: an entry
 must not outlive its file either, or the deletion undoes itself again.
 
-Reader: `db_ops.lib.data_files`. Owner: `control`. It is catalogued like any other config file, so
+Reader: `dbabrain.lib.data_files`. Owner: `control`. It is catalogued like any other config file, so
 the console shows it and a config bundle carries it.
 
 ## Syncing worker-side config back to the master
@@ -997,7 +1022,7 @@ wholesale rather than merging it:
 
 ```bash
 # Pull the worker-owned config files (overwrite) AND mirror new *.sql scripts back:
-python -m db_ops.control.cli worker-pull-data-config --key-base64 <KEY> \
+python -m dbabrain.control.cli worker-pull-data-config --key-base64 <KEY> \
   --writeback-config --include-sql
 ```
 

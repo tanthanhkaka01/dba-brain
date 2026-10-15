@@ -1,0 +1,680 @@
+"""What this installation is, where it is running, and how much room it has left.
+
+Every other status answer in the toolkit is about something else: ``ops-status`` reads the store to
+say whether the *apps* ran on schedule, ``host-facts`` reaches a monitored *host* over its
+``cmd_access``, ``worker-status`` drives the worker *from the master* over SSH. Nothing answered the
+question asked first when something looks wrong — *which build am I talking to, on which machine,
+and is it out of memory or disk*. On 2026-09-03 that was answered by hand four times: two versions
+were in play, one on a host and one in a container, and telling them apart took a shell.
+
+No SSH, and the store only for one column: this process is already on the machine being described,
+so it reads itself. From 0.22.0 it also lists the app commands this node schedules, with each one's
+last run read from ``job_runs`` - and that read is the one part allowed to fail. A store that is down
+costs the column and names why; it never costs the report, because this is still the status asked
+for first when the store is what is broken.
+
+**Inside a container, ``/proc/meminfo`` is the host's memory, not the limit this process has.** A
+report that quotes 64 GB while the cgroup allows 2 GB is worse than no report — it is the number
+somebody uses to rule memory out. The cgroup is read first, and every memory figure says which
+source it came from.
+
+There are no third-party dependencies here on purpose (the package has exactly two, neither of them
+psutil). Anything the standard library cannot answer on this platform is reported as unavailable
+rather than guessed.
+"""
+
+from __future__ import annotations
+
+import os
+import platform
+import shutil
+import socket
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from typing import Any
+
+from dbabrain.lib import node_role as node_role_rule
+from dbabrain.lib import run_mode as run_mode_lib
+from dbabrain.lib import timezone as display_timezone
+from dbabrain.lib.time_window import TimeWindow, weekdays_text, window_of
+from dbabrain.lib.timezone import format_display_text
+
+#: cgroup v2, then v1. A container that was given no limit reports "max" in v2 and a number near
+#: 2**63 in v1; both mean "the host's memory", so both fall through to /proc/meminfo.
+_CGROUP_V2 = ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current")
+_CGROUP_V1 = ("/sys/fs/cgroup/memory/memory.limit_in_bytes",
+              "/sys/fs/cgroup/memory/memory.usage_in_bytes")
+
+#: Above this a cgroup limit is the kernel's "unlimited" sentinel rather than a real ceiling.
+_UNLIMITED_ABOVE_BYTES = 1 << 50
+
+
+def _read_int(path: str) -> int | None:
+    try:
+        text = Path(path).read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    if text == "max":
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _memory_from_cgroup() -> dict[str, Any] | None:
+    for limit_path, used_path in (_CGROUP_V2, _CGROUP_V1):
+        limit = _read_int(limit_path)
+        used = _read_int(used_path)
+        if limit is None or used is None or limit > _UNLIMITED_ABOVE_BYTES:
+            continue
+        return {"source": "cgroup", "total_bytes": limit, "used_bytes": used,
+                "available_bytes": max(0, limit - used)}
+    return None
+
+
+def _memory_from_proc() -> dict[str, Any] | None:
+    try:
+        lines = Path("/proc/meminfo").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    fields: dict[str, int] = {}
+    for line in lines:
+        name, _, rest = line.partition(":")
+        parts = rest.split()
+        if parts and parts[0].isdigit():
+            fields[name] = int(parts[0]) * 1024
+    total = fields.get("MemTotal")
+    available = fields.get("MemAvailable")
+    if total is None or available is None:
+        return None
+    return {"source": "/proc/meminfo (the host's, not a container limit)",
+            "total_bytes": total, "used_bytes": total - available,
+            "available_bytes": available}
+
+
+def _memory_from_windows() -> dict[str, Any] | None:
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        class Status(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        status = Status()
+        status.dwLength = ctypes.sizeof(Status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        return {"source": "GlobalMemoryStatusEx", "total_bytes": int(status.ullTotalPhys),
+                "used_bytes": int(status.ullTotalPhys - status.ullAvailPhys),
+                "available_bytes": int(status.ullAvailPhys)}
+    except Exception:  # noqa: BLE001 - an unreadable counter is "unavailable", not a failure.
+        return None
+
+
+def memory() -> dict[str, Any]:
+    """Memory as this process actually experiences it, saying where the numbers came from."""
+    for reader in (_memory_from_cgroup, _memory_from_proc, _memory_from_windows):
+        found = reader()
+        if found:
+            return found
+    return {"source": "unavailable on this platform"}
+
+
+def cpu() -> dict[str, Any]:
+    """Cores and, where the platform has one, the load average.
+
+    ``os.getloadavg`` does not exist on Windows, and a load average is not a percentage: it is
+    runnable processes, so it is reported beside the core count rather than instead of it.
+    """
+    cores = os.cpu_count()
+    facts: dict[str, Any] = {"cores": cores}
+    try:
+        one, five, fifteen = os.getloadavg()
+        facts["load_avg"] = [round(one, 2), round(five, 2), round(fifteen, 2)]
+        if cores:
+            facts["load_per_core"] = round(one / cores, 2)
+    except (AttributeError, OSError):
+        facts["load_avg"] = None
+    return facts
+
+
+def host_addresses() -> dict[str, Any]:
+    """The machine's name and the address it reaches the network from.
+
+    ``gethostbyname(gethostname())`` returns the loopback on many Linux hosts, so the outward
+    address is taken from an unconnected UDP socket - which sends nothing and needs nothing to be
+    listening, but does make the kernel pick the interface it would route from.
+    """
+    name = socket.gethostname()
+    outward = None
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.settimeout(0.2)
+        probe.connect(("203.0.113.1", 9))  # RFC 5737; nothing is sent to it
+        outward = probe.getsockname()[0]
+    except OSError:
+        outward = None
+    finally:
+        probe.close()
+    try:
+        resolved = socket.gethostbyname(name)
+    except OSError:
+        resolved = None
+    return {"hostname": name, "ip": outward or resolved, "resolved_ip": resolved}
+
+
+def _uptime_seconds_from_proc() -> float | None:
+    """Seconds since boot from ``/proc/uptime`` — Linux, including inside a container."""
+    try:
+        with open("/proc/uptime", encoding="utf-8") as handle:
+            return float(handle.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _uptime_seconds_from_windows() -> float | None:
+    """Seconds since boot from ``GetTickCount64`` — milliseconds, monotonic, and no privilege.
+
+    Deliberately not WMI's ``LastBootUpTime``: that spawns a process, needs the WMI service, and
+    returns a local-time string with an offset field that has to be parsed. This is one call and
+    the answer is already an interval, so nothing about it depends on the machine's timezone.
+    """
+    try:
+        import ctypes
+
+        ticks = ctypes.windll.kernel32.GetTickCount64()  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return None
+    return float(ticks) / 1000.0
+
+
+def uptime(*, now: datetime | None = None) -> dict[str, Any]:
+    """How long the machine has been up, and the instant it came up, in UTC.
+
+    **This is the host's uptime, not the daemon's**, which is why the rendered line says so. The
+    two answer different questions and this module can only answer one of them honestly: it reads
+    *itself*, and the process reading is the short-lived one the bot spawned to ask, not the
+    scheduler. Whether the scheduler has been running is `ops-status`, which reads the store.
+
+    Inside a container `/proc/uptime` is the **host's** clock, not the container's age. The source
+    is reported for the same reason every memory figure reports one — a number whose meaning
+    changes with where it was read has to say where it was read.
+
+    UTC throughout: an interval has no timezone, and the instant it started is only comparable
+    across an estate if it is written in one.
+    """
+    seconds = _uptime_seconds_from_proc()
+    source = "/proc/uptime"
+    if seconds is None:
+        seconds = _uptime_seconds_from_windows()
+        source = "GetTickCount64"
+    if seconds is None or seconds < 0:
+        return {"seconds": None, "hours": None, "since": None, "source": "unavailable"}
+    moment = now or datetime.now(timezone.utc)
+    return {
+        "seconds": round(seconds, 3),
+        "hours": round(seconds / 3600.0, 2),
+        "since": (moment - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": source,
+    }
+
+
+def disk(path: Path) -> dict[str, Any]:
+    try:
+        usage = shutil.disk_usage(str(path))
+    except OSError:
+        return {"source": "unavailable"}
+    return {"path": str(path), "total_bytes": usage.total, "used_bytes": usage.used,
+            "free_bytes": usage.free}
+
+
+def _gib(value: Any) -> str:
+    if not isinstance(value, int):
+        return "?"
+    return f"{value / (1024 ** 3):.1f} GiB"
+
+
+def _percent(used: Any, total: Any) -> str:
+    if not isinstance(used, int) or not isinstance(total, int) or total <= 0:
+        return "?"
+    return f"{used * 100 / total:.0f}%"
+
+
+def distribution() -> dict[str, Any]:
+    """Which build is running: the published ``dbabrain`` wheel or a private build of this tree.
+
+    The reason this is here at all: on 2026-09-03 both were live on the same estate within the same
+    hour - a container built from the private tree and a pip install of the published wheel - and
+    telling them apart from a chat message was impossible. Until 0.29.0 the distribution's name told
+    them apart; since then both are `dbabrain`, and the version does it: a private build carries the
+    internal counter (``2.87.37``), the published wheel the number it was released as, which is
+    ``PUBLIC_VERSION``.
+
+    A source checkout or a container that runs the tree straight from a path has no distribution
+    metadata at all, and that is an answer too, not a failure.
+    """
+    from importlib import metadata
+
+    from dbabrain.lib.distribution import PUBLIC_VERSION
+
+    try:
+        found = metadata.distribution("dbabrain")
+    except Exception:  # noqa: BLE001 - not installed: the tree is run from a path.
+        return {"name": None, "installed_version": None,
+                "product": "dbabrain (source tree)", "source": "run from a source tree, not installed"}
+    published = found.version == PUBLIC_VERSION
+    return {"name": "dbabrain", "installed_version": found.version,
+            "product": "DBA Brain (published)" if published else "dbabrain (private build)",
+            "source": "pip-installed"}
+
+
+def runtime() -> str:
+    """Docker, Kubernetes, or straight on the operating system."""
+    if Path("/.dockerenv").exists():
+        return "docker"
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        return "kubernetes"
+    try:
+        cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return "host"
+    for marker, label in (("docker", "docker"), ("containerd", "containerd"),
+                          ("kubepods", "kubernetes"), ("lxc", "lxc")):
+        if marker in cgroup:
+            return label
+    return "host"
+
+
+def operating_system() -> str:
+    """The distribution a person would name, not the kernel version.
+
+    ``platform.platform()`` answers "Linux-6.8.0-generic" for both Ubuntu and RHEL, which does not
+    help anybody deciding whether a package name applies.
+    """
+    if os.name == "nt":
+        release, version, _sp, _kind = platform.win32_ver()
+        return f"Windows {release} ({version})".strip()
+    try:
+        release = platform.freedesktop_os_release()
+        pretty = release.get("PRETTY_NAME") or release.get("NAME")
+        if pretty:
+            return f"{pretty} ({platform.release()})"
+    except (AttributeError, OSError):
+        pass
+    return f"{platform.system()} {platform.release()}"
+
+
+def dbabrain_uptime(runtime_dir: str | Path | None) -> dict[str, Any]:
+    """How long **DBA Brain** has been running on this node, from the daemon's own state file.
+
+    Distinct from :func:`uptime`, which is the machine's, and the two are routinely far apart: a
+    node whose daemon restarted an hour ago sits on a host that has been up for a week. Both are
+    reported because the reader wants a different one depending on why they asked.
+    """
+    from dbabrain.lib import daemon_state
+
+    if runtime_dir is None:
+        return {"status": "unknown", "hours": None, "since": None, "pid": None}
+    return daemon_state.uptime(runtime_dir)
+
+
+def collect(*, tool_root: Path, version: str, public_version: str | None = None,
+            store: str | None = None, node_role: str | None = None,
+            runtime_dir: str | Path | None = None,
+            web: dict[str, Any] | None = None,
+            apps: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Everything the report needs, as data. Callers that want JSON stop here.
+
+    ``web`` is passed in rather than looked up here: everything else in this module reads the
+    *machine* (memory, disks, uptime), which a packaged install can always answer, while the web
+    addresses come out of the data folder. Resolving config is the CLI's job — see
+    ``READS_LOCAL_CONFIG`` in ``tests/test_common_layers.py``, which caught exactly this.
+    """
+    ours = dbabrain_uptime(runtime_dir)
+    # The role of the DAEMON, not of this process. `DBABRAIN_NODE_ROLE` is read from the environment,
+    # and self-status runs in its own — usually a shell where nobody exported it, and over Telegram
+    # in a worker the daemon spawned. So the node whose daemon was started as `worker` answered
+    # `master (default)`, which is the only line anyone reads to find out. Measured 2026-09-15.
+    # The daemon records the role it came up with, so when one is running that is the answer; with
+    # none running this process's own environment is all there is.
+    running_role = str((ours or {}).get("node_role") or "") if (ours or {}).get(
+        "status") == "running" else ""
+
+    # The clock this node's SCHEDULES are read against, which is the one identity field that
+    # changes what the node *does* rather than what it is: every `time_window.from_hour` is a local
+    # hour read against it. It was absent until 2026-09-16, and the `+08` a reader could see came
+    # only from `format_display_text` stamping an offset onto the two uptime lines - so the offset
+    # leaked onto two lines and the zone appeared nowhere. `db timezone` and `runtime_nodes` had
+    # computed the whole answer all along.
+    clock = display_timezone.describe()
+
+    return {
+        "version": version,
+        "public_version": public_version,
+        "python": platform.python_version(),
+        "timezone": clock.get("timezone"),
+        "utc_offset": clock.get("utc_offset"),
+        "tz_abbreviation": clock.get("tz_abbreviation"),
+        "distribution": distribution(),
+        "runtime": runtime(),
+        "os": operating_system(),
+        "tool_root": str(tool_root),
+        "node_role": (node_role or running_role or os.environ.get("DBABRAIN_NODE_ROLE")
+                      or "master (default)"),
+
+        "store": store,
+        "host": host_addresses(),
+        "web": web or {},
+        "apps": apps,
+        "cpu": cpu(),
+        "memory": memory(),
+        "disk": disk(tool_root),
+        "uptime": uptime(),
+        "dbabrain_uptime": ours,
+        "pid": os.getpid(),
+    }
+
+
+def _timezone_line(facts: dict[str, Any]) -> str:
+    """The zone, the offset and the abbreviation on one line - all three, because each answers a
+    different question. The name is what a config file can be written back to, the offset is what
+    a reader converts a timestamp with, and the abbreviation is what the estate calls it. Under
+    daylight saving the offset changes twice a year and only the name does not.
+    """
+    zone = facts.get("timezone") or "unknown"
+    offset = str(facts.get("utc_offset") or "")
+    abbreviation = str(facts.get("tz_abbreviation") or "")
+    # Many zones have no abbreviation of their own and Python answers with the offset again, so a
+    # naive join reads `+07 (+07)`. Print it only when it says something the offset did not.
+    if abbreviation and abbreviation != offset:
+        offset = f"{offset} ({abbreviation})".strip()
+    return f"timezone  : {zone}" + (f"  {offset}" if offset else "")
+
+
+def render(facts: dict[str, Any]) -> str:
+    """The same facts as a chat message. Read on a phone, so it is short and every line is a fact."""
+    host = facts.get("host") or {}
+    cpu_facts = facts.get("cpu") or {}
+    mem = facts.get("memory") or {}
+    disk_facts = facts.get("disk") or {}
+
+    dist = facts.get("distribution") or {}
+    version = facts.get("version") or "?"
+    public = facts.get("public_version")
+
+    # Which product, before anything else: two builds of this toolkit can run the same estate and
+    # they number differently, so the version below is only readable once this line is read.
+    product_line = f"product   : {dist.get('product') or 'dbabrain'}"
+    if dist.get("name"):
+        product_line += f"  [pip: {dist['name']} {dist.get('installed_version')}]"
+
+    version_line = f"version   : {version}" + (f"  (public {public})" if public else "")
+
+    runtime_text = facts.get("runtime") or "host"
+    where = "in Docker" if runtime_text == "docker" else (
+        "on the OS directly" if runtime_text == "host" else f"in {runtime_text}")
+
+    lines = [
+        "DBA Brain / dbabrain - current state",
+        product_line,
+        version_line,
+        f"running   : {where}, on {facts.get('os')}",
+        f"python    : {facts.get('python')}",
+        f"host      : {host.get('hostname') or '?'}",
+        f"ip        : {host.get('ip') or 'unavailable'}",
+        f"tool root : {facts.get('tool_root')}",
+        f"node_role : {facts.get('node_role')}",
+        _timezone_line(facts),
+    ]
+    if facts.get("store"):
+        lines.append(f"store     : {facts['store']}")
+
+    load = cpu_facts.get("load_avg")
+    cpu_line = f"cpu       : {cpu_facts.get('cores') or '?'} core(s)"
+    if load:
+        cpu_line += f", load {load[0]} / {load[1]} / {load[2]}"
+        if cpu_facts.get("load_per_core") is not None:
+            cpu_line += f" ({cpu_facts['load_per_core']} per core)"
+    lines.append(cpu_line)
+
+    if isinstance(mem.get("total_bytes"), int):
+        lines.append(
+            f"memory    : {_gib(mem.get('used_bytes'))} used of {_gib(mem.get('total_bytes'))}"
+            f" ({_percent(mem.get('used_bytes'), mem.get('total_bytes'))}), "
+            f"{_gib(mem.get('available_bytes'))} free"
+        )
+        # Which source answered decides whether the number means anything in a container.
+        lines.append(f"            source: {mem.get('source')}")
+    else:
+        lines.append(f"memory    : {mem.get('source')}")
+
+    if isinstance(disk_facts.get("total_bytes"), int):
+        lines.append(
+            f"disk      : {_gib(disk_facts.get('free_bytes'))} free of "
+            f"{_gib(disk_facts.get('total_bytes'))} "
+            f"({_percent(disk_facts.get('used_bytes'), disk_facts.get('total_bytes'))} used)"
+        )
+
+    up = facts.get("uptime") or {}
+    if up.get("hours") is not None:
+        # "host up since" rather than "up since": this is the machine's clock, and on a node whose
+        # daemon was restarted an hour ago the two numbers are nothing like each other.
+        lines.append(f"uptime    : {up['hours']:.2f} h  "
+                     f"(host up since {format_display_text(up.get('since'))})")
+    else:
+        lines.append(f"uptime    : {up.get('source') or 'unavailable'}")
+
+    ours = facts.get("dbabrain_uptime") or {}
+    state = ours.get("status")
+    if state == "running":
+        lines.append(f"dbabrain up : {ours['hours']:.2f} h  "
+                     f"(since {format_display_text(ours.get('since'))})")
+    elif state == "stale":
+        # Worth saying, not hiding: the file is only left behind when the daemon died without
+        # unwinding, which is the difference between "stopped" and "was killed".
+        lines.append(f"dbabrain up : not running  (last start {format_display_text(ours.get('since'))}, "
+                     f"pid {ours.get('pid')} is gone)")
+    elif state == "stopped":
+        lines.append("dbabrain up : not running  (no daemon has started in this tool root)")
+    else:
+        lines.append("dbabrain up : unknown")
+
+    lines.extend(_web_lines(facts.get("web") or {}))
+    lines.extend(_app_lines(facts.get("apps")))
+    return "\n".join(lines)
+
+
+def _web_lines(web_facts: dict[str, Any]) -> list[str]:
+    """The web block, or one line saying why there is none.
+
+    Kept to the pages that exist under stable names. A per-server page needs a slug this function
+    has no business inventing, so the server-metrics line is the page itself and the reader
+    appends `?server=<server_id>` - which is what the page's own picker does.
+    """
+    if not web_facts.get("served_here"):
+        detail = web_facts.get("error")
+        return ["", "web       : not served from this node"
+                + (f"  ({detail})" if detail else "")]
+
+    urls = web_facts.get("urls") or {}
+    if not urls:
+        return ["", "web       : no address for this node - cannot build the links"]
+
+    lines = ["", "web UI    : " + urls.get("console", "")]
+    lines.append("reports   : " + urls.get("reports", ""))
+    for label, key in (("inventory  ", "inventory"),
+                       ("server metr", "server_metrics"),
+                       ("index usage", "index_usage"),
+                       ("sla        ", "sla")):
+        if urls.get(key):
+            lines.append(f"  {label}: {urls[key]}")
+    if urls.get("server_metrics"):
+        lines.append("            (server metrics takes ?server=<server_id>; "
+                     "index usage is one page per server)")
+    if not web_facts.get("enabled", True):
+        lines.append("            NOTE: the webhost command is disabled, so nothing is listening")
+
+    source = web_facts.get("address_source")
+    if source == "published":
+        lines.append(f"            (host taken from report_base_url: in {web_facts.get('runtime')} "
+                     "this node cannot see the address it is published on)")
+    elif source == "placeholder":
+        lines.append(f"            (running in {web_facts.get('runtime')}, so this node cannot know "
+                     "its published address - fill in <host>, or set report_base_url)")
+
+    # The comparison this block exists to make visible. Two nodes have now published pages naming
+    # a host they had moved off, and nothing said so until someone opened one and clicked a link.
+    if web_facts.get("matches_published") is False:
+        lines.append(f"            WARNING: published links point at "
+                     f"{web_facts.get('published_base')} - not this node. "
+                     f"Fix report_base_url in data/reports_config.json")
+    return lines
+
+
+# --------------------------------------------------------------------------- #
+# What this node schedules
+# --------------------------------------------------------------------------- #
+def summarize_apps(commands: list[dict[str, Any]] | None, *, node_role: str,
+                   last_runs: dict[str, dict[str, Any]] | None,
+                   store_error: str = "",
+                   now: datetime | None = None) -> dict[str, Any]:
+    """The app commands as this node would run them, one entry each, inactive ones included.
+
+    Takes everything as data - the records, the role, the last runs - because deciding where they
+    come from is the CLI's job (``tests/test_common_layers.py``). ``last_runs`` of ``None`` means the
+    store was not read, which is different from "never ran": ``store_error`` says why.
+
+    Asked for on 2026-09-23 because two schedulers were running disjoint sets on two schemas, and
+    nothing a person could send from a phone said which set this one was.
+    """
+    if commands is None:
+        return {"configured": 0, "state": "not configured", "items": []}
+    moment = now or datetime.now(timezone.utc)
+    # "master (default)" is how collect() spells an unset role; the rule wants the role itself.
+    role = str(node_role or "").split(" ")[0].strip().lower()
+    items: list[dict[str, Any]] = []
+    for command in commands:
+        if not isinstance(command, dict):
+            continue
+        code = str(command.get("app_code") or command.get("app_command_id") or "").strip()
+        if not code:
+            continue
+        # The scheduler's own reading of the window (rules R20); one it refuses shows as unset.
+        window = window_of(command, context=code) or TimeWindow()
+        try:
+            mode = run_mode_lib.parse(command)
+            mode_text = (mode.mode if mode.mode == run_mode_lib.SYNC
+                         else f"{mode.mode} x{mode.max_parallel}")
+        except ValueError as exc:
+            mode_text = f"invalid ({exc})"
+        # job_runs records a run under app_command_id, which is the app_code on this estate; both
+        # are tried so a node whose ids differ still finds its rows.
+        run_key = str(command.get("app_command_id") or code)
+        last = (last_runs or {}).get(run_key) or (last_runs or {}).get(code) or {}
+        started = _parse_moment(last.get("started_at"))
+        items.append({
+            "app": code,
+            "active": bool(command.get("active", True)),
+            "runs_here": node_role_rule.runs_on(command.get("node_role"), role, default="all"),
+            "node_role": str(command.get("node_role") or "all"),
+            "run_mode": mode_text,
+            "repeat_interval": window.repeat_interval,
+            "hours": _hours_text(window),
+            "weekdays": None if window.weekdays is None else weekdays_text(window.weekdays),
+            "last_status": str(last.get("status") or "").lower() if last else "",
+            "last_started_at": str(last.get("started_at") or ""),
+            "age_seconds": int((moment - started).total_seconds()) if started else None,
+        })
+    scheduled = [item for item in items if item["active"] and item["runs_here"]]
+    return {"configured": len(items), "scheduled_here": len(scheduled), "role": role or "master",
+            "state": "ok", "store_read": last_runs is not None,
+            "store_error": store_error, "items": items}
+
+
+def _parse_moment(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _hours_text(window: TimeWindow) -> str:
+    start = 0 if window.from_hour is None else window.from_hour
+    end = 23 if window.to_hour is None else window.to_hour
+    return f"{start:02d}-{end:02d}h"
+
+
+def _interval_text(seconds: Any) -> str:
+    try:
+        value = int(seconds)
+    except (TypeError, ValueError):
+        return "-"
+    if value < 0:
+        return "manual"
+    if value == 0:
+        return "service"
+    if value >= 3600 and value % 3600 == 0:
+        return f"{value // 3600}h"
+    if value >= 60 and value % 60 == 0:
+        return f"{value // 60}m"
+    return f"{value}s"
+
+
+def _age_text(seconds: int | None) -> str:
+    if seconds is None:
+        return ""
+    if seconds < 120:
+        return f"{seconds}s ago"
+    if seconds < 7200:
+        return f"{seconds // 60}m ago"
+    return f"{seconds // 3600}h ago"
+
+
+def _app_lines(apps: dict[str, Any] | None) -> list[str]:
+    """One line per app command, for a phone: on/off, how it runs, when, and how it last went.
+
+    A note is never printed - it is the one field that can be long, and the body is capped at 4096.
+    """
+    if not apps:
+        return []
+    if apps.get("state") == "not configured":
+        return ["", "apps      : not configured (no data/app_commands.json)"]
+    lines = ["", f"apps      : {apps.get('configured', 0)} configured, "
+                 f"{apps.get('scheduled_here', 0)} scheduled on this node "
+                 f"(role {apps.get('role')})"]
+    for item in apps.get("items") or []:
+        if not item["active"]:
+            state = "off"
+        elif not item["runs_here"]:
+            # Named by the role it waits for, so a master reading a worker's list sees why.
+            state = f"{item['node_role']} only"
+        else:
+            state = "on"
+        interval = _interval_text(item["repeat_interval"])
+        when = interval if interval in ("manual", "service") else f"every {interval}"
+        when += f" {item['hours']}"
+        if item["weekdays"] is not None:
+            when += f" on {item['weekdays']}"
+        last = ""
+        if item["last_status"]:
+            last = f"last {item['last_status']} {_age_text(item['age_seconds'])}".rstrip()
+        elif apps.get("store_read") and item["active"] and item["runs_here"]:
+            last = "no run in 24 h"
+        lines.append(f"  {item['app']:<30} {state:<11} {item['run_mode']:<8} {when:<17} {last}".rstrip())
+    if not apps.get("store_read"):
+        reason = apps.get("store_error") or "the store was not read"
+        lines.append(f"            (last run unknown: {reason})")
+    return lines

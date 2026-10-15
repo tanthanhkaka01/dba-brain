@@ -26,9 +26,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.config import DbOpsConfig
-from db_ops.db import DbOpsStore
-from db_ops.db.run_requests import (
+from dbabrain.lib.config import DbaBrainConfig
+from dbabrain.db import DbaBrainStore
+from dbabrain.db.run_requests import (
     STATUS_CANCELLED,
     STATUS_EXPIRED,
     STATUS_PENDING,
@@ -37,7 +37,7 @@ from db_ops.db.run_requests import (
     utc_now,
     utc_text,
 )
-from db_ops.jobs import daemon
+from dbabrain.jobs import daemon
 
 
 def only_running(estate) -> object:
@@ -77,7 +77,7 @@ NOT_DUE_COMMAND = {
 
 @pytest.fixture()
 def queue(tmp_path: Path) -> RunRequestStore:
-    return RunRequestStore(tmp_path / "db_ops.sqlite")
+    return RunRequestStore(tmp_path / "dbabrain.sqlite")
 
 
 @pytest.fixture()
@@ -87,12 +87,12 @@ def estate(tmp_path: Path):
     data.mkdir()
     (data / "app_commands.json").write_text(
         json.dumps({"app_commands": [NOT_DUE_COMMAND]}), encoding="utf-8")
-    store_path = tmp_path / "db_ops.sqlite"
+    store_path = tmp_path / "dbabrain.sqlite"
     # node_role matters: the command declares "worker", and a daemon running as master filters
     # it out before the queue is ever consulted.
-    config = DbOpsConfig(sqlite_path=store_path, log_dir=tmp_path / "logs",
+    config = DbaBrainConfig(sqlite_path=store_path, log_dir=tmp_path / "logs",
                          runtime_dir=tmp_path / "runtime", node_role="worker")
-    store = DbOpsStore(store_path)
+    store = DbaBrainStore(store_path)
     store.initialize()
     return {"config": config, "store": store, "data": data, "running": {},
             "queue": RunRequestStore(store_path)}
@@ -251,7 +251,7 @@ def test_the_requester_survives_the_run_finishing(estate) -> None:
 
 def test_a_scheduled_run_carries_no_requester(estate) -> None:
     """The stamp has to mean something: a run nobody asked for must not claim one."""
-    from db_ops.jobs.daemon import start_app_command, load_app_commands
+    from dbabrain.jobs.daemon import start_app_command, load_app_commands
 
     command = load_app_commands(estate["data"] / "app_commands.json")["APP-TEST"]
     start_app_command(config=estate["config"], store=estate["store"], data_dir=estate["data"],

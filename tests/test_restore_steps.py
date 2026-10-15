@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common.restorestep import RestoreStepError, backup_paths, restore_step
-from db_ops.common.restorestep import sqlserver as mssql
+from dbabrain.common.restorestep import RestoreStepError, backup_paths, restore_step
+from dbabrain.common.restorestep import sqlserver as mssql
 
 
 def _mssql(**over):
@@ -206,7 +206,7 @@ def test_duplicate_connects_as_the_auxiliary():
 
 def test_success_is_the_banner_not_the_exit_code():
     """RMAN prints error stacks and still exits 0."""
-    from db_ops.common.restorestep.oracle import _failed
+    from dbabrain.common.restorestep.oracle import _failed
 
     assert _failed("duplicate", "RMAN-06136: ...", 0) is True
     assert _failed("duplicate", "Finished Duplicate Db at 07-AUG-26", 0) is False
@@ -290,8 +290,8 @@ def test_staging_replaces_a_previous_copy_rather_than_copying_into_it():
     restore to whatever was staged first - pieces deleted at the source get read hours later.
     (Still how a WAL directory reaches a RUNNING container for a separate log step, and how an
     Oracle duplicate reaches its backup location.)"""
-    from db_ops.common.hostcmd import parse_host
-    from db_ops.common.restorestep.postgresql import _stage_command
+    from dbabrain.common.hostcmd import parse_host
+    from dbabrain.common.restorestep.postgresql import _stage_command
 
     stage = _stage_command(parse_host({"runtime": "docker", "host": "h", "container": "c"}),
                            "/b/base/a_FULL")
@@ -333,7 +333,7 @@ def test_a_dry_run_does_not_connect():
 def test_a_path_a_volume_already_serves_is_never_copied_or_deleted():
     """Host and container are looking at one directory, so there is nothing to copy - and the
     "previous copy" the staging would delete first would be the source backups themselves."""
-    from db_ops.common.restorestep.postgresql import _served_by_a_mount
+    from dbabrain.common.restorestep.postgresql import _served_by_a_mount
 
     mounts = [{"Source": "/opt/stage", "Destination": "/var/lib/postgresql/backup"}]
 
@@ -346,7 +346,7 @@ def test_a_path_a_volume_already_serves_is_never_copied_or_deleted():
 def test_the_wal_directory_is_staged_too_because_the_server_reads_it():
     """``restore_command`` is run by the server, inside the container. Pointing it at a host path
     the server cannot see produces a cluster that starts and silently replays nothing."""
-    import db_ops.common.restorestep.postgresql as pg
+    import dbabrain.common.restorestep.postgresql as pg
 
     calls = []
 

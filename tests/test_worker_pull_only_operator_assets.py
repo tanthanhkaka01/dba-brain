@@ -22,8 +22,8 @@ import stat as stat_mod
 
 import pytest
 
-from db_ops.control import worker_data
-from db_ops.lib.paths import OPERATOR_ASSET_KINDS
+from dbabrain.control import worker_data
+from dbabrain.lib.paths import OPERATOR_ASSET_KINDS
 
 
 class _Entry:

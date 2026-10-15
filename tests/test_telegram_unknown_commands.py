@@ -1,8 +1,8 @@
 import json
 import sqlite3
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram.command_processor import parse_command_message, process_one_command_message
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram.command_processor import parse_command_message, process_one_command_message
 
 
 def write_json(path, root_key, rows):
@@ -39,7 +39,7 @@ def prepare_store(tmp_path, text):
     )
     write_json(tmp_path / "telegram_groups.json", "telegram_groups", [])
 
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     store.upsert_telegram_messages(
         [
             {

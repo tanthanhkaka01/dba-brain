@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import backup as backup_api
-from db_ops.common.backup import parse_backup_spec, plan_backup, run_backup
-from db_ops.common.backup.spec import RECEIPT, BackupSpecError, backup_level_for
+from dbabrain.common import backup as backup_api
+from dbabrain.common.backup import parse_backup_spec, plan_backup, run_backup
+from dbabrain.common.backup.spec import RECEIPT, BackupSpecError, backup_level_for
 
 SCRIPT = "assets/backup/oracle/oracle_rman_database.sh"
 
@@ -84,7 +84,7 @@ def test_a_nonzero_exit_reports_what_the_engine_said(ran):
 
 def test_a_host_that_cannot_be_reached_is_distinct_from_a_backup_that_failed(ran, monkeypatch):
     """The fix is somewhere else entirely, so it must not read as "the backup failed"."""
-    from db_ops.common.hostcmd import HostCommandError
+    from dbabrain.common.hostcmd import HostCommandError
 
     def refuse(*args, **kwargs):
         raise HostCommandError("could not connect to ubuntu@203.0.113.188: timed out")

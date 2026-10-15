@@ -14,8 +14,8 @@ import io
 
 import pytest
 
-from db_ops.common import confirm
-from db_ops.control import config_gate
+from dbabrain.common import confirm
+from dbabrain.control import config_gate
 
 
 def _no_terminal(monkeypatch):
@@ -70,12 +70,12 @@ def test_the_drift_gate_stops_when_ask_finds_nobody(monkeypatch):
         calls.append((command, request))
         return {"interactive": False, "answer": "", "source": "none"}
 
-    monkeypatch.setattr("db_ops.transport.common_cli.run", run)
+    monkeypatch.setattr("dbabrain.transport.common_cli.run", run)
     assert config_gate._read_choice(config_gate._ask_on_the_terminal) is None
     assert calls == [("ask", {"prompt": "  adopt / keep / abort ? "})]
 
 
 def test_the_drift_gate_reads_a_typed_choice_through_ask(monkeypatch):
-    monkeypatch.setattr("db_ops.transport.common_cli.run",
+    monkeypatch.setattr("dbabrain.transport.common_cli.run",
                         lambda command, request, **_kwargs: {"interactive": True, "answer": "Adopt\n"})
     assert config_gate._read_choice(config_gate._ask_on_the_terminal) == "adopt"

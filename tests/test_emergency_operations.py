@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import confirm, sqlserver_emergency
-from db_ops.common.evidence import GateReport
+from dbabrain.common import confirm, sqlserver_emergency
+from dbabrain.common.evidence import GateReport
 from conftest import shipped_config
 
 OPERATIONS = shipped_config("emergency_operations.json")

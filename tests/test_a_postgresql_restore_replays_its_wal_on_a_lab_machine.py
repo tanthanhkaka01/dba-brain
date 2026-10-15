@@ -27,10 +27,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.backup_restore import restore_by_id
-from db_ops.lib.shell import docker_cli
+from dbabrain.backup_restore import restore_by_id
+from dbabrain.lib.shell import docker_cli
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "db_ops" / "common" / "backup_scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "dbabrain" / "common" / "backup_scripts"
 
 
 # --------------------------------------------------------------------------- #
@@ -39,7 +39,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "db_ops" / "common" / "backup_sc
 @pytest.fixture
 def container_run(monkeypatch):
     """Drive the real container path of the PostgreSQL restore step, recording every command."""
-    import db_ops.common.restorestep.postgresql as pg
+    import dbabrain.common.restorestep.postgresql as pg
 
     calls: list[str] = []
     mounts = [{"Source": "/var/lib/docker/volumes/v/_data", "Destination": "/var/lib/postgresql"}]
@@ -59,10 +59,10 @@ def container_run(monkeypatch):
 
     def run(fail=False, **extra):
         failing["rebuild"] = fail
-        from db_ops.common.restorestep import restore_step
+        from dbabrain.common.restorestep import restore_step
         result = restore_step("diff", {
             "db_type": "postgresql", "data_dir": "/var/lib/postgresql/18/docker",
-            "staging_dir": "/var/lib/postgresql/dbops_staging",
+            "staging_dir": "/var/lib/postgresql/dbabrain_staging",
             "backup_paths": ["/in/base/a_FULL", "/in/base/b_INCR"],
             "host": {"runtime": "docker", "host": "h", "container": "c", "sudo": True}, **extra})
         return result, calls
@@ -75,8 +75,8 @@ def test_the_recovery_configuration_is_written_before_the_first_start(container_
 
     combine = next(c for c in calls if "pg_combinebackup" in c)
     start = next(i for i, c in enumerate(calls) if c.endswith(" start c"))
-    assert "/var/lib/postgresql/dbops_staging/recovery.signal" in combine
-    assert "restore_command" in combine and "cp /var/lib/postgresql/dbops_wal/%f %p" in combine
+    assert "/var/lib/postgresql/dbabrain_staging/recovery.signal" in combine
+    assert "restore_command" in combine and "cp /var/lib/postgresql/dbabrain_wal/%f %p" in combine
     assert calls.index(combine) < start
     assert result["recovery"] == "recovered"
 
@@ -89,9 +89,9 @@ def test_the_wal_is_copied_into_the_data_volume_with_the_chain(container_run):
 
     combine = next(c for c in calls if "pg_combinebackup" in c)
     assert "-v /in/wal:/in/wal:ro" in combine
-    assert "cp -a /in/wal/. /var/lib/postgresql/dbops_wal/" in combine
+    assert "cp -a /in/wal/. /var/lib/postgresql/dbabrain_wal/" in combine
     assert not [c for c in calls if "docker cp" in c]
-    assert result["wal_copy"] == "/var/lib/postgresql/dbops_wal"
+    assert result["wal_copy"] == "/var/lib/postgresql/dbabrain_wal"
 
 
 # --------------------------------------------------------------------------- #
@@ -111,7 +111,7 @@ def test_the_target_is_stopped_before_anything_is_written(container_run):
 
 def test_the_target_is_started_again_when_the_rebuild_fails(container_run):
     """Down is a second incident on top of the failed restore; the error already says what broke."""
-    from db_ops.common.restorestep import RestoreStepError
+    from dbabrain.common.restorestep import RestoreStepError
 
     with pytest.raises(RestoreStepError, match="boom"):
         container_run(fail=True, wal_dir="/in/wal")
@@ -143,7 +143,7 @@ def test_a_planned_restore_into_a_container_has_no_separate_log_step(monkeypatch
 @pytest.mark.skipif(not shutil.which("sh"), reason="no POSIX shell here")
 def test_the_configuration_file_ends_where_it_should(tmp_path):
     """Run the generated shell for real: unquoted, `printf %s\\n` left a literal `n` behind."""
-    from db_ops.common.restorestep.postgresql import _recovery_config
+    from dbabrain.common.restorestep.postgresql import _recovery_config
 
     directory = tmp_path.as_posix()
     subprocess.run(["sh", "-c", _recovery_config(directory, "/w", "")], check=True)
@@ -175,7 +175,7 @@ def test_asked_for_sudo_is_a_fallback_everywhere(container_run):
 # 1.26 - a password-login target gets its password
 # --------------------------------------------------------------------------- #
 def test_a_password_login_target_is_given_its_password(monkeypatch):
-    from db_ops.backup_restore import backup
+    from dbabrain.backup_restore import backup
 
     target = SimpleNamespace(host="192.0.2.250", port=22, username="labuser", key_file=None,
                              password_ref="LAB_SSH")
@@ -188,8 +188,8 @@ def test_a_password_login_target_is_given_its_password(monkeypatch):
 
 
 def test_a_key_login_target_is_not_asked_for_secrets(monkeypatch, tmp_path):
-    from db_ops.backup_restore import backup
-    import db_ops.lib.data_sources as data_sources
+    from dbabrain.backup_restore import backup
+    import dbabrain.lib.data_sources as data_sources
 
     target = SimpleNamespace(host="h", port=22, username="u", key_file="k.key", password_ref="X")
     monkeypatch.setattr(backup, "resolve_ssh_target", lambda *a, **k: target)
@@ -208,7 +208,7 @@ def test_autocommit_is_on_before_the_first_statement(monkeypatch):
     import sys
     import types
 
-    from db_ops.common import db_connect
+    from dbabrain.common import db_connect
 
     events: list[str] = []
 
@@ -261,8 +261,8 @@ def test_a_backup_job_takes_over_the_folder_it_writes(script, leaf):
 def test_an_oracle_duplicate_stages_its_backup_location_into_the_container(monkeypatch):
     """The copy lands on the target HOST; RMAN reads inside the container. Served by no volume, the
     location was invisible to it: "RMAN-05579: CONTROLFILE backup not found" (2026-09-24)."""
-    import db_ops.common.restorestep.oracle as ora
-    import db_ops.common.restorestep.postgresql as pg
+    import dbabrain.common.restorestep.oracle as ora
+    import dbabrain.common.restorestep.postgresql as pg
 
     calls: list[str] = []
 

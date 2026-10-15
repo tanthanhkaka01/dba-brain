@@ -15,7 +15,7 @@ difference invisible when you copy a working setup.
 
 from __future__ import annotations
 
-from db_ops.telegram import api
+from dbabrain.telegram import api
 
 
 def _fake_get_me(monkeypatch, result: dict, ok: bool = True):
@@ -72,7 +72,7 @@ def test_the_id_is_a_string_because_that_is_what_the_config_file_holds(monkeypat
 
 
 def test_the_command_is_registered_and_reaches_the_function():
-    from db_ops.telegram import cli
+    from dbabrain.telegram import cli
 
     args = cli.parse_args(["bot-info"])
     assert args.command == "bot-info"

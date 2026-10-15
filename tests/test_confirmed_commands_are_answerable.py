@@ -7,7 +7,7 @@ level: two answers, the second the target's own id typed out. Nothing made those
 they disagreed in the way that is hardest to see: on the estate they matched, and on a fresh
 install they did not.
 
-Found on 2026-09-04 while cutting v0.7.0. `db-ops init` wrote the command catalogue and **not**
+Found on 2026-09-04 while cutting v0.7.0. `dbabrain init` wrote the command catalogue and **not**
 `emergency_operations.json`, and the package did not carry one — so every install that was not this
 one priced `kill-spid`, `shrink-log`, `start-job`, `disable-job` and `run-sql-task` at level 100
 while the commands collected a single `yes`. The gate then refused with "the request does not carry
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import confirm
+from dbabrain.common import confirm
 
 PACKAGE = Path(confirm.__file__).resolve().parents[1]
 COMMANDS = PACKAGE / "telegram" / "catalogue" / "telegram_support_commands.json"
@@ -81,7 +81,7 @@ def test_every_named_operation_is_in_the_ladder() -> None:
 
 def test_the_scaffold_writes_the_ladder_into_a_new_tool_root(tmp_path: Path) -> None:
     """`init` is the only thing that turns the packaged copy into a file the gate reads."""
-    from db_ops.common import scaffold
+    from dbabrain.common import scaffold
 
     scaffold.initialise(tmp_path, app_name="dbabrain")
 
@@ -93,7 +93,7 @@ def test_the_scaffold_writes_the_ladder_into_a_new_tool_root(tmp_path: Path) -> 
 def test_an_install_with_no_ladder_of_its_own_is_priced_by_the_packaged_one(tmp_path) -> None:
     """The case that was broken: installed, not yet initialised, every command refused. The node's
     ladder is read app-side, and an absent one is the shipped ladder."""
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     rules = request_fill.operation_rules("kill-spid", data_dir=tmp_path / "data")
 

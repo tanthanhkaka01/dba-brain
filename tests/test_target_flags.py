@@ -1,4 +1,4 @@
-from db_ops.lib.target_flags import is_alerts_enabled, is_metrics_enabled, is_reports_enabled, is_target_enabled
+from dbabrain.lib.target_flags import is_alerts_enabled, is_metrics_enabled, is_reports_enabled, is_target_enabled
 
 
 def test_target_flags_default_from_enabled_only():

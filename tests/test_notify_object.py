@@ -3,7 +3,7 @@
 Covers both apps that carry it — backup_restore entries/sub-jobs and SQL targets — because
 the point of the object is that they behave identically.
 
-`notify` is a common config object like `time_window` — one shape (`db_ops/common/notify.py`)
+`notify` is a common config object like `time_window` — one shape (`dbabrain/common/notify.py`)
 that every app's entries carry, not a convention each app invents. It answers two questions
 per entry: report every run, and report failures — each with an enable flag, a level, and an
 optional explicit chat.
@@ -19,15 +19,15 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore.config import (
+from dbabrain.backup_restore.config import (
     BACKUP_RESTORE_NOTIFY_DEFAULTS,
     merge_notify_configs,
     parse_backup_restore_notify,
 )
-from db_ops.backup_restore.events import emit_backup_restore_event
-from db_ops.lib import telegram_route as app_client
-from db_ops.lib import notify_route
-from db_ops.lib.notify import NotifyConfig, NotifyConfigError, NotifyRule, parse_notify_config
+from dbabrain.backup_restore.events import emit_backup_restore_event
+from dbabrain.lib import telegram_route as app_client
+from dbabrain.lib import notify_route
+from dbabrain.lib.notify import NotifyConfig, NotifyConfigError, NotifyRule, parse_notify_config
 from conftest import shipped_config
 
 
@@ -38,8 +38,8 @@ class _Config:
 
     @property
     def store(self):
-        """SQLite store declaration matching this fake's sqlite_path (see db_ops.lib.config)."""
-        from db_ops.lib.config import SqliteStoreConfig, StoreConfig
+        """SQLite store declaration matching this fake's sqlite_path (see dbabrain.lib.config)."""
+        from dbabrain.lib.config import SqliteStoreConfig, StoreConfig
         from pathlib import Path as _Path
 
         return StoreConfig(sqlite=SqliteStoreConfig(path=_Path(str(self.sqlite_path))))
@@ -154,7 +154,7 @@ def test_a_typo_is_rejected_at_parse_time():
 def test_a_level_the_config_defines_is_accepted(monkeypatch):
     """A group added with notify_level: "sla" defines that level. Requiring a code edit to
     use it would mean an image rebuild per group — and a config rejected until then."""
-    from db_ops.lib import notify
+    from dbabrain.lib import notify
 
     monkeypatch.setattr(notify, "known_chat_levels", lambda: notify.NOTIFY_CHAT_LEVELS + ("sla",))
     rule = parse_notify_config({"notify": {"alert_on_error": {"telegram_chat": "sla"}}}).alert_on_error
@@ -163,7 +163,7 @@ def test_a_level_the_config_defines_is_accepted(monkeypatch):
 
 
 def test_known_levels_include_the_ones_this_deployment_configured():
-    from db_ops.lib.notify import NOTIFY_CHAT_LEVELS, known_chat_levels
+    from dbabrain.lib.notify import NOTIFY_CHAT_LEVELS, known_chat_levels
 
     levels = known_chat_levels()
     assert set(NOTIFY_CHAT_LEVELS) <= set(levels)  # standard levels always available
@@ -311,7 +311,7 @@ def test_frequent_backup_jobs_stay_quiet_and_every_job_still_alerts_on_failure()
     a job that runs a few times a day is worth a run message; one that runs every few minutes
     (archivelog, WAL, log) would drown the group. Failures stay on for all of them, which is
     the half that must never be switched off."""
-    from db_ops.backup_restore.backup import load_backup_jobs
+    from dbabrain.backup_restore.backup import load_backup_jobs
 
     HOURLY = 3600
     jobs = load_backup_jobs(shipped_config("restore_config.json"))
@@ -344,7 +344,7 @@ def test_sql_targets_carry_the_object_and_not_the_legacy_spelling():
 
 def test_a_newly_added_sql_task_is_written_in_the_canonical_form(tmp_path, monkeypatch):
     """Otherwise the file drifts back to the legacy spelling one `add-sql` at a time."""
-    from db_ops.common import config_admin
+    from dbabrain.common import config_admin
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()

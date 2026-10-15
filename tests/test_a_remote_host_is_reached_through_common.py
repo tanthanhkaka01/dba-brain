@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import remote_host
-from db_ops.lib.common_cli import CommonCliError
-from db_ops.lib.remote_host import RemoteError, RemoteHost
+from dbabrain.lib import remote_host
+from dbabrain.lib.common_cli import CommonCliError
+from dbabrain.lib.remote_host import RemoteError, RemoteHost
 
 
 class FakeCli:
@@ -122,12 +122,12 @@ def test_small_files_travel_as_one_tar_under_their_exact_paths_and_a_big_one_alo
 
     pushes = [request["remote_path"] for command, request in cli.calls if command == "push-file"]
     assert pushes[0] == "/opt/w/image.tar"
-    assert pushes[1].startswith("/tmp/db_ops_push_") and pushes[1].endswith(".tar")
+    assert pushes[1].startswith("/tmp/dbabrain_push_") and pushes[1].endswith(".tar")
     with tarfile.open(fileobj=io.BytesIO(cli.pushed[pushes[1]])) as tar:
         assert tar.getnames() == ["opt/w/data/a.json"]
     commands = [request["command"] for command, request in cli.calls if command == "run-cmd"]
-    assert commands[0].startswith("tar -xf /tmp/db_ops_push_") and "-C / --no-same-owner" in commands[0]
-    assert commands[1].startswith("rm -f -- /tmp/db_ops_push_"), "the staged tar is removed"
+    assert commands[0].startswith("tar -xf /tmp/dbabrain_push_") and "-C / --no-same-owner" in commands[0]
+    assert commands[1].startswith("rm -f -- /tmp/dbabrain_push_"), "the staged tar is removed"
     assert sorted(arrived) == ["/opt/w/data/a.json", "/opt/w/image.tar"]
 
 

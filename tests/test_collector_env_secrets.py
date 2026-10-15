@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.metrics import collector
+from dbabrain.metrics import collector
 
 
 class _Metric:
@@ -27,7 +27,7 @@ class _Metric:
 class _Target:
     target_id = "CLOUD-203-0-113-188-ORA-1521"
     # A real MetricTarget always carries these, and _collector_env reads them to inject
-    # DB_OPS_TARGET_HOST. A stub without them is a stub of something that cannot exist.
+    # DBABRAIN_TARGET_HOST. A stub without them is a stub of something that cannot exist.
     ip = "203.0.113.188"
     cmd_access = {"enabled": True, "method": "ssh", "host": "203.0.113.188"}
 

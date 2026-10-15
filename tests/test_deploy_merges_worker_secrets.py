@@ -23,10 +23,10 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.secret_text import encrypt_secret_text, load_secret_text_file
-from db_ops.control import deploy as deploy_ops
-from db_ops.control import worker_data
-from db_ops.control.worker_data import SecretMergeConflict
+from dbabrain.lib.secret_text import encrypt_secret_text, load_secret_text_file
+from dbabrain.control import deploy as deploy_ops
+from dbabrain.control import worker_data
+from dbabrain.control.worker_data import SecretMergeConflict
 
 KEY = "lab-passphrase"
 
@@ -123,7 +123,7 @@ def test_a_master_only_ref_is_never_dropped(tmp_path, monkeypatch):
 def test_no_key_skips_instead_of_breaking_the_deploy(tmp_path, monkeypatch, capsys):
     """Both stores are encrypted, so with no key there is nothing to compare. A deploy that ran
     before this step existed has to keep running — but the operator is told what it means."""
-    monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("DBABRAIN_SECRET_KEY", raising=False)
     action, encrypted, _ = _merge(
         tmp_path, monkeypatch,
         master={"PROD_DB": "p1"}, worker={"PG_LAB": "x"}, key=None)

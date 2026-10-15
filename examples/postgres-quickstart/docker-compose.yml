@@ -12,7 +12,7 @@
 services:
   postgres:
     image: postgres:16
-    container_name: dbops_quickstart_pg
+    container_name: dbabrain_quickstart_pg
     environment:
       POSTGRES_PASSWORD: quickstart_only_not_a_real_password
       POSTGRES_DB: appdb

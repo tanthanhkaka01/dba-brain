@@ -29,7 +29,7 @@ def _version(text: str) -> tuple[int, ...]:
 
 
 def _public_version() -> str:
-    from db_ops.lib.distribution import PUBLIC_VERSION
+    from dbabrain.lib.distribution import PUBLIC_VERSION
 
     return PUBLIC_VERSION
 

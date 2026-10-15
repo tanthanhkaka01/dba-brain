@@ -10,9 +10,9 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram import command_processor
-from db_ops.telegram.command_processor import CLAIM_STALE_SECONDS, process_pending_command_messages
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram import command_processor
+from dbabrain.telegram.command_processor import CLAIM_STALE_SECONDS, process_pending_command_messages
 
 from conftest import patch_telegram
 
@@ -36,7 +36,7 @@ def write_echo_command(path):
                 "need_file": 0,
                 "action_type": "cli_execute",
                 "action_config": {
-                    "working_dir": "tools/db_ops",
+                    "working_dir": "tools/dbabrain",
                     "command_argv": ["python", "-c", "print('{\"status\": \"success\"}')"],
                     "start_text": "Force hourly metrics report started for {target_ip}",
                     "success_text": "Force hourly metrics report completed for {target_ip}",
@@ -105,7 +105,7 @@ def test_a_claim_left_behind_by_a_killed_worker_is_closed_and_its_sender_told(tm
     `/spbot_restart_server` included, while the first run's reply had perhaps never been sent. It
     is closed now, and its sender is asked to check and send it again."""
     sqlite_path, commands_path, message_id = prepare(tmp_path)
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     now = datetime.now(timezone.utc)
 
     abandoned = (now - timedelta(seconds=CLAIM_STALE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")

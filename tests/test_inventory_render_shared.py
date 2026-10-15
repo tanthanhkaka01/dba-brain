@@ -13,13 +13,13 @@ apps reach the same object, and the surviving app-side code is only what genuine
 import ast
 from pathlib import Path
 
-from db_ops.lib import inventory_render
+from dbabrain.lib import inventory_render
 
 
 def test_both_apps_use_the_same_render_functions_not_copies():
     """Identity, not equality: if either app ever re-declares one of these, this fails."""
-    from db_ops.control import inventory as control_inventory
-    from db_ops.reports import inventory_summary as reports_inventory
+    from dbabrain.control import inventory as control_inventory
+    from dbabrain.reports import inventory_summary as reports_inventory
 
     for name in ("build_inventory_summary", "_merge_overlay", "_render_markdown",
                  "_findings", "_baseline_lines", "_backup_evidence"):
@@ -37,7 +37,7 @@ def test_neither_app_defines_the_shared_functions_any_more():
     moved = {"build_inventory_summary", "_merge_overlay", "_render_markdown", "_findings",
              "_baseline_lines", "_backup_evidence", "_g", "_platform", "_remote_user_text",
              "_primary_db", "_write_inventory"}
-    for module in ("db_ops/control/inventory.py", "db_ops/reports/inventory_summary.py"):
+    for module in ("dbabrain/control/inventory.py", "dbabrain/reports/inventory_summary.py"):
         tree = ast.parse(Path(module).read_text(encoding="utf-8"))
         declared = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
         assert not (declared & moved), f"{module} still defines {sorted(declared & moved)}"
@@ -46,8 +46,8 @@ def test_neither_app_defines_the_shared_functions_any_more():
 def test_each_app_keeps_only_what_genuinely_differs():
     """control reaches the worker over SSH/SFTP; reports runs store-local. That difference is the
     reason they are separate apps at all, so it stays app-side."""
-    control = ast.parse(Path("db_ops/control/inventory.py").read_text(encoding="utf-8"))
-    reports = ast.parse(Path("db_ops/reports/inventory_summary.py").read_text(encoding="utf-8"))
+    control = ast.parse(Path("dbabrain/control/inventory.py").read_text(encoding="utf-8"))
+    reports = ast.parse(Path("dbabrain/reports/inventory_summary.py").read_text(encoding="utf-8"))
 
     control_fns = {n.name for n in control.body if isinstance(n, ast.FunctionDef)}
     reports_fns = {n.name for n in reports.body if isinstance(n, ast.FunctionDef)}
@@ -57,19 +57,19 @@ def test_each_app_keeps_only_what_genuinely_differs():
 
 
 def test_the_module_still_lives_where_the_purity_guard_looks() -> None:
-    """It moved to ``db_ops/lib/`` on 2026-08-15, and the check that matters moved with it.
+    """It moved to ``dbabrain/lib/`` on 2026-08-15, and the check that matters moved with it.
 
     This file used to assert that ``common/inventory_render.py`` imports no app. That rule still
     holds and is now enforced far more strictly: ``tests/test_lib_is_pure.py`` requires every
-    ``lib`` module to import **nothing** from ``db_ops`` at all, app or otherwise. Re-checking the
+    ``lib`` module to import **nothing** from ``dbabrain`` at all, app or otherwise. Re-checking the
     weaker rule here would only be a second place to update — and a path this file hardcodes is
     exactly what broke when the module moved.
 
     What is worth keeping is the link: if the module ever leaves ``lib``, the strict guard stops
     covering it silently, so fail here instead.
     """
-    assert Path("db_ops/lib/inventory_render.py").exists(), (
-        "inventory_render moved out of db_ops/lib/ — tests/test_lib_is_pure.py no longer covers "
+    assert Path("dbabrain/lib/inventory_render.py").exists(), (
+        "inventory_render moved out of dbabrain/lib/ — tests/test_lib_is_pure.py no longer covers "
         "it. Either move it back or restate its import rule wherever it now lives."
     )
 

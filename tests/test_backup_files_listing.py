@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common.backupfiles import (
+from dbabrain.common.backupfiles import (
     CONTROLFILE, DIFF, FULL, LOG, BackupListError, list_backup_files,
 )
 
@@ -37,7 +37,7 @@ def test_postgresql_reads_the_level_out_of_the_directory_names(monkeypatch):
         "/b/base/20260806T130000Z_INCR|256|2026-08-06 13:00:00\n"
         "/b/wal|4096|2026-08-06 14:00:00\n"
     )
-    monkeypatch.setattr("db_ops.common.backupfiles.postgresql.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.postgresql.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": listing, "stderr": ""})
 
     result = list_backup_files({"db_type": "postgresql", "path": "/b",
@@ -50,7 +50,7 @@ def test_postgresql_reads_the_level_out_of_the_directory_names(monkeypatch):
 def test_postgresql_never_names_a_database():
     """pg_basebackup is whole-cluster. Inventing a database would let a caller filter on
     something that was never true."""
-    from db_ops.common.backupfiles import postgresql
+    from dbabrain.common.backupfiles import postgresql
 
     rows = postgresql.list_files.__doc__ or ""
     assert "whole-cluster" in postgresql.__doc__
@@ -58,7 +58,7 @@ def test_postgresql_never_names_a_database():
 
 def test_postgresql_ignores_anything_that_is_not_part_of_the_layout(monkeypatch):
     listing = "/b/base/README|10|2026-08-06 01:00:00\n/b/base/20260806T010000Z_FULL|1|x\n"
-    monkeypatch.setattr("db_ops.common.backupfiles.postgresql.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.postgresql.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": listing, "stderr": ""})
 
     result = list_backup_files({"db_type": "postgresql", "path": "/b"})
@@ -100,7 +100,7 @@ def test_oracle_levels_come_from_rman_not_the_file_name(monkeypatch):
     `List of Archived Logs in backup set` line that identifies the set. A first cut flipped a flag
     on that marker and so labelled every archivelog piece as whatever the previous set was -
     measured on the CLOUD lab as 810 "full" pieces where there is one level 0."""
-    monkeypatch.setattr("db_ops.common.backupfiles.oracle.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.oracle.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": ORACLE_LIST, "stderr": ""})
 
     result = list_backup_files({"db_type": "oracle", "path": "/b",
@@ -116,7 +116,7 @@ def test_oracle_skips_pieces_outside_the_directory_asked_about(monkeypatch):
     """An FRA copy has no counterpart in the directory being reported on, so offering it would
     hand the caller a path it cannot use."""
     text = ORACLE_LIST + "\n  Piece Name: /fra/OTHER_20260806_09\n"
-    monkeypatch.setattr("db_ops.common.backupfiles.oracle.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.oracle.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": text, "stderr": ""})
 
     result = list_backup_files({"db_type": "oracle", "path": "/b"})
@@ -126,7 +126,7 @@ def test_oracle_skips_pieces_outside_the_directory_asked_about(monkeypatch):
 
 def test_oracle_refusal_is_reported_rather_than_read_as_empty(monkeypatch):
     """An empty list and "rman would not talk to us" are different answers."""
-    monkeypatch.setattr("db_ops.common.backupfiles.oracle.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.oracle.run",
                         lambda *a, **k: {"exit_code": 1,
                                          "stdout": "RMAN-04005: error from target database",
                                          "stderr": ""})
@@ -137,7 +137,7 @@ def test_oracle_refusal_is_reported_rather_than_read_as_empty(monkeypatch):
 
 def test_kinds_filter_narrows_the_answer(monkeypatch):
     listing = ("/b/base/a_FULL|1|x\n/b/base/b_INCR|1|x\n/b/wal|1|x\n")
-    monkeypatch.setattr("db_ops.common.backupfiles.postgresql.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.postgresql.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": listing, "stderr": ""})
 
     result = list_backup_files({"db_type": "postgresql", "path": "/b", "kinds": ["full"]})
@@ -148,10 +148,10 @@ def test_kinds_filter_narrows_the_answer(monkeypatch):
 
 def test_every_engine_returns_the_same_row_shape(monkeypatch):
     """The whole point of one command for three engines."""
-    monkeypatch.setattr("db_ops.common.backupfiles.postgresql.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.postgresql.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": "/b/base/a_FULL|1|x\n",
                                          "stderr": ""})
-    monkeypatch.setattr("db_ops.common.backupfiles.oracle.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.oracle.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": ORACLE_LIST, "stderr": ""})
 
     pg = list_backup_files({"db_type": "postgresql", "path": "/b"})["files"][0]
@@ -172,7 +172,7 @@ BS Key  Size       Device Type Elapsed Time Completion Time
         Piece Name: /b/CF_AUTO_20260806_04.bkp
   Control File Included: Ckp SCN: 12345
 """
-    monkeypatch.setattr("db_ops.common.backupfiles.oracle.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.oracle.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": text, "stderr": ""})
 
     default = list_backup_files({"db_type": "oracle", "path": "/b"})
@@ -187,7 +187,7 @@ BS Key  Size       Device Type Elapsed Time Completion Time
 # --------------------------------------------------------------------------- #
 
 def _pg(monkeypatch, listing):
-    monkeypatch.setattr("db_ops.common.backupfiles.postgresql.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.postgresql.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": listing, "stderr": ""})
 
 
@@ -269,7 +269,7 @@ def test_newest_finished_at_is_what_the_next_call_takes(monkeypatch):
 def test_latest_is_per_database_not_per_kind(monkeypatch):
     """A SQL Server backup directory holds every database on the instance, so "the latest full"
     across the set would answer with whichever database was backed up last."""
-    from db_ops.common.backupfiles import _latest_only
+    from dbabrain.common.backupfiles import _latest_only
 
     files = [
         {"path": "a.bak", "kind": FULL, "database_name": "APPDB", "finished_at": "2026-08-07 01:00:00"},
@@ -283,7 +283,7 @@ def test_latest_is_per_database_not_per_kind(monkeypatch):
 def test_a_backup_with_no_reported_time_is_kept_not_dropped(monkeypatch):
     """An engine that could not state a time is a gap in knowledge, not proof the piece is old -
     dropping it would silently shorten a chain."""
-    from db_ops.common.backupfiles import _in_window
+    from dbabrain.common.backupfiles import _in_window
 
     rows = [{"path": "x", "kind": FULL, "finished_at": None}]
 
@@ -311,8 +311,8 @@ def test_a_bare_string_is_refused_rather_than_iterated(monkeypatch):
 def test_a_database_filter_narrows_a_shared_directory():
     """One SQL Server directory holds every database on the instance, so walking a chain without
     naming one would take the "diff after the full" from whichever database happened to be next."""
-    from db_ops.common.backupfiles import list_backup_files as walk
-    import db_ops.common.backupfiles.postgresql as pg
+    from dbabrain.common.backupfiles import list_backup_files as walk
+    import dbabrain.common.backupfiles.postgresql as pg
 
     rows = [
         {"path": "appdb.bak", "kind": FULL, "database_name": "APPDB", "size_bytes": None,
@@ -335,7 +335,7 @@ def test_every_engine_reports_the_same_timestamp_format():
     stat mtime with nanoseconds and an offset. `finished_at` is handed straight back as `after` on
     the next call, so a caller comparing two engines' strings must not have to know which is which.
     """
-    from db_ops.common.backupfiles import row
+    from dbabrain.common.backupfiles import row
 
     assert row(path="a", kind=FULL, finished_at="2026-08-07T01:02:13")["finished_at"] == \
         "2026-08-07 01:02:13"

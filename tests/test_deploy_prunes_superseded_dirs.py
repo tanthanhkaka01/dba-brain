@@ -29,11 +29,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_ops.control import deploy
+from dbabrain.control import deploy
 
 
 def _bundle(tmp_path: Path, layout: dict[str, list[str]]) -> Path:
-    bundle = tmp_path / "db_ops_deploy"
+    bundle = tmp_path / "dbabrain_deploy"
     for owned, children in layout.items():
         for child in children:
             (bundle / owned / child).mkdir(parents=True)

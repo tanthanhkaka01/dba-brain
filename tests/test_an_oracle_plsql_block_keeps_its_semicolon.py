@@ -10,8 +10,8 @@ usual way to call a procedure or wait on ``DBMS_SESSION.SLEEP`` - failed on its 
 
 from __future__ import annotations
 
-from db_ops.common import sql_run
-from db_ops.lib.sql_text import is_plsql_block, oracle_statement
+from dbabrain.common import sql_run
+from dbabrain.lib.sql_text import is_plsql_block, oracle_statement
 
 
 def test_a_statement_loses_its_semicolon():

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.logging_ops.handlers import DailyArchiveFileHandler, HostNameFilter
+from dbabrain.logging_ops.handlers import DailyArchiveFileHandler, HostNameFilter
 
 
 def _handler(path: Path, *, close_after_each_record: bool) -> DailyArchiveFileHandler:
@@ -34,7 +34,7 @@ def _handler(path: Path, *, close_after_each_record: bool) -> DailyArchiveFileHa
 
 
 def _record(message: str, *, exc_info=None) -> logging.LogRecord:
-    return logging.LogRecord("db_ops", logging.ERROR, __file__, 1, message, None, exc_info)
+    return logging.LogRecord("dbabrain", logging.ERROR, __file__, 1, message, None, exc_info)
 
 
 def test_a_multi_line_message_is_one_line_in_the_file(tmp_path):

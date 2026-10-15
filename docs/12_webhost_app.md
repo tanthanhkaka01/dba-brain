@@ -1,22 +1,22 @@
 # 12. Web Host App
 
-The **webhost** app (`db_ops/webhost/`) is the browser-facing side of db_ops. It does two things
+The **webhost** app (`dbabrain/webhost/`) is the browser-facing side of dbabrain. It does two things
 on one listener:
 
 1. **publishes the generated reports** over HTTP so they can be opened instead of copied off the
    worker (`/report_dba/...`), and
-2. **serves the web console** — login, sessions, a dashboard of all fourteen db_ops apps, config
-   editing, and a "Run now" button (`/db_ops/...`).
+2. **serves the web console** — login, sessions, a dashboard of all fourteen dbabrain apps, config
+   editing, and a "Run now" button (`/dbabrain/...`).
 
 It is small and self-contained, built on the Python standard-library `http.server` — no external
-web server, no framework, no JavaScript bundle, no asset to fetch. Like the other db_ops apps it
-has a CLI (`python -m db_ops.webhost.cli`) and is driven by the app-command daemon (`APP-WEBHOST`).
+web server, no framework, no JavaScript bundle, no asset to fetch. Like the other dbabrain apps it
+has a CLI (`python -m dbabrain.webhost.cli`) and is driven by the app-command daemon (`APP-WEBHOST`).
 
 Typical URLs on the worker:
 
 ```
 http://<worker>:8080/report_dba/database-inventory.html   the reports
-http://<worker>:8080/db_ops/                              the console
+http://<worker>:8080/dbabrain/                              the console
 ```
 
 The two are a **URL prefix apart on the same port**, not two servers. One listener means one
@@ -62,8 +62,8 @@ never kill, restart at once). `daemon --once` does not start services — see
 
 ## The web console
 
-`/db_ops/` is a signed-in view of the estate. It is implemented as a **pure request -> response
-function** (`db_ops/webhost/app.py::WebApp.handle`) with the socket handling left entirely in
+`/dbabrain/` is a signed-in view of the estate. It is implemented as a **pure request -> response
+function** (`dbabrain/webhost/app.py::WebApp.handle`) with the socket handling left entirely in
 `server.py`, which is what lets the whole console be tested offline —
 `tests/test_webhost_console.py` drives it with no socket, no browser and no live store.
 
@@ -76,14 +76,14 @@ different from the old one). Every other session of the account ends with the ch
 accounts sign in to the console and to the report pages. Passwords are kept only as a PBKDF2 hash
 in the running store (`web_users`); a change made from the console clears any recoverable copy
 the CLI had written to the secret store. A store that already has accounts gets no `admin` by
-itself - `python -m db_ops.webhost.cli bootstrap-admin` adds the same `admin` / `admin`, changed
+itself - `python -m dbabrain.webhost.cli bootstrap-admin` adds the same `admin` / `admin`, changed
 at its first sign-in, to such a store (a store that outlived its first node, whose only
 account belongs to someone who is not there; the 0.26 soak node, 2026-10-03). It never resets
 an active `admin`: that password is somebody's - `user-password` does that, deliberately.
 
 Accounts live in the runtime store (`web_users`), not in a file. A password is stored only as a
 PBKDF2-HMAC-SHA256 encoding at the same 200 000 iterations the encrypted secret store uses
-(`db_ops/lib/web_auth.py`); the plaintext is never written anywhere.
+(`dbabrain/lib/web_auth.py`); the plaintext is never written anywhere.
 
 Each account carries a **level from 1 to 100** — deliberately the same ladder
 `telegram_users.user_type` uses, so there is one permission scale for the whole tool. What each
@@ -119,17 +119,17 @@ a bot command's action, a metric's SQL variants, a restore's script/env - and an
 `store_config.json` or `data_files.json` - needs `min_level_admin` **and** the password in the
 confirmation box. Before, an edit account (or a script running in its browser) could set
 `command_text` to any shell line, and the daemon ran it as the worker within a second. The list is
-`db_ops/lib/config_exec_fields.py`.
+`dbabrain/lib/config_exec_fields.py`.
 
 The password is also written to `data/encrypted_secret_text.json` under
 `WEB_CONSOLE_<USERNAME>`, so an operator can look it up instead of resetting it:
 
 ```powershell
-python -m db_ops.webhost.cli user-password-show --username thanh --key-base64 <KEY>
+python -m dbabrain.webhost.cli user-password-show --username thanh --key-base64 <KEY>
 ```
 
 Pass `--no-remember` to keep only the hash. What the copy costs is worth saying plainly: the hash
-stops being the only one, and anyone with `DB_OPS_SECRET_KEY` can read the password. That is a
+stops being the only one, and anyone with `DBABRAIN_SECRET_KEY` can read the password. That is a
 real reduction and a small one *here* — the same file already holds the postgres superuser and the
 SQL Server DBA logins — and **the login path never consults it**, so it is a note for a person,
 not a second way in. `web_users.password_ref` records where the copy lives, or is empty when there
@@ -216,13 +216,13 @@ rather than guessing the default. The per-server pages (`index-usage_<slug>.html
 they are reached from the inventory and from the index report's own fleet picker, and naming one
 estate's servers in shipped code is what `check-identifiers` refuses.
 
-`/db_ops/` opens on an **overview**: counts for the estate, then only what needs attention —
+`/dbabrain/` opens on an **overview**: counts for the estate, then only what needs attention —
 failing, overdue, or queued. Deliberately not every app's detail at once, which is what made the
 two apps that were failing indistinguishable from the twelve that were fine.
 
 ### An app's page
 
-`/db_ops/app/<app_code>` shows one app: its scheduled commands with the schedule **spelled the way
+`/dbabrain/app/<app_code>` shows one app: its scheduled commands with the schedule **spelled the way
 an operator says it** ("every 1s", "every 2h", "runs once and stays up" for `repeat_interval: 0`,
 "manual only" for `-1`), the timeout, the node role, the command line, and how the last 24 hours
 went — healthy / overdue / failing, run and failure counts, and the last error — followed by the
@@ -232,7 +232,7 @@ config it owns. An app with no scheduled command says so rather than looking bro
 table with a single row to click — that click told the operator nothing, and for the daemon
 `app_commands.json` *is* what the page is for. Apps owning several keep the table, because there
 the choice is real. Either way a record links to the same editor, so there is one write path and
-not two, and the file's own page stays reachable at `/db_ops/config/<file>`.
+not two, and the file's own page stays reachable at `/dbabrain/config/<file>`.
 
 Three sources are joined, and **all three are read through the store**, not off this checkout's
 disk:
@@ -241,7 +241,7 @@ disk:
 | --- | --- |
 | The blocks themselves | `webhost_config.json`, as mirrored into `config_items` |
 | Schedules and command lines | `app_commands.json`, as mirrored into `config_items` |
-| Healthy / overdue / failing | `job_runs`, via `db_ops.db.ops_status` |
+| Healthy / overdue / failing | `job_runs`, via `dbabrain.db.ops_status` |
 
 The status column is the **same computation the control app's hourly Telegram summary uses**, so
 the console and the alert cannot disagree about whether an app is overdue. If the run history
@@ -253,7 +253,7 @@ The config table on each app's page is the entry point for editing. See "Config 
 
 ### The running log
 
-The **Logging Engine** page (`/db_ops/app/logging_ops`) shows the log this node is writing, newest
+The **Logging Engine** page (`/dbabrain/app/logging_ops`) shows the log this node is writing, newest
 line first, a hundred lines at a time, with older lines arriving as you scroll. A picker chooses
 which log; it opens on whichever moved last, because that is the one being written now.
 
@@ -264,7 +264,7 @@ fourteen times and still leave nothing where people look.
 Some decisions worth knowing:
 
 - **Newest first, read from the end.** The file is seeked backwards a chunk at a time
-  ([`db_ops/lib/log_tail.py`](../db_ops/lib/log_tail.py)), so opening a 400 MB log costs one page,
+  ([`dbabrain/lib/log_tail.py`](../dbabrain/lib/log_tail.py)), so opening a 400 MB log costs one page,
   not a scan. Memory is bounded by the chunk, never by the file.
 - **The scroll cursor is a byte offset, not a page number.** Lines are being appended while you
   read; anything counted in lines would shift under you and repeat or skip rows.
@@ -282,7 +282,7 @@ may not reach the internet. With scripting off it degrades to the newest hundred
 the server, which is still the useful part.
 
 ```
-GET /db_ops/api/logs?file=metrics.log&before=<offset>&limit=100
+GET /dbabrain/api/logs?file=metrics.log&before=<offset>&limit=100
 ```
 
 ### Editing config
@@ -294,7 +294,7 @@ input: a number box for `repeat_interval`, a checkbox for `active`, one-item-per
 `db_types`, and a nested block like `time_window` or `notify` as its own section with its rows
 indented under it.
 
-The grid is generated **from the record itself** ([`db_ops/lib/record_form.py`](../db_ops/lib/record_form.py)),
+The grid is generated **from the record itself** ([`dbabrain/lib/record_form.py`](../dbabrain/lib/record_form.py)),
 never from a hand-written list of known fields. That distinction is the whole design: these
 records have no fixed shape — a SQL target carries `time_window` and `notify`, a metric definition
 carries per-`db_type` `variants`, `users.json` carries a list of credential objects — and a form
@@ -331,7 +331,7 @@ deploy now refuses to do that silently: see "The config-drift gate" in
 [11_control_app.md](11_control_app.md). To bring an edit to the master by hand:
 
 ```powershell
-python -m db_ops.db.cli export-config '{"files": ["app_commands.json"]}' --key-base64 <K>
+python -m dbabrain.db.cli export-config '{"files": ["app_commands.json"]}' --key-base64 <K>
 ```
 
 **Retiring keeps the row.** The record leaves the file and its row goes `is_active = 0`, keeping
@@ -346,7 +346,7 @@ Every write is gated twice, and a refusal says which:
 | CSRF token | A form from somewhere else. `SameSite=Lax` already blocks the cross-site POST; this is the second lock. |
 | `min_level_edit` (50) | An account that may look but not change. A viewer sees no edit controls at all — a button that answers 403 is a worse answer than no button. |
 
-The write path itself (`db_ops/db/config_edit.py`) refuses a record whose key fields do not match
+The write path itself (`dbabrain/db/config_edit.py`) refuses a record whose key fields do not match
 the record being edited (renaming is a delete and an add), a key that is already live, a literal
 secret, a payload that is not an object, and retiring the file-settings row.
 
@@ -369,23 +369,23 @@ timeout reaper, and a console that spawned its own subprocess would have none of
 The same request can be queued from a shell:
 
 ```powershell
-python -m db_ops.db.cli run-app '{"app_command_id": "APP-METRICS", "requested_by": "thanh"}'
-python -m db_ops.db.cli run-app '{"list": true}'
+python -m dbabrain.db.cli run-app '{"app_command_id": "APP-METRICS", "requested_by": "thanh"}'
+python -m dbabrain.db.cli run-app '{"list": true}'
 ```
 
 ### Managing accounts
 
 ```powershell
 # the first account (the console says so when there are none)
-python -m db_ops.webhost.cli user-add --username thanh --level 100 --password-stdin
+python -m dbabrain.webhost.cli user-add --username thanh --level 100 --password-stdin
 
-python -m db_ops.webhost.cli user-list
-python -m db_ops.webhost.cli user-level    --username thanh --level 50
-python -m db_ops.webhost.cli user-password --username thanh --password-stdin
-python -m db_ops.webhost.cli user-password-show --username thanh --key-base64 <KEY>
-python -m db_ops.webhost.cli user-disable  --username someone --note "left the team"
-python -m db_ops.webhost.cli sessions --username thanh
-python -m db_ops.webhost.cli sessions --username thanh --revoke
+python -m dbabrain.webhost.cli user-list
+python -m dbabrain.webhost.cli user-level    --username thanh --level 50
+python -m dbabrain.webhost.cli user-password --username thanh --password-stdin
+python -m dbabrain.webhost.cli user-password-show --username thanh --key-base64 <KEY>
+python -m dbabrain.webhost.cli user-disable  --username someone --note "left the team"
+python -m dbabrain.webhost.cli sessions --username thanh
+python -m dbabrain.webhost.cli sessions --username thanh --revoke
 ```
 
 **Prefer `--password-stdin`.** `--password` exists for convenience but argv is world-readable in
@@ -396,25 +396,25 @@ way on a shared host should be treated as disclosed.
 
 | Route | Method | Needs a session | What it does |
 | --- | --- | --- | --- |
-| `/db_ops/login` | GET, POST | no | The form; authenticates and sets the cookie. |
-| `/db_ops/logout` | POST | no | Revokes the session and clears the cookie. |
-| `/db_ops/` | GET | yes | The overview: estate counts, and what needs attention. |
-| `/db_ops/app/<app_code>` | GET | yes | One app: its commands, its status, its config. |
-| `/db_ops/api/session` | GET | yes | Who is signed in, and until when. |
-| `/db_ops/api/apps` | GET | yes | The app blocks as JSON. |
-| `/db_ops/api/config` | GET | yes | Mirrored config records, filterable. |
-| `/db_ops/api/logs` | GET | yes | One page of a log file, newest first. |
-| `/db_ops/config/<file>` | GET | yes | One config file's records, by collection. |
-| `/db_ops/config/<file>/<collection>/<key>` | GET | yes | One record, as editable JSON, with its history. |
-| `/db_ops/config/<file>/<collection>[/<key>]` | POST | yes, level 50 | Create or update a record. |
-| `/db_ops/config/<file>/<collection>/<key>/delete` | POST | yes, level 50 | Retire a record. |
-| `/db_ops/apps/<app_command_id>/run` | POST | yes, level 50 | Queue a run. |
-| `/db_ops/users` | GET | yes, admin | Accounts: role, state, last sign-in, failed sign-ins, sessions; recent sign-in attempts. |
-| `/db_ops/users` | POST | yes, admin + password | Create an account (role or exact level, initial password, *must change* by default). |
-| `/db_ops/users/<name>/level` | POST | yes, admin + password | Change its role or level. |
-| `/db_ops/users/<name>/password` | POST | yes, admin + password | Reset its password (ends its sessions; *must change* by default). |
-| `/db_ops/users/<name>/signout` | POST | yes, admin + password | End every session it holds. |
-| `/db_ops/users/<name>/disable` | POST | yes, admin + password | Disable it (ends its sessions; the name can be issued again). |
+| `/dbabrain/login` | GET, POST | no | The form; authenticates and sets the cookie. |
+| `/dbabrain/logout` | POST | no | Revokes the session and clears the cookie. |
+| `/dbabrain/` | GET | yes | The overview: estate counts, and what needs attention. |
+| `/dbabrain/app/<app_code>` | GET | yes | One app: its commands, its status, its config. |
+| `/dbabrain/api/session` | GET | yes | Who is signed in, and until when. |
+| `/dbabrain/api/apps` | GET | yes | The app blocks as JSON. |
+| `/dbabrain/api/config` | GET | yes | Mirrored config records, filterable. |
+| `/dbabrain/api/logs` | GET | yes | One page of a log file, newest first. |
+| `/dbabrain/config/<file>` | GET | yes | One config file's records, by collection. |
+| `/dbabrain/config/<file>/<collection>/<key>` | GET | yes | One record, as editable JSON, with its history. |
+| `/dbabrain/config/<file>/<collection>[/<key>]` | POST | yes, level 50 | Create or update a record. |
+| `/dbabrain/config/<file>/<collection>/<key>/delete` | POST | yes, level 50 | Retire a record. |
+| `/dbabrain/apps/<app_command_id>/run` | POST | yes, level 50 | Queue a run. |
+| `/dbabrain/users` | GET | yes, admin | Accounts: role, state, last sign-in, failed sign-ins, sessions; recent sign-in attempts. |
+| `/dbabrain/users` | POST | yes, admin + password | Create an account (role or exact level, initial password, *must change* by default). |
+| `/dbabrain/users/<name>/level` | POST | yes, admin + password | Change its role or level. |
+| `/dbabrain/users/<name>/password` | POST | yes, admin + password | Reset its password (ends its sessions; *must change* by default). |
+| `/dbabrain/users/<name>/signout` | POST | yes, admin + password | End every session it holds. |
+| `/dbabrain/users/<name>/disable` | POST | yes, admin + password | Disable it (ends its sessions; the name can be issued again). |
 
 Anything else under the prefix is a 404. An unauthenticated page request redirects to the login
 form; an unauthenticated **`/api/`** request answers `401` with JSON, so a `fetch()` gets an error
@@ -423,7 +423,7 @@ it can read rather than a login page it would parse as data.
 ## CLI
 
 ```powershell
-python -m db_ops.webhost.cli --config config.json serve \
+python -m dbabrain.webhost.cli --config config.json serve \
   --root runtime/reports \
   --mount report_dba \
   --port 8080
@@ -440,10 +440,10 @@ python -m db_ops.webhost.cli --config config.json serve \
 | `--latest-glob` | `*_database-inventory-report.html` | Which reports the `latest` link tracks. |
 | `--refresh-seconds` | `60` | How often the `latest` link is refreshed. |
 | `--console` / `--no-console` | on | Serve the web console beside the reports. |
-| `--console-mount` | from `webhost_config.json` (`db_ops`) | URL prefix for the console. |
+| `--console-mount` | from `webhost_config.json` (`dbabrain`) | URL prefix for the console. |
 
 Config is resolved as `config.webhost.json` if present, else `config.json`. The console opens the
-runtime store, so `serve` needs the secret passphrase (`--key-base64`, or `DB_OPS_SECRET_KEY`) when
+runtime store, so `serve` needs the secret passphrase (`--key-base64`, or `DBABRAIN_SECRET_KEY`) when
 the store is PostgreSQL — the daemon forwards it automatically.
 
 The console's own settings (mount, cookie name, session length, the `min_level_*` gates) come from
@@ -481,7 +481,7 @@ URL to get the newest snapshot **at or before** a moment:
 | `index-usage_<slug>.html` | a stable name, overwritten every run | `<YYYYMMDD>_<same name>` |
 
 The second group is archived **once per calendar day**, by
-[`db_ops.lib.report_archive`](../db_ops/lib/report_archive.py), overwritten by each later
+[`dbabrain.lib.report_archive`](../dbabrain/lib/report_archive.py), overwritten by each later
 run that day. Stamping them per run was measured and rejected: ~12 MB a build against a two-hourly
 workflow is ~4.3 GB a month of near-duplicate files. One copy per day is not a lossy approximation
 of what `?date=` can ask for — a date-only query addresses exactly one snapshot per day — and it
@@ -503,7 +503,7 @@ to, not the current wall-clock time.
 `APP-WEBHOST` in `data/app_commands.json` starts the server:
 
 ```json
-"command_text": "python -m db_ops.webhost.cli --config config.json serve --root runtime/reports --mount report_dba --port 8080"
+"command_text": "python -m dbabrain.webhost.cli --config config.json serve --root runtime/reports --mount report_dba --port 8080"
 ```
 
 It uses `repeat_interval: 0` = **run-once** (see [03_app_command_daemon.md](03_app_command_daemon.md)):
@@ -524,7 +524,7 @@ still serves the timestamped files directly, but the fixed `database-inventory.h
 | `database-inventory.html` 404s but `?date=...` works | The `latest` symlink could not be created (Windows privilege). Runs fine on the Linux worker. |
 | `latest` still shows an old snapshot | The `latest` link refreshes every `--refresh-seconds` (default 60s); wait one cycle after a new report renders. |
 | `?date=` returns an older report than expected | No report exists at or before that moment; selection is newest `<= date`. Check `runtime/reports` for the stamps present. |
-| Report shows only a date, no time | The file was rendered by an older db_ops version (date-only stamp). Newly rendered reports include the time. |
+| Report shows only a date, no time | The file was rendered by an older dbabrain version (date-only stamp). Newly rendered reports include the time. |
 | Reachable from the worker host but not other machines | A network/routing issue (e.g. a VM bridged over Wi-Fi), not the webhost — it binds `0.0.0.0`. Verify the listener with `ss -tlnp | grep 8080` and that nothing upstream blocks the port. |
 | Console says "No accounts exist yet" | True — create the first with `webhost.cli user-add`. The store is reachable; it is empty. |
 | Signed out every time the browser is closed | The cookie lost its `Max-Age`. Check the `Set-Cookie` header on the login response; `session_days` in `webhost_config.json` drives it. |

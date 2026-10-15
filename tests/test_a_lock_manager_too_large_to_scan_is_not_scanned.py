@@ -31,13 +31,13 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.paths import PACKAGED_CATALOGUE
-from db_ops.lib.sql_text import SqlSettingError, apply_sql_settings
-from db_ops.metrics.definitions import load_metric_definitions
+from dbabrain.lib.paths import PACKAGED_CATALOGUE
+from dbabrain.lib.sql_text import SqlSettingError, apply_sql_settings
+from dbabrain.metrics.definitions import load_metric_definitions
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-COLLECTORS = REPO_ROOT / "db_ops" / "metrics" / "collectors"
-CATALOGUE = REPO_ROOT / "db_ops" / "metrics" / "catalogue" / "metric_definitions.json"
+COLLECTORS = REPO_ROOT / "dbabrain" / "metrics" / "collectors"
+CATALOGUE = REPO_ROOT / "dbabrain" / "metrics" / "catalogue" / "metric_definitions.json"
 VARIANTS = ("sqlserver/025_sqlserver_transaction_lock_holders.sql",
             "sqlserver/legacy_2008r2/025_sqlserver_transaction_lock_holders.sql")
 

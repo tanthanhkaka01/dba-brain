@@ -16,7 +16,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
-from db_ops.lib import daemon_state
+from dbabrain.lib import daemon_state
 
 
 def test_a_running_daemon_reports_hours_since_it_started(tmp_path):
@@ -87,37 +87,37 @@ def test_a_runtime_directory_that_cannot_be_written_does_not_stop_the_daemon(tmp
 def test_both_uptimes_are_shown_because_they_answer_different_questions(tmp_path):
     """A node whose daemon restarted an hour ago sits on a host that has been up for a week.
     Reporting one of those as "uptime" answers whichever question the reader did not ask."""
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
     daemon_state.record_start(tmp_path)
     text = self_status.render({
         "uptime": {"hours": 165.4, "since": "2026-08-29T10:30:17Z", "source": "GetTickCount64"},
-        "db_ops_uptime": self_status.db_ops_uptime(tmp_path),
+        "dbabrain_uptime": self_status.dbabrain_uptime(tmp_path),
     })
 
     # The stored value goes in as UTC and comes out on the display clock, saying which — a
-    # listing is read by a person, and "10:30:17Z" next to a local "db_ops up" line was two
+    # listing is read by a person, and "10:30:17Z" next to a local "dbabrain up" line was two
     # clocks in three lines.
     assert "uptime    : 165.40 h  (host up since 2026-08-29 10:30:17 +00)" in text
-    assert "db_ops up : 0.00 h  (since " in text
+    assert "dbabrain up : 0.00 h  (since " in text
 
 
 def test_the_report_says_not_running_rather_than_leaving_the_line_out(tmp_path):
     """An absent line reads as "nothing to say"; this line saying "not running" is the answer."""
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
-    text = self_status.render({"db_ops_uptime": self_status.db_ops_uptime(tmp_path)})
+    text = self_status.render({"dbabrain_uptime": self_status.dbabrain_uptime(tmp_path)})
 
-    assert "db_ops up : not running" in text
+    assert "dbabrain up : not running" in text
 
 
 def test_a_caller_that_does_not_know_the_runtime_dir_gets_unknown_not_a_wrong_answer():
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
-    facts = self_status.db_ops_uptime(None)
+    facts = self_status.dbabrain_uptime(None)
 
     assert facts["status"] == "unknown"
-    assert "db_ops up : unknown" in self_status.render({"db_ops_uptime": facts})
+    assert "dbabrain up : unknown" in self_status.render({"dbabrain_uptime": facts})
 
 
 def test_a_second_process_does_not_clear_the_first_one_s_record(tmp_path):
@@ -161,7 +161,7 @@ def test_a_single_pass_does_not_claim_the_file():
     state in the same root, and the clear on its way out would then delete it."""
     import inspect
 
-    from db_ops.jobs import daemon
+    from dbabrain.jobs import daemon
 
     source = inspect.getsource(daemon)
     claim = source.index("daemon_state.record_start(")

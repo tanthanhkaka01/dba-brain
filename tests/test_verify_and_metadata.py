@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import verifyrestore
-from db_ops.common.restoremetadata import MetadataReplayError, replay, split_batches
+from dbabrain.common import verifyrestore
+from dbabrain.common.restoremetadata import MetadataReplayError, replay, split_batches
 
 
 # --------------------------------------------------------------------------- #

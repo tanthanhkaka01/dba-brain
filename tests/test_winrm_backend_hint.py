@@ -13,7 +13,7 @@ recording `WARNING: Command exited with code 1` every cycle.
 So the hint is attached where the wrong conclusion gets drawn, and only there.
 """
 
-from db_ops.common.remote_exec import RemoteResult, _name_the_missing_backend
+from dbabrain.common.remote_exec import RemoteResult, _name_the_missing_backend
 
 
 def _result(exit_code=1, stderr="", stdout=""):
@@ -33,7 +33,7 @@ def test_an_authentication_failure_names_the_backend_that_was_missing():
     hinted = _name_the_missing_backend(_result(stderr=AUTH_FAILURE), host="192.0.2.10")
 
     assert "pypsrp` is not installed" in hinted.stderr
-    # Named through db_ops.lib.packaging, so it is right under either distribution name.
+    # Named through dbabrain.lib.packaging, so it is right under either distribution name.
     assert "[winrm]" in hinted.stderr and "pip install" in hinted.stderr
     assert AUTH_FAILURE in hinted.stderr, "the host's own words are kept, not replaced"
 

@@ -2,9 +2,9 @@ import json
 from pathlib import Path
 
 from conftest import answer_metric_items
-from db_ops.metrics.collector import _collect_one_metric
-from db_ops.metrics.definitions import load_metric_definitions
-from db_ops.metrics.models import MetricDefinition, MetricTarget
+from dbabrain.metrics.collector import _collect_one_metric
+from dbabrain.metrics.definitions import load_metric_definitions
+from dbabrain.metrics.models import MetricDefinition, MetricTarget
 
 
 TEST_WORK_DIR = Path(__file__).resolve().parents[1] / "runtime" / "test_metric_timeouts"

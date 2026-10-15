@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The Logging Engine provides consistent file logging for every `db_ops` app. It writes per-`log_scope` app logs, runtime stdout/stderr logs, a shared `errors.log`, and daily archives.
+The Logging Engine provides consistent file logging for every `dbabrain` app. It writes per-`log_scope` app logs, runtime stdout/stderr logs, a shared `errors.log`, and daily archives.
 
 ## Reading the logs from the console
 
@@ -17,7 +17,7 @@ See [12_webhost_app.md](12_webhost_app.md).
 
 ## Package / Files
 
-- `db_ops/logging_ops/`
+- `dbabrain/logging_ops/`
 - `logs/`
 - `data/app_commands.json` field `log_scope`
 - `config.json` fields `log_dir`, `console_level`, `file_level`
@@ -54,19 +54,19 @@ DATE|LOGTYPE|APP|HOST|FUNCTION|TEXT
 Write a test log and insert a `job_runs` row:
 
 ```powershell
-python -m db_ops.cli --config config.json --level warning --message "manual logging test" --job-code MANUAL-LOG-TEST --status warning
+python -m dbabrain.cli --config config.json --level warning --message "manual logging test" --job-code MANUAL-LOG-TEST --status warning
 ```
 
 Show recent `job_runs` rows:
 
 ```powershell
-python -m db_ops.cli --config config.json --recent 20
+python -m dbabrain.cli --config config.json --recent 20
 ```
 
 Run the daemon once to exercise per-command log scopes:
 
 ```powershell
-python -m db_ops.jobs.daemon --config config.json --once
+python -m dbabrain.jobs.daemon --config config.json --once
 ```
 
 ## Useful Manual Queries

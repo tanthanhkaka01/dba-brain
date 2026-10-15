@@ -2,9 +2,9 @@ from io import StringIO
 import logging
 from pathlib import Path
 
-from db_ops.logging_ops import build_log_paths, log_event, setup_app_logger
-from db_ops.logging_ops.handlers import DailyArchiveFileHandler
-from db_ops.logging_ops.runtime_stdout import TeeStdout
+from dbabrain.logging_ops import build_log_paths, log_event, setup_app_logger
+from dbabrain.logging_ops.handlers import DailyArchiveFileHandler
+from dbabrain.logging_ops.runtime_stdout import TeeStdout
 
 
 class FakeTelegramConfig:
@@ -13,7 +13,7 @@ class FakeTelegramConfig:
 
 class FakeConfig:
     def __init__(self, log_dir):
-        self.app_name = "db_ops"
+        self.app_name = "dbabrain"
         self.log_dir = log_dir
         self.console_level = "INFO"
         self.file_level = "INFO"
@@ -35,7 +35,7 @@ def test_tee_stdout_writes_common_log_format(tmp_path):
 
 
 def test_build_log_paths_uses_log_scope():
-    logs_dir = Path("tools/db_ops/logs")
+    logs_dir = Path("tools/dbabrain/logs")
     main_log, runtime_log = build_log_paths(logs_dir, "sql_tasks")
 
     assert main_log == logs_dir / "sql_tasks.log"

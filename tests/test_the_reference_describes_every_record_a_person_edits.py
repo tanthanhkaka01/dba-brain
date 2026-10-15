@@ -23,11 +23,11 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import sql_task_admin
-from db_ops.lib import shared_objects
-from db_ops.lib.sql_access import SQL_TASK_DB_TYPES
-from db_ops.metrics import definitions
-from db_ops.telegram.command_processor import ACTION_TYPES
+from dbabrain.common import sql_task_admin
+from dbabrain.lib import shared_objects
+from dbabrain.lib.sql_access import SQL_TASK_DB_TYPES
+from dbabrain.metrics import definitions
+from dbabrain.telegram.command_processor import ACTION_TYPES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA = REPO_ROOT / "data"
@@ -141,7 +141,7 @@ def test_the_shipped_examples_obey_the_new_entries(tmp_path):
 # --------------------------------------------------------------------------- #
 def _smb_restore_example() -> tuple[dict, dict]:
     """The example's `backup_restore` block, and its one engine (not script) restore entry."""
-    from db_ops.backup_restore.config import is_script_restore
+    from dbabrain.backup_restore.config import is_script_restore
 
     block = json.loads((DATA / "restore_config.example.json").read_text(encoding="utf-8"))["backup_restore"]
     entry = next(item for item in block["restores"] if not is_script_restore(item))
@@ -162,7 +162,7 @@ def test_a_copy_default_the_restore_block_sets_is_also_an_entry_field():
 
 
 def test_an_entry_s_own_copy_settings_are_the_ones_it_restores_with():
-    from db_ops.backup_restore.config import RESTORE_PARSER_DEFAULTS, _parse_restore_items
+    from dbabrain.backup_restore.config import RESTORE_PARSER_DEFAULTS, _parse_restore_items
 
     block, entry = _smb_restore_example()
     own = {**entry, "copy_recent_hours": 192, "copy_file_patterns": ["APPDB_*"],
@@ -178,7 +178,7 @@ def test_an_entry_s_own_copy_settings_are_the_ones_it_restores_with():
 
 
 def test_space_check_is_described_as_its_parser_reads_it():
-    from db_ops.lib import restore_space
+    from dbabrain.lib import restore_space
 
     fields = {f["field"]: f for f in _entry("restore_space_check")["fields"]}
     assert set(fields) == {"enabled", "factor", "on_unknown", "measure_restore"}

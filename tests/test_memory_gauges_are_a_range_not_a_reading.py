@@ -23,8 +23,8 @@ about all three:
   data, not an instance short of memory. Those rows are above PLE in the table for that reason.
 """
 
-from db_ops.lib import interval_rates
-from db_ops.reports import workload
+from dbabrain.lib import interval_rates
+from dbabrain.reports import workload
 
 
 def _memory(stamp, *, since="2026-09-06 15:58:55", **values):
@@ -222,7 +222,7 @@ def test_the_collector_records_and_grades_nothing():
     section exists to prevent, so the collector must not be able to reach one either."""
     from pathlib import Path
 
-    sql = Path("db_ops/metrics/collectors/sqlserver/075_sqlserver_memory_gauges.sql").read_text(
+    sql = Path("dbabrain/metrics/collectors/sqlserver/075_sqlserver_memory_gauges.sql").read_text(
         encoding="utf-8")
     assert "'OK' AS varchar(16)" in sql
     assert "WARNING" not in sql and "CRITICAL" not in sql
@@ -235,7 +235,7 @@ def test_every_item_the_collector_emits_has_a_home_on_the_page():
     from pathlib import Path
     import re
 
-    sql = Path("db_ops/metrics/collectors/sqlserver/075_sqlserver_memory_gauges.sql").read_text(
+    sql = Path("dbabrain/metrics/collectors/sqlserver/075_sqlserver_memory_gauges.sql").read_text(
         encoding="utf-8")
     body = sql.split("SET NOCOUNT ON")[1]
     emitted = set(re.findall(r"'([a-z_]{4,})'\s*(?:AS metric_item|,)", body))

@@ -1,6 +1,6 @@
 """An app never runs another app's CLI from its code (R42).
 
-The operator, 2026-09-25: *a `db_ops` CLI is not something to run casually - what components share
+The operator, 2026-09-25: *a `dbabrain` CLI is not something to run casually - what components share
 goes into `lib` or `common`.* An app driving another app's CLI is an import rule (R01) routed around
 through a process: the two are coupled exactly as much, and the coupling is invisible to every
 import check.
@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 
-DB_OPS = Path(__file__).resolve().parents[1] / "db_ops"
+DBABRAIN = Path(__file__).resolve().parents[1] / "dbabrain"
 APPS = frozenset({"backup_restore", "control", "jobs", "metrics", "reports", "sla", "sql_tasks",
                   "sre", "telegram", "webhost"})
 
@@ -32,24 +32,24 @@ CALLS_LEFT: frozenset[tuple[str, str]] = frozenset()
 
 
 def _app_files() -> list[Path]:
-    return sorted(p for p in DB_OPS.rglob("*.py") if "__pycache__" not in p.parts
-                  and p.relative_to(DB_OPS).parts[0] in APPS and len(p.relative_to(DB_OPS).parts) > 1)
+    return sorted(p for p in DBABRAIN.rglob("*.py") if "__pycache__" not in p.parts
+                  and p.relative_to(DBABRAIN).parts[0] in APPS and len(p.relative_to(DBABRAIN).parts) > 1)
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(DB_OPS).as_posix()
+    return path.relative_to(DBABRAIN).as_posix()
 
 
 def _apps_started(path: Path) -> set[str]:
     """The other apps whose module an argv list in this file names right after ``-m``."""
-    own = path.relative_to(DB_OPS).parts[0]
+    own = path.relative_to(DBABRAIN).parts[0]
     started: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         if not isinstance(node, (ast.List, ast.Tuple)):
             continue
         values = [item.value if isinstance(item, ast.Constant) else None for item in node.elts]
         for flag, module in zip(values, values[1:]):
-            if flag == "-m" and isinstance(module, str) and module.startswith("db_ops."):
+            if flag == "-m" and isinstance(module, str) and module.startswith("dbabrain."):
                 app = module.split(".")[1]
                 if app in APPS and app != own:
                     started.add(app)
@@ -67,5 +67,5 @@ def test_an_app_does_not_start_another_apps_cli(path):
 def test_the_calls_left_only_shrink():
     """A call that was moved leaves the list in the same change."""
     gone = sorted(f"{file} -> {app}" for file, app in CALLS_LEFT
-                  if not (DB_OPS / file).exists() or app not in _apps_started(DB_OPS / file))
+                  if not (DBABRAIN / file).exists() or app not in _apps_started(DBABRAIN / file))
     assert not gone, f"no longer started - delete from CALLS_LEFT: {gone}"

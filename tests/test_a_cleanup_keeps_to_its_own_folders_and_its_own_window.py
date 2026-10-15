@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore import delete_backup
-from db_ops.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
-from db_ops.lib.backupfiles_retention import plan_retention
+from dbabrain.backup_restore import delete_backup
+from dbabrain.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
+from dbabrain.lib.backupfiles_retention import plan_retention
 
 
 def _config(root: str, **overrides) -> BackupRestoreConfig:

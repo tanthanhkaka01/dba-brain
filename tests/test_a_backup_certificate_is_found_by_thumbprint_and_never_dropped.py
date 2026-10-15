@@ -10,7 +10,7 @@ with its own ``db_ops_backup_cert`` - each path did the wrong thing its own way:
 * the SMB restore saw the name and skipped the import - so the source's certificate never arrived,
   and the restore failed on the thumbprint.
 
-Now there is one batch (``db_ops.lib.sqlserver_certificate``) and all three send it: the thumbprint
+Now there is one batch (``dbabrain.lib.sqlserver_certificate``) and all three send it: the thumbprint
 is the SHA-1 of the ``.cer`` file, read by the instance itself; one already there is left alone; a
 taken name becomes ``<name>_<first 8 hex digits>``. The SMB restore can also read the pair that
 dbabrain's own backup job exports beside the backups, which it could not before.
@@ -26,14 +26,14 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore import certificate as cert_module
-from db_ops.backup_restore.config import BackupCertificateSource, BackupRestoreConfig, load_restore_configs
-from db_ops.common import restorekey, sqlcmd_run
-from db_ops.lib import sqlserver_certificate
+from dbabrain.backup_restore import certificate as cert_module
+from dbabrain.backup_restore.config import BackupCertificateSource, BackupRestoreConfig, load_restore_configs
+from dbabrain.common import restorekey, sqlcmd_run
+from dbabrain.lib import sqlserver_certificate
 
 REPO = Path(__file__).resolve().parents[1]
-SHELL_RESTORE = REPO / "db_ops" / "common" / "restore_scripts" / "sqlserver" / "mssql_restore.sh"
-WINDOWS_BACKUP = REPO / "db_ops" / "common" / "backup_scripts" / "sqlserver" / "mssql_backup_database.ps1"
+SHELL_RESTORE = REPO / "dbabrain" / "common" / "restore_scripts" / "sqlserver" / "mssql_restore.sh"
+WINDOWS_BACKUP = REPO / "dbabrain" / "common" / "backup_scripts" / "sqlserver" / "mssql_backup_database.ps1"
 
 
 def _batch(**overrides) -> str:
@@ -80,7 +80,7 @@ def test_values_inside_the_dynamic_statement_are_escaped_for_both_literals():
 
 def test_the_answer_line_names_the_certificate_that_holds_the_thumbprint_now():
     assert sqlserver_certificate.parse_marker(
-        "noise\nDB_OPS_CERTIFICATE|db_ops_backup_cert_a1b2c3d4|A1B2C3D4E5F60718293A4B5C6D7E8F9012345678|1\n") == {
+        "noise\nDBABRAIN_CERTIFICATE|db_ops_backup_cert_a1b2c3d4|A1B2C3D4E5F60718293A4B5C6D7E8F9012345678|1\n") == {
         "certificate_name": "db_ops_backup_cert_a1b2c3d4",
         "thumbprint": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "imported": True}
     assert sqlserver_certificate.parse_marker("no marker here") is None
@@ -92,7 +92,7 @@ def test_the_shell_restore_sends_the_same_batch_and_drops_nothing():
     assert "DROP CERTIFICATE" not in shell
     for line in ("HASHBYTES('SHA1', f.BulkColumn)", "WHERE thumbprint = @thumbprint",
                  "SUBSTRING(@thumbprint, 1, 4)", "pvt_key_encryption_type = 'NA'",
-                 "DB_OPS_CERTIFICATE|"):
+                 "DBABRAIN_CERTIFICATE|"):
         assert line in shell
 
 
@@ -102,7 +102,9 @@ def test_the_shell_restore_sends_the_same_batch_and_drops_nothing():
 def test_restore_key_plans_the_one_batch_and_drops_nothing():
     answer = restorekey.import_key({"cer_path": "/c.cer", "pvk_path": "/c.pvk", "password": "pw",
                                     "dry_run": True})
-    assert answer["statements"] == [_batch(cer_path="/c.cer", pvk_path="/c.pvk")]
+    # The request names no certificate, so the batch asks for the one default name.
+    assert answer["statements"] == [_batch(name=sqlserver_certificate.DEFAULT_NAME,
+                                           cer_path="/c.cer", pvk_path="/c.pvk")]
     assert "DROP CERTIFICATE" not in answer["statements"][0]
 
 
@@ -112,7 +114,7 @@ def test_restore_key_through_sqlcmd_reports_one_already_there_as_not_imported(mo
     def fake_run(request):
         sent.update(request)
         return {"exit_code": 0, "timed_out": False,
-                "stdout": "DB_OPS_CERTIFICATE|db_ops_backup_cert_source|A1B2C3D4|0\n"}
+                "stdout": "DBABRAIN_CERTIFICATE|db_ops_backup_cert_source|A1B2C3D4|0\n"}
 
     monkeypatch.setattr(sqlcmd_run, "run_sqlcmd", fake_run)
     answer = restorekey.import_key({
@@ -199,8 +201,11 @@ def test_an_entry_states_the_pair_and_the_target_container(tmp_path):
     }
     path.write_text(json.dumps({"backup_restore": {"restores": [entry]}}), encoding="utf-8")
     config = load_restore_configs(path)[0]
+    # The entry names no certificate: the one default name. An entry that existed before 0.29.0
+    # does not get here - upgrade-config wrote the name it had been running on into it.
     assert config.backup_certificate == BackupCertificateSource(
-        name="db_ops_backup_cert", password_ref="PASSPHRASE_REF", source_dir="D:\\SQLBK_DBOPS\\_cert")
+        name=sqlserver_certificate.DEFAULT_NAME, password_ref="PASSPHRASE_REF",
+        source_dir="D:\\SQLBK_DBOPS\\_cert")
     assert config.sql_container == "MSSQL_1433"
 
 

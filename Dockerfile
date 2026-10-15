@@ -1,8 +1,8 @@
 # DBA Ops Assistant — Ubuntu runtime image.
 #
-# The image mirrors the repository layout under /app/tools/db_ops so that the
+# The image mirrors the repository layout under /app/tools/dbabrain so that the
 # daemon's REPO_ROOT/TOOL_ROOT path math and the app_commands "working_dir"
-# values ("tools/db_ops") resolve exactly as they do on a developer checkout.
+# values ("tools/dbabrain") resolve exactly as they do on a developer checkout.
 # Secrets are read (encrypted) from the mounted data/ dir; the passphrase is
 # supplied at runtime via --key and is never baked into the image.
 FROM ubuntu:24.04
@@ -74,7 +74,7 @@ RUN set -eux; \
 # Isolated virtualenv keeps Python deps off the PEP 668 system interpreter.
 RUN python3 -m venv "$VIRTUAL_ENV"
 
-WORKDIR /app/tools/db_ops
+WORKDIR /app/tools/dbabrain
 
 # Install Python deps first so this layer caches across source changes.
 COPY requirements.txt ./
@@ -82,12 +82,12 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # Application source. config/data/sql/secrets are supplied at runtime via mounts
 # (see docker-compose.yml) and are intentionally NOT baked into the image.
-COPY db_ops ./db_ops
+COPY dbabrain ./dbabrain
 
 # Install it, rather than relying on the source being in the working directory.
 #
 # Copying alone is enough for the daemon, which runs from this WORKDIR — and it is why the image
-# had no `db-ops` command and `python -m db_ops...` failed from anywhere else. Both are what the
+# had no `dbabrain` command and `python -m dbabrain...` failed from anywhere else. Both are what the
 # documentation tells a reader to type, so an image that cannot do them is an image the docs are
 # wrong about. `--no-deps` because requirements.txt above already resolved them, and installing
 # again would let a transitive pin drift between the two layers.

@@ -18,10 +18,10 @@ the one supported way to say the opposite.
 
 import json
 
-from db_ops.common import instance_admin
-from db_ops.lib.data_sources.metric_targets import load_config_metric_targets
-from db_ops.lib.inventory_render import adopt_new_servers, reportable_servers, seed_inventory
-from db_ops.lib.target_flags import is_alerts_enabled, is_metrics_enabled, is_reports_enabled
+from dbabrain.common import instance_admin
+from dbabrain.lib.data_sources.metric_targets import load_config_metric_targets
+from dbabrain.lib.inventory_render import adopt_new_servers, reportable_servers, seed_inventory
+from dbabrain.lib.target_flags import is_alerts_enabled, is_metrics_enabled, is_reports_enabled
 
 
 def test_a_registration_writes_one_flag_and_not_four(tmp_path):

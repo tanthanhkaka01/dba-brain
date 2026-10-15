@@ -30,11 +30,11 @@ import socket
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from db_ops.backup_restore import schedule
-from db_ops.db import DbOpsStore
-from db_ops.jobs import daemon
-from db_ops.lib import run_claim
-from db_ops.sql_tasks import runner
+from dbabrain.backup_restore import schedule
+from dbabrain.db import DbaBrainStore
+from dbabrain.jobs import daemon
+from dbabrain.lib import run_claim
+from dbabrain.sql_tasks import runner
 
 from test_jobs_daemon import FakeStore, _make_app_command, _make_row
 from tests.test_sql_task_claims import FakeLogger, RecordingSqlRunStore, sql_command, sql_target
@@ -214,7 +214,7 @@ def test_the_sql_task_sweep_frees_this_hosts_dead_run_at_once(monkeypatch):
 
 
 def test_the_running_sql_runs_carry_their_host_column(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     store.insert_sql_run(
         run_key="9|1|server|sqlserver|svc|inst|APPDB", sql_id=9, sql_code="SQLSERVER-009",

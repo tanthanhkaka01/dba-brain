@@ -3,22 +3,22 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.metrics.models import MetricResult
-from db_ops.metrics.storage import MetricStore
-from db_ops.reports import cli as reports_cli
-from db_ops.reports import service
-from db_ops.reports.metrics_reports import create_metric_history_report
+from dbabrain.db import DbaBrainStore
+from dbabrain.metrics.models import MetricResult
+from dbabrain.metrics.storage import MetricStore
+from dbabrain.reports import cli as reports_cli
+from dbabrain.reports import service
+from dbabrain.reports.metrics_reports import create_metric_history_report
 
 
 NOW = datetime(2026, 7, 13, 6, 0, 0, tzinfo=timezone.utc)
 
 
 def _sqlite_store_config(sqlite_path):
-    """SQLite store declaration for a test config stand-in (mirrors DbOpsConfig.store)."""
+    """SQLite store declaration for a test config stand-in (mirrors DbaBrainConfig.store)."""
     from pathlib import Path as _Path
 
-    from db_ops.lib.config import SqliteStoreConfig, StoreConfig
+    from dbabrain.lib.config import SqliteStoreConfig, StoreConfig
 
     return StoreConfig(sqlite=SqliteStoreConfig(path=_Path(str(sqlite_path))))
 
@@ -173,10 +173,10 @@ def test_metric_history_summary_limit_keeps_newest_rows_in_chronological_order(t
 
 
 def test_metric_history_workflow_reads_stored_rows_and_queues_report_without_collection(tmp_path, monkeypatch):
-    # The level -> chat_id map now comes from db_ops.common.cli telegram-group, not from
+    # The level -> chat_id map now comes from dbabrain.common.cli telegram-group, not from
     # the config object, so stub the common helper to keep this test hermetic.
-    monkeypatch.setattr("db_ops.reports.service.telegram_groups", lambda **_: {"logging": "-100"})
-    monkeypatch.setattr("db_ops.reports.cli.telegram_groups", lambda **_: {"logging": "-100"})
+    monkeypatch.setattr("dbabrain.reports.service.telegram_groups", lambda **_: {"logging": "-100"})
+    monkeypatch.setattr("dbabrain.reports.cli.telegram_groups", lambda **_: {"logging": "-100"})
 
     sqlite_path = tmp_path / "runtime.sqlite"
     insert_results(sqlite_path, [metric_result(collected_at="2026-07-13T05:30:00Z")])
@@ -193,7 +193,7 @@ def test_metric_history_workflow_reads_stored_rows_and_queues_report_without_col
         now=NOW,
     )
 
-    queued = DbOpsStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
+    queued = DbaBrainStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
     assert result["status"] == "success"
     assert result["exit_code"] == 0
     assert result["row_count"] == 1

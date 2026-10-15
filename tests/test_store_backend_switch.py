@@ -16,16 +16,16 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.db import declaration
+from dbabrain.db import declaration
 
 
 def full() -> dict:
     return {
         "notes": "the long explanation this file carries",
         "backend": "postgresql",
-        "sqlite": {"path": "runtime/db_ops.sqlite"},
-        "postgresql": {"host": "192.0.2.115", "port": 5433, "database": "db_ops",
-                       "schema": "db_ops", "username": "postgres", "password_ref": "PG_REF"},
+        "sqlite": {"path": "runtime/dbabrain.sqlite"},
+        "postgresql": {"host": "192.0.2.115", "port": 5433, "database": "dbabrain",
+                       "schema": "dbabrain", "username": "postgres", "password_ref": "PG_REF"},
     }
 
 
@@ -50,7 +50,7 @@ def test_a_node_can_be_pointed_at_another_schema_on_the_same_server() -> None:
     moved = declaration.switch_backend(full(), "postgresql", postgres={"schema": "dba_brain"})
 
     assert moved["postgresql"]["schema"] == "dba_brain"
-    assert moved["postgresql"]["database"] == "db_ops", "only what was named moves"
+    assert moved["postgresql"]["database"] == "dbabrain", "only what was named moves"
 
 
 def test_the_connection_string_is_rebuilt_when_the_target_moves() -> None:
@@ -65,13 +65,13 @@ def test_the_connection_string_is_rebuilt_when_the_target_moves() -> None:
     """
     raw = full()
     raw["postgresql"]["connection_string"] = (
-        "postgresql://postgres:{password}@192.0.2.115:5433/db_ops"
-        "?sslmode=prefer&options=-csearch_path%3Ddb_ops")
+        "postgresql://postgres:{password}@192.0.2.115:5433/dbabrain"
+        "?sslmode=prefer&options=-csearch_path%3Ddbabrain")
 
     moved = declaration.switch_backend(raw, "postgresql", postgres={"schema": "dba_brain"})
 
     assert "search_path%3Ddba_brain" in moved["postgresql"]["connection_string"]
-    assert "search_path%3Ddb_ops" not in moved["postgresql"]["connection_string"]
+    assert "search_path%3Ddbabrain" not in moved["postgresql"]["connection_string"]
 
 
 def test_a_declaration_with_no_connection_string_does_not_grow_one() -> None:
@@ -98,7 +98,7 @@ def test_every_declared_target_field_can_actually_be_set() -> None:
 def test_re_pointing_at_what_is_already_there_changes_nothing() -> None:
     raw = full()
 
-    assert declaration.switch_backend(raw, "postgresql", postgres={"schema": "db_ops"}) == raw
+    assert declaration.switch_backend(raw, "postgresql", postgres={"schema": "dbabrain"}) == raw
 
 
 def test_moving_to_a_target_this_build_cannot_read_is_refused() -> None:
@@ -113,7 +113,7 @@ def test_switching_back_to_postgresql_works_from_sqlite() -> None:
     twice = declaration.switch_backend(once, "postgresql")
 
     assert twice["backend"] == "postgresql"
-    assert twice["sqlite"]["path"] == "runtime/db_ops.sqlite"
+    assert twice["sqlite"]["path"] == "runtime/dbabrain.sqlite"
 
 
 def test_postgres_is_accepted_as_a_spelling_of_postgresql() -> None:
@@ -121,7 +121,7 @@ def test_postgres_is_accepted_as_a_spelling_of_postgresql() -> None:
 
 
 def test_a_sqlite_path_may_be_given_and_otherwise_is_kept() -> None:
-    assert declaration.switch_backend(full(), "sqlite")["sqlite"]["path"] == "runtime/db_ops.sqlite"
+    assert declaration.switch_backend(full(), "sqlite")["sqlite"]["path"] == "runtime/dbabrain.sqlite"
     assert declaration.switch_backend(
         full(), "sqlite", sqlite_path="runtime/soak.sqlite")["sqlite"]["path"] == "runtime/soak.sqlite"
 
@@ -155,13 +155,13 @@ def test_what_is_returned_is_something_this_build_can_parse() -> None:
     switched = declaration.switch_backend(full(), "sqlite")
 
     target = declaration.parse(switched)
-    assert "db_ops.sqlite" in str(target.sqlite_path)
+    assert "dbabrain.sqlite" in str(target.sqlite_path)
 
 
 def test_setting_the_database_takes_the_old_spelling_off_the_block() -> None:
     """A block written before 0.22.0 says `database`; re-pointing it writes `database_name` and
     removes the old key, so the file never holds one value under two names."""
     raw = full()
-    raw["postgresql"]["database"] = raw["postgresql"].pop("database_name", "db_ops")
+    raw["postgresql"]["database"] = raw["postgresql"].pop("database_name", "dbabrain")
     moved = declaration.switch_backend(raw, "postgresql", postgres={"database_name": "other"})
     assert moved["postgresql"]["database_name"] == "other" and "database" not in moved["postgresql"]

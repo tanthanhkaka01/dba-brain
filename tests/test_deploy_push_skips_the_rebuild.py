@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.control import cli, deploy as deploy_ops
+from dbabrain.control import cli, deploy as deploy_ops
 
 MANIFEST = {
     "data_files": [
@@ -40,7 +40,7 @@ def master(tmp_path: Path, monkeypatch) -> Path:
     (tmp_path / "assets" / "tasks" / "oracle").mkdir(parents=True)
     (tmp_path / "assets" / "tasks" / "oracle" / "019_get_job_details.sql").write_text(
         "select 1 from dual", encoding="utf-8")
-    monkeypatch.setattr(cli, "DB_OPS_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "DBABRAIN_ROOT", tmp_path)
 
     def refuse(name):
         def _refuse(*_args, **_kwargs):
@@ -70,7 +70,7 @@ def test_a_push_uploads_the_named_files_and_returns_the_count(master, monkeypatc
     monkeypatch.setattr(deploy_ops, "ssh_connect", lambda *_a, **_k: _NoopClient())
     monkeypatch.setattr(deploy_ops, "reclaim_worker_files", lambda **_k: None)
 
-    from db_ops.lib.deploy_selection import select_push_files
+    from dbabrain.lib.deploy_selection import select_push_files
 
     selected = select_push_files(tool_root=master, push_type="config",
                                  names=["sql_targets.json"], data_dir=master / "data")

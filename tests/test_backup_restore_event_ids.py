@@ -12,8 +12,8 @@ import sqlite3
 
 import pytest
 
-from db_ops.backup_restore import events
-from db_ops.backup_restore.events import emit_backup_restore_event, resolve_run_id, run_id_key
+from dbabrain.backup_restore import events
+from dbabrain.backup_restore.events import emit_backup_restore_event, resolve_run_id, run_id_key
 
 
 class _Config:
@@ -24,8 +24,8 @@ class _Config:
 
     @property
     def store(self):
-        """SQLite store declaration matching this fake's sqlite_path (see db_ops.lib.config)."""
-        from db_ops.lib.config import SqliteStoreConfig, StoreConfig
+        """SQLite store declaration matching this fake's sqlite_path (see dbabrain.lib.config)."""
+        from dbabrain.lib.config import SqliteStoreConfig, StoreConfig
         from pathlib import Path as _Path
 
         return StoreConfig(sqlite=SqliteStoreConfig(path=_Path(str(self.sqlite_path))))
@@ -34,7 +34,7 @@ class _Config:
 def queued(tmp_path, monkeypatch):
     """Emit events into a temp store with Telegram routing on; return the queued rows."""
     monkeypatch.setattr(events, "alert_chat_id", lambda level: 42, raising=False)
-    monkeypatch.setattr("db_ops.lib.telegram_route.telegram_route",
+    monkeypatch.setattr("dbabrain.lib.telegram_route.telegram_route",
                         lambda level, **_: {"enabled": True, "alert": True, "chat_id": 42})
     config = _Config(tmp_path / "runtime.sqlite")
 
@@ -108,7 +108,7 @@ def test_the_id_has_its_own_line_ahead_of_a_huge_payload(queued):
     """The id used to be reachable only inside the JSON payload, which was clipped at 3900
     characters — so it was cut off exactly on the noisiest, most urgent events.
 
-    The clip is gone (`db_ops.telegram.api` splits an over-long body across messages instead of
+    The clip is gone (`dbabrain.telegram.api` splits an over-long body across messages instead of
     dropping its tail), so the payload now survives whole. The dedicated id line stays anyway:
     a line near the top lands in the first part, while an id buried in a long JSON blob lands in
     whichever part it happens to fall into — and nobody scrolls to part 3 for it."""
@@ -177,7 +177,7 @@ def test_a_multi_entry_workflow_lists_every_id_it_touched(queued):
 def test_the_id_reaches_the_job_runs_row_too(tmp_path, monkeypatch):
     """The sqlite row is what a report or a later investigation reads; it must not depend on
     the caller having remembered to put the id in metadata."""
-    monkeypatch.setattr("db_ops.lib.telegram_route.telegram_route",
+    monkeypatch.setattr("dbabrain.lib.telegram_route.telegram_route",
                         lambda level, **_: {"enabled": True, "alert": False, "chat_id": ""})
     config = _Config(tmp_path / "runtime.sqlite")
 

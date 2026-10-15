@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.control import export_public
-from db_ops.transport.common_cli import CommonCliError
+from dbabrain.control import export_public
+from dbabrain.transport.common_cli import CommonCliError
 
 
 def _answer(monkeypatch, success, data, error=""):
@@ -22,16 +22,16 @@ def _answer(monkeypatch, success, data, error=""):
         calls.append((command, request))
         return success, data, error
 
-    monkeypatch.setattr("db_ops.transport.common_cli.run_allowing_failure", run_allowing_failure)
+    monkeypatch.setattr("dbabrain.transport.common_cli.run_allowing_failure", run_allowing_failure)
     return calls
 
 
 def test_a_clean_scan_returns_its_report_for_the_whole_copied_tree(monkeypatch, tmp_path):
-    (tmp_path / "db_ops").mkdir()
+    (tmp_path / "dbabrain").mkdir()
     (tmp_path / ".git").mkdir()
     calls = _answer(monkeypatch, True, {"hits": 0, "files_with_findings": 0})
     assert export_public.scan_exported_tree(tmp_path)["hits"] == 0
-    assert calls == [("check-identifiers", {"root": str(tmp_path), "paths": ["db_ops"]})]
+    assert calls == [("check-identifiers", {"root": str(tmp_path), "paths": ["dbabrain"]})]
 
 
 def test_a_refused_scan_is_skipped_not_passed(monkeypatch, tmp_path):

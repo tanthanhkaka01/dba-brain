@@ -17,8 +17,8 @@ still could not tell us" — and only the second is a reason to go and edit the 
 
 from __future__ import annotations
 
-from db_ops.reports.inventory_health import build_sql_governance
-from db_ops.reports.inventory_report import _fmt_cpu
+from dbabrain.reports.inventory_health import build_sql_governance
+from dbabrain.reports.inventory_report import _fmt_cpu
 
 
 def _cpu_row(message: str, collected_at: str = "2026-09-07T00:29:25Z") -> dict:
@@ -93,7 +93,7 @@ def test_no_count_anywhere_renders_as_a_dash_not_a_zero():
 # --------------------------------------------------------------------------------------------- #
 def test_the_shipped_collector_reads_both_counts_from_the_instance():
     """A parser for fields nothing emits is the defect this fix was for, one layer down."""
-    from db_ops.lib.paths import PACKAGE_DIR
+    from dbabrain.lib.paths import PACKAGE_DIR
 
     sql = (PACKAGE_DIR / "metrics" / "collectors" / "sqlserver"
            / "012_sqlserver_cpu_memory.sql").read_text(encoding="utf-8")
@@ -110,7 +110,7 @@ def test_the_server_page_keeps_its_snapshot_stamp_after_a_server_is_picked():
     """The stamp was the initial text of the element the host line is written into, so choosing a
     server erased it — and a page with no date on it is one nobody can tell is stale. The
     inventory page beside it kept showing one, which is how the difference was noticed."""
-    from db_ops.reports.server_report import TEMPLATE_HTML
+    from dbabrain.reports.server_report import TEMPLATE_HTML
 
     html = TEMPLATE_HTML.read_text(encoding="utf-8")
     after = html.split('document.getElementById("hostMeta").textContent', 1)[1][:400]

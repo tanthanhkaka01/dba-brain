@@ -12,7 +12,7 @@ inventory *did* have the instance — the worker's copy predated the rename — 
 shape a deploy leaves behind, which is why the check takes a data directory rather than assuming
 this one.
 
-`data/config_references.json` declares the pointers and `db_ops.lib.config_references` follows
+`data/config_references.json` declares the pointers and `dbabrain.lib.config_references` follows
 them. The first test below is that incident, reproduced from the two files' shapes.
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import config_references
+from dbabrain.lib import config_references
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

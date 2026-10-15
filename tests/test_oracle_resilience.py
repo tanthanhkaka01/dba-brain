@@ -3,9 +3,9 @@ import types
 
 import pytest
 
-from db_ops.common import metric_batch
-from db_ops.metrics import executor
-from db_ops.metrics.models import MetricTarget
+from dbabrain.common import metric_batch
+from dbabrain.metrics import executor
+from dbabrain.metrics.models import MetricTarget
 
 
 class FakeOracleConnection:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import session_trace
+from dbabrain.common import session_trace
 
 
 #: The login a caller states - common.cli reads no configuration (rules R09), so every request here

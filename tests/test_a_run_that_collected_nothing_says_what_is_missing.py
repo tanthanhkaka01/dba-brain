@@ -15,7 +15,7 @@ other field and not that one — so even what the run *did* say went to the stor
 person who had just asked.
 """
 
-from db_ops.metrics.targets import explain_no_targets
+from dbabrain.metrics.targets import explain_no_targets
 
 
 def test_an_empty_inventory_names_the_file_and_the_command():
@@ -72,7 +72,7 @@ def test_an_inventory_that_should_have_produced_targets_is_named_as_a_defect():
 def test_the_collect_summary_message_reaches_the_console(capsys):
     """It reached the store and stopped there: `_print_collect_summary` listed every count and
     not the one field carrying words."""
-    from db_ops.metrics import cli
+    from dbabrain.metrics import cli
 
     cli._print_collect_summary(_summary(message="No metric targets: ... holds no instance."))
 
@@ -83,7 +83,7 @@ def test_the_collect_summary_message_reaches_the_console(capsys):
 
 def test_a_run_with_nothing_to_say_says_nothing_extra(capsys):
     """The ordinary pass must not gain a blank line at the end of its summary."""
-    from db_ops.metrics import cli
+    from dbabrain.metrics import cli
 
     cli._print_collect_summary(_summary(message=""))
 
@@ -99,7 +99,7 @@ def _instance(*, enabled=True, metrics=True, db_type="sqlserver"):
 
 
 def _summary(*, message):
-    from db_ops.metrics.models import CollectSummary
+    from dbabrain.metrics.models import CollectSummary
 
     return CollectSummary(
         run_id=1, target_count=0, metric_count=0, executed_count=0, skipped_interval_count=0,

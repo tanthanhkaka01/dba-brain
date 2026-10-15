@@ -19,8 +19,8 @@ import json
 
 import pytest
 
-from db_ops.common import secret_literals
-from db_ops.lib.secret_text import encrypt_secret_text
+from dbabrain.common import secret_literals
+from dbabrain.lib.secret_text import encrypt_secret_text
 
 KEY = "test-passphrase-not-a-real-one"
 
@@ -85,7 +85,7 @@ def test_the_passphrase_itself_is_searched_for_and_never_printed(tmp_path):
 
 def test_the_tests_ship_so_they_are_searched_by_default():
     """The public repository and every sdist carry `tests/`, and the default surface did not."""
-    from db_ops.common.identifier_scan import DEFAULT_PATHS
+    from dbabrain.common.identifier_scan import DEFAULT_PATHS
 
     assert "tests" in DEFAULT_PATHS
 
@@ -116,7 +116,7 @@ def test_short_and_placeholder_values_are_not_searched(tmp_path):
 
 def test_no_key_refuses_rather_than_reporting_clean(tmp_path, monkeypatch):
     """The one answer this must never give is 'clean' about a store it could not read."""
-    monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("DBABRAIN_SECRET_KEY", raising=False)
     store = _store(tmp_path, {"MSSQL_LAB_SA": "Jf-not-real-37d#42"})
 
     with pytest.raises(secret_literals.SecretLiteralError):

@@ -13,19 +13,19 @@ failed surfaced only later, as an SFTP error nobody could explain.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from db_ops.common import cli_docker_db
-from db_ops.common.docker_db import provisioner
-from db_ops.common.docker_db import remote_host as remote
-from db_ops.transport import common_cli
-from db_ops.lib.docker_db_spec import DEFAULT_BACKUP_MOUNT
-from db_ops.sre import cli as sre_cli
-from db_ops.sre import remote as sre_remote
-from db_ops.lib import docker_db_registry as resolve
+from dbabrain.common import cli_docker_db
+from dbabrain.common.docker_db import provisioner
+from dbabrain.common.docker_db import remote_host as remote
+from dbabrain.transport import common_cli
+from dbabrain.sre import cli as sre_cli
+from dbabrain.sre import remote as sre_remote
+from dbabrain.lib import docker_db_registry as resolve
 
 
 class FakeHost:
@@ -114,6 +114,9 @@ def test_create_db_docker_asks_common_to_install_docker_with_the_resolved_login(
     code = sre_cli.main(["--config", str(config), "create-db-docker", "--name", "LAB_1433",
                          "--engine", "mssql", "--version", "2025-latest", "--password-ref", "LAB_SA",
                          "--remote-host", "192.0.2.249", "--remote-user", "labuser",
+                         # This root states no lab folders, so the command line does: nothing
+                         # in the code stands in for them.
+                         "--containers-dir", "/opt/acme/containers", "--backup-mount", "/opt/acme/backup",
                          "--remote-password-ref", "LAB_SSH", "--install-docker", "--no-register"])
 
     assert code == 0
@@ -138,9 +141,12 @@ def test_create_db_docker_hands_ensure_docker_the_labs_own_backup_mount(monkeypa
 
     cli_docker_db._create({"name": "LAB_1433", "engine": "mssql", "version": "2025-latest",
                            "password_ref": "LAB_SA", "password": "pw", "install_docker": True,
+                           # Both folders are the request's to state: the command assumes none.
+                           "containers_dir": "/opt/acme/containers", "backup_mount": "/opt/acme/backup",
                            "remote": {"host": "192.0.2.249", "username": "labuser", "password": "pw"}})
 
-    assert seen["backup_mount"] == DEFAULT_BACKUP_MOUNT
+    assert seen["backup_mount"] == "/opt/acme/backup"
+    assert seen["containers_dir"] == "/opt/acme/containers"
     assert seen["sudo_password"] == "pw", "the SSH password is the sudo password unless told otherwise"
 
 
@@ -152,6 +158,66 @@ def test_a_dry_run_never_installs_docker(monkeypatch):
 
     result = cli_docker_db._create({"name": "LAB_1433", "engine": "mssql", "version": "2025-latest",
                                     "install_docker": True, "dry_run": True,
+                                    "containers_dir": "/opt/acme/containers",
+                                    "backup_mount": "/opt/acme/backup",
                                     "remote": {"host": "192.0.2.249", "username": "labuser"}})
 
     assert result["dry_run"] is True and result["docker"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Where a lab's folders come from: a flag, else the node's own - never the code (0.29.0)
+# --------------------------------------------------------------------------- #
+def _create_through_the_cli(monkeypatch, tmp_path, *extra, folders=None):
+    sent = {}
+
+    def fake_run(command, request, **kwargs):
+        sent.update(request, _command=command)
+        return {"worker_host": "192.0.2.249", "compose_path": "/c/LAB_1433/docker-compose.yml",
+                "summary": "ok", "status": "running"}
+
+    monkeypatch.setattr(common_cli, "run", fake_run)
+    monkeypatch.setattr(sre_remote, "resolve_remote_ssh_password", lambda **_: "pw")
+    monkeypatch.setattr(resolve, "resolve_password_value", lambda *a, **k: ("sa-pw", "env:LAB_SA"))
+    config = tmp_path / "config.json"
+    config.write_text((Path(__file__).resolve().parents[1] / "config.example.json").read_text(encoding="utf-8-sig"),
+                      encoding="utf-8")
+    if folders is not None:
+        (tmp_path / "data").mkdir(exist_ok=True)
+        (tmp_path / "data" / "sre_config.json").write_text(
+            json.dumps({"sre": {"docker_db": folders}}), encoding="utf-8")
+    code = sre_cli.main(["--config", str(config), "create-db-docker", "--data-dir", str(tmp_path / "data"),
+                         "--name", "LAB_1433", "--engine", "mssql", "--version", "2025-latest",
+                         "--password-ref", "LAB_SA", "--remote-host", "192.0.2.249",
+                         "--remote-user", "labuser", "--remote-password-ref", "LAB_SSH", "--no-register",
+                         *extra])
+    return code, sent
+
+
+def test_a_lab_is_built_under_the_folders_its_node_states(monkeypatch, tmp_path):
+    """The command that builds the lab reads no configuration, so the app puts the node's own
+    folders in the request - the ones every lab that node already has is under."""
+    code, sent = _create_through_the_cli(monkeypatch, tmp_path, folders={
+        "containers_dir": "/opt/db_ops/containers", "backup_mount": "/opt/db_ops/backup"})
+
+    assert code == 0
+    assert sent["containers_dir"] == "/opt/db_ops/containers"
+    assert sent["backup_mount"] == "/opt/db_ops/backup"
+
+
+def test_a_flag_still_decides_over_what_the_node_states(monkeypatch, tmp_path):
+    code, sent = _create_through_the_cli(
+        monkeypatch, tmp_path, "--containers-dir", "/srv/labs", "--backup-mount", "-",
+        folders={"containers_dir": "/opt/db_ops/containers", "backup_mount": "/opt/db_ops/backup"})
+
+    assert code == 0
+    assert sent["containers_dir"] == "/srv/labs"
+    assert sent["backup_mount"] == "", "the skip sentinel asks for no mount"
+
+
+def test_a_node_that_states_no_folder_is_refused_before_anything_is_asked_of_a_host(monkeypatch, tmp_path):
+    """Until 0.29.0 this took a folder the code held as a constant - a folder nobody had chosen."""
+    code, sent = _create_through_the_cli(monkeypatch, tmp_path)
+
+    assert code != 0
+    assert "_command" not in sent, "refused by the spec, before the command that reaches the host"

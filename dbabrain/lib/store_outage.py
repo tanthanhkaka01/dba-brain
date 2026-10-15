@@ -1,0 +1,184 @@
+"""Which store failures are worth waiting out, and for how long before giving up.
+
+**The run this exists for.** On 2026-09-18 the container holding the runtime store was restarted.
+It was back in two seconds. The daemon was not: it raised ``FATAL 57P03`` — *the database system is
+starting up* — the scan loop let it out, ``main`` logged one line and returned 1, and nothing
+restarted the process. The only sign for the next nineteen hours was the absence of rows, and
+0.18.0 was abandoned at hour 21.8 because of it.
+
+A store that is *coming back* and a store that is *gone* are different facts and want different
+answers. The loop already knew that for SQLite — ``database is locked`` has been retried with a
+backoff since the beginning — and knew nothing about it for PostgreSQL, where the same category has
+a name the server itself supplies: the SQLSTATE class ``08`` (connection exception) and the ``57Pxx``
+shutdown codes.
+
+**Bounded, deliberately.** Retrying forever turns a store that has really gone away into a daemon
+that looks alive and schedules nothing, which is the failure this module is against, one level up.
+The budget below is what separates "coming back" from "gone": past it the error is raised exactly as
+it is today, and the process exits loudly. It is hours, not minutes, since a full disk under the store
+took a person an hour to clear and the daemon that had given up was all that stayed down.
+
+This module holds the *rule* and no I/O, so it can be read and tested without a database — the whole
+point of :mod:`dbabrain.lib`. The sleeping and the logging belong to the caller.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+#: SQLSTATEs that mean *ask again in a moment*, not *this statement was wrong*. PostgreSQL sends
+#: the code with the error, so this is the server's own classification and not a guess at its text.
+#:
+#: ``08xxx`` is the connection-exception class. ``57P01``/``57P02``/``57P03`` are the three ways a
+#: server says it is on its way down or not yet up — ``57P03`` is the one that ended 0.18.0.
+#: ``53300`` is *too many connections*: a real limit, but one that clears, and every dbabrain process
+#: opens its connection per statement and closes it, so waiting is the correct response.
+#:
+#: ``53000``/``53100``/``53200`` are the store out of disk or memory. Not a restart, but the same
+#: kind of answer: the statement was right and the server could not take it now. On 2026-09-27 a full
+#: disk under the store raised ``53100`` on a write, the daemon let it out and exited, and a PC node
+#: with nothing to restart it lost its soak - while the store came back 62 minutes later, once a
+#: person had freed the disk.
+TRANSIENT_SQLSTATES: frozenset[str] = frozenset({
+    "08000", "08001", "08003", "08004", "08006", "08007", "08P01",
+    "57P01", "57P02", "57P03",
+    "53000", "53100", "53200", "53300",
+})
+
+#: Read only when there is no SQLSTATE to read: a connection lost at the socket never reaches the
+#: server, so nothing sends a code back. pg8000 raises ``InterfaceError("network error")`` for it,
+#: and the operating system raises its own. Kept short on purpose — every phrase here is one this
+#: estate has actually seen, and a list that grows by imagination starts swallowing real bugs.
+TRANSIENT_PHRASES: tuple[str, ...] = (
+    "network error",
+    "connection is closed",
+    "connection already closed",
+    "server closed the connection",
+    "the database system is starting up",
+    # The other thing 57P03 says, and the words the server used on 2026-09-22 when it came back up
+    # under a full disk. Second-line defence only: with the SQLSTATE now read through the exception
+    # chain the text is never consulted for this one.
+    "the database system is in recovery mode",
+    "the database system is shutting down",
+    "connection reset",
+    "connection refused",
+    "connection aborted",
+    "broken pipe",
+    "no route to host",
+    "timed out",
+    "timeout expired",
+    # pg8000's sentence for EVERY socket failure while connecting - refused, timed out, no route -
+    # raised `from` the socket error, so the words above sit one link down in `__cause__`, where
+    # this text match never looks. Without it a store connect that timed out read as permanent: on
+    # 2026-10-06 the 0.27.0 soak's daemon exited on one ten-second timeout at hour 1.5 and the node
+    # stood dead for sixteen hours, the store answering again within minutes.
+    "can't create a connection to host",
+)
+
+#: How long the daemon may wait in total for one outage before letting the error out.
+#:
+#: Ten minutes until 0.24.0, which covered a restart and nothing a person has to do: the full disk of
+#: 2026-09-27 took 62 minutes to clear, and the daemon that gave up on it was the one thing that did
+#: not come back. Six hours covers a person being reached at night. Waiting is not silence - every
+#: wait is written to the error log - and a store that has been moved or lost its credentials still
+#: answers with a definite code (``28P01``, ``3D000``) that is never waited on, so it still reaches a
+#: person at once.
+BUDGET_SECONDS: int = 6 * 60 * 60
+
+#: The longest single wait. A short first wait catches the two-second restart without losing a
+#: scheduling cycle; the cap keeps the budget from being spent in three sleeps.
+MAX_WAIT_SECONDS: int = 30
+
+
+def sqlstate(error: BaseException) -> str:
+    """The SQLSTATE PostgreSQL sent with this error, or ``""``.
+
+    pg8000 raises its errors carrying the server's response fields as a mapping, where ``C`` is the
+    code: ``DatabaseError({'S': 'FATAL', 'C': '57P03', 'M': 'the database system is starting up'})``.
+    Read by shape rather than by class, because :mod:`dbabrain.lib` may not import a database driver —
+    and because a driver that grows a ``sqlstate`` attribute should be read through it instead.
+    """
+    seen: list[int] = []
+    current: BaseException | None = error
+    # Walk the chain, because the code is usually not on the exception a caller sees. Every store
+    # CONNECT failure arrives as `PostgresStoreError("Could not connect to …: <driver error>")`,
+    # raised `from` the driver's own exception — so the SQLSTATE is one link down and reading only
+    # the top gave "". That is not a cosmetic miss: it classified `57P03` as permanent, so the
+    # daemon exited on the first attempt instead of waiting the store out, and on 2026-09-21 a soak
+    # lost 5 h 45 m and the estate 7 h of log backups to exactly that. The chain is bounded by
+    # identity rather than by depth, so a self-referential __context__ cannot loop.
+    while current is not None and id(current) not in seen:
+        seen.append(id(current))
+        direct = getattr(current, "sqlstate", None) or getattr(current, "pgcode", None)
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        for arg in getattr(current, "args", ()) or ():
+            if isinstance(arg, dict):
+                code = arg.get("C") or arg.get("code")
+                if isinstance(code, str) and code.strip():
+                    return code.strip()
+        current = current.__cause__ or current.__context__
+    return ""
+
+
+def is_transient(error: BaseException) -> bool:
+    """True when the store said *not now* rather than *no*.
+
+    The SQLSTATE is read first and trusted alone: a code outside the transient set is a definite
+    answer — a syntax error, a missing table, a permission — and retrying it only delays the report.
+    """
+    code = sqlstate(error)
+    if code:
+        return code in TRANSIENT_SQLSTATES
+    text = f"{type(error).__name__}: {error}".lower()
+    return any(phrase in text for phrase in TRANSIENT_PHRASES)
+
+
+@dataclass
+class OutageWaiter:
+    """How long to wait for the next attempt, and when to stop waiting.
+
+    One instance lives for the length of the loop. :meth:`wait_for` answers a failed pass, and
+    :meth:`recovered` is called after a good one — the budget is per *outage*, not per process, or
+    a daemon that has been up for a month would give up on its first hiccup.
+    """
+
+    budget_seconds: int = BUDGET_SECONDS
+    max_wait_seconds: int = MAX_WAIT_SECONDS
+    attempts: int = 0
+    waited_seconds: int = field(default=0)
+
+    def wait_for(self, error: BaseException) -> int | None:
+        """Seconds to sleep before trying again, or ``None`` to let the error out.
+
+        ``None`` means one of two things and the caller need not tell them apart: this is not a
+        transient failure, or the budget for this outage is spent. Both end the same way — the
+        error is raised as it would have been without this module.
+        """
+        if not is_transient(error):
+            return None
+        remaining = self.budget_seconds - self.waited_seconds
+        if remaining <= 0:
+            return None
+        self.attempts += 1
+        # 2, 4, 8, 16, 30, 30 … — the first wait is short because the outage this was written for
+        # was two seconds long, and a scheduling cycle missed is a metric not collected.
+        wait = min(self.max_wait_seconds, 2 ** self.attempts, remaining)
+        self.waited_seconds += wait
+        return wait
+
+    def recovered(self) -> None:
+        """A pass succeeded: this outage is over and the next one starts with a full budget."""
+        self.attempts = 0
+        self.waited_seconds = 0
+
+
+__all__ = [
+    "BUDGET_SECONDS",
+    "MAX_WAIT_SECONDS",
+    "TRANSIENT_PHRASES",
+    "TRANSIENT_SQLSTATES",
+    "OutageWaiter",
+    "is_transient",
+    "sqlstate",
+]

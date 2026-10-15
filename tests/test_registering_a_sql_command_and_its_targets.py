@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from db_ops.common import sql_task_admin
+from dbabrain.common import sql_task_admin
 
 
 @pytest.fixture()
@@ -249,12 +249,12 @@ def test_the_registrar_and_the_runner_read_the_same_tuple():
     import inspect
 
     from conftest import SQL_RUNNER_MODULES
-    from db_ops.lib.sql_access import SQL_TASK_DB_TYPES
+    from dbabrain.lib.sql_access import SQL_TASK_DB_TYPES
 
     assert SQL_TASK_DB_TYPES == ("sqlserver", "oracle", "postgresql")
     # The runner is five modules since 2026-10-03 (Q11); the check reads all of them, so a literal
     # pair cannot come back in whichever one a later edit touches.
-    source = "".join(inspect.getsource(importlib.import_module(f"db_ops.sql_tasks.{name}"))
+    source = "".join(inspect.getsource(importlib.import_module(f"dbabrain.sql_tasks.{name}"))
                      for name in SQL_RUNNER_MODULES)
     assert "sql_access.SQL_TASK_DB_TYPES" in source
     assert '{"sqlserver", "oracle"}' not in source

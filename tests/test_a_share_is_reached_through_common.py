@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import smb
+from dbabrain.common import smb
 
 _LISTING = (
     "  .                          D        0  Wed Jun 24 01:00:00 2026\n"
@@ -197,7 +197,7 @@ def _share_answers(root: Path, deleted: list):
 
 @pytest.fixture()
 def staged(tmp_path, monkeypatch):
-    from db_ops.backup_restore import share
+    from dbabrain.backup_restore import share
 
     root = tmp_path / "import"
     (root / "APPDB" / "FULL").mkdir(parents=True)
@@ -221,7 +221,7 @@ def staged(tmp_path, monkeypatch):
 def _target(root: Path):
     import dataclasses
 
-    from db_ops.backup_restore.config import BackupRestoreConfig
+    from dbabrain.backup_restore.config import BackupRestoreConfig
 
     return dataclasses.replace(
         BackupRestoreConfig(
@@ -235,7 +235,7 @@ def _target(root: Path):
 
 
 def test_a_windows_cleanup_deletes_only_what_is_aged_and_behind_the_newest_full(staged):
-    from db_ops.backup_restore.delete_backup import delete_old_target_backup_files_on_share
+    from dbabrain.backup_restore.delete_backup import delete_old_target_backup_files_on_share
 
     results = delete_old_target_backup_files_on_share(_target(staged["root"]), now=staged["now"])
 
@@ -245,7 +245,7 @@ def test_a_windows_cleanup_deletes_only_what_is_aged_and_behind_the_newest_full(
 
 
 def test_a_dry_run_on_a_windows_target_deletes_nothing(staged):
-    from db_ops.backup_restore.delete_backup import delete_old_target_backup_files_on_share
+    from dbabrain.backup_restore.delete_backup import delete_old_target_backup_files_on_share
 
     results = delete_old_target_backup_files_on_share(_target(staged["root"]), dry_run=True, now=staged["now"])
 
@@ -260,7 +260,7 @@ def test_the_chain_is_read_from_the_share_listing_never_by_walking_the_path(monk
     share filled. `ci` found it (Linux runners; the soak node was Windows). Here the share is one
     nothing on this machine serves, as it is for a Linux node: the listing is all there is, and it
     is enough. (On Linux the two tests above also hold the separator.)"""
-    from db_ops.backup_restore import delete_backup, share
+    from dbabrain.backup_restore import delete_backup, share
 
     def walked(root):
         raise AssertionError(f"the cleanup walked {root} instead of reading the share's listing")

@@ -18,7 +18,7 @@ also an answer, and because a run that hangs is the one failure that leaves noth
 import io
 import time
 
-from db_ops.common import confirm
+from dbabrain.common import confirm
 
 
 def test_an_answer_that_never_comes_is_not_waited_on_for_ever(monkeypatch):
@@ -106,6 +106,6 @@ class _SilentTerminal(io.StringIO):
 
 
 def _report():
-    from db_ops.common.evidence import GateReport
+    from dbabrain.common.evidence import GateReport
 
     return GateReport(operation="run-sql-task", target="sql_id 9")

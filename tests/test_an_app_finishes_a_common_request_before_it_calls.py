@@ -3,7 +3,7 @@
 ``common.cli`` reads no configuration: a command works from its request alone, so it runs by hand on
 an empty node. Until 0.24.0, 22 commands took a bare ``server_id`` and looked the login, the policy
 and the confirmation price up themselves. Now the app that calls does that, through
-``db_ops.lib.data_sources.request_fill`` - and what it fills is exactly what the command would have
+``dbabrain.lib.data_sources.request_fill`` - and what it fills is exactly what the command would have
 looked up, or the operation runs as someone else, on a different schedule, at a different price.
 
 These hold the filler to that: the login the inventory names (or the one the caller chose), the
@@ -17,8 +17,8 @@ import json
 
 import pytest
 
-from db_ops.lib.data_sources import request_fill
-from db_ops.lib.data_sources.request_fill import RequestFillError, fill_request
+from dbabrain.lib.data_sources import request_fill
+from dbabrain.lib.data_sources.request_fill import RequestFillError, fill_request
 
 SECRETS = {"DBA_REF": "dba-secret", "MON_REF": "monitor-secret", "OS_REF": "os-secret"}
 
@@ -232,7 +232,7 @@ def test_an_instance_that_declares_no_login_is_refused_not_guessed(data_dir):
 def test_a_store_that_cannot_be_read_is_a_sentence_naming_the_server_not_a_traceback(
         data_dir, monkeypatch):
     def no_key(data_dir=None, **_kwargs):
-        raise RuntimeError("No decryption key provided. Pass --key or set DB_OPS_SECRET_KEY.")
+        raise RuntimeError("No decryption key provided. Pass --key or set DBABRAIN_SECRET_KEY.")
 
     monkeypatch.setattr(request_fill, "load_secret_text", no_key)
 

@@ -1,6 +1,6 @@
 """A JSON request between two processes of this program does not go through the machine's code page.
 
-Every app reaches a database through `python -m db_ops.common.cli run-sql`, with the request —
+Every app reaches a database through `python -m dbabrain.common.cli run-sql`, with the request —
 including the whole SQL text — written to the child's stdin. `subprocess.run(text=True)` with no
 `encoding` picks `locale.getpreferredencoding()`, which on Windows is the ANSI code page, and the
 child's `sys.stdin` picks its own with `errors="surrogateescape"`. When those two disagree, a byte
@@ -38,7 +38,7 @@ PAYLOAD = {"sql": "x" * 340 + EM_DASH + " and what each can carry", "note": "d�
 #: it the trip ends earlier, at the writer, and the reader is never asked.
 ANSI_SPELLABLE = {"sql": PAYLOAD["sql"], "note": "an ordinary note"}
 
-#: Reads stdin the way `db_ops.common.cli` does now.
+#: Reads stdin the way `dbabrain.common.cli` does now.
 _CHILD_PINNED = (
     "import sys,json;"
     "d=json.loads(sys.stdin.buffer.read().decode('utf-8-sig'));"
@@ -116,8 +116,8 @@ def test_the_spawn_pins_its_encoding() -> None:
     """
     import inspect
 
-    from db_ops.lib import common_cli
-    from db_ops.transport import process
+    from dbabrain.lib import common_cli
+    from dbabrain.transport import process
 
     # 0.24.0: the call is built and read in `lib`, started in `transport` (docs/15_transport.md) -
     # so the pin is asserted where each half now lives.
@@ -137,8 +137,8 @@ def test_the_reader_pins_its_encoding() -> None:
     is what keeps this one assertion covering both."""
     import inspect
 
-    from db_ops.common import cli
-    from db_ops.lib import json_io
+    from dbabrain.common import cli
+    from dbabrain.lib import json_io
 
     source = inspect.getsource(json_io.read_json_request)
 
@@ -155,7 +155,7 @@ def test_every_character_the_writer_serialises_survives_utf8(text: str) -> None:
     that happened to break.
 
     A pure round trip through the two encodings the fix pins, with no child process. An earlier
-    version drove this through a real `_read_json_request`, and importing `db_ops.common.cli` in a
+    version drove this through a real `_read_json_request`, and importing `dbabrain.common.cli` in a
     subprocess under pytest hung the suite twice: the module brings up logging, and the test was
     paying for a whole app start to check a `decode` call.
     """

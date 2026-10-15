@@ -16,19 +16,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.webhost.app import WebSettings, safe_next
-from db_ops.webhost.server import make_handler
+from dbabrain.webhost.app import WebSettings, safe_next
+from dbabrain.webhost.server import make_handler
 
 
 @pytest.mark.parametrize("bad", ["//evil.example/x", "/\\evil.example", "https://evil.example",
                                  "evil.example", "/\nLocation: x", ""])
 def test_a_next_that_leaves_the_site_goes_home(bad):
-    assert safe_next(bad, default="/db_ops/") == "/db_ops/"
+    assert safe_next(bad, default="/dbabrain/") == "/dbabrain/"
 
 
-@pytest.mark.parametrize("good", ["/db_ops/config", "/report_dba/database-inventory.html?date=2026-10-01"])
+@pytest.mark.parametrize("good", ["/dbabrain/config", "/report_dba/database-inventory.html?date=2026-10-01"])
 def test_a_path_on_this_site_is_kept(good):
-    assert safe_next(good, default="/db_ops/") == good
+    assert safe_next(good, default="/dbabrain/") == good
 
 
 def test_reports_require_a_login_by_default_and_it_can_be_switched_off():
@@ -37,7 +37,7 @@ def test_reports_require_a_login_by_default_and_it_can_be_switched_off():
 
 
 class _Console:
-    prefix = "/db_ops"
+    prefix = "/dbabrain"
 
     def __init__(self, *, require=True, session=None):
         self.settings = SimpleNamespace(reports_require_login=require)
@@ -78,7 +78,7 @@ def test_an_anonymous_report_request_is_sent_to_the_login(tmp_path):
     status, headers, _ = _get(tmp_path, _Console(), "/report_dba/page.html")
 
     assert status == 303
-    assert headers["Location"] == "/db_ops/login?next=/report_dba/page.html"
+    assert headers["Location"] == "/dbabrain/login?next=/report_dba/page.html"
 
 
 def test_a_logged_in_user_gets_the_report(tmp_path):

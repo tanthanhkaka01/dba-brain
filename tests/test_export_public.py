@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.control import export_public
-from db_ops.lib.distribution import DOC_FOR_PACKAGE, PRIVATE_PACKAGES, PUBLIC_PACKAGES
+from dbabrain.control import export_public
+from dbabrain.lib.distribution import DOC_FOR_PACKAGE, PRIVATE_PACKAGES, PUBLIC_PACKAGES
 
 #: A package that does not ship — invented here, and deliberately not a real one.
 #:
@@ -45,8 +45,8 @@ WITHHELD_DOC = "99_atlantis_app.md"
 def _atlantis_is_withheld(monkeypatch):
     """Declare the invented package private, everywhere the export looks it up."""
     private = {WITHHELD: "invented for this test; the mechanism is the subject, not the list"}
-    monkeypatch.setattr("db_ops.lib.distribution.PRIVATE_PACKAGES", private)
-    monkeypatch.setattr("db_ops.control.export_public.PRIVATE_PACKAGES", private)
+    monkeypatch.setattr("dbabrain.lib.distribution.PRIVATE_PACKAGES", private)
+    monkeypatch.setattr("dbabrain.control.export_public.PRIVATE_PACKAGES", private)
     monkeypatch.setitem(DOC_FOR_PACKAGE, WITHHELD, WITHHELD_DOC)
 
 
@@ -55,11 +55,11 @@ def tree(tmp_path: Path) -> Path:
     """A miniature of this repository: two public packages, one private, and the paths around them."""
     root = tmp_path / "repo"
     for name in ("lib", "metrics"):
-        (root / "db_ops" / name).mkdir(parents=True)
-        (root / "db_ops" / name / "__init__.py").write_text("", encoding="utf-8")
-    (root / "db_ops" / WITHHELD).mkdir(parents=True)
-    (root / "db_ops" / WITHHELD / "__init__.py").write_text("", encoding="utf-8")
-    (root / "db_ops" / "__init__.py").write_text('__version__ = "0.0.0"\n', encoding="utf-8")
+        (root / "dbabrain" / name).mkdir(parents=True)
+        (root / "dbabrain" / name / "__init__.py").write_text("", encoding="utf-8")
+    (root / "dbabrain" / WITHHELD).mkdir(parents=True)
+    (root / "dbabrain" / WITHHELD / "__init__.py").write_text("", encoding="utf-8")
+    (root / "dbabrain" / "__init__.py").write_text('__version__ = "0.0.0"\n', encoding="utf-8")
 
     (root / "docs").mkdir()
     (root / "docs" / "04_metrics_engine.md").write_text("# metrics\n", encoding="utf-8")
@@ -68,9 +68,9 @@ def tree(tmp_path: Path) -> Path:
     (root / "tests").mkdir()
     (root / "tests" / "conftest.py").write_text("import pytest\n", encoding="utf-8")
     (root / "tests" / "test_metrics.py").write_text(
-        "from db_ops.metrics import cli\n", encoding="utf-8")
+        "from dbabrain.metrics import cli\n", encoding="utf-8")
     (root / "tests" / f"test_{WITHHELD}.py").write_text(
-        f"from db_ops.{WITHHELD} import cli\n", encoding="utf-8")
+        f"from dbabrain.{WITHHELD} import cli\n", encoding="utf-8")
 
     (root / "data").mkdir()
     (root / "data" / "db_instances.json").write_text("{}", encoding="utf-8")
@@ -95,8 +95,8 @@ def _shipped(plan: export_public.ExportPlan) -> set[str]:
 def test_a_private_package_does_not_cross(tree: Path) -> None:
     shipped = _shipped(export_public.build_plan(tree))
 
-    assert "db_ops/metrics/__init__.py" in shipped
-    assert not any(path.startswith(f"db_ops/{WITHHELD}/") for path in shipped)
+    assert "dbabrain/metrics/__init__.py" in shipped
+    assert not any(path.startswith(f"dbabrain/{WITHHELD}/") for path in shipped)
 
 
 def test_the_doc_of_a_private_package_does_not_cross(tree: Path) -> None:
@@ -135,11 +135,11 @@ def test_shared_test_machinery_always_crosses(tree: Path) -> None:
     """`conftest.py` is not a test, and dropping it takes every test that depends on it.
 
     Measured the hard way on 2026-08-22: the first version of the filter removed `conftest.py`
-    because one fixture imports `db_ops.reports`, and **18 unrelated files failed collection** with
+    because one fixture imports `dbabrain.reports`, and **18 unrelated files failed collection** with
     `ModuleNotFoundError: No module named 'conftest'` — a message that says nothing about the cause.
     """
     (tree / "tests" / "conftest.py").write_text(
-        f"from db_ops.{WITHHELD} import cli\n", encoding="utf-8")
+        f"from dbabrain.{WITHHELD} import cli\n", encoding="utf-8")
 
     assert "tests/conftest.py" in _shipped(export_public.build_plan(tree))
 
@@ -172,7 +172,7 @@ def test_a_non_empty_target_is_refused(tree: Path, tmp_path: Path) -> None:
     """An export over a previous run ships whatever survived it — a survivor is cargo, not junk."""
     target = tmp_path / "out"
     target.mkdir()
-    (target / "leftover.py").write_text(f"from db_ops.{WITHHELD} import cli\n", encoding="utf-8")
+    (target / "leftover.py").write_text(f"from dbabrain.{WITHHELD} import cli\n", encoding="utf-8")
 
     with pytest.raises(export_public.ExportError, match="not empty"):
         export_public.export(tree, target, allow_inside_git=True)
@@ -199,7 +199,7 @@ def test_shared_machinery_importing_a_private_package_at_module_scope_is_refused
     something calls it, and the tests that would call it are filtered out anyway.
     """
     (tree / "tests" / "conftest.py").write_text(
-        f"from db_ops.{WITHHELD} import cli\n", encoding="utf-8")
+        f"from dbabrain.{WITHHELD} import cli\n", encoding="utf-8")
 
     with pytest.raises(export_public.ExportError, match="shared test machinery"):
         export_public.export(tree, tmp_path / "out")
@@ -207,7 +207,7 @@ def test_shared_machinery_importing_a_private_package_at_module_scope_is_refused
 
 def test_a_lazy_import_in_shared_machinery_is_allowed(tree: Path, tmp_path: Path) -> None:
     (tree / "tests" / "conftest.py").write_text(
-        f"def fixture():\n    from db_ops.{WITHHELD} import cli\n    return cli\n", encoding="utf-8")
+        f"def fixture():\n    from dbabrain.{WITHHELD} import cli\n    return cli\n", encoding="utf-8")
 
     plan = export_public.export(tree, tmp_path / "out", allow_inside_git=True)
 

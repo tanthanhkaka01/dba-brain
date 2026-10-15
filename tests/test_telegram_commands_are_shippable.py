@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.paths import DEFAULT_DATA_DIR, PACKAGE_DIR
+from dbabrain.lib.paths import DEFAULT_DATA_DIR, PACKAGE_DIR
 
 PACKAGED = PACKAGE_DIR / "telegram" / "catalogue" / "telegram_support_commands.json"
 ESTATE = DEFAULT_DATA_DIR / "telegram_support_commands.json"
@@ -102,7 +102,7 @@ def test_every_estate_command_ships_unless_it_is_a_named_exception() -> None:
 
     assert not missing, (
         f"commands the estate has and the package does not: {missing}. Promote them into "
-        "db_ops/telegram/catalogue/, or add them to ESTATE_ONLY with the reason.")
+        "dbabrain/telegram/catalogue/, or add them to ESTATE_ONLY with the reason.")
 
 
 def test_the_exceptions_are_still_real() -> None:
@@ -195,8 +195,8 @@ def test_the_ticket_export_is_a_task_output_not_a_command() -> None:
     worked and a task's `output.format` could not say the same word. Two vocabularies for one
     question, and the workaround was a bespoke command with an id in it.
     """
-    from db_ops.lib.result_format import RESULT_FORMATS
-    from db_ops.lib.task_output import FILE_OUTPUT_FORMATS, OUTPUT_FORMATS
+    from dbabrain.lib.result_format import RESULT_FORMATS
+    from dbabrain.lib.task_output import FILE_OUTPUT_FORMATS, OUTPUT_FORMATS
 
     assert "json" in OUTPUT_FORMATS and "json" in FILE_OUTPUT_FORMATS
     assert not [f for f in FILE_OUTPUT_FORMATS if f not in RESULT_FORMATS], (
@@ -209,7 +209,7 @@ def test_the_shipped_example_is_the_packaged_catalogue() -> None:
     """A third hand-kept copy of the same list, and it had already drifted.
 
     `data/telegram_support_commands.example.json` ships in place of the estate's file on a public
-    checkout, while `db_ops/telegram/catalogue/` is what `db-ops init` writes. Both are "the
+    checkout, while `dbabrain/telegram/catalogue/` is what `dbabrain init` writes. Both are "the
     command set a stranger gets", so a difference between them is one of them being wrong — and on
     2026-08-27 the example was five commands behind and still carried one that had been removed
     that morning.

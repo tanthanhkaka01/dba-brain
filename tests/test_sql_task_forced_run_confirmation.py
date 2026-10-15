@@ -6,7 +6,7 @@ the write but a Telegram clearance. Clearance is the wrong control for that: `co
 answers *who may ask*, never *how hard it is to ask*, and raising it to 50 on 2026-09-04 made the
 command as privileged as `/spbot_kill_spid` while it still cost nothing to run.
 
-The confirmation therefore lives where every other one lives — `db_ops.common.confirm`, priced by
+The confirmation therefore lives where every other one lives — `dbabrain.common.confirm`, priced by
 `data/emergency_operations.json` — and the app reaches it the way an app reaches `common`: over
 the CLI (`common.cli authorize`), never by importing it. So this file has two halves: the gate's
 own face, and what `sql_tasks` asks it.
@@ -17,9 +17,9 @@ import types
 
 import pytest
 
-from db_ops.common import confirm
-from db_ops.sql_tasks import runner
-from db_ops.sql_tasks.runner import authorize_forced_run, parse_args
+from dbabrain.common import confirm
+from dbabrain.sql_tasks import runner
+from dbabrain.sql_tasks.runner import authorize_forced_run, parse_args
 
 from conftest import patch_sql_runner
 
@@ -223,7 +223,7 @@ def _main_without_its_world(monkeypatch, tmp_path, *, authorized):
     patch_sql_runner(monkeypatch, "setup_app_logger", lambda *a, **k: None)
     patch_sql_runner(monkeypatch, "log_event", lambda *a, **k: None)
     patch_sql_runner(monkeypatch, "telegram_groups", lambda: {})
-    monkeypatch.setattr(runner.DbOpsStore, "from_config", classmethod(
+    monkeypatch.setattr(runner.DbaBrainStore, "from_config", classmethod(
         lambda cls, config: types.SimpleNamespace(initialize=lambda: None)))
 
     def fake_authorize(**kwargs):

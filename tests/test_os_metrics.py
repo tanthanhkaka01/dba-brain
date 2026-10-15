@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common.remote_exec import shell_prelude
-from db_ops.metrics.collector import _collector_env, _prepare_remote, _remote_shell_for
-from db_ops.metrics.definitions import load_metric_definitions
+from dbabrain.common.remote_exec import shell_prelude
+from dbabrain.metrics.collector import _collector_env, _prepare_remote, _remote_shell_for
+from dbabrain.metrics.definitions import load_metric_definitions
 from conftest import shipped_config
 
 # The catalogue that *ships*, not the one this estate happens to have. Reading
@@ -21,11 +21,11 @@ from conftest import shipped_config
 # `data/metric_definitions.json` said, and there is no such file in an exported tree — so
 # these assertions passed here and raised StopIteration anywhere else.
 DEFAULT_DEFINITIONS_PATH = shipped_config("metric_definitions.json")
-from db_ops.metrics.models import MetricDefinition, MetricTarget
-from db_ops.reports.inventory_health import (
+from dbabrain.metrics.models import MetricDefinition, MetricTarget
+from dbabrain.reports.inventory_health import (
     build_os_health, build_inventory_status, merged_drives, parse_os_kv,
 )
-from db_ops.reports.inventory_report import build_models, build_triage
+from dbabrain.reports.inventory_report import build_models, build_triage
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "os_metrics"
@@ -101,14 +101,14 @@ def test_collector_env_merges_target_wide_and_per_metric_config():
         "collector_env": {"OS_TOP_N": "5"},
         "metric_overrides": {"OS_SERVICE_STATUS": {"collector_env": {"OS_SERVICE_NAMES": "*Dynamics AX Object Server*"}}},
     })
-    # DB_OPS_TARGET_HOST is injected into every cmd collector rather than declared — it is the
+    # DBABRAIN_TARGET_HOST is injected into every cmd collector rather than declared — it is the
     # address the inventory already reaches this host on, so a script never restates it.
     service_env = _collector_env(metric=_definition("OS_SERVICE_STATUS"), target=target)
-    assert service_env == {"DB_OPS_TARGET_HOST": "192.0.2.116", "OS_TOP_N": "5",
+    assert service_env == {"DBABRAIN_TARGET_HOST": "192.0.2.116", "OS_TOP_N": "5",
                            "OS_SERVICE_NAMES": "*Dynamics AX Object Server*"}
     # The per-metric block must not leak into other metrics.
     assert _collector_env(metric=_definition("OS_CPU_USAGE"), target=target) == {
-        "DB_OPS_TARGET_HOST": "192.0.2.116", "OS_TOP_N": "5"}
+        "DBABRAIN_TARGET_HOST": "192.0.2.116", "OS_TOP_N": "5"}
 
 
 def test_collector_env_per_metric_overrides_target_wide():
@@ -234,7 +234,7 @@ def test_merged_drives_falls_back_to_os_disks_when_there_is_no_sql_disk_metric()
 
 def test_merged_drives_still_prefers_the_sql_metric_on_a_database_host():
     fixture = code_map(load_fixture("sqlserver_host"))
-    from db_ops.reports.inventory_health import build_disk_health
+    from dbabrain.reports.inventory_health import build_disk_health
 
     db_host = {"server_id": "ACME-192-0-2-115", "ip": "192.0.2.115",
                "databases": [{"db_type": "sqlserver"}],

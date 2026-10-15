@@ -1,10 +1,5 @@
 # Installation
 
-> **Naming, while the project is being renamed.** The distribution and the module path are still
-> `db_ops`, so every command below reads `python -m db_ops.<app>.cli`. They become `dbabrain` when
-> the code moves to the public repository. Nothing else on this page changes with them.
-> <!-- TODO(rename): update the distribution name and the `python -m` paths here once the package
-> rename lands. -->
 
 ## What you need
 
@@ -38,7 +33,7 @@ python -m venv .venv
 Check it:
 
 ```bash
-.venv/bin/python -m db_ops.db.cli --help
+.venv/bin/python -m dbabrain.db.cli --help
 ```
 
 ### Engine extras
@@ -153,7 +148,7 @@ Installing it, running it under `docker compose` and upgrading it to the next re
 compose file it runs. What follows here is what the image is and how to build one yourself.
 
 ```bash
-docker build -t db_ops:local .
+docker build -t dbabrain:local .
 ```
 
 Configuration and secrets are **not** baked in. The image carries the code; `config.json`, `data/`
@@ -162,14 +157,14 @@ or in the environment. That is what lets one image serve several estates, and it
 someone else built is not a copy of your credentials.
 
 ```bash
-docker run -d --name db_ops_daemon \
-  -v "$PWD/config.json:/app/tools/db_ops/config.json:ro" \
-  -v "$PWD/data:/app/tools/db_ops/data" \
-  -v "$PWD/logs:/app/tools/db_ops/logs" \
-  -v "$PWD/runtime:/app/tools/db_ops/runtime" \
-  -e DB_OPS_NODE_ROLE=worker \
-  -e DB_OPS_SECRET_KEY='<passphrase>' \
-  db_ops:local daemon
+docker run -d --name dbabrain_daemon \
+  -v "$PWD/config.json:/app/tools/dbabrain/config.json:ro" \
+  -v "$PWD/data:/app/tools/dbabrain/data" \
+  -v "$PWD/logs:/app/tools/dbabrain/logs" \
+  -v "$PWD/runtime:/app/tools/dbabrain/runtime" \
+  -e DBABRAIN_NODE_ROLE=worker \
+  -e DBABRAIN_SECRET_KEY='<passphrase>' \
+  dbabrain:local daemon
 ```
 
 **It runs as uid 10001, not root.** A monitoring daemon reads databases over the network and
@@ -185,12 +180,12 @@ docker run --user 0:0 ...                  # or keep the old behaviour, in one f
 An unwritable mount is reported by name before anything starts, rather than surfacing later as a
 traceback from whichever component wrote first.
 
-**`db-ops` is on the PATH inside the image**, and the package is installed rather than only copied,
+**`dbabrain` is on the PATH inside the image**, and the package is installed rather than only copied,
 so every command in this documentation works from any directory in the container — not only from
 the one the daemon happens to start in.
 
-The image lays the project out under `/app/tools/db_ops`, which is why `working_dir` in
-`data/app_commands.json` is the string `tools/db_ops` — a logical alias for the tool root that
+The image lays the project out under `/app/tools/dbabrain`, which is why `working_dir` in
+`data/app_commands.json` is the string `tools/dbabrain` — a logical alias for the tool root that
 resolves to the checkout on a workstation and to that path in the container, so one configuration
 file works in both.
 
@@ -199,16 +194,16 @@ file works in both.
 The five-minute version, against a throwaway PostgreSQL container, is
 [`examples/postgres-quickstart/`](../examples/postgres-quickstart). Against your own estate:
 
-1. **Create a tool root.** `db-ops init` writes one — twelve files, and it prints the next six
+1. **Create a tool root.** `dbabrain init` writes one — twelve files, and it prints the next six
    commands. Four of them arrive complete because they are product data rather than your estate:
    the 93-metric catalogue, the report definitions, the bot commands, and the daemon's schedule. A directory holding `data/` or `config.json` *is* a tool root: stand in it, or point
-   `DB_OPS_HOME` at it. Do not build one by hand.
+   `DBABRAIN_HOME` at it. Do not build one by hand.
 2. **Declare one target and one credential.** `data/db_instances.json` and `data/users.json`.
 3. **Put the password in the secret store.** Write `secrets/secret_text.json`, then
-   `db-ops encrypt-secret --key-base64 <base64-passphrase>`.
-4. **Check it resolves before it connects.** `db-ops check-credentials`, then
-   `db-ops metrics collect --dry-run`.
-5. **Collect.** `db-ops metrics --key-base64 <base64-passphrase> collect` — the key goes *before*
+   `dbabrain encrypt-secret --key-base64 <base64-passphrase>`.
+4. **Check it resolves before it connects.** `dbabrain check-credentials`, then
+   `dbabrain metrics collect --dry-run`.
+5. **Collect.** `dbabrain metrics --key-base64 <base64-passphrase> collect` — the key goes *before*
    the subcommand.
 6. **Only then schedule anything.** `data/app_commands.json` is already written; trim it to the
    apps you actually run, then start the daemon. It runs the same commands you just ran by hand,
@@ -221,11 +216,11 @@ succeeded turns a configuration mistake into an intermittent one.
 
 ### If another machine already runs this estate
 
-Do not repeat steps 1 to 3 by hand. On the machine that already works, `db-ops export-data
-prod-bundle.json` writes its whole configuration to one file; here, `db-ops import-data
+Do not repeat steps 1 to 3 by hand. On the machine that already works, `dbabrain export-data
+prod-bundle.json` writes its whole configuration to one file; here, `dbabrain import-data
 prod-bundle.json` applies it, and this machine runs the same estate. The secret store crosses as
-ciphertext, so the only thing you still have to supply is the passphrase — set `DB_OPS_SECRET_KEY`
-and confirm with `db-ops check-credentials`. Full detail, and what import refuses to do, in
+ciphertext, so the only thing you still have to supply is the passphrase — set `DBABRAIN_SECRET_KEY`
+and confirm with `dbabrain check-credentials`. Full detail, and what import refuses to do, in
 [`docs/configuration.md` §9](./configuration.md#9-moving-a-whole-estate-to-another-machine).
 
 See [`docs/configuration.md`](./configuration.md) for what each file decides, and
@@ -236,9 +231,9 @@ sends anywhere.
 
 ```bash
 pip install --upgrade dbabrain
-python -m db_ops.db.cli --config config.json init      # idempotent; applies any schema change
-python -m db_ops.common.cli upgrade-config '{}'        # what the new version would move in data/
-python -m db_ops.common.cli upgrade-config '{"dry_run": false}'   # move it; each file copied first
+python -m dbabrain.db.cli --config config.json init      # idempotent; applies any schema change
+python -m dbabrain.common.cli upgrade-config '{}'        # what the new version would move in data/
+python -m dbabrain.common.cli upgrade-config '{"dry_run": false}'   # move it; each file copied first
 ```
 
 `init` is safe to run against an existing store: it creates what is missing and upgrades what is
@@ -255,6 +250,6 @@ node does not know the new names and reads, for instance, an instance switched o
 
 ## Uninstalling
 
-`pip uninstall db_ops` removes the code. Your tool root — configuration, logs, the store — is a
+`pip uninstall dbabrain` removes the code. Your tool root — configuration, logs, the store — is a
 directory you created and is left alone; delete it if you want it gone. Nothing is installed on
 the monitored databases, so there is nothing to remove there.

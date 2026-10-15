@@ -1,4 +1,4 @@
-"""Every ``db_ops.common.cli`` command takes one JSON object, and that is checked, not trusted.
+"""Every ``dbabrain.common.cli`` command takes one JSON object, and that is checked, not trusted.
 
 The contract exists so that a config file, a Telegram action and a shell caller can pass the
 same payload through untranslated — it is the shape ``data/*.json`` already has. A command
@@ -22,14 +22,14 @@ import re
 
 import pytest
 
-from db_ops.common import cli
+from dbabrain.common import cli
 
 
 #: Commands that mutate something real. They are asked for their parse behaviour only, with
 #: a payload guaranteed to fail validation before anything is touched.
 ALL_COMMANDS = [
     # `telegram-group` / `telegram-route` were removed from this list on 2026-08-15: both moved to
-    # `db_ops.telegram.cli` when the routing settings went back to their owner, and neither name
+    # `dbabrain.telegram.cli` when the routing settings went back to their owner, and neither name
     # has reached a handler here since. They still *passed* every case below — an unknown command
     # falls through to `config_admin.main`, whose JSON-request branch rejects the malformed payload
     # before argparse ever sees the name. A parametrization that passes for a command that does not
@@ -80,7 +80,7 @@ ALL_COMMANDS = [
     # Left this file on 2026-08-15 and covered elsewhere now, for the same reason in each case —
     # they were not shared-layer work:
     #   queue-telegram-message, ops-status, restore-drill-status
-    #                        -> db_ops/db/cli.py, see tests/test_db_cli_json_contract.py
+    #                        -> dbabrain/db/cli.py, see tests/test_db_cli_json_contract.py
     #                           (they open the runtime store, which ORD 01 owns)
     # Leaving them listed here would not have failed: an unknown command falls through to
     # `config_admin.main`, whose JSON branch rejects the payload before argparse sees the name.

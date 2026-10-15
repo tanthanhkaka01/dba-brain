@@ -12,27 +12,27 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_ops.control import cli as control_cli
-from db_ops.lib import request_types, shared_objects
+from dbabrain.control import cli as control_cli
+from dbabrain.lib import request_types, shared_objects
 
-PACKAGE = Path(__file__).resolve().parents[1] / "db_ops"
+PACKAGE = Path(__file__).resolve().parents[1] / "dbabrain"
 REFERENCE = shared_objects.load(PACKAGE / "common" / "catalogue")
 
 
 def test_the_request_and_answer_types_are_the_reference_rendered():
     committed = (PACKAGE / "lib" / "cli_types.py").read_text(encoding="utf-8")
     assert committed == request_types.render(REFERENCE), (
-        "lib/cli_types.py differs from the reference: python -m db_ops.control.cli request-types --write")
+        "lib/cli_types.py differs from the reference: python -m dbabrain.control.cli request-types --write")
 
 
 def test_the_transport_stub_is_the_reference_rendered():
     committed = (PACKAGE / "transport" / "common_cli.pyi").read_text(encoding="utf-8")
     assert committed == request_types.render_transport_stub(REFERENCE), (
-        "transport/common_cli.pyi differs from the reference: python -m db_ops.control.cli request-types --write")
+        "transport/common_cli.pyi differs from the reference: python -m dbabrain.control.cli request-types --write")
 
 
 def test_every_entry_becomes_a_type_and_every_command_with_both_is_typed():
-    from db_ops.lib import cli_types
+    from dbabrain.lib import cli_types
 
     entries = [e for e in REFERENCE if e.get("kind") in ("input", "output")
                and str(e.get("object", "")).startswith(("input_", "output_"))]

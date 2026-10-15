@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from db_ops.db import DbOpsStore
-from db_ops.jobs import JobRun
-from db_ops.telegram.command_processor import (
+from dbabrain.db import DbaBrainStore
+from dbabrain.jobs import JobRun
+from dbabrain.telegram.command_processor import (
     completion_verdict,
     _job_run_metadata_matches,
     _probe_completion,
@@ -20,7 +20,7 @@ PROBE = {
 
 
 def _store(tmp_path):
-    store = DbOpsStore(str(tmp_path / "t.sqlite"))
+    store = DbaBrainStore(str(tmp_path / "t.sqlite"))
     store.initialize()
     return store
 
@@ -86,7 +86,7 @@ def test_a_zombie_is_not_alive(monkeypatch, tmp_path):
     process lingers in state Z. os.kill(pid, 0) succeeds on a zombie — believing that meant
     "running" is why a failed create-db-docker went silent for 30 minutes and then reported a
     timeout instead of the real error."""
-    from db_ops.telegram import command_processor as cp
+    from dbabrain.telegram import command_processor as cp
 
     proc = tmp_path / "4242"
     proc.mkdir()
@@ -95,7 +95,7 @@ def test_a_zombie_is_not_alive(monkeypatch, tmp_path):
     # Patched on `process_liveness`, which is where the rule lives now; `command_processor`
     # re-exports it, so `cp._is_pid_alive` is still the name under test and still the one
     # production calls. Patching `cp` stopped reaching the code the day it moved.
-    from db_ops.lib import process_liveness as liveness
+    from dbabrain.lib import process_liveness as liveness
 
     monkeypatch.setattr(liveness.sys, "platform", "linux")  # the container the worker runs in
     monkeypatch.setattr(liveness, "open", lambda path, *a, **kw: (proc / "stat").open(*a, **kw),
@@ -107,7 +107,7 @@ def test_a_zombie_is_not_alive(monkeypatch, tmp_path):
 
 
 def test_a_running_process_is_alive(monkeypatch, tmp_path):
-    from db_ops.telegram import command_processor as cp
+    from dbabrain.telegram import command_processor as cp
 
     proc = tmp_path / "4243"
     proc.mkdir()
@@ -128,7 +128,7 @@ def test_a_running_process_is_alive(monkeypatch, tmp_path):
 def test_the_exit_code_of_a_detached_posix_command_is_read_back(tmp_path, monkeypatch):
     from pathlib import Path
 
-    from db_ops.telegram import command_processor as cp
+    from dbabrain.telegram import command_processor as cp
 
     stdout_path = tmp_path / "run.stdout.txt"
     stdout_path.write_text("Status: running\n", encoding="utf-8")
@@ -145,7 +145,7 @@ def test_the_error_summary_is_the_error_not_the_compose_progress():
     """What the operator was shown: "Network mssql_lab_ha_01_default Creating Network ... Volume
     ... Creating" — the *head* of docker compose's progress, truncated. The actual error never
     made it into the message."""
-    from db_ops.telegram.command_processor import _extract_error_from_output
+    from dbabrain.telegram.command_processor import _extract_error_from_output
 
     stderr = "\n".join([
         "Network mssql_lab_ha_01_default  Creating",
@@ -174,7 +174,7 @@ def test_the_wrapper_records_what_the_command_returned(tmp_path):
     """
     import sys
 
-    from db_ops.telegram.detached_exit import run
+    from dbabrain.telegram.detached_exit import run
 
     path = tmp_path / "rc.txt"
 
@@ -187,7 +187,7 @@ def test_the_wrapper_records_what_the_command_returned(tmp_path):
 
 def test_a_command_that_cannot_start_is_recorded_as_a_failure(tmp_path):
     """A missing executable is a real failure and must not read as "unknown"."""
-    from db_ops.telegram.detached_exit import run
+    from dbabrain.telegram.detached_exit import run
 
     path = tmp_path / "rc.txt"
 
@@ -204,7 +204,7 @@ def test_the_wrapper_needs_no_quoting(tmp_path):
     """
     import sys
 
-    from db_ops.telegram.detached_exit import run
+    from dbabrain.telegram.detached_exit import run
 
     path = tmp_path / "rc.txt"
     written = tmp_path / "out.txt"
@@ -222,11 +222,11 @@ def test_the_dispatch_launches_through_the_wrapper_on_every_platform(monkeypatch
     """One path, so the two cannot drift again — which is how Windows came to have none."""
     import inspect
 
-    from db_ops.telegram import command_processor as cp
+    from dbabrain.telegram import command_processor as cp
 
     source = inspect.getsource(cp)
 
-    assert "db_ops.telegram.detached_exit" in source
+    assert "dbabrain.telegram.detached_exit" in source
     assert not hasattr(cp, "_get_exit_code_windows"), (
         "the function that returned a hardcoded 1 for 'no handle' must not come back")
 

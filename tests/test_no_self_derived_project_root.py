@@ -6,8 +6,8 @@ and different in every installed copy, where the answer becomes ``site-packages/
 2026-08-21 a wheel built from this tree proved it: the package imported cleanly and could not
 have found a single config file.
 
-That was fixed once in ``db_ops/lib/paths.py``, which now resolves the root in a stated order
-(``DB_OPS_HOME`` → a working directory carrying ``data/`` or ``config.json`` → the package's own
+That was fixed once in ``dbabrain/lib/paths.py``, which now resolves the root in a stated order
+(``DBABRAIN_HOME`` → a working directory carrying ``data/`` or ``config.json`` → the package's own
 location). The fix is worthless if the idiom grows back somewhere else, and it had already grown
 back **eleven** times before this guard existed — including in
 ``telegram/command_processor.py``, which imported ``TOOL_ROOT`` on one line and re-derived the
@@ -26,9 +26,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "db_ops"
+PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "dbabrain"
 
-#: The one file allowed to state how deep the package sits, relative to ``db_ops/``.
+#: The one file allowed to state how deep the package sits, relative to ``dbabrain/``.
 #: A second entry here needs the same argument this one had, made as hard.
 ALLOWED: dict[str, str] = {
     "lib/paths.py": (
@@ -60,7 +60,7 @@ def test_the_project_root_is_derived_from_the_package_location_in_one_file_only(
     assert not offenders, (
         "These modules work out the project root from their own file path, which resolves to "
         "site-packages once the package is installed. Import TOOL_ROOT / PACKAGE_ROOT / "
-        "DEFAULT_DATA_DIR from db_ops.lib.paths instead:\n"
+        "DEFAULT_DATA_DIR from dbabrain.lib.paths instead:\n"
         + "\n".join(f"  {name}:{number}: {line}" for name, number, line in offenders)
     )
 

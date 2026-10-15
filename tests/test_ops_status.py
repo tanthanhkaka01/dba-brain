@@ -2,8 +2,8 @@
 
 On 2026-08-12 a NameError in the SQL task scanner made every scheduled scan exit 1, once a
 minute, for a day. The daemon kept running, the container stayed up, the metric reports kept
-arriving, and not one scheduled SQL task ran. Nothing in db_ops noticed, because everything in
-db_ops watches databases and nothing watched db_ops. A person found it by noticing an absence,
+arriving, and not one scheduled SQL task ran. Nothing in dbabrain noticed, because everything in
+dbabrain watches databases and nothing watched dbabrain. A person found it by noticing an absence,
 which is the worst detector there is: absence is what nobody notices at 03:00.
 
 What these tests pin is the judgement, not the plumbing:
@@ -20,7 +20,7 @@ What these tests pin is the judgement, not the plumbing:
 import json
 from datetime import datetime, timedelta, timezone
 
-from db_ops.db import ops_status as ops
+from dbabrain.db import ops_status as ops
 
 
 class _Conn:
@@ -296,7 +296,7 @@ def test_the_summary_is_not_repeated_inside_its_interval():
 
 def test_the_last_hour_of_the_window_still_gets_its_report():
     """"to 20h" means the 20:xx report is sent, which is what an operator means by it and what
-    time_window does everywhere else in db_ops."""
+    time_window does everywhere else in dbabrain."""
     local = timezone(timedelta(hours=7))
     due, _ = ops.summary_is_due(last_sent=None,
                                 now_local=datetime(2026, 8, 13, 20, 45, tzinfo=local))

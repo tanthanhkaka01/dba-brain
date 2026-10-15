@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 
 SCRIPT = "assets/backup/postgresql/pg_basebackup_database.sh"
 
@@ -89,7 +89,7 @@ def test_the_failed_target_is_removed_on_every_path_that_fails(code: str):
 
 
 def test_pg_basebackup_output_is_printed_as_well_as_classified(code: str):
-    """db_ops stores this as `stdout_tail`, and the server's own message is the only thing that
+    """dbabrain stores this as `stdout_tail`, and the server's own message is the only thing that
     says why a backup did not happen. Capturing it to classify it must not swallow it."""
     assert 'bb_output="$(run_db' in code
     assert "printf '%s\\n' \"$bb_output\"" in code

@@ -1,7 +1,7 @@
 """A first-run step must not report success for having done nothing.
 
 Both cases below were found by installing the published `dbabrain 0.1.0` from PyPI into an empty
-repository and following the `AGENTS.md` that `db-ops init` writes there. Neither is exotic; both
+repository and following the `AGENTS.md` that `dbabrain init` writes there. Neither is exotic; both
 are the first two commands anybody runs, and each reported success while achieving nothing:
 
 - `encrypt-secret` was given the *wrapped* secret file — ``{"secrets": {...}}`` — which is what the
@@ -25,8 +25,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common.cli_check_credentials import run as _check_credentials_command
-from db_ops.lib.secret_text import encrypt_secret_text_file
+from dbabrain.common.cli_check_credentials import run as _check_credentials_command
+from dbabrain.lib.secret_text import encrypt_secret_text_file
 
 
 def test_a_nested_secret_file_is_refused_and_the_message_shows_the_shape(tmp_path: Path) -> None:

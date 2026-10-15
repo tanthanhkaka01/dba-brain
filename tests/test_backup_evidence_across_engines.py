@@ -9,7 +9,7 @@ night. An operator reading that page would conclude those databases were unprote
 
 PostgreSQL needs its own metric code (``collector_type`` is per metric, and a base backup is a
 directory on disk rather than a catalog row), so the fix is a *set* of codes that all mean
-"backup evidence" — :data:`db_ops.lib.backup_policy.BACKUP_LAST_RESULT_CODES`. These tests pin
+"backup evidence" — :data:`dbabrain.lib.backup_policy.BACKUP_LAST_RESULT_CODES`. These tests pin
 the property that matters: which code a row arrived under must not change the verdict.
 """
 
@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import datetime
 
-from db_ops.lib import backup_policy
-from db_ops.reports import inventory_health
+from dbabrain.lib import backup_policy
+from dbabrain.reports import inventory_health
 
-from db_ops.lib import data_sources
+from dbabrain.lib import data_sources
 
 # `evaluate_backup_policy` no longer reads data/backup_policy.json itself (2026-08-15):
 # reading is data_sources' job, judging is lib's. These tests exercised the shipped policy

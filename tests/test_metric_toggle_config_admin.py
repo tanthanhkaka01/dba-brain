@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common.config_admin import ConfigAdminError, set_metric_toggle
+from dbabrain.common.config_admin import ConfigAdminError, set_metric_toggle
 
 
 def _seed(tmp_path: Path) -> Path:
@@ -142,7 +142,7 @@ def test_toggle_rejects_unknown_inputs(tmp_path):
 
 
 def test_format_time_window_line_compact():
-    from db_ops.telegram.command_processor import _format_time_window_line
+    from dbabrain.telegram.command_processor import _format_time_window_line
 
     assert _format_time_window_line(None) == "always"
     assert _format_time_window_line({"from_hour": 1, "to_hour": 5, "repeat_interval": 72000, "timeout": 7200}) == \
@@ -155,7 +155,7 @@ def test_format_time_window_line_compact():
 def test_listing_commands_render_from_repo_config():
     """Smoke: both listing handlers run against the real repo config (read-only).
     A fake store captures the document queue when the listing overflows one message."""
-    from db_ops.telegram import command_processor
+    from dbabrain.telegram import command_processor
 
     queued = []
 
@@ -188,12 +188,12 @@ def test_execute_metric_toggle_command_maps_args(monkeypatch):
     """/spbot_metric_toggle turns three chat words into the `metric-toggle` request.
 
     Stubbed at the CLI boundary since 2026-08-15: the write runs in
-    `db_ops.common.cli metric-toggle`, so patching the in-process function would patch something
+    `dbabrain.common.cli metric-toggle`, so patching the in-process function would patch something
     this path no longer calls. What is asserted is the request — the bot's only job here is to
     say which server, which scope and which direction.
     """
-    from db_ops.transport import common_cli
-    from db_ops.telegram import command_processor
+    from dbabrain.transport import common_cli
+    from dbabrain.telegram import command_processor
 
     calls = {}
 

@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.lib.state_transition import decide_notification, diff_states
+from dbabrain.lib.state_transition import decide_notification, diff_states
 
 SEVERITY = ("FAILED", "AT_RISK", "NO_DATA", "PASSED")
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)

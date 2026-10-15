@@ -20,7 +20,7 @@ restored into would be the worst kind of surprise.
 
 import json
 
-from db_ops.common import sqlserver_instance as si
+from dbabrain.common import sqlserver_instance as si
 
 
 def _guard(name):

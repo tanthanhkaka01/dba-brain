@@ -24,9 +24,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from db_ops.common import showcase
-from db_ops.lib import page_banner
-from db_ops.lib import timezone as tz
+from dbabrain.common import showcase
+from dbabrain.lib import page_banner
+from dbabrain.lib import timezone as tz
 
 
 def test_a_rendered_stamp_can_be_read_back_into_the_moment_it_names():
@@ -145,6 +145,6 @@ def test_a_showcase_can_be_rebuilt_over_its_own_output_without_stacking_stamps()
 
 def _no_op_mapping():
     """A mapping that renames nothing, so these tests read about names and not about the scrub."""
-    from db_ops.lib import pseudonym
+    from dbabrain.lib import pseudonym
 
     return pseudonym.Mapping({})

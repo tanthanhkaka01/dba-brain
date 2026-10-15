@@ -15,7 +15,7 @@ import types
 
 import pytest
 
-from db_ops.common import remote_exec as rx
+from dbabrain.common import remote_exec as rx
 
 CONNECT_SECONDS = 1
 COMMAND_SECONDS = 2.5
@@ -59,6 +59,6 @@ def test_a_deadline_the_caller_sets_still_cuts_the_command(slow_pypsrp):
 
 
 def test_sqlcmd_no_longer_needs_its_own_large_number():
-    from db_ops.common import sqlcmd_run
+    from dbabrain.common import sqlcmd_run
 
     assert not hasattr(sqlcmd_run, "_WINRM_UNBOUNDED_SECONDS")

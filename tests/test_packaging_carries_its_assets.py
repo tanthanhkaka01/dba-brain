@@ -5,7 +5,7 @@ package that is not in `packages.find`**. So a stale line reads as "the host con
 while nothing ships, and the failure arrives on somebody else's machine as a template that is not
 there — long after the install that was supposed to contain it.
 
-That is not hypothetical here. `v0.1.0` withheld seven packages, `db_ops.sre`'s `package-data` entry
+That is not hypothetical here. `v0.1.0` withheld seven packages, `dbabrain.sre`'s `package-data` entry
 was removed with them, and when the packages came back in `v0.2.0` the entry had to come back too.
 Nothing but this test connects those two edits.
 
@@ -30,10 +30,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: without it. A metric with no SQL collects nothing; a compose template that is absent means
 #: `create-db-docker` writes an empty file; a report with no HTML renders a blank page.
 MUST_BE_IN_THE_WHEEL: tuple[tuple[str, str], ...] = (
-    ("db_ops/metrics/collectors/sqlserver/001_sqlserver_instance_status.sql", "a metric's query"),
-    ("db_ops/common/backup_scripts/sqlserver/mssql_backup_database.sh", "a backup script"),
+    ("dbabrain/metrics/collectors/sqlserver/001_sqlserver_instance_status.sql", "a metric's query"),
+    ("dbabrain/common/backup_scripts/sqlserver/mssql_backup_database.sh", "a backup script"),
     # scaffold reads it at import, so a wheel without it fails at the first command.
-    ("db_ops/common/agents_guide.md", "the AGENTS.md init writes and dbabrain guide prints"),
+    ("dbabrain/common/agents_guide.md", "the AGENTS.md init writes and dbabrain guide prints"),
 )
 
 
@@ -47,7 +47,7 @@ def _clean_source(tmp_path: Path) -> Path:
 
     A build run inside the repository is not a clean build, in two ways measured on 2026-09-11 while
     a file was missing from `package-data`: `build/lib` keeps every file an earlier build copied
-    there and the next wheel ships them, and `db_ops.egg-info/SOURCES.txt` keeps the list of files an
+    there and the next wheel ships them, and `dbabrain.egg-info/SOURCES.txt` keeps the list of files an
     earlier build found and setuptools reads it back as a manifest. Either one made this test pass
     with the declaration removed, for as long as an earlier build had run with it present. Built
     from a copy that holds neither, the wheel carries what is declared and nothing else.
@@ -58,7 +58,7 @@ def _clean_source(tmp_path: Path) -> Path:
         if (REPO_ROOT / name).exists():
             shutil.copy2(REPO_ROOT / name, source / name)
     leftovers = shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info", "build")
-    shutil.copytree(REPO_ROOT / "db_ops", source / "db_ops", ignore=leftovers)
+    shutil.copytree(REPO_ROOT / "dbabrain", source / "dbabrain", ignore=leftovers)
     if (REPO_ROOT / "docs").is_dir():
         shutil.copytree(REPO_ROOT / "docs", source / "docs", ignore=leftovers)
     return source
@@ -98,15 +98,15 @@ def test_every_file_init_writes_from_the_package_is_in_the_wheel(tmp_path: Path)
     is in the source tree and not in the wheel passes every source-tree test and then vanishes on an
     installed node.
 
-    That happened on 2026-09-11 with `db_ops/backup_restore/catalogue/restore_config.json`: added to
+    That happened on 2026-09-11 with `dbabrain/backup_restore/catalogue/restore_config.json`: added to
     PACKAGED_DEFAULTS, left out of `package-data`, found only by building the wheel for a fresh-root
     test. The list is derived from the map itself, so the next one cannot be forgotten the same way.
     """
-    from db_ops.common import scaffold
+    from dbabrain.common import scaffold
 
     names = _wheel_names(tmp_path)
-    missing = sorted(f"db_ops/{source}" for source in scaffold.PACKAGED_DEFAULTS.values()
-                     if f"db_ops/{source}" not in names)
+    missing = sorted(f"dbabrain/{source}" for source in scaffold.PACKAGED_DEFAULTS.values()
+                     if f"dbabrain/{source}" not in names)
 
     assert not missing, (
         "init writes these from the package, and the wheel does not carry them - add their folder "
@@ -117,7 +117,7 @@ def test_every_file_init_writes_from_the_package_is_in_the_wheel(tmp_path: Path)
 def test_every_package_data_entry_names_a_package_that_ships(tmp_path: Path) -> None:
     """A `package-data` line for a withheld package is ignored, so it reads as a lie.
 
-    This is the check that would have caught the `db_ops.sre` entry being wrong in both directions
+    This is the check that would have caught the `dbabrain.sre` entry being wrong in both directions
     — left behind when the package was withheld, and needed again when it came back.
     """
     import tomllib

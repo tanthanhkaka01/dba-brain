@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 from conftest import shipped_config
 
 DEFINITIONS = shipped_config("metric_definitions.json")
@@ -120,7 +120,7 @@ def test_every_variant_file_the_two_metrics_name_exists(metrics):
     for code in ("QUERY_STORE_QUERY_ISSUES", "QUERY_STORE_COVERAGE"):
         for variant in metrics[code]["variants"]:
             if variant.get("file"):
-                # Per file, as the engine resolves them (db_ops.lib.paths.asset_dir): an operator's
+                # Per file, as the engine resolves them (dbabrain.lib.paths.asset_dir): an operator's
                 # own assets/metrics/ folder would otherwise hide every shipped query.
                 assert resolve_tool_path(f"assets/metrics/{variant['file']}").is_file(), variant["file"]
 
@@ -145,7 +145,7 @@ def _coverage_row(name, value, message, status="OK"):
 def test_a_readonly_reason_is_spelled_out_for_the_reader():
     """A page printing `readonly_reason=65536` has told the reader nothing they can act on, and
     that number is exactly the case they most need to act on."""
-    from db_ops.reports import inventory_health
+    from dbabrain.reports import inventory_health
 
     assert inventory_health.describe_query_store_readonly_reason(65536) == (
         "storage size limit reached")
@@ -155,7 +155,7 @@ def test_a_readonly_reason_is_spelled_out_for_the_reader():
 
 def test_a_query_store_that_filled_up_is_reported_as_not_capturing():
     """The failure the configured flag hides: switched on, silently recording nothing."""
-    from db_ops.reports import inventory_health
+    from dbabrain.reports import inventory_health
 
     entry = inventory_health.build_query_store_entry(_coverage_row(
         "APPDB", "READ_ONLY",
@@ -171,7 +171,7 @@ def test_a_query_store_that_filled_up_is_reported_as_not_capturing():
 
 def test_a_database_the_collector_never_saw_is_unknown_not_off():
     """Blank and off are different answers; rendering both as off invents a finding."""
-    from db_ops.reports import inventory_health
+    from dbabrain.reports import inventory_health
 
     assert inventory_health.build_query_store_entry(None) == {}
 
@@ -179,7 +179,7 @@ def test_a_database_the_collector_never_saw_is_unknown_not_off():
 def test_the_server_section_puts_the_databases_that_capture_nothing_first():
     """The section exists to answer "where can I not investigate"; on a 13-database instance that
     answer must not be somewhere in the middle of the list."""
-    from db_ops.reports import server_report
+    from dbabrain.reports import server_report
 
     section = server_report.build_query_store([
         _coverage_row("Globex_Prod", "READ_WRITE",
@@ -195,7 +195,7 @@ def test_the_server_section_puts_the_databases_that_capture_nothing_first():
 
 def test_the_server_section_counts_on_but_not_capturing_separately():
     """It is neither "on" nor "off" in any way a reader can act on, and it is the interesting one."""
-    from db_ops.reports import server_report
+    from dbabrain.reports import server_report
 
     section = server_report.build_query_store([
         _coverage_row("APPDB", "READ_ONLY",
@@ -210,7 +210,7 @@ def test_the_server_section_counts_on_but_not_capturing_separately():
 
 def test_a_failed_collection_is_not_rendered_as_a_database():
     """An itemless row is a collection that failed, not a database called ""."""
-    from db_ops.reports import server_report
+    from dbabrain.reports import server_report
 
     section = server_report.build_query_store([
         {"metric_code": "QUERY_STORE_COVERAGE", "metric_item": None, "metric_value": None,
@@ -221,7 +221,7 @@ def test_a_failed_collection_is_not_rendered_as_a_database():
 
 
 def test_the_inventory_row_carries_the_state_for_the_database_column():
-    from db_ops.reports import inventory_report
+    from dbabrain.reports import inventory_report
 
     rows = inventory_report._build_databases({
         "database_health": [{
@@ -237,7 +237,7 @@ def test_the_inventory_row_carries_the_state_for_the_database_column():
 def test_query_store_coverage_is_loaded_into_the_inventory_overlay():
     """Without it in HEALTH_CODES the overlay never sees the rows, so the column renders blank for
     every database however well the collector runs."""
-    from db_ops.reports import inventory_health
+    from dbabrain.reports import inventory_health
 
     assert "QUERY_STORE_COVERAGE" in inventory_health.HEALTH_CODES
 
@@ -248,7 +248,7 @@ def test_off_by_choice_and_off_after_a_failure_are_told_apart():
     database. SALESDB on 192.0.2.115 is the second kind — desired OFF, actual ERROR, 2128 MB still
     there — and read as the first for as long as the collector skipped the options DMV for
     databases reporting Query Store as off."""
-    from db_ops.reports import server_report
+    from dbabrain.reports import server_report
 
     section = server_report.build_query_store([
         _coverage_row("SALESDB", "ERROR",

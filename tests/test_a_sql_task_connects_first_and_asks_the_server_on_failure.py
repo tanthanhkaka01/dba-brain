@@ -24,9 +24,9 @@ import json
 
 import pytest
 
-from db_ops.common import sql_task_admin
-from db_ops.lib import sql_task_target
-from db_ops.sql_tasks import runner
+from dbabrain.common import sql_task_admin
+from dbabrain.lib import sql_task_target
+from dbabrain.sql_tasks import runner
 
 from test_sql_task_claims import (RecordingSqlRunStore, inventory_and_credentials, sql_command,
                                   sql_target)

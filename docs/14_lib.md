@@ -1,6 +1,6 @@
 # 14. Lib (pure helpers)
 
-`db_ops/lib/` is the only layer every other component may import **in-process**. 49 modules,
+`dbabrain/lib/` is the only layer every other component may import **in-process**. 49 modules,
 ~8,000 lines. It holds values, vocabularies and rules about values — never operations.
 
 It is the counterpart to [`13_common.md`](./13_common.md). The two split the shared surface between
@@ -46,11 +46,11 @@ while spawning a CLI from `lib` puts an operation inside the layer that everythi
 Rule A and Rule B are R06 and R07 in [`rules.md`](./rules.md), the one numbered list of the
 project's rules, with their guards and the exceptions left.
 
-### Rule A — a `lib` module imports nothing from `db_ops`
+### Rule A — a `lib` module imports nothing from `dbabrain`
 
 Not `common`, not `db`, not an app, not `config.json`. Everything it needs arrives as an argument.
 
-Guarded by **`tests/test_lib_is_pure.py`**, which walks the AST of every module under `db_ops/lib/`
+Guarded by **`tests/test_lib_is_pure.py`**, which walks the AST of every module under `dbabrain/lib/`
 including `restore/`. The guard is three tests, not one: the import check, plus two that keep the
 allowance list honest — every allowance must still name a real module, and every allowance must
 still be used. An allowance that has been fixed fails the suite rather than lingering.
@@ -58,11 +58,11 @@ still be used. An allowance that has been fixed fails the suite rather than ling
 ### No allowances left (0.24.0)
 
 ```python
-ALLOWED_DB_OPS_IMPORTS = {}
+ALLOWED_DBABRAIN_IMPORTS = {}
 ```
 
-There were two - `notify.py` and `telegram_route.py`, each reading `db_ops.config`. The
-configuration parser moved into this layer (`lib/config.py`; the `db_ops.config` alias it left
+There were two - `notify.py` and `telegram_route.py`, each reading `dbabrain.config`. The
+configuration parser moved into this layer (`lib/config.py`; the `dbabrain.config` alias it left
 behind was deleted in 0.25.0), so both read a sibling and the rule is absolute (R06). So are the data-folder reader
 (`lib/data_sources/`) and the version (`lib/version.py`), which moved in with it: `common` reads
 them from here, because `common` may import nothing but `lib` (R04).
@@ -92,8 +92,8 @@ Three mechanisms, and the choice is not a matter of taste:
 
 | The thing | Goes to |
 | --- | --- |
-| a **value or a rule** — pure, takes its inputs as arguments | `db_ops/lib/` |
-| a **read of `data/`** | `db_ops/lib/data_sources/` — the one reader |
+| a **value or a rule** — pure, takes its inputs as arguments | `dbabrain/lib/` |
+| a **read of `data/`** | `dbabrain/lib/data_sources/` — the one reader |
 | an **operation** — touches a database, host, file, or the network | a `common` CLI command |
 
 A module that does two of these is doing two jobs and gets split. That split is not hypothetical:
@@ -126,7 +126,10 @@ differently in two places.
 | `docker_db_registry.py` | the lab-database connection registry (`data/docker_db_connections.json`: build an entry, upsert, relocate, the engine it records) and the password around a build (resolve from the environment or the store; check, then store after the build). `sre/docker_db/` until 0.24.0 - here because `control worker-create-db-docker` builds the same thing, and an app imports neither another app nor `common` |
 | `docker_db_spec.py` | what a lab database Docker instance **is** - `DockerDbSpec` and its validation, `ENGINE_META` (image, port, login, health ceiling per engine), the lab subnet rule, and the default folders. Here since 0.23.0 because both sides of the `common.cli` boundary need it: `sre` for its argparse choices and the connection record, `common.docker_db` to build the instance |
 | `target_flags.py` | per-target on/off flags, and `is_record_active` - one rule for a Telegram chat or person switched on by `active` or the older `status: "active"`, absent meaning on |
-| `remote_host.py` | `RemoteHost` - a Linux host reached through `common.cli`: `run` / `run_script` (`run-cmd`), `put` / `get` (`push-file` / `pull-file`), `exists` / `stat` / `listdir_attr`, and `put_files` / `get_files`, which move many files as one tar. What `control` and `backup_restore` hold instead of an SSH client (rules R03). It builds each request and reads each answer; the one thing that starts a process is the `call` the app passes in - `db_ops.transport.common_cli.run_allowing_failure` - so it starts nothing itself (R07). `put_bytes` writes a few kilobytes from memory, base64 on a here-document, so a certificate's private key touches no local disk |
+| `remote_host.py` | `RemoteHost` - a Linux host reached through `common.cli`: `run` / `run_script` (`run-cmd`), `put` / `get` (`push-file` / `pull-file`), `exists` / `stat` / `listdir_attr`, and `put_files` / `get_files`, which move many files as one tar. What `control` and `backup_restore` hold instead of an SSH client (rules R03). It builds each request and reads each answer; the one thing that starts a process is the `call` the app passes in - `dbabrain.transport.common_cli.run_allowing_failure` - so it starts nothing itself (R07). `put_bytes` writes a few kilobytes from memory, base64 on a here-document, so a certificate's private key touches no local disk |
+| `package_rename.py` | what a node's configuration says about the code under its name before 0.29.0, and what it says after (`renamed`): a module path, a path into the package and the `tools/` alias (each with either slash - the daemon reads `tools\...` as the same alias; a path counts as into the package by what comes before the name - a relative step, the tool root, a checkout, `site-packages` - so `/opt/<old>/reports/...` on a host keeps its name and `../<old>/sre` does not), the name of an environment variable this version reads - and nothing else, so the store's schema and tables, a host folder, an id or a secret ref that share the letters keep them. The one module that writes the earlier name, because finding it is its job; `upgrade-config`'s `package-rename` step runs it |
+| `earlier_defaults.py` | the defaults 0.29.0 renamed and the records that had been running on them: `state_backup_certificate` writes the earlier certificate name into every SQL Server backup job (`env.BACKUP_CERT_NAME`), script-driven restore (the same) and share-driven restore (`source.backup_certificate.name`) that names none, and returns what it changed; `state_staging_marker` writes the earlier marker name into every restore entry that stages on its target (`target_backup_dir`) and names none; `state_lab_folders` writes the two lab folders the code held as constants into `sre.docker_db` where a node states none. Pure - `upgrade-config`'s step `earlier-defaults` reads and writes the file. The one other module that writes an earlier name, because stating it is its job |
+| `lab_folders.py` | where a node keeps its lab databases, as its configuration states it: `read` takes a parsed `sre_config.json` and `load` a data directory, and both answer `LabFolders(containers_dir, backup_mount)` from `sre.docker_db`, empty where nothing is stated. For the apps - `sre.cli` and `control` resolve a flag, else this, and put the folder in the request, because the command that builds or moves a lab reads no configuration (rules R09) and `docker_db_spec` holds no folder to fall back to |
 | `moved_commands.py` | `MOVED_COMMANDS` - which command moved from which CLI to which (`common.cli self-status` -> `db.cli`), the table `upgrade-config`'s `moved-commands` step rewrites an old command line by. Here because it is a value, and `common` may name no CLI module in its own code (rules R05) |
 | `webhost_endpoints.py` | where this node's own pages are — parses `--port`/`--mount` out of the webhost serve `command_text`, builds the console and reports base URLs, and names the pages that exist under stable names. A per-server page stays a `{server_id}` template: a real server id in shipped code is what `check-identifiers` refuses |
 | `report_links.py` | `page_relative` / `href_for_page` — turning an absolute report URL into a relative href when it is one of our own pages. The report text stays absolute for Telegram; the rendered page gets the relative form, which resolves against whatever host served it rather than the one that rendered it |
@@ -145,7 +148,7 @@ differently in two places.
 | `rows.py` | `row_value` / `row_text` — one column out of a store row that may not have it |
 | `json_io.py` | reading a `data/*.json` the one way the whole tool reads them |
 | `text_format.py` | one-line text helpers more than one component must agree on — the stored timestamp (`format_utc`) and the `\|`-safe log value. `format_message_time` still lives here as the name producers import, but it is now one call into `timezone.py` rather than a second implementation |
-| `timezone.py` | **the one clock db_ops shows.** Parses `config.json`'s `timezone` (an IANA name or a fixed offset), resolves it, and renders every operator-facing time as `2026-09-07 07:32:56 +07`. Also `display_now()` — what a `time_window`'s `from_hour`/`to_hour` are compared against — `display_today()`, `file_stamp()`, `label_from_file_stamp()` and `format_display_text()` - plus the two inverses a file that leaves the estate needs: `parse_display()` reads a rendered stamp back into the moment it names (refusing one with no offset rather than guessing a zone) and `utc_file_stamp()` writes `20260912T0130Z`, which says which clock it is on. Bound once by `db_ops.config.parse_config`; see §Timezone below |
+| `timezone.py` | **the one clock dbabrain shows.** Parses `config.json`'s `timezone` (an IANA name or a fixed offset), resolves it, and renders every operator-facing time as `2026-09-07 07:32:56 +07`. Also `display_now()` — what a `time_window`'s `from_hour`/`to_hour` are compared against — `display_today()`, `file_stamp()`, `label_from_file_stamp()` and `format_display_text()` - plus the two inverses a file that leaves the estate needs: `parse_display()` reads a rendered stamp back into the moment it names (refusing one with no offset rather than guessing a zone) and `utc_file_stamp()` writes `20260912T0130Z`, which says which clock it is on. Bound once by `dbabrain.config.parse_config`; see §Timezone below |
 | `secret_value.py` | a secret named in a JSON object, resolved: an explicit value, an environment variable, or a ref it was handed (`resolve_secret_value`). `common.remote_exec`'s until 0.24.0 - an app needs the same resolution and may not import `common` (R03) |
 | `credential_files.py` | `users.json`'s database and remote credential groups, read (`load_credentials_file`, `load_remote_credentials_file`) - moved out of `common` in 0.24.0 with the data-folder reader, which needs them |
 | `sql_task_catalog.py` | the SQL task configuration, read - `sql_commands.json` and `sql_targets.json` into `SqlCommand` / `SqlTarget`, decided once for the runner and the bot (0.24.0; the runner's until then) |
@@ -163,14 +166,14 @@ Two halves, split along the `lib`/`common` line:
 
 | | Where | Kind |
 | --- | --- | --- |
-| The rule | `db_ops/lib/timezone.py` | pure — parse, resolve, render. Imports nothing from `db_ops` |
-| The operation | `python -m db_ops.db.cli timezone` | reads this node's config and says what it resolved - `node_id` and `listing` here are its rules. Opens no store unless asked to record, so it answers when the store is down (0.24.0: `common.cli timezone` did this, and went - rules R43) |
-| The record | `python -m db_ops.db.cli timezone --record` | upserts this node's row in `runtime_nodes`. In `db.cli` because `common` may not import `db` |
+| The rule | `dbabrain/lib/timezone.py` | pure — parse, resolve, render. Imports nothing from `dbabrain` |
+| The operation | `python -m dbabrain.db.cli timezone` | reads this node's config and says what it resolved - `node_id` and `listing` here are its rules. Opens no store unless asked to record, so it answers when the store is down (0.24.0: `common.cli timezone` did this, and went - rules R43) |
+| The record | `python -m dbabrain.db.cli timezone --record` | upserts this node's row in `runtime_nodes`. In `db.cli` because `common` may not import `db` |
 
-**Bound once, in `db_ops.lib.config.parse_config`.** Producers deep in the reports and telegram apps
+**Bound once, in `dbabrain.lib.config.parse_config`.** Producers deep in the reports and telegram apps
 call `format_display()` without being handed a timezone they have no other reason to know about —
 the plumbing alternative always misses one, and the one it misses prints a second clock. No app
-parses the field. `DB_OPS_TIMEZONE` overrides it per node, exactly like `DB_OPS_NODE_ROLE`.
+parses the field. `DBABRAIN_TIMEZONE` overrides it per node, exactly like `DBABRAIN_NODE_ROLE`.
 
 **Storage is not affected and must never be.** `format_utc` stays `%Y-%m-%dT%H:%M:%SZ` on both
 backends. Every range query in the tool compares that text lexically, so a timestamp written in
@@ -197,7 +200,7 @@ verdict; none of them reads a file.
 | `event_policy.py` | which events matter |
 | `data_sources/request_fill.py` | what an app does **before** it calls `common.cli` (0.24.0): `fill_request(command, request)` turns a `server_id` into the fields the command needs stated - `connection` (the SQL login, password resolved), `access` (the host's `cmd_access` with its login), `policy` (the maintenance policy, defaults then the server's own; or the instance policy), `rules` (the node's ladder entry) and a replay's `secrets`. `FILLS` says which command needs which; what the caller already stated is kept. `common.cli` reads no configuration (rules R09), so this is the other half of it - imported by apps only, never by `common` |
 | `confirmation_ladder.py` | one reading of an `emergency_operations.json` ladder - `operation_rules(document, operation)`, strictest for anything unpriced, and `rules_from_request` for the `rules` a request states. Both sides read a ladder since 0.24.0 - the app its node's file, `common.confirm` the shipped one when a request states none - and this is why they read it the same way |
-| `metric_target.py` | `MetricTarget` - one target metric collection runs against, resolved from config. Here since 0.24.0 with its loader, `data_sources/collection_targets.py` (`db_ops.metrics.targets` is that module under its old name): `common.cli check-credentials` asks it, and `common` may import only `lib` |
+| `metric_target.py` | `MetricTarget` - one target metric collection runs against, resolved from config. Here since 0.24.0 with its loader, `data_sources/collection_targets.py` (`dbabrain.metrics.targets` is that module under its old name): `common.cli check-credentials` asks it, and `common` may import only `lib` |
 | `inventory_file.py` | the database inventory file an explicit `--inventory` names - JSON, or YAML read without PyYAML. From `common.sql_execution` (0.24.0), which the metrics target loader could not import |
 | `metric_score.py` | how a set of metric rows scores for one status — the fleet ordering rule |
 | `health_model.py` | what is true about a target *now*, shared by every page that claims to say so |
@@ -216,8 +219,8 @@ reachable from everywhere else. Every symptom is an ordinary connect timeout.
 
 It has cost three outages on the same SQL Server — 2026-08-05, 2026-08-14, 2026-08-26 — and each
 was diagnosed by hand. The answer to the first two was *pinning*, in three places that all still
-matter: `db_ops.lib.docker_db_spec.lab_network_subnet` (every generated lab compose file),
-`docker-compose.runtime.yml` (db_ops's own network), and `db_ops/sre/host_config/docker-daemon.json`
+matter: `dbabrain.lib.docker_db_spec.lab_network_subnet` (every generated lab compose file),
+`docker-compose.runtime.yml` (dbabrain's own network), and `dbabrain/sre/host_config/docker-daemon.json`
 (the host's own allocation). Pinning works — but only where somebody applied it, which is why the
 third happened on a worker VM built after the second.
 
@@ -232,7 +235,7 @@ So this module does not pin anything. It **detects**, from what a host's network
 `UNCONFINED` is the one that pays for the module: it fires on a host where nothing is broken yet,
 which is the only moment the fix is free. What it checks against is
 [`data/network_reservations.json`](../data/network_reservations.json) — the estate's routed ranges
-as data, not literals — and `db_ops.control.cli worker-status` is what runs it.
+as data, not literals — and `dbabrain.control.cli worker-status` is what runs it.
 
 ### Config objects parsed once
 
@@ -242,13 +245,13 @@ passed around as values. A per-app copy of any of them is a bug — the reason t
 than in `common` is exactly the class-does-not-survive-a-subprocess point above.
 
 **The field-level reference is data** - for these blocks, for every config record, and (from 0.22.0) for every `common.cli` request and answer: `data/shared_config_objects.json`, read by
-`shared_objects.py` and answered by `python -m db_ops.common.cli describe-object`. Each field
+`shared_objects.py` and answered by `python -m dbabrain.common.cli describe-object`. Each field
 carries both a `range_text` for a person and a `constraint` a program can evaluate — kind, nullable,
 min, max, enum, special values — because a prose range cannot be checked and an unchecked reference
 goes stale. `shared_objects.check_data_dir` is that check: it walks every path the file declares and
 reports a required field missing, a value out of range, and **a field nothing reads** (a typo in a
 schedule is otherwise silent — the parser ignores what it does not recognise and the record runs on
-the default while looking configured). `python -m db_ops.common.cli check-objects` is its CLI face
+the default while looking configured). `python -m dbabrain.common.cli check-objects` is its CLI face
 and `tests/test_shared_config_objects_reference.py` runs it over this estate. It also counts, as
 `fallback` violations (notices in 0.26.0), the active records that leave a which-thing fact to a
 default - `stated_facts.py`, the owner's no-fallback rule (rules R50, `docs/13_common.md`,
@@ -295,7 +298,7 @@ were valid, and nothing in the tree compared one against the other.
 | --- | --- |
 | `result_format.py` | render one result set the way the caller needs to read it |
 | `xlsx_export.py` | dependency-free XLSX writer for a single result-set sheet |
-| `xlsx_import.py` | read one sheet out of an XLSX, build a table on any engine db_ops knows |
+| `xlsx_import.py` | read one sheet out of an XLSX, build a table on any engine dbabrain knows |
 | `delimited_import.py` | the same, for tab / comma / semicolon / pipe text |
 | `inventory_render.py` | merge a health overlay into the canonical inventory and render it; `seed_inventory` builds a first canonical file from `db_instances.json` servers — identity only, no credential reference (the reports app writes it under the webhost root). Hides nothing by default — see below |
 | `listing.py` | what a `/spbot_list_*` reply shows |
@@ -303,8 +306,8 @@ were valid, and nothing in the tree compared one against the other.
 | `telegram_text.py` | fit a body into Telegram's limit **by splitting, never by cutting** |
 | `telegram_command_text.py` | read a `/spbot...` message into a command and arguments, and write one back as the line that runs it |
 | `process_liveness.py` | (0.26.0: `stop_process_and_children` stops a process this one did not start, with everything under it, only while it carries a recorded start time - for a SQL task run past its timeout) is this PID a *running* process — the zombie trap on POSIX and the `OpenProcess` one on Windows, in one place. Since 0.26.0 also `process_start_marker` (the start time that tells a reused PID from the original, B1.6), `child_start_marker` (the same, only for a child of this process - read right after a `Popen`), `own_group_kwargs` (start a child as the head of its own tree) and `stop_process_tree` (`killpg` on POSIX; on Windows every descendant from a process snapshot, terminated through the API - `lib` runs no CLI, so not `taskkill`). **A tree is walked only while its PID still carries the start marker taken at launch** - a walk from a bare PID ends whoever holds the number now; without a match only the `Popen` itself is stopped - review 0.25.0, B2.3, F1.1 |
-| `node_identity.py` | the tool root's own identity - a random id in `runtime/node_identity`, written once, handed by the daemon to its children in `DB_OPS_NODE_IDENTITY` and recorded on every claim - because a container's host name changes on every recreate and the node does not. `""` when the root cannot hold the file, which reaps nothing sooner |
-| `app_timeout.py` | the timeout the daemon will enforce on this process, read from `DB_OPS_APP_TIMEOUT_SECONDS` (which the daemon sets on every child whose command has one), and a budget as a share of it - `None` outside the daemon, where nothing kills the process |
+| `node_identity.py` | the tool root's own identity - a random id in `runtime/node_identity`, written once, handed by the daemon to its children in `DBABRAIN_NODE_IDENTITY` and recorded on every claim - because a container's host name changes on every recreate and the node does not. `""` when the root cannot hold the file, which reaps nothing sooner |
+| `app_timeout.py` | the timeout the daemon will enforce on this process, read from `DBABRAIN_APP_TIMEOUT_SECONDS` (which the daemon sets on every child whose command has one), and a budget as a share of it - `None` outside the daemon, where nothing kills the process |
 | `file_lock.py` | `FileLock(path)`: an exclusive lock on `<path>.lock` for one read-modify-write - `flock` on POSIX, `msvcrt` waited for on Windows (`LK_LOCK` gave up after ten tries and raised). The secret stores and the Telegram routing files share it (review 0.25.0, B9.1, F8.2) |
 | `daemon_state.py` | the daemon's own start, left in `runtime/` so something that is not the daemon can say how long DBA Brain has been up — believed only while its pid is alive |
 | `sql_task_target.py` | where a SQL task target runs, in true words - `server/instance.database` on SQL Server, `master` when no database is named, never the `service_name` SQL Server does not have - and which part of a failed connection failed: `classify_connect_failure` (4060 database / 18456 login / unreachable), `near_match` (the same name in another case first), and the messages naming the instances or databases the server does have |
@@ -319,7 +322,7 @@ were valid, and nothing in the tree compared one against the other.
 | `telegram_severity.py` | the severity emoji, applied once at the send layer |
 | `powershell.py` | quoting, encoding, and the `Invoke-Command` wrapper |
 | `sql_text.py` | SQL text and result limits — the parts of running a query that are not the running. Since 0.28.0 also `apply_sql_settings`: a metric's `sql_settings` written into the `DECLARE`s its SQL file carries - a number only, into a name the file declares exactly once |
-| `sqlserver_certificate.py` | **the one batch that makes a backup-encryption certificate available on SQL Server** (`import_batch`, and `parse_marker` for its answer): by thumbprint - the SHA-1 of the `.cer` - and never dropping one; a taken name becomes `<name>_<8 hex digits>`. `restore-key`, the SMB restore and (written out) the shell restore send it (0.24.0) |
+| `sqlserver_certificate.py` | `DEFAULT_NAME`, the one name a backup's certificate takes when a record states none (`dbabrain_backup_cert`; the backup script, both restores and `restore-key` each held a copy until 0.29.0), and **the one batch that makes a backup-encryption certificate available on SQL Server** (`import_batch`, and `parse_marker` for its answer): by thumbprint - the SHA-1 of the `.cer` - and never dropping one; a taken name becomes `<name>_<8 hex digits>`. `restore-key`, the SMB restore and (written out) the shell restore send it (0.24.0) |
 | `mssql_ddl.py` | SQL Server DDL rendered from catalogue rows - pure text in and out, no connection; the counterpart of `common.schema_catalog`, which reads `sys.*` |
 | `name_filter.py` | which names a request selected, and which of its patterns matched nothing (`select`, `unused_patterns`) - the third answer is the one that kept being forgotten |
 
@@ -345,7 +348,7 @@ continuation by the `[part i/n]` marker that the splitter writes.
 | `request_types.py` | renders the reference's `input_*` / `output_*` entries as static types (`render`) and the typed overloads of `transport.common_cli.run` / `run_allowing_failure` (`render_transport_stub`) - one description of a request, the reference, and the types derived from it rather than written beside it (2026-10-02). Pure: text in, text out; `control.cli request-types --write` writes the two files |
 | `cli_types.py` | **generated** by `request_types.render` - a `TypedDict` per request (`<Command>Request`) and per answer (`<Command>Answer`), 118 of them; held to the reference by `tests/test_cli_types_match_the_reference.py` |
 | `errors.py` | the kinds of error, named - `request`, `not_configured`, `refused`, `unreachable`, `failed`, `config`, `internal` (`KIND_*`, `KINDS`) - and a base per kind (`RequestError` and `ConfigError` are also `ValueError`; `NotConfigured`, `Refused`, `Unreachable`, `OperationFailed` also `RuntimeError`; `InvalidConfig` and `InvalidRequest` are the `config` / `request` kinds for a site that raised a bare `RuntimeError`), so a module's own error class gains a kind without any `except` changing - every class in the tree has one, and no bare `RuntimeError` is raised (rules R48). `kind_of(exc)` - its own kind, `unreachable` for the built-in connection and timeout errors a driver raises, else `internal` (never a guess). The kind is what an answer carries as `error_kind` and `lib.common_cli.CommonCliError.kind` reads back (2026-10-02, `audits/20261002_audit_typed_requests_and_errors.md`) |
-| `request_check.py` | a `common.cli` request held to its command's `input_` entry before the command reads it (rules R49): `check(command, request)` runs `shared_objects.check_record` against the **packaged** reference (never a node's `data/` - R09), with a blank optional string read as "not given"; `refusal(findings)` is the sentence for the `value` and `missing` findings that refuse (`REFUSING`, on since 0.27.0 after a node's 24 hours of real requests measured clean - the first node it ran on, in 0.26.0, refused every SQL task over a wrong reference entry), `measured(findings)` the unknown keys and deprecated spellings that do not. `common/cli_request.py` calls it, and appends the measured ones to `DB_OPS_REQUEST_CHECK_LOG` when that is set (2026-10-03) |
+| `request_check.py` | a `common.cli` request held to its command's `input_` entry before the command reads it (rules R49): `check(command, request)` runs `shared_objects.check_record` against the **packaged** reference (never a node's `data/` - R09), with a blank optional string read as "not given"; `refusal(findings)` is the sentence for the `value` and `missing` findings that refuse (`REFUSING`, on since 0.27.0 after a node's 24 hours of real requests measured clean - the first node it ran on, in 0.26.0, refused every SQL task over a wrong reference entry), `measured(findings)` the unknown keys and deprecated spellings that do not. `common/cli_request.py` calls it, and appends the measured ones to `DBABRAIN_REQUEST_CHECK_LOG` when that is set (2026-10-03) |
 | `paths.py` | where the tool is on disk, and — separately — where its configuration is. See below |
 | `shell.py` | cross-platform shell helpers |
 | `secret_text.py` | encrypted secret-text storage, and `set_secret_everywhere` — the one writer that updates **both** the encrypted store and the plaintext source the deploy regenerates it from. `write_secret_file` is how any secret file is written: atomic, `0600` on create (`atomic_write_text(private=True)`), mode and owner kept on replace (0.26.0, review F6.2 - the deploy's merge used `write_text`); `init`'s `secrets/secret_text.json` and `instance-add`'s store are written the same way |
@@ -355,7 +358,7 @@ continuation by the `[part i/n]` marker that the splitter writes.
 | `deploy_selection.py` | which files a *partial* deploy ships — the rules for `deploy --type/--file-name`, with no transport in them. See below |
 | `workflow_steps.py` | one step of a Telegram conversation: what may be answered, what may be skipped, where Back goes, and the keyboard the operator sees. See below |
 | `distribution.py` | what the public distribution contains and what stays behind (`is_public`, `public_package_globs`); `PUBLIC_BINARIES`, the pictures that ship although the export's text rule cannot read them, each named with where it came from; `PUBLIC_VERSION`, the released number, edited by hand |
-| `packaging.py` | what to tell a reader to `pip install` when an optional driver is missing - the distribution name differs between the repository and the public package (`install_hint`) |
+| `packaging.py` | what to tell a reader to `pip install` when an optional driver is missing (`install_hint`) - built from the installed distribution, never spelled out; the repository and the public package were named apart until 0.29.0 |
 
 #### `data_files.py` — the list every transfer reads first
 
@@ -401,7 +404,7 @@ the module itself, because each of them was a bug waiting in the obvious impleme
   never been prompted for, which is exactly why a Skip button could not exist; making them all
   prompt would have started interrogating people about arguments they left out on purpose.
 
-`db_ops/telegram/command_conversation.py` supplies what this cannot: the store writes, the queued
+`dbabrain/telegram/command_conversation.py` supplies what this cannot: the store writes, the queued
 prompt, and the trail row in `telegram_workflow_steps`.
 
 #### `deploy_selection.py` — what a partial deploy is allowed to carry
@@ -433,11 +436,11 @@ is the whole picture; a push is a statement about the files it names and about n
 #### `config_bundle.py` — one estate, one file
 
 The sentence it exists for is the acceptance test: on a machine that has never seen this project,
-`pip install dbabrain` then `db-ops import-data <bundle>` leaves the tool running **identically**
-to the machine the bundle came from. `db-ops export-data` writes the file.
+`pip install dbabrain` then `dbabrain import-data <bundle>` leaves the tool running **identically**
+to the machine the bundle came from. `dbabrain export-data` writes the file.
 
 **The file list is derived, never enumerated here.** `data/config_catalog.json` is already the
-allow-list that decides what counts as configuration — `db_ops.db.config_sync` reads the same file
+allow-list that decides what counts as configuration — `dbabrain.db.config_sync` reads the same file
 to decide what may enter the runtime store — so this module walks it. A config file added next
 month and catalogued crosses with no edit here, and one the catalog does not name does not cross.
 That is what keeps `database-inventory.json` (generated output, rebuilt on the new host against
@@ -451,7 +454,7 @@ Five roles cross, and the role is what `--no-secrets` / `--no-assets` filter on:
 | `tool_config` | `config.json`. Every path in it is relative to the tool root by design, so a copied root stays self-consistent and nothing is rewritten on arrival |
 | `config_catalog` | `data/config_catalog.json` itself — it is not listed among its own `config_sources`, so walking the catalog cannot pick it up |
 | `config_source` | the catalogued `data/*.json` |
-| `secret_store` | `data/encrypted_secret_text.json`, as **ciphertext**. The passphrase is not in the file and there is no field for it to hide in: the importing machine sets `DB_OPS_SECRET_KEY` |
+| `secret_store` | `data/encrypted_secret_text.json`, as **ciphertext**. The passphrase is not in the file and there is no field for it to hide in: the importing machine sets `DBABRAIN_SECRET_KEY` |
 | `estate_asset` | `assets/**` and `data/ssh_keys/**` — config names these by path, so config without them points at nothing |
 
 Two rules the format exists to enforce, both of them about a file that arrived from somewhere
@@ -487,7 +490,7 @@ whole-file diffs in the next commit anybody made. Two things restore it:
   summary of the written half rather than a claim about it.
 
 Measured end to end on the real tool root: 74 files exported and imported into an empty root,
-**0 byte differences**, and `db-ops check-credentials` gives the imported root the identical
+**0 byte differences**, and `dbabrain check-credentials` gives the imported root the identical
 answer — 30 targets checked, same one pre-existing problem.
 
 **A bundle is a credential.** It names hosts, accounts and chat ids and carries ciphertext. It
@@ -503,7 +506,7 @@ to notice.
 Hiding a machine is a statement about *an* estate, which makes it configuration. The library's
 default is now to hide nothing, the list arrives as an argument (`exclude_ip_prefixes`), and the
 apps read it from `reports_config.json` through
-`db_ops.lib.data_sources.inventory_exclude_ip_prefixes()`. The reader lives in `common` rather
+`dbabrain.lib.data_sources.inventory_exclude_ip_prefixes()`. The reader lives in `common` rather
 than here for the usual reason: reading the data folder is an operation, and `lib` is only ever a
 function of its arguments.
 
@@ -531,11 +534,11 @@ So the answer has an order, and the package's location is the last entry in it:
 
 | | Source | |
 | :---: | --- | --- |
-| 1 | `DB_OPS_HOME` | what the operator stated. A value pointing at a directory that does not exist **raises** — falling through would swallow a typo and then read a different estate's configuration |
+| 1 | `DBABRAIN_HOME` | what the operator stated. A value pointing at a directory that does not exist **raises** — falling through would swallow a typo and then read a different estate's configuration |
 | 2 | the working directory | only if it carries a `ROOT_MARKERS` entry (`data/` or `config.json`). Any directory would otherwise be accepted, inventing an answer for a user who said nothing |
 | 3 | `PACKAGE_ROOT` | the fallback that keeps the checkout and the container working unchanged |
 
-`DB_OPS_DATA_DIR` points the data folder somewhere of its own, because once the tool is installed
+`DBABRAIN_DATA_DIR` points the data folder somewhere of its own, because once the tool is installed
 the two move independently: the code goes where pip puts it, the configuration stays where the
 operator keeps configuration.
 
@@ -554,10 +557,10 @@ file had to change when the shipped files moved on 2026-08-22:
 
 | Configuration says | The files live in |
 | --- | --- |
-| `assets/metrics/...` | `db_ops/metrics/collectors/` |
-| `assets/backup/...` | `db_ops/common/backup_scripts/` |
-| `assets/restore/...` | `db_ops/common/restore_scripts/` |
-| `assets/host/...` | `db_ops/sre/host_config/` |
+| `assets/metrics/...` | `dbabrain/metrics/collectors/` |
+| `assets/backup/...` | `dbabrain/common/backup_scripts/` |
+| `assets/restore/...` | `dbabrain/common/restore_scripts/` |
+| `assets/host/...` | `dbabrain/sre/host_config/` |
 
 The right-hand column is derived from this module's own location, and legitimately: a built-in
 asset follows the code, the way configuration follows the operator. `OPERATOR_ASSET_KINDS` names
@@ -617,7 +620,7 @@ the right password" no matter who is asking — the HTTP layer, the store, or a 
 account.
 
 It imports `PBKDF2_ITERATIONS` and the salt length **from `secret_text.py`** rather than spelling
-them again. db_ops has one KDF setting; two copies would agree today and diverge the first time
+them again. dbabrain has one KDF setting; two copies would agree today and diverge the first time
 one of them is raised, leaving passwords hashed at the old cost with nothing to say so.
 
 The cost is read from the module attribute at call time, which makes that constant a single

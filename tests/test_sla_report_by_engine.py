@@ -10,8 +10,8 @@ did not pass with the instance they belong to, and each instance's detail.
 
 from __future__ import annotations
 
-from db_ops.sla.models import SlaPolicyResult, SlaValidationSummary
-from db_ops.sla.publish import render_html
+from dbabrain.sla.models import SlaPolicyResult, SlaValidationSummary
+from dbabrain.sla.publish import render_html
 
 
 def _result(target_id, status="PASSED", *, policy_id="AVAIL", domain="availability",

@@ -11,8 +11,8 @@ import ssl
 
 import pytest
 
-from db_ops.backup_restore import certificate
-from db_ops.backup_restore.config import BackupRestoreConfig
+from dbabrain.backup_restore import certificate
+from dbabrain.backup_restore.config import BackupRestoreConfig
 
 
 def _fetch(monkeypatch, **over):

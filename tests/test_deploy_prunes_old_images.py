@@ -1,7 +1,7 @@
 """A deploy that never removes what it replaced is a disk leak with a release cadence.
 
-`start_daemon` ends in `docker load`, which adds `db_ops:<version>` and repoints `db_ops:latest`.
-Nothing removed the version it superseded. Measured on the worker on 2026-08-18: **383 `db_ops`
+`start_daemon` ends in `docker load`, which adds `dbabrain:<version>` and repoints `dbabrain:latest`.
+Nothing removed the version it superseded. Measured on the worker on 2026-08-18: **383 `dbabrain`
 tags and 526 dangling images**, on a host whose root volume had already been extended once from
 293 GB to 589 GB. Deploy frequency is what turned it from a one-off into a daily cost — 2.85.32
 through 2.85.49 is seventeen versions in two days — because each build changes the layer holding
@@ -21,7 +21,7 @@ did not.
 
 import pytest
 
-from db_ops.control.deploy import KEEP_IMAGE_VERSIONS, _prune_old_images
+from dbabrain.control.deploy import KEEP_IMAGE_VERSIONS, _prune_old_images
 
 
 class _FakeClient:
@@ -39,7 +39,7 @@ def run_calls(monkeypatch):
         calls.append((command, check))
         return 0
 
-    monkeypatch.setattr("db_ops.control.deploy.ssh_run", fake_ssh_run)
+    monkeypatch.setattr("dbabrain.control.deploy.ssh_run", fake_ssh_run)
     return calls
 
 
@@ -96,4 +96,4 @@ def test_the_script_is_not_wrapped_in_another_layer_of_quoting(run_calls):
     command = run_calls[0][0]
 
     assert not command.startswith("sh -c")
-    assert command.startswith("keep=$(docker images db_ops")
+    assert command.startswith("keep=$(docker images dbabrain")

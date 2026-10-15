@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import deletefiles
-from db_ops.common.deletefiles import DELETED, FAILED, NOT_FOUND, SKIPPED, DeleteFileError
+from dbabrain.common import deletefiles
+from dbabrain.common.deletefiles import DELETED, FAILED, NOT_FOUND, SKIPPED, DeleteFileError
 
 
 @pytest.fixture

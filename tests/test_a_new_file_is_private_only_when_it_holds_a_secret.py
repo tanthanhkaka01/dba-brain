@@ -25,8 +25,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import scaffold
-from db_ops.lib import docker_db_registry, json_io, secret_text
+from dbabrain.common import scaffold
+from dbabrain.lib import docker_db_registry, json_io, secret_text
 
 posix_modes = pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
 

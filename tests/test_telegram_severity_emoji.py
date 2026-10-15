@@ -9,8 +9,8 @@ severity is left alone, and that tagging never stacks on a producer that tagged 
 
 import pytest
 
-from db_ops.telegram.api import send_message
-from db_ops.telegram.severity import SEVERITY_EMOJI, classify_message, decorate_message
+from dbabrain.telegram.api import send_message
+from dbabrain.telegram.severity import SEVERITY_EMOJI, classify_message, decorate_message
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +110,7 @@ def test_send_message_tags_the_body_it_posts(monkeypatch):
         posted.update(payload)
         return {"ok": True, "result": {"message_id": 1}}
 
-    monkeypatch.setattr("db_ops.telegram.api.call_telegram_api", fake_call)
+    monkeypatch.setattr("dbabrain.telegram.api.call_telegram_api", fake_call)
 
     send_message(bot_token="t", chat_id="-100", text="ERROR|host01|Restore workflow FAILED.")
 
@@ -127,7 +127,7 @@ def test_an_over_long_message_is_split_and_the_tag_leads_the_first_part(monkeypa
         posted.append(payload)
         return {"ok": True, "result": {"message_id": len(posted)}}
 
-    monkeypatch.setattr("db_ops.telegram.api.call_telegram_api", fake_call)
+    monkeypatch.setattr("dbabrain.telegram.api.call_telegram_api", fake_call)
 
     send_message(
         bot_token="t",
@@ -153,10 +153,10 @@ def test_a_queued_row_keeps_its_declared_message_type_when_it_is_read_back(tmp_p
     visible symptom: the /spbot_add_sql schedule prompt contains the word "timeout", so an
     ordinary question went out as "❌ Schedule? ...".
     """
-    from db_ops.db import DbOpsStore
-    from db_ops.telegram.send_queue import row_value
+    from dbabrain.db import DbaBrainStore
+    from dbabrain.telegram.send_queue import row_value
 
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     prompt = ("Schedule? 'manual' = only when you run it with /spbot_run_sql_task, "
               "'default' = every 300s all day, or: from_hour to_hour repeat_interval timeout")
@@ -180,7 +180,7 @@ def test_a_queued_row_keeps_its_declared_message_type_when_it_is_read_back(tmp_p
 def test_a_body_inside_the_limit_is_sent_unchanged_as_one_message():
     """The common case must stay exactly as it was: one message, no part footer. A footer on
     every short alert would be noise on the overwhelming majority of what the bot sends."""
-    from db_ops.lib.telegram_text import split_telegram_message
+    from dbabrain.lib.telegram_text import split_telegram_message
 
     assert split_telegram_message("short body") == ["short body"]
 
@@ -188,7 +188,7 @@ def test_a_body_inside_the_limit_is_sent_unchanged_as_one_message():
 def test_a_split_breaks_on_line_boundaries_so_a_table_row_is_never_cut_in_half():
     """The body this exists for is a markdown table. Cutting mid-row would produce a line with
     the wrong number of pipes, which renders as a broken table rather than as data."""
-    from db_ops.lib.telegram_text import split_telegram_message
+    from dbabrain.lib.telegram_text import split_telegram_message
 
     row = "| " + "c" * 60 + " |"
     parts = split_telegram_message("\n".join([row] * 200))
@@ -202,7 +202,7 @@ def test_a_split_breaks_on_line_boundaries_so_a_table_row_is_never_cut_in_half()
 def test_every_line_survives_the_split():
     """Splitting exists so that nothing is dropped; a split that loses a line is worse than the
     clip it replaced, because it looks complete."""
-    from db_ops.lib.telegram_text import split_telegram_message
+    from dbabrain.lib.telegram_text import split_telegram_message
 
     lines = [f"row {n}" for n in range(1500)]
     parts = split_telegram_message("\n".join(lines))
@@ -215,7 +215,7 @@ def test_every_line_survives_the_split():
 def test_one_line_longer_than_the_whole_limit_is_hard_split_rather_than_dropped():
     """A single 10k-character line has no boundary to break on — a stdout tail printed without
     newlines, say. It still has to arrive."""
-    from db_ops.lib.telegram_text import split_telegram_message
+    from dbabrain.lib.telegram_text import split_telegram_message
 
     parts = split_telegram_message("y" * 10000)
 
@@ -225,7 +225,7 @@ def test_one_line_longer_than_the_whole_limit_is_hard_split_rather_than_dropped(
 
 
 def test_each_part_is_numbered_so_the_reader_knows_more_is_coming():
-    from db_ops.lib.telegram_text import split_telegram_message
+    from dbabrain.lib.telegram_text import split_telegram_message
 
     parts = split_telegram_message("\n".join(f"row {n}" for n in range(1500)))
 
@@ -236,7 +236,7 @@ def test_each_part_is_numbered_so_the_reader_knows_more_is_coming():
 def test_the_reply_quote_goes_on_the_first_part_and_buttons_on_the_last(monkeypatch):
     """Quoting on every part would quote the original once per message; buttons belong where the
     reader ends up, which is the bottom."""
-    from db_ops.telegram.api import send_message
+    from dbabrain.telegram.api import send_message
 
     posted = []
 
@@ -244,7 +244,7 @@ def test_the_reply_quote_goes_on_the_first_part_and_buttons_on_the_last(monkeypa
         posted.append(payload)
         return {"ok": True, "result": {"message_id": len(posted)}}
 
-    monkeypatch.setattr("db_ops.telegram.api.call_telegram_api", fake_call)
+    monkeypatch.setattr("dbabrain.telegram.api.call_telegram_api", fake_call)
 
     send_message(bot_token="t", chat_id="-100", text="\n".join(f"row {n}" for n in range(1500)),
                  reply_to_message_id=77, reply_markup={"force_reply": True})
@@ -257,7 +257,7 @@ def test_the_reply_quote_goes_on_the_first_part_and_buttons_on_the_last(monkeypa
 def test_the_recorded_message_id_is_the_first_part_not_the_last(monkeypatch):
     """The queue row stores this id and replies quote it. Pointing it at the tail would quote
     the end of the output instead of its beginning."""
-    from db_ops.telegram.api import send_message
+    from dbabrain.telegram.api import send_message
 
     posted = []
 
@@ -265,7 +265,7 @@ def test_the_recorded_message_id_is_the_first_part_not_the_last(monkeypatch):
         posted.append(payload)
         return {"ok": True, "result": {"message_id": len(posted)}}
 
-    monkeypatch.setattr("db_ops.telegram.api.call_telegram_api", fake_call)
+    monkeypatch.setattr("dbabrain.telegram.api.call_telegram_api", fake_call)
 
     result = send_message(bot_token="t", chat_id="-100",
                           text="\n".join(f"row {n}" for n in range(1500)))
@@ -278,7 +278,7 @@ def test_a_reply_still_goes_out_when_the_message_it_quotes_is_gone(monkeypatch, 
     """The bot deletes a typed password from the chat, and a member may delete their own command.
     Quoting a deleted message, Telegram refused the whole reply - *400: message to be replied not
     found* - and the next question or the result never arrived (64 replies on the soak store)."""
-    from db_ops.telegram.api import send_document, send_message
+    from dbabrain.telegram.api import send_document, send_message
 
     posted = []
 
@@ -290,8 +290,8 @@ def test_a_reply_still_goes_out_when_the_message_it_quotes_is_gone(monkeypatch, 
         posted.append(payload)
         return {"ok": True, "result": {"message_id": len(posted)}}
 
-    monkeypatch.setattr("db_ops.telegram.api.call_telegram_api", fake_call)
-    monkeypatch.setattr("db_ops.telegram.api.call_telegram_multipart_api", fake_multipart)
+    monkeypatch.setattr("dbabrain.telegram.api.call_telegram_api", fake_call)
+    monkeypatch.setattr("dbabrain.telegram.api.call_telegram_multipart_api", fake_multipart)
 
     send_message(bot_token="t", chat_id="-100", text="Which secret?", reply_to_message_id=77)
     send_message(bot_token="t", chat_id="-100", text="Not a reply")

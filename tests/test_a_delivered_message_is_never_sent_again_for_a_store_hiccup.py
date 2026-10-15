@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import sqlite3
 
-from db_ops.db.store import DbOpsStore
-from db_ops.telegram import send_queue
+from dbabrain.db.store import DbaBrainStore
+from dbabrain.telegram import send_queue
 
 
-def _store_with_one_row(tmp_path) -> tuple[DbOpsStore, int]:
-    store = DbOpsStore(tmp_path / "store.sqlite3")
+def _store_with_one_row(tmp_path) -> tuple[DbaBrainStore, int]:
+    store = DbaBrainStore(tmp_path / "store.sqlite3")
     store.initialize()
     with store.connect() as conn:
         conn.execute("INSERT INTO telegram_send_messages (tlgchat_id, message_text, send_status) "
@@ -24,7 +24,7 @@ def _store_with_one_row(tmp_path) -> tuple[DbOpsStore, int]:
     return store, int(row_id)
 
 
-def _status(store: DbOpsStore, row_id: int) -> tuple[int, str | None]:
+def _status(store: DbaBrainStore, row_id: int) -> tuple[int, str | None]:
     with store.connect() as conn:
         row = conn.execute("SELECT send_status, send_date FROM telegram_send_messages "
                            "WHERE send_tlgmsg_id = ?", (row_id,)).fetchone()
@@ -37,7 +37,7 @@ def test_a_store_write_that_fails_once_does_not_send_the_message_twice(tmp_path,
     monkeypatch.setattr(send_queue, "send_message",
                         lambda **kw: sent.append(kw["text"]) or {"result": {"message_id": 7}})
     monkeypatch.setattr(send_queue, "RECORD_SENT_PAUSE_SECONDS", 0.0)
-    real = DbOpsStore.mark_telegram_send_message_sent
+    real = DbaBrainStore.mark_telegram_send_message_sent
     calls = {"n": 0}
 
     def flaky(self, **kwargs):
@@ -46,7 +46,7 @@ def test_a_store_write_that_fails_once_does_not_send_the_message_twice(tmp_path,
             raise sqlite3.OperationalError("database is locked")
         return real(self, **kwargs)
 
-    monkeypatch.setattr(DbOpsStore, "mark_telegram_send_message_sent", flaky)
+    monkeypatch.setattr(DbaBrainStore, "mark_telegram_send_message_sent", flaky)
 
     result = send_queue.send_one_message(sqlite_path=tmp_path / "store.sqlite3",
                                          send_tlgmsg_id=row_id, bot_token="t")
@@ -66,7 +66,7 @@ def test_a_store_that_never_records_it_still_does_not_resend(tmp_path, monkeypat
     def always_locked(self, **kwargs):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(DbOpsStore, "mark_telegram_send_message_sent", always_locked)
+    monkeypatch.setattr(DbaBrainStore, "mark_telegram_send_message_sent", always_locked)
 
     result = send_queue.send_one_message(sqlite_path=tmp_path / "store.sqlite3",
                                          send_tlgmsg_id=row_id, bot_token="t", retry_count=3)

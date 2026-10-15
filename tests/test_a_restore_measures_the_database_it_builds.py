@@ -31,10 +31,10 @@ import pytest
 
 from conftest import patch_restore
 
-from db_ops.backup_restore import copy_backup, space
-from db_ops.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
-from db_ops.lib import restore_space
-from db_ops.lib.config import DbOpsConfig
+from dbabrain.backup_restore import copy_backup, space
+from dbabrain.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
+from dbabrain.lib import restore_space
+from dbabrain.lib.config import DbaBrainConfig
 
 GIB = 1024 ** 3
 
@@ -199,7 +199,7 @@ def test_the_answer_is_found_among_whatever_else_sqlcmd_prints():
     stdout = ("Changed database context to 'master'.\n"
               "                                        \n"
               "----------------------------------------\n"
-              f"DBOPS_ROOM|{393 * GIB}|{366 * GIB}|{21 * GIB}|/var/opt/mssql            \n")
+              f"DBABRAIN_ROOM|{393 * GIB}|{366 * GIB}|{21 * GIB}|/var/opt/mssql            \n")
 
     assert space.parse_restore_room(stdout) == {
         "created": 393 * GIB, "overwritten": 366 * GIB, "free": 21 * GIB, "volume": "/var/opt/mssql"}
@@ -207,7 +207,7 @@ def test_the_answer_is_found_among_whatever_else_sqlcmd_prints():
 
 def test_a_number_the_instance_could_not_read_is_unknown_not_zero():
     """Zero free bytes and "could not read the free bytes" are different answers."""
-    measured = space.parse_restore_room("DBOPS_ROOM|1000|0||\n")
+    measured = space.parse_restore_room("DBABRAIN_ROOM|1000|0||\n")
 
     assert measured["created"] == 1000 and measured["free"] is None
     assert space.parse_restore_room("no marker at all")["created"] is None
@@ -250,7 +250,7 @@ def test_measuring_is_asked_for_in_the_entry_s_space_check(tmp_path):
 
 def test_a_restore_that_would_not_fit_is_refused_and_says_what_can_be_changed(tmp_path):
     with pytest.raises(space.RestoreSpaceRefused) as caught:
-        _room(_asking(tmp_path), f"DBOPS_ROOM|{366 * GIB}|0|{394 * GIB}|/var/opt/mssql\n")
+        _room(_asking(tmp_path), f"DBABRAIN_ROOM|{366 * GIB}|0|{394 * GIB}|/var/opt/mssql\n")
 
     message = str(caught.value)
     assert "database=Payroll_Main" in message and "SHORT BY" in message
@@ -262,7 +262,7 @@ def test_a_restore_that_would_not_fit_is_refused_and_says_what_can_be_changed(tm
 def test_a_restore_that_fits_returns_what_it_measured(tmp_path):
     said: list[str] = []
 
-    result = _room(_asking(tmp_path), f"DBOPS_ROOM|{10 * GIB}|0|{394 * GIB}|D:\\\n", said=said)
+    result = _room(_asking(tmp_path), f"DBABRAIN_ROOM|{10 * GIB}|0|{394 * GIB}|D:\\\n", said=said)
 
     assert result["ok"] is True and result["new_bytes"] == 10 * GIB
     assert result["required_bytes"] == 20 * GIB, "the entry's factor, as for the copy - x2 by default"
@@ -270,8 +270,8 @@ def test_a_restore_that_fits_returns_what_it_measured(tmp_path):
 
 
 UNMEASURED = [
-    ("DBOPS_ROOM|1000|0||\n", None, "the free space of the volume"),
-    ("DBOPS_ROOM||0|5000|/\n", None, "the size of the files the backup holds"),
+    ("DBABRAIN_ROOM|1000|0||\n", None, "the free space of the volume"),
+    ("DBABRAIN_ROOM||0|5000|/\n", None, "the size of the files the backup holds"),
     ("", RuntimeError("sqlcmd command failed with exit code 1."), "the size of the files the backup holds"),
 ]
 
@@ -315,7 +315,7 @@ def test_turning_the_check_off_asks_the_target_nothing(tmp_path):
 # Where it is asked: after the plan, before the first RESTORE
 # --------------------------------------------------------------------------- #
 def _restore(tmp_path: Path, monkeypatch, room_answer: str, *, asks: bool = True) -> tuple[list, object]:
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = _entry(tmp_path, databases=(), source_database_name="Payroll_Main",
                     restore_database_name="Payroll_Main_DR",
@@ -323,8 +323,8 @@ def _restore(tmp_path: Path, monkeypatch, room_answer: str, *, asks: bool = True
     backup = config.vm_import_unc / "Payroll_Main" / "FULL" / "latest.bak"
     backup.parent.mkdir(parents=True)
     backup.write_text("backup", encoding="utf-8")
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
-                             sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
+                             sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     calls: list = []
 
     def fake_run_sqlcmd(cmd, **_kwargs):
@@ -336,14 +336,14 @@ def _restore(tmp_path: Path, monkeypatch, room_answer: str, *, asks: bool = True
 
     def run():
         return restore_module.run_restore_database(
-            config=config, db_ops_config=app_config, backup_file=backup,
+            config=config, dbabrain_config=app_config, backup_file=backup,
             ensure_certificate=False, ensure_credential=False)
 
     return calls, run
 
 
 def test_the_room_is_asked_before_the_first_restore(tmp_path, monkeypatch):
-    calls, run = _restore(tmp_path, monkeypatch, f"DBOPS_ROOM|{10 * GIB}|0|{394 * GIB}|D:\\\n")
+    calls, run = _restore(tmp_path, monkeypatch, f"DBABRAIN_ROOM|{10 * GIB}|0|{394 * GIB}|D:\\\n")
 
     result = run()
 
@@ -363,7 +363,7 @@ def test_an_entry_that_does_not_ask_goes_straight_to_its_restore(tmp_path, monke
 
 
 def test_a_refused_database_gets_no_restore_statement_at_all(tmp_path, monkeypatch):
-    calls, run = _restore(tmp_path, monkeypatch, f"DBOPS_ROOM|{366 * GIB}|0|{94 * GIB}|D:\\\n")
+    calls, run = _restore(tmp_path, monkeypatch, f"DBABRAIN_ROOM|{366 * GIB}|0|{94 * GIB}|D:\\\n")
 
     with pytest.raises(space.RestoreSpaceRefused):
         run()

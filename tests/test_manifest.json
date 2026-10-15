@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "suite": "db_ops pytest regression suite",
+  "suite": "dbabrain pytest regression suite",
   "source": "tests",
   "generated_from": ".venv/Scripts/python.exe -m pytest tests --collect-only -q",
   "total_cases": 2183,
@@ -29,9 +29,9 @@
   },
   "cases": [
     {
-      "case_id": "DBOPS-TC-001",
+      "case_id": "DBABRAIN-TC-001",
       "nodeid": "tests/test_backup_restore.py::test_get_latest_full_backup_selects_newest_bak",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_get_latest_full_backup_selects_newest_bak",
       "parameters": null,
@@ -44,9 +44,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-002",
+      "case_id": "DBABRAIN-TC-002",
       "nodeid": "tests/test_backup_restore.py::test_get_latest_full_backup_raises_when_empty",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_get_latest_full_backup_raises_when_empty",
       "parameters": null,
@@ -59,9 +59,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-003",
+      "case_id": "DBABRAIN-TC-003",
       "nodeid": "tests/test_backup_restore.py::test_vm_unc_to_local_path_preserves_relative_folder",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_vm_unc_to_local_path_preserves_relative_folder",
       "parameters": null,
@@ -74,9 +74,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-004",
+      "case_id": "DBABRAIN-TC-004",
       "nodeid": "tests/test_backup_restore.py::test_build_restore_sql_uses_vm_local_paths_and_escapes_literals",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_restore_sql_uses_vm_local_paths_and_escapes_literals",
       "parameters": null,
@@ -89,9 +89,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-005",
+      "case_id": "DBABRAIN-TC-005",
       "nodeid": "tests/test_backup_restore.py::test_build_restore_full_sql_uses_norecovery_and_final_steps_are_separate",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_restore_full_sql_uses_norecovery_and_final_steps_are_separate",
       "parameters": null,
@@ -104,9 +104,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-006",
+      "case_id": "DBABRAIN-TC-006",
       "nodeid": "tests/test_backup_restore.py::test_find_latest_full_backups_selects_newest_per_database_folder",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_find_latest_full_backups_selects_newest_per_database_folder",
       "parameters": null,
@@ -119,9 +119,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-007",
+      "case_id": "DBABRAIN-TC-007",
       "nodeid": "tests/test_backup_restore.py::test_build_restore_candidate_derives_database_and_paths_from_backup_folder",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_restore_candidate_derives_database_and_paths_from_backup_folder",
       "parameters": null,
@@ -134,9 +134,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-008",
+      "case_id": "DBABRAIN-TC-008",
       "nodeid": "tests/test_backup_restore.py::test_build_restore_candidate_uses_explicit_target_database_mapping",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_restore_candidate_uses_explicit_target_database_mapping",
       "parameters": null,
@@ -149,9 +149,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-009",
+      "case_id": "DBABRAIN-TC-009",
       "nodeid": "tests/test_backup_restore.py::test_build_sqlcmd_query_command_runs_on_vm_when_vm_target_is_configured",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_sqlcmd_query_command_runs_on_vm_when_vm_target_is_configured",
       "parameters": null,
@@ -164,9 +164,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-010",
+      "case_id": "DBABRAIN-TC-010",
       "nodeid": "tests/test_backup_restore.py::test_build_sqlcmd_query_command_uses_sql_auth_when_configured",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_sqlcmd_query_command_uses_sql_auth_when_configured",
       "parameters": null,
@@ -179,9 +179,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-011",
+      "case_id": "DBABRAIN-TC-011",
       "nodeid": "tests/test_backup_restore.py::test_build_robocopy_command_uses_orchestrator_to_vm_paths",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_robocopy_command_uses_orchestrator_to_vm_paths",
       "parameters": null,
@@ -194,9 +194,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-012",
+      "case_id": "DBABRAIN-TC-012",
       "nodeid": "tests/test_backup_restore.py::test_build_robocopy_command_rejects_mapped_drive_source",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_robocopy_command_rejects_mapped_drive_source",
       "parameters": null,
@@ -209,9 +209,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-013",
+      "case_id": "DBABRAIN-TC-013",
       "nodeid": "tests/test_backup_restore.py::test_build_cmdkey_command_uses_password_from_environment",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_cmdkey_command_uses_password_from_environment",
       "parameters": null,
@@ -224,9 +224,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-014",
+      "case_id": "DBABRAIN-TC-014",
       "nodeid": "tests/test_backup_restore.py::test_build_copy_cmdkey_commands_includes_prod_and_vm_credentials",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_copy_cmdkey_commands_includes_prod_and_vm_credentials",
       "parameters": null,
@@ -239,9 +239,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-015",
+      "case_id": "DBABRAIN-TC-015",
       "nodeid": "tests/test_backup_restore.py::test_parse_restore_config_keeps_zero_copy_recent_hours",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_parse_restore_config_keeps_zero_copy_recent_hours",
       "parameters": null,
@@ -254,9 +254,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-016",
+      "case_id": "DBABRAIN-TC-016",
       "nodeid": "tests/test_backup_restore.py::test_parse_restore_config_reads_source_certificate_api_url",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_parse_restore_config_reads_source_certificate_api_url",
       "parameters": null,
@@ -269,9 +269,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-017",
+      "case_id": "DBABRAIN-TC-017",
       "nodeid": "tests/test_backup_restore.py::test_parse_restore_config_target_sql_instance_overrides_default",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_parse_restore_config_target_sql_instance_overrides_default",
       "parameters": null,
@@ -284,9 +284,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-018",
+      "case_id": "DBABRAIN-TC-018",
       "nodeid": "tests/test_backup_restore.py::test_validate_restore_target_rejects_source_server_as_target",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_validate_restore_target_rejects_source_server_as_target",
       "parameters": null,
@@ -299,9 +299,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-019",
+      "case_id": "DBABRAIN-TC-019",
       "nodeid": "tests/test_backup_restore.py::test_validate_restore_target_rejects_source_sql_instance",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_validate_restore_target_rejects_source_sql_instance",
       "parameters": null,
@@ -314,9 +314,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-020",
+      "case_id": "DBABRAIN-TC-020",
       "nodeid": "tests/test_backup_restore.py::test_run_restore_server_sets_vm_credential_once_for_multiple_databases",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_restore_server_sets_vm_credential_once_for_multiple_databases",
       "parameters": null,
@@ -329,9 +329,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-021",
+      "case_id": "DBABRAIN-TC-021",
       "nodeid": "tests/test_backup_restore.py::test_run_restore_database_stops_before_recovery_when_full_fails",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_restore_database_stops_before_recovery_when_full_fails",
       "parameters": null,
@@ -344,9 +344,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-022",
+      "case_id": "DBABRAIN-TC-022",
       "nodeid": "tests/test_backup_restore.py::test_run_sqlcmd_query_command_treats_restore_error_text_as_failure",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_sqlcmd_query_command_treats_restore_error_text_as_failure",
       "parameters": null,
@@ -359,9 +359,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-023",
+      "case_id": "DBABRAIN-TC-023",
       "nodeid": "tests/test_backup_restore.py::test_run_restore_database_logs_execution_timeline_and_sanitizes_secrets",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_restore_database_logs_execution_timeline_and_sanitizes_secrets",
       "parameters": null,
@@ -374,9 +374,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-024",
+      "case_id": "DBABRAIN-TC-024",
       "nodeid": "tests/test_backup_restore.py::test_run_sqlcmd_query_command_streams_restore_progress",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_sqlcmd_query_command_streams_restore_progress",
       "parameters": null,
@@ -389,9 +389,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-025",
+      "case_id": "DBABRAIN-TC-025",
       "nodeid": "tests/test_backup_restore.py::test_restore_log_backups_are_logged_one_file_at_a_time",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_restore_log_backups_are_logged_one_file_at_a_time",
       "parameters": null,
@@ -404,9 +404,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-026",
+      "case_id": "DBABRAIN-TC-026",
       "nodeid": "tests/test_backup_restore.py::test_restore_stdout_summary_parses_large_sql_server_restore_output",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_restore_stdout_summary_parses_large_sql_server_restore_output",
       "parameters": null,
@@ -419,9 +419,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-027",
+      "case_id": "DBABRAIN-TC-027",
       "nodeid": "tests/test_backup_restore.py::test_restore_sanitizer_redacts_sensitive_text",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_restore_sanitizer_redacts_sensitive_text",
       "parameters": null,
@@ -434,9 +434,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-028",
+      "case_id": "DBABRAIN-TC-028",
       "nodeid": "tests/test_backup_restore.py::test_restore_sanitizer_redacts_json_result_values",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_restore_sanitizer_redacts_json_result_values",
       "parameters": null,
@@ -449,9 +449,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-029",
+      "case_id": "DBABRAIN-TC-029",
       "nodeid": "tests/test_backup_restore.py::test_runtime_stdout_bridge_sanitizes_before_writing",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_runtime_stdout_bridge_sanitizes_before_writing",
       "parameters": null,
@@ -464,9 +464,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-030",
+      "case_id": "DBABRAIN-TC-030",
       "nodeid": "tests/test_backup_restore.py::test_build_add_certificate_sql_checks_name_or_thumbprint_before_create",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_add_certificate_sql_checks_name_or_thumbprint_before_create",
       "parameters": null,
@@ -479,9 +479,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-031",
+      "case_id": "DBABRAIN-TC-031",
       "nodeid": "tests/test_backup_restore.py::test_build_add_certificate_command_runs_on_vm_and_writes_cert_files",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_add_certificate_command_runs_on_vm_and_writes_cert_files",
       "parameters": null,
@@ -494,9 +494,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-032",
+      "case_id": "DBABRAIN-TC-032",
       "nodeid": "tests/test_backup_restore.py::test_parse_backup_certificate_reads_vault_payload_data",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_parse_backup_certificate_reads_vault_payload_data",
       "parameters": null,
@@ -509,9 +509,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-033",
+      "case_id": "DBABRAIN-TC-033",
       "nodeid": "tests/test_backup_restore.py::test_ensure_source_certificate_dry_run_skips_api_call",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_ensure_source_certificate_dry_run_skips_api_call",
       "parameters": null,
@@ -524,9 +524,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-034",
+      "case_id": "DBABRAIN-TC-034",
       "nodeid": "tests/test_backup_restore.py::test_ensure_source_certificate_with_events_pushes_start_and_end",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_ensure_source_certificate_with_events_pushes_start_and_end",
       "parameters": null,
@@ -539,9 +539,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-035",
+      "case_id": "DBABRAIN-TC-035",
       "nodeid": "tests/test_backup_restore.py::test_ensure_source_certificate_with_events_skips_alert_when_api_not_configured",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_ensure_source_certificate_with_events_skips_alert_when_api_not_configured",
       "parameters": null,
@@ -554,9 +554,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-036",
+      "case_id": "DBABRAIN-TC-036",
       "nodeid": "tests/test_backup_restore.py::test_ensure_source_certificate_with_events_pushes_critical_on_error",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_ensure_source_certificate_with_events_pushes_critical_on_error",
       "parameters": null,
@@ -569,9 +569,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-037",
+      "case_id": "DBABRAIN-TC-037",
       "nodeid": "tests/test_backup_restore.py::test_run_add_certificate_command_reports_stdout_stderr",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_add_certificate_command_reports_stdout_stderr",
       "parameters": null,
@@ -584,9 +584,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-038",
+      "case_id": "DBABRAIN-TC-038",
       "nodeid": "tests/test_backup_restore.py::test_run_add_certificate_command_reports_timeout",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_add_certificate_command_reports_timeout",
       "parameters": null,
@@ -599,9 +599,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-039",
+      "case_id": "DBABRAIN-TC-039",
       "nodeid": "tests/test_backup_restore.py::test_copy_backup_cli_accepts_hours_override",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_copy_backup_cli_accepts_hours_override",
       "parameters": null,
@@ -614,9 +614,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-040",
+      "case_id": "DBABRAIN-TC-040",
       "nodeid": "tests/test_backup_restore.py::test_restore_workflow_cli_accepts_defaults",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_restore_workflow_cli_accepts_defaults",
       "parameters": null,
@@ -629,9 +629,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-041",
+      "case_id": "DBABRAIN-TC-041",
       "nodeid": "tests/test_backup_restore.py::test_restore_workflow_orchestrates_existing_steps_in_order",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_restore_workflow_orchestrates_existing_steps_in_order",
       "parameters": null,
@@ -644,9 +644,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-042",
+      "case_id": "DBABRAIN-TC-042",
       "nodeid": "tests/test_backup_restore.py::test_import_certificate_cli_accepts_source_id",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_import_certificate_cli_accepts_source_id",
       "parameters": null,
@@ -659,9 +659,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-043",
+      "case_id": "DBABRAIN-TC-043",
       "nodeid": "tests/test_backup_restore.py::test_restore_latest_end_event_counts_stdout_restore_errors_as_failed",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_restore_latest_end_event_counts_stdout_restore_errors_as_failed",
       "parameters": null,
@@ -674,9 +674,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-044",
+      "case_id": "DBABRAIN-TC-044",
       "nodeid": "tests/test_backup_restore.py::test_delete_backup_cli_requires_hours_and_accepts_source_id",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_delete_backup_cli_requires_hours_and_accepts_source_id",
       "parameters": null,
@@ -689,9 +689,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-045",
+      "case_id": "DBABRAIN-TC-045",
       "nodeid": "tests/test_backup_restore.py::test_load_restore_configs_reads_sources_array",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_load_restore_configs_reads_sources_array",
       "parameters": null,
@@ -704,9 +704,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-046",
+      "case_id": "DBABRAIN-TC-046",
       "nodeid": "tests/test_backup_restore.py::test_load_restore_configs_uses_default_restore_file_when_config_has_no_backup_restore",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_load_restore_configs_uses_default_restore_file_when_config_has_no_backup_restore",
       "parameters": null,
@@ -719,9 +719,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-047",
+      "case_id": "DBABRAIN-TC-047",
       "nodeid": "tests/test_backup_restore.py::test_load_restore_configs_reads_source_target_database_pairs",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_load_restore_configs_reads_source_target_database_pairs",
       "parameters": null,
@@ -734,9 +734,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-048",
+      "case_id": "DBABRAIN-TC-048",
       "nodeid": "tests/test_backup_restore.py::test_load_restore_configs_keeps_common_target_when_per_source_target_fields_are_blank",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_load_restore_configs_keeps_common_target_when_per_source_target_fields_are_blank",
       "parameters": null,
@@ -749,9 +749,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-049",
+      "case_id": "DBABRAIN-TC-049",
       "nodeid": "tests/test_backup_restore.py::test_list_recent_backup_files_filters_by_pattern_and_mtime",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_list_recent_backup_files_filters_by_pattern_and_mtime",
       "parameters": null,
@@ -764,9 +764,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-050",
+      "case_id": "DBABRAIN-TC-050",
       "nodeid": "tests/test_backup_restore.py::test_copy_backup_file_preserves_relative_folder_and_skips_existing",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_copy_backup_file_preserves_relative_folder_and_skips_existing",
       "parameters": null,
@@ -779,9 +779,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-051",
+      "case_id": "DBABRAIN-TC-051",
       "nodeid": "tests/test_backup_restore.py::test_run_copy_backup_uses_powershell_for_unc_sources",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_copy_backup_uses_powershell_for_unc_sources",
       "parameters": null,
@@ -794,9 +794,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-052",
+      "case_id": "DBABRAIN-TC-052",
       "nodeid": "tests/test_backup_restore.py::test_copy_backup_file_with_logging_emits_start_and_done",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_copy_backup_file_with_logging_emits_start_and_done",
       "parameters": null,
@@ -809,9 +809,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-053",
+      "case_id": "DBABRAIN-TC-053",
       "nodeid": "tests/test_backup_restore.py::test_copy_backup_file_with_logging_emits_skip",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_copy_backup_file_with_logging_emits_skip",
       "parameters": null,
@@ -824,9 +824,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-054",
+      "case_id": "DBABRAIN-TC-054",
       "nodeid": "tests/test_backup_restore.py::test_copy_backup_file_with_logging_emits_failed",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_copy_backup_file_with_logging_emits_failed",
       "parameters": null,
@@ -839,9 +839,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-055",
+      "case_id": "DBABRAIN-TC-055",
       "nodeid": "tests/test_backup_restore.py::test_run_copy_backup_logs_scan_and_final_summary",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_copy_backup_logs_scan_and_final_summary",
       "parameters": null,
@@ -854,9 +854,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-056",
+      "case_id": "DBABRAIN-TC-056",
       "nodeid": "tests/test_backup_restore.py::test_backup_restore_cli_restore_workflow_uses_restore_workflow_logs",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_backup_restore_cli_restore_workflow_uses_restore_workflow_logs",
       "parameters": null,
@@ -869,9 +869,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-057",
+      "case_id": "DBABRAIN-TC-057",
       "nodeid": "tests/test_backup_restore.py::test_list_old_target_backup_files_filters_by_target_mtime",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_list_old_target_backup_files_filters_by_target_mtime",
       "parameters": null,
@@ -884,9 +884,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-058",
+      "case_id": "DBABRAIN-TC-058",
       "nodeid": "tests/test_backup_restore.py::test_run_delete_backup_deletes_only_old_files_from_target",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_delete_backup_deletes_only_old_files_from_target",
       "parameters": null,
@@ -899,9 +899,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-059",
+      "case_id": "DBABRAIN-TC-059",
       "nodeid": "tests/test_backup_restore.py::test_run_delete_backup_rejects_target_overlapping_source",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_delete_backup_rejects_target_overlapping_source",
       "parameters": null,
@@ -914,9 +914,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-060",
+      "case_id": "DBABRAIN-TC-060",
       "nodeid": "tests/test_backup_restore.py::test_run_delete_backup_zero_hours_deletes_all_target_files",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_run_delete_backup_zero_hours_deletes_all_target_files",
       "parameters": null,
@@ -929,9 +929,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-061",
+      "case_id": "DBABRAIN-TC-061",
       "nodeid": "tests/test_backup_restore.py::test_build_checkdb_sql_targets_restore_database",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_build_checkdb_sql_targets_restore_database",
       "parameters": null,
@@ -944,9 +944,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-062",
+      "case_id": "DBABRAIN-TC-062",
       "nodeid": "tests/test_backup_restore.py::test_emit_backup_restore_event_writes_sqlite_and_pushes_telegram",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_emit_backup_restore_event_writes_sqlite_and_pushes_telegram",
       "parameters": null,
@@ -959,9 +959,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-063",
+      "case_id": "DBABRAIN-TC-063",
       "nodeid": "tests/test_backup_restore.py::test_emit_backup_restore_event_swallows_telegram_failure",
-      "file": "tools/db_ops/tests/test_backup_restore.py",
+      "file": "tools/dbabrain/tests/test_backup_restore.py",
       "component": "backup_restore",
       "test_name": "test_emit_backup_restore_event_swallows_telegram_failure",
       "parameters": null,
@@ -974,9 +974,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-064",
+      "case_id": "DBABRAIN-TC-064",
       "nodeid": "tests/test_driver_fallback.py::test_pyodbc_failure_falls_back_to_pymssql_and_preserves_timeout",
-      "file": "tools/db_ops/tests/test_driver_fallback.py",
+      "file": "tools/dbabrain/tests/test_driver_fallback.py",
       "component": "driver_fallback",
       "test_name": "test_pyodbc_failure_falls_back_to_pymssql_and_preserves_timeout",
       "parameters": null,
@@ -989,9 +989,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-065",
+      "case_id": "DBABRAIN-TC-065",
       "nodeid": "tests/test_driver_fallback.py::test_configured_pymssql_driver_skips_pyodbc_connect",
-      "file": "tools/db_ops/tests/test_driver_fallback.py",
+      "file": "tools/dbabrain/tests/test_driver_fallback.py",
       "component": "driver_fallback",
       "test_name": "test_configured_pymssql_driver_skips_pyodbc_connect",
       "parameters": null,
@@ -1004,9 +1004,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-066",
+      "case_id": "DBABRAIN-TC-066",
       "nodeid": "tests/test_jobs_daemon.py::test_app_daemon_loads_only_app_commands",
-      "file": "tools/db_ops/tests/test_jobs_daemon.py",
+      "file": "tools/dbabrain/tests/test_jobs_daemon.py",
       "component": "jobs_daemon",
       "test_name": "test_app_daemon_loads_only_app_commands",
       "parameters": null,
@@ -1019,9 +1019,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-067",
+      "case_id": "DBABRAIN-TC-067",
       "nodeid": "tests/test_jobs_daemon.py::test_due_app_commands_start_independently",
-      "file": "tools/db_ops/tests/test_jobs_daemon.py",
+      "file": "tools/dbabrain/tests/test_jobs_daemon.py",
       "component": "jobs_daemon",
       "test_name": "test_due_app_commands_start_independently",
       "parameters": null,
@@ -1034,9 +1034,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-068",
+      "case_id": "DBABRAIN-TC-068",
       "nodeid": "tests/test_jobs_daemon.py::test_long_running_app_does_not_block_another_due_app",
-      "file": "tools/db_ops/tests/test_jobs_daemon.py",
+      "file": "tools/dbabrain/tests/test_jobs_daemon.py",
       "component": "jobs_daemon",
       "test_name": "test_long_running_app_does_not_block_another_due_app",
       "parameters": null,
@@ -1049,9 +1049,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-069",
+      "case_id": "DBABRAIN-TC-069",
       "nodeid": "tests/test_jobs_daemon.py::test_duplicate_app_command_is_skipped_while_running",
-      "file": "tools/db_ops/tests/test_jobs_daemon.py",
+      "file": "tools/dbabrain/tests/test_jobs_daemon.py",
       "component": "jobs_daemon",
       "test_name": "test_duplicate_app_command_is_skipped_while_running",
       "parameters": null,
@@ -1064,9 +1064,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-070",
+      "case_id": "DBABRAIN-TC-070",
       "nodeid": "tests/test_jobs_daemon.py::test_repeat_interval_is_measured_from_started_at",
-      "file": "tools/db_ops/tests/test_jobs_daemon.py",
+      "file": "tools/dbabrain/tests/test_jobs_daemon.py",
       "component": "jobs_daemon",
       "test_name": "test_repeat_interval_is_measured_from_started_at",
       "parameters": null,
@@ -1079,9 +1079,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-071",
+      "case_id": "DBABRAIN-TC-071",
       "nodeid": "tests/test_jobs_daemon.py::test_timeout_seconds_terminates_long_running_app",
-      "file": "tools/db_ops/tests/test_jobs_daemon.py",
+      "file": "tools/dbabrain/tests/test_jobs_daemon.py",
       "component": "jobs_daemon",
       "test_name": "test_timeout_seconds_terminates_long_running_app",
       "parameters": null,
@@ -1094,9 +1094,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-072",
+      "case_id": "DBABRAIN-TC-072",
       "nodeid": "tests/test_jobs_daemon.py::test_app_daemon_log_includes_scope",
-      "file": "tools/db_ops/tests/test_jobs_daemon.py",
+      "file": "tools/dbabrain/tests/test_jobs_daemon.py",
       "component": "jobs_daemon",
       "test_name": "test_app_daemon_log_includes_scope",
       "parameters": null,
@@ -1109,9 +1109,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-073",
+      "case_id": "DBABRAIN-TC-073",
       "nodeid": "tests/test_jobs_daemon.py::test_missing_log_scope_raises_clear_validation_error",
-      "file": "tools/db_ops/tests/test_jobs_daemon.py",
+      "file": "tools/dbabrain/tests/test_jobs_daemon.py",
       "component": "jobs_daemon",
       "test_name": "test_missing_log_scope_raises_clear_validation_error",
       "parameters": null,
@@ -1124,9 +1124,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-074",
+      "case_id": "DBABRAIN-TC-074",
       "nodeid": "tests/test_jobs_daemon.py::test_runtime_log_records_command_execution_metadata",
-      "file": "tools/db_ops/tests/test_jobs_daemon.py",
+      "file": "tools/dbabrain/tests/test_jobs_daemon.py",
       "component": "jobs_daemon",
       "test_name": "test_runtime_log_records_command_execution_metadata",
       "parameters": null,
@@ -1139,9 +1139,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-075",
+      "case_id": "DBABRAIN-TC-075",
       "nodeid": "tests/test_logging_ops.py::test_tee_stdout_writes_common_log_format",
-      "file": "tools/db_ops/tests/test_logging_ops.py",
+      "file": "tools/dbabrain/tests/test_logging_ops.py",
       "component": "logging",
       "test_name": "test_tee_stdout_writes_common_log_format",
       "parameters": null,
@@ -1154,9 +1154,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-076",
+      "case_id": "DBABRAIN-TC-076",
       "nodeid": "tests/test_logging_ops.py::test_build_log_paths_uses_log_scope",
-      "file": "tools/db_ops/tests/test_logging_ops.py",
+      "file": "tools/dbabrain/tests/test_logging_ops.py",
       "component": "logging",
       "test_name": "test_build_log_paths_uses_log_scope",
       "parameters": null,
@@ -1169,9 +1169,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-077",
+      "case_id": "DBABRAIN-TC-077",
       "nodeid": "tests/test_logging_ops.py::test_setup_app_logger_uses_scope_filename_not_app_identifiers",
-      "file": "tools/db_ops/tests/test_logging_ops.py",
+      "file": "tools/dbabrain/tests/test_logging_ops.py",
       "component": "logging",
       "test_name": "test_setup_app_logger_uses_scope_filename_not_app_identifiers",
       "parameters": null,
@@ -1184,9 +1184,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-078",
+      "case_id": "DBABRAIN-TC-078",
       "nodeid": "tests/test_logging_ops.py::test_setup_app_logger_keeps_daily_archive_handler",
-      "file": "tools/db_ops/tests/test_logging_ops.py",
+      "file": "tools/dbabrain/tests/test_logging_ops.py",
       "component": "logging",
       "test_name": "test_setup_app_logger_keeps_daily_archive_handler",
       "parameters": null,
@@ -1199,9 +1199,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-079",
+      "case_id": "DBABRAIN-TC-079",
       "nodeid": "tests/test_metric_storage.py::test_fetch_latest_report_results_can_filter_active_metric_codes",
-      "file": "tools/db_ops/tests/test_metric_storage.py",
+      "file": "tools/dbabrain/tests/test_metric_storage.py",
       "component": "metric_storage",
       "test_name": "test_fetch_latest_report_results_can_filter_active_metric_codes",
       "parameters": null,
@@ -1214,9 +1214,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-080",
+      "case_id": "DBABRAIN-TC-080",
       "nodeid": "tests/test_metric_storage.py::test_fetch_latest_report_results_empty_metric_code_filter_returns_no_rows",
-      "file": "tools/db_ops/tests/test_metric_storage.py",
+      "file": "tools/dbabrain/tests/test_metric_storage.py",
       "component": "metric_storage",
       "test_name": "test_fetch_latest_report_results_empty_metric_code_filter_returns_no_rows",
       "parameters": null,
@@ -1229,9 +1229,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-081",
+      "case_id": "DBABRAIN-TC-081",
       "nodeid": "tests/test_metric_storage.py::test_latest_successful_result_time_ignores_sql_execution_failed_warning",
-      "file": "tools/db_ops/tests/test_metric_storage.py",
+      "file": "tools/dbabrain/tests/test_metric_storage.py",
       "component": "metric_storage",
       "test_name": "test_latest_successful_result_time_ignores_sql_execution_failed_warning",
       "parameters": null,
@@ -1244,9 +1244,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-082",
+      "case_id": "DBABRAIN-TC-082",
       "nodeid": "tests/test_metric_storage.py::test_mark_daily_report_created_updates_selected_metric_rows",
-      "file": "tools/db_ops/tests/test_metric_storage.py",
+      "file": "tools/dbabrain/tests/test_metric_storage.py",
       "component": "metric_storage",
       "test_name": "test_mark_daily_report_created_updates_selected_metric_rows",
       "parameters": null,
@@ -1259,9 +1259,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-083",
+      "case_id": "DBABRAIN-TC-083",
       "nodeid": "tests/test_metric_targets.py::test_resolve_metric_target_by_ip",
-      "file": "tools/db_ops/tests/test_metric_targets.py",
+      "file": "tools/dbabrain/tests/test_metric_targets.py",
       "component": "metric_targets",
       "test_name": "test_resolve_metric_target_by_ip",
       "parameters": null,
@@ -1274,9 +1274,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-084",
+      "case_id": "DBABRAIN-TC-084",
       "nodeid": "tests/test_metric_targets.py::test_resolve_metric_target_by_ip_reports_no_match",
-      "file": "tools/db_ops/tests/test_metric_targets.py",
+      "file": "tools/dbabrain/tests/test_metric_targets.py",
       "component": "metric_targets",
       "test_name": "test_resolve_metric_target_by_ip_reports_no_match",
       "parameters": null,
@@ -1289,9 +1289,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-085",
+      "case_id": "DBABRAIN-TC-085",
       "nodeid": "tests/test_metric_targets.py::test_resolve_metric_target_by_ip_reports_ambiguity",
-      "file": "tools/db_ops/tests/test_metric_targets.py",
+      "file": "tools/dbabrain/tests/test_metric_targets.py",
       "component": "metric_targets",
       "test_name": "test_resolve_metric_target_by_ip_reports_ambiguity",
       "parameters": null,
@@ -1304,9 +1304,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-086",
+      "case_id": "DBABRAIN-TC-086",
       "nodeid": "tests/test_metric_targets.py::test_resolve_metric_target_accepts_target_id_guard",
-      "file": "tools/db_ops/tests/test_metric_targets.py",
+      "file": "tools/dbabrain/tests/test_metric_targets.py",
       "component": "metric_targets",
       "test_name": "test_resolve_metric_target_accepts_target_id_guard",
       "parameters": null,
@@ -1319,9 +1319,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-087",
+      "case_id": "DBABRAIN-TC-087",
       "nodeid": "tests/test_metric_targets.py::test_load_metric_targets_skips_metrics_disabled_target",
-      "file": "tools/db_ops/tests/test_metric_targets.py",
+      "file": "tools/dbabrain/tests/test_metric_targets.py",
       "component": "metric_targets",
       "test_name": "test_load_metric_targets_skips_metrics_disabled_target",
       "parameters": null,
@@ -1334,9 +1334,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-088",
+      "case_id": "DBABRAIN-TC-088",
       "nodeid": "tests/test_metric_timeouts.py::test_load_metric_definitions_reads_default_timeout",
-      "file": "tools/db_ops/tests/test_metric_timeouts.py",
+      "file": "tools/dbabrain/tests/test_metric_timeouts.py",
       "component": "metric_timeouts",
       "test_name": "test_load_metric_definitions_reads_default_timeout",
       "parameters": null,
@@ -1349,9 +1349,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-089",
+      "case_id": "DBABRAIN-TC-089",
       "nodeid": "tests/test_metric_timeouts.py::test_collect_one_metric_passes_metric_timeout_to_executor",
-      "file": "tools/db_ops/tests/test_metric_timeouts.py",
+      "file": "tools/dbabrain/tests/test_metric_timeouts.py",
       "component": "metric_timeouts",
       "test_name": "test_collect_one_metric_passes_metric_timeout_to_executor",
       "parameters": null,
@@ -1364,9 +1364,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-090",
+      "case_id": "DBABRAIN-TC-090",
       "nodeid": "tests/test_oracle_resilience.py::test_oracle_timeout_sets_call_timeout_and_closes_connection",
-      "file": "tools/db_ops/tests/test_oracle_resilience.py",
+      "file": "tools/dbabrain/tests/test_oracle_resilience.py",
       "component": "oracle_resilience",
       "test_name": "test_oracle_timeout_sets_call_timeout_and_closes_connection",
       "parameters": null,
@@ -1379,9 +1379,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-091",
+      "case_id": "DBABRAIN-TC-091",
       "nodeid": "tests/test_oracle_resilience.py::test_oracle_success_uses_service_name_and_returns_first_result_set",
-      "file": "tools/db_ops/tests/test_oracle_resilience.py",
+      "file": "tools/dbabrain/tests/test_oracle_resilience.py",
       "component": "oracle_resilience",
       "test_name": "test_oracle_success_uses_service_name_and_returns_first_result_set",
       "parameters": null,
@@ -1394,9 +1394,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-092",
+      "case_id": "DBABRAIN-TC-092",
       "nodeid": "tests/test_reports_force_hourly.py::test_reports_cli_force_hourly_report_requires_target_ip",
-      "file": "tools/db_ops/tests/test_reports_force_hourly.py",
+      "file": "tools/dbabrain/tests/test_reports_force_hourly.py",
       "component": "reports_force_hourly",
       "test_name": "test_reports_cli_force_hourly_report_requires_target_ip",
       "parameters": null,
@@ -1409,9 +1409,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-093",
+      "case_id": "DBABRAIN-TC-093",
       "nodeid": "tests/test_reports_force_hourly.py::test_resolve_report_target_uses_config_before_runtime_rows",
-      "file": "tools/db_ops/tests/test_reports_force_hourly.py",
+      "file": "tools/dbabrain/tests/test_reports_force_hourly.py",
       "component": "reports_force_hourly",
       "test_name": "test_resolve_report_target_uses_config_before_runtime_rows",
       "parameters": null,
@@ -1424,9 +1424,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-094",
+      "case_id": "DBABRAIN-TC-094",
       "nodeid": "tests/test_reports_force_hourly.py::test_resolve_report_target_fails_when_reports_disabled",
-      "file": "tools/db_ops/tests/test_reports_force_hourly.py",
+      "file": "tools/dbabrain/tests/test_reports_force_hourly.py",
       "component": "reports_force_hourly",
       "test_name": "test_resolve_report_target_fails_when_reports_disabled",
       "parameters": null,
@@ -1439,9 +1439,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-095",
+      "case_id": "DBABRAIN-TC-095",
       "nodeid": "tests/test_reports_force_hourly.py::test_stored_metric_summary_fails_when_metrics_disabled_and_no_rows",
-      "file": "tools/db_ops/tests/test_reports_force_hourly.py",
+      "file": "tools/dbabrain/tests/test_reports_force_hourly.py",
       "component": "reports_force_hourly",
       "test_name": "test_stored_metric_summary_fails_when_metrics_disabled_and_no_rows",
       "parameters": null,
@@ -1454,9 +1454,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-096",
+      "case_id": "DBABRAIN-TC-096",
       "nodeid": "tests/test_reports_force_hourly.py::test_force_hourly_report_executes_collect_report_push_in_order",
-      "file": "tools/db_ops/tests/test_reports_force_hourly.py",
+      "file": "tools/dbabrain/tests/test_reports_force_hourly.py",
       "component": "reports_force_hourly",
       "test_name": "test_force_hourly_report_executes_collect_report_push_in_order",
       "parameters": null,
@@ -1469,9 +1469,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-097",
+      "case_id": "DBABRAIN-TC-097",
       "nodeid": "tests/test_reports_force_hourly.py::test_force_hourly_report_collect_failure_stops_workflow",
-      "file": "tools/db_ops/tests/test_reports_force_hourly.py",
+      "file": "tools/dbabrain/tests/test_reports_force_hourly.py",
       "component": "reports_force_hourly",
       "test_name": "test_force_hourly_report_collect_failure_stops_workflow",
       "parameters": null,
@@ -1484,9 +1484,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-098",
+      "case_id": "DBABRAIN-TC-098",
       "nodeid": "tests/test_reports_force_hourly.py::test_force_hourly_report_report_creation_failure_stops_workflow",
-      "file": "tools/db_ops/tests/test_reports_force_hourly.py",
+      "file": "tools/dbabrain/tests/test_reports_force_hourly.py",
       "component": "reports_force_hourly",
       "test_name": "test_force_hourly_report_report_creation_failure_stops_workflow",
       "parameters": null,
@@ -1499,9 +1499,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-099",
+      "case_id": "DBABRAIN-TC-099",
       "nodeid": "tests/test_reports_force_hourly.py::test_force_hourly_report_alert_push_failure_stops_workflow",
-      "file": "tools/db_ops/tests/test_reports_force_hourly.py",
+      "file": "tools/dbabrain/tests/test_reports_force_hourly.py",
       "component": "reports_force_hourly",
       "test_name": "test_force_hourly_report_alert_push_failure_stops_workflow",
       "parameters": null,
@@ -1514,9 +1514,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-100",
+      "case_id": "DBABRAIN-TC-100",
       "nodeid": "tests/test_reports_push.py::test_push_report_alerts_queues_backup_health_to_logging_group",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_push_report_alerts_queues_backup_health_to_logging_group",
       "parameters": null,
@@ -1529,9 +1529,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-101",
+      "case_id": "DBABRAIN-TC-101",
       "nodeid": "tests/test_reports_push.py::test_default_reports_config_has_required_report_codes_and_schedule_fields",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_default_reports_config_has_required_report_codes_and_schedule_fields",
       "parameters": null,
@@ -1544,9 +1544,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-102",
+      "case_id": "DBABRAIN-TC-102",
       "nodeid": "tests/test_reports_push.py::test_report_config_requires_metric_max_age_seconds",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_report_config_requires_metric_max_age_seconds",
       "parameters": null,
@@ -1559,9 +1559,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-103",
+      "case_id": "DBABRAIN-TC-103",
       "nodeid": "tests/test_reports_push.py::test_run_scheduled_reports_queues_once_then_skips_by_report_state",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_run_scheduled_reports_queues_once_then_skips_by_report_state",
       "parameters": null,
@@ -1574,9 +1574,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-104",
+      "case_id": "DBABRAIN-TC-104",
       "nodeid": "tests/test_reports_push.py::test_daily_logging_report_runs_only_inside_allowed_window",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_daily_logging_report_runs_only_inside_allowed_window",
       "parameters": null,
@@ -1589,9 +1589,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-105",
+      "case_id": "DBABRAIN-TC-105",
       "nodeid": "tests/test_reports_push.py::test_daily_logging_report_uses_metric_max_age_as_summary_window",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_daily_logging_report_uses_metric_max_age_as_summary_window",
       "parameters": null,
@@ -1604,9 +1604,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-106",
+      "case_id": "DBABRAIN-TC-106",
       "nodeid": "tests/test_reports_push.py::test_daily_logging_report_skips_outside_allowed_window",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_daily_logging_report_skips_outside_allowed_window",
       "parameters": null,
@@ -1619,9 +1619,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-107",
+      "case_id": "DBABRAIN-TC-107",
       "nodeid": "tests/test_reports_push.py::test_daily_logging_report_respects_legacy_send_state_repeat_interval",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_daily_logging_report_respects_legacy_send_state_repeat_interval",
       "parameters": null,
@@ -1634,9 +1634,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-108",
+      "case_id": "DBABRAIN-TC-108",
       "nodeid": "tests/test_reports_push.py::test_daily_logging_report_ignores_stale_metric_rows_by_max_age",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_daily_logging_report_ignores_stale_metric_rows_by_max_age",
       "parameters": null,
@@ -1649,9 +1649,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-109",
+      "case_id": "DBABRAIN-TC-109",
       "nodeid": "tests/test_reports_push.py::test_push_report_alerts_can_filter_report_ids",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_push_report_alerts_can_filter_report_ids",
       "parameters": null,
@@ -1664,9 +1664,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-110",
+      "case_id": "DBABRAIN-TC-110",
       "nodeid": "tests/test_reports_push.py::test_create_metrics_reports_skips_reports_disabled_target",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_create_metrics_reports_skips_reports_disabled_target",
       "parameters": null,
@@ -1679,9 +1679,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-111",
+      "case_id": "DBABRAIN-TC-111",
       "nodeid": "tests/test_reports_push.py::test_push_report_alerts_skips_alerts_disabled_target",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_push_report_alerts_skips_alerts_disabled_target",
       "parameters": null,
@@ -1694,9 +1694,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-112",
+      "case_id": "DBABRAIN-TC-112",
       "nodeid": "tests/test_reports_push.py::test_backup_health_report_ignores_synthetic_target_db_name_from_no_data",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_backup_health_report_ignores_synthetic_target_db_name_from_no_data",
       "parameters": null,
@@ -1709,9 +1709,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-113",
+      "case_id": "DBABRAIN-TC-113",
       "nodeid": "tests/test_reports_push.py::test_create_metrics_reports_marks_metric_rows_without_queueing_telegram",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_create_metrics_reports_marks_metric_rows_without_queueing_telegram",
       "parameters": null,
@@ -1724,9 +1724,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-114",
+      "case_id": "DBABRAIN-TC-114",
       "nodeid": "tests/test_reports_push.py::test_create_metrics_reports_can_scope_to_one_target",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_create_metrics_reports_can_scope_to_one_target",
       "parameters": null,
@@ -1739,9 +1739,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-115",
+      "case_id": "DBABRAIN-TC-115",
       "nodeid": "tests/test_reports_push.py::test_create_metrics_reports_keeps_full_query_store_message",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_create_metrics_reports_keeps_full_query_store_message",
       "parameters": null,
@@ -1754,9 +1754,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-116",
+      "case_id": "DBABRAIN-TC-116",
       "nodeid": "tests/test_reports_push.py::test_create_metrics_reports_skips_latest_rows_already_marked_daily_report",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_create_metrics_reports_skips_latest_rows_already_marked_daily_report",
       "parameters": null,
@@ -1769,9 +1769,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-117",
+      "case_id": "DBABRAIN-TC-117",
       "nodeid": "tests/test_reports_push.py::test_create_metrics_reports_marks_previous_collect_rows_as_reported",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_create_metrics_reports_marks_previous_collect_rows_as_reported",
       "parameters": null,
@@ -1784,9 +1784,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-118",
+      "case_id": "DBABRAIN-TC-118",
       "nodeid": "tests/test_reports_push.py::test_create_metric_report_for_level_ignores_stale_hourly_metric_rows",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_create_metric_report_for_level_ignores_stale_hourly_metric_rows",
       "parameters": null,
@@ -1799,9 +1799,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-119",
+      "case_id": "DBABRAIN-TC-119",
       "nodeid": "tests/test_reports_push.py::test_create_metric_report_for_level_marks_unreported_rows_and_older_scope",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_create_metric_report_for_level_marks_unreported_rows_and_older_scope",
       "parameters": null,
@@ -1814,9 +1814,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-120",
+      "case_id": "DBABRAIN-TC-120",
       "nodeid": "tests/test_reports_push.py::test_create_metric_report_for_level_critical_includes_metric_max_age_duration",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_create_metric_report_for_level_critical_includes_metric_max_age_duration",
       "parameters": null,
@@ -1829,9 +1829,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-121",
+      "case_id": "DBABRAIN-TC-121",
       "nodeid": "tests/test_reports_push.py::test_push_report_alerts_skips_backup_health_when_logging_group_missing",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_push_report_alerts_skips_backup_health_when_logging_group_missing",
       "parameters": null,
@@ -1844,9 +1844,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-122",
+      "case_id": "DBABRAIN-TC-122",
       "nodeid": "tests/test_reports_push.py::test_long_report_text_is_split_for_telegram_limit",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_long_report_text_is_split_for_telegram_limit",
       "parameters": null,
@@ -1859,9 +1859,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-123",
+      "case_id": "DBABRAIN-TC-123",
       "nodeid": "tests/test_reports_push.py::test_push_report_alerts_queues_long_report_as_multiple_messages",
-      "file": "tools/db_ops/tests/test_reports_push.py",
+      "file": "tools/dbabrain/tests/test_reports_push.py",
       "component": "reports_push",
       "test_name": "test_push_report_alerts_queues_long_report_as_multiple_messages",
       "parameters": null,
@@ -1874,9 +1874,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-124",
+      "case_id": "DBABRAIN-TC-124",
       "nodeid": "tests/test_runtime_scope.py::test_cross_command_same_scope_blocks_second_command_when_overlap_disallowed",
-      "file": "tools/db_ops/tests/test_runtime_scope.py",
+      "file": "tools/dbabrain/tests/test_runtime_scope.py",
       "component": "runtime_scope",
       "test_name": "test_cross_command_same_scope_blocks_second_command_when_overlap_disallowed",
       "parameters": null,
@@ -1892,9 +1892,9 @@
       "xfail_reason": "Design gap: no runtime scope overlap policy blocks same database commands."
     },
     {
-      "case_id": "DBOPS-TC-125",
+      "case_id": "DBABRAIN-TC-125",
       "nodeid": "tests/test_runtime_scope.py::test_cross_command_different_scope_can_run_in_parallel",
-      "file": "tools/db_ops/tests/test_runtime_scope.py",
+      "file": "tools/dbabrain/tests/test_runtime_scope.py",
       "component": "runtime_scope",
       "test_name": "test_cross_command_different_scope_can_run_in_parallel",
       "parameters": null,
@@ -1907,9 +1907,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-126",
+      "case_id": "DBABRAIN-TC-126",
       "nodeid": "tests/test_runtime_scope.py::test_partial_overlap_all_database_scope_blocks_specific_database",
-      "file": "tools/db_ops/tests/test_runtime_scope.py",
+      "file": "tools/dbabrain/tests/test_runtime_scope.py",
       "component": "runtime_scope",
       "test_name": "test_partial_overlap_all_database_scope_blocks_specific_database",
       "parameters": null,
@@ -1925,9 +1925,9 @@
       "xfail_reason": "Design gap: no ALL-scope containment rule blocks specific database commands."
     },
     {
-      "case_id": "DBOPS-TC-127",
+      "case_id": "DBABRAIN-TC-127",
       "nodeid": "tests/test_runtime_scope.py::test_nested_scope_all_running_blocks_single_target",
-      "file": "tools/db_ops/tests/test_runtime_scope.py",
+      "file": "tools/dbabrain/tests/test_runtime_scope.py",
       "component": "runtime_scope",
       "test_name": "test_nested_scope_all_running_blocks_single_target",
       "parameters": null,
@@ -1943,9 +1943,9 @@
       "xfail_reason": "Design gap: due_sql_tasks checks exact run_key only, not nested/broader running scopes."
     },
     {
-      "case_id": "DBOPS-TC-128",
+      "case_id": "DBABRAIN-TC-128",
       "nodeid": "tests/test_scheduler_concurrency.py::test_two_daemons_cannot_claim_same_app_command",
-      "file": "tools/db_ops/tests/test_scheduler_concurrency.py",
+      "file": "tools/dbabrain/tests/test_scheduler_concurrency.py",
       "component": "scheduler_concurrency",
       "test_name": "test_two_daemons_cannot_claim_same_app_command",
       "parameters": null,
@@ -1961,9 +1961,9 @@
       "xfail_reason": "Design gap: app daemon has no durable cross-process app_command claim/lease."
     },
     {
-      "case_id": "DBOPS-TC-129",
+      "case_id": "DBABRAIN-TC-129",
       "nodeid": "tests/test_scheduler_concurrency.py::test_different_task_same_process_runs_when_scopes_do_not_overlap",
-      "file": "tools/db_ops/tests/test_scheduler_concurrency.py",
+      "file": "tools/dbabrain/tests/test_scheduler_concurrency.py",
       "component": "scheduler_concurrency",
       "test_name": "test_different_task_same_process_runs_when_scopes_do_not_overlap",
       "parameters": null,
@@ -1976,9 +1976,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-130",
+      "case_id": "DBABRAIN-TC-130",
       "nodeid": "tests/test_scheduler_concurrency.py::test_retry_after_fail_waits_for_repeat_interval",
-      "file": "tools/db_ops/tests/test_scheduler_concurrency.py",
+      "file": "tools/dbabrain/tests/test_scheduler_concurrency.py",
       "component": "scheduler_concurrency",
       "test_name": "test_retry_after_fail_waits_for_repeat_interval",
       "parameters": null,
@@ -1991,9 +1991,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-131",
+      "case_id": "DBABRAIN-TC-131",
       "nodeid": "tests/test_scheduler_concurrency.py::test_daemon_restart_marks_stale_running_app_before_new_run",
-      "file": "tools/db_ops/tests/test_scheduler_concurrency.py",
+      "file": "tools/dbabrain/tests/test_scheduler_concurrency.py",
       "component": "scheduler_concurrency",
       "test_name": "test_daemon_restart_marks_stale_running_app_before_new_run",
       "parameters": null,
@@ -2009,9 +2009,9 @@
       "xfail_reason": "Design gap: app daemon startup does not reconcile stale persisted RUNNING job_runs."
     },
     {
-      "case_id": "DBOPS-TC-132",
+      "case_id": "DBABRAIN-TC-132",
       "nodeid": "tests/test_sla_compliance.py::test_validate_sla_policy_passes_when_actual_meets_objective",
-      "file": "tools/db_ops/tests/test_sla_compliance.py",
+      "file": "tools/dbabrain/tests/test_sla_compliance.py",
       "component": "sla_compliance",
       "test_name": "test_validate_sla_policy_passes_when_actual_meets_objective",
       "parameters": null,
@@ -2024,9 +2024,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-133",
+      "case_id": "DBABRAIN-TC-133",
       "nodeid": "tests/test_sla_compliance.py::test_validate_sla_policy_fails_when_actual_is_below_objective",
-      "file": "tools/db_ops/tests/test_sla_compliance.py",
+      "file": "tools/dbabrain/tests/test_sla_compliance.py",
       "component": "sla_compliance",
       "test_name": "test_validate_sla_policy_fails_when_actual_is_below_objective",
       "parameters": null,
@@ -2039,9 +2039,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-134",
+      "case_id": "DBABRAIN-TC-134",
       "nodeid": "tests/test_sla_compliance.py::test_validate_sla_policy_reports_no_data",
-      "file": "tools/db_ops/tests/test_sla_compliance.py",
+      "file": "tools/dbabrain/tests/test_sla_compliance.py",
       "component": "sla_compliance",
       "test_name": "test_validate_sla_policy_reports_no_data",
       "parameters": null,
@@ -2054,9 +2054,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-135",
+      "case_id": "DBABRAIN-TC-135",
       "nodeid": "tests/test_sla_compliance.py::test_parse_sla_policy_accepts_string_lists",
-      "file": "tools/db_ops/tests/test_sla_compliance.py",
+      "file": "tools/dbabrain/tests/test_sla_compliance.py",
       "component": "sla_compliance",
       "test_name": "test_parse_sla_policy_accepts_string_lists",
       "parameters": null,
@@ -2069,9 +2069,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-136",
+      "case_id": "DBABRAIN-TC-136",
       "nodeid": "tests/test_sql_task_claims.py::test_concurrent_sql_task_workers_claim_one_run",
-      "file": "tools/db_ops/tests/test_sql_task_claims.py",
+      "file": "tools/dbabrain/tests/test_sql_task_claims.py",
       "component": "sql_task_claims",
       "test_name": "test_concurrent_sql_task_workers_claim_one_run",
       "parameters": null,
@@ -2087,9 +2087,9 @@
       "xfail_reason": "Design gap: sql_runs has no atomic active claim/unique RUNNING row per run_key."
     },
     {
-      "case_id": "DBOPS-TC-137",
+      "case_id": "DBABRAIN-TC-137",
       "nodeid": "tests/test_sql_task_claims.py::test_same_folder_deploy_cannot_execute_concurrently_for_same_target_database",
-      "file": "tools/db_ops/tests/test_sql_task_claims.py",
+      "file": "tools/dbabrain/tests/test_sql_task_claims.py",
       "component": "sql_task_claims",
       "test_name": "test_same_folder_deploy_cannot_execute_concurrently_for_same_target_database",
       "parameters": null,
@@ -2105,9 +2105,9 @@
       "xfail_reason": "Design gap: folder SQL deploys have no durable per-target database lock."
     },
     {
-      "case_id": "DBOPS-TC-138",
+      "case_id": "DBABRAIN-TC-138",
       "nodeid": "tests/test_sql_task_claims.py::test_race_condition_insert_result_does_not_duplicate_run_key",
-      "file": "tools/db_ops/tests/test_sql_task_claims.py",
+      "file": "tools/dbabrain/tests/test_sql_task_claims.py",
       "component": "sql_task_claims",
       "test_name": "test_race_condition_insert_result_does_not_duplicate_run_key",
       "parameters": null,
@@ -2123,9 +2123,9 @@
       "xfail_reason": "Design gap: sql_runs has no active-run uniqueness constraint for duplicate run_key inserts."
     },
     {
-      "case_id": "DBOPS-TC-139",
+      "case_id": "DBABRAIN-TC-139",
       "nodeid": "tests/test_sql_task_claims.py::test_lock_expiration_allows_reclaim_after_ttl",
-      "file": "tools/db_ops/tests/test_sql_task_claims.py",
+      "file": "tools/dbabrain/tests/test_sql_task_claims.py",
       "component": "sql_task_claims",
       "test_name": "test_lock_expiration_allows_reclaim_after_ttl",
       "parameters": null,
@@ -2141,9 +2141,9 @@
       "xfail_reason": "Design gap: no claim_sql_run API or TTL lease expiration exists."
     },
     {
-      "case_id": "DBOPS-TC-140",
+      "case_id": "DBABRAIN-TC-140",
       "nodeid": "tests/test_sql_task_claims.py::test_heartbeat_prevents_lock_steal",
-      "file": "tools/db_ops/tests/test_sql_task_claims.py",
+      "file": "tools/dbabrain/tests/test_sql_task_claims.py",
       "component": "sql_task_claims",
       "test_name": "test_heartbeat_prevents_lock_steal",
       "parameters": null,
@@ -2159,9 +2159,9 @@
       "xfail_reason": "Design gap: no heartbeat_sql_run API exists to protect active leases from stealing."
     },
     {
-      "case_id": "DBOPS-TC-141",
+      "case_id": "DBABRAIN-TC-141",
       "nodeid": "tests/test_sql_task_claims.py::test_stale_running_sql_run_is_marked_error_before_retry",
-      "file": "tools/db_ops/tests/test_sql_task_claims.py",
+      "file": "tools/dbabrain/tests/test_sql_task_claims.py",
       "component": "sql_task_claims",
       "test_name": "test_stale_running_sql_run_is_marked_error_before_retry",
       "parameters": null,
@@ -2174,9 +2174,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-142",
+      "case_id": "DBABRAIN-TC-142",
       "nodeid": "tests/test_sql_task_claims.py::test_array_script_failure_stops_later_script_and_records_failed_file",
-      "file": "tools/db_ops/tests/test_sql_task_claims.py",
+      "file": "tools/dbabrain/tests/test_sql_task_claims.py",
       "component": "sql_task_claims",
       "test_name": "test_array_script_failure_stops_later_script_and_records_failed_file",
       "parameters": null,
@@ -2189,9 +2189,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-143",
+      "case_id": "DBABRAIN-TC-143",
       "nodeid": "tests/test_sql_tasks_runner.py::test_execute_cursor_batches_reads_later_result_sets",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_execute_cursor_batches_reads_later_result_sets",
       "parameters": null,
@@ -2204,9 +2204,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-144",
+      "case_id": "DBABRAIN-TC-144",
       "nodeid": "tests/test_sql_tasks_runner.py::test_parse_run_sql_id_force_command",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_parse_run_sql_id_force_command",
       "parameters": null,
@@ -2219,9 +2219,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-145",
+      "case_id": "DBABRAIN-TC-145",
       "nodeid": "tests/test_sql_tasks_runner.py::test_run_sql_id_force_selects_inactive_targets",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_run_sql_id_force_selects_inactive_targets",
       "parameters": null,
@@ -2234,9 +2234,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-146",
+      "case_id": "DBABRAIN-TC-146",
       "nodeid": "tests/test_sql_tasks_runner.py::test_single_script_execution",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_single_script_execution",
       "parameters": null,
@@ -2249,9 +2249,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-147",
+      "case_id": "DBABRAIN-TC-147",
       "nodeid": "tests/test_sql_tasks_runner.py::test_sql_target_database_name_is_loaded",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_sql_target_database_name_is_loaded",
       "parameters": null,
@@ -2264,9 +2264,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-148",
+      "case_id": "DBABRAIN-TC-148",
       "nodeid": "tests/test_sql_tasks_runner.py::test_sqlserver_execution_uses_target_database_name",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_sqlserver_execution_uses_target_database_name",
       "parameters": null,
@@ -2279,9 +2279,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-149",
+      "case_id": "DBABRAIN-TC-149",
       "nodeid": "tests/test_sql_tasks_runner.py::test_find_database_inventory_respects_target_database_name",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_find_database_inventory_respects_target_database_name",
       "parameters": null,
@@ -2294,9 +2294,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-150",
+      "case_id": "DBABRAIN-TC-150",
       "nodeid": "tests/test_sql_tasks_runner.py::test_array_script_execution_uses_configured_order",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_array_script_execution_uses_configured_order",
       "parameters": null,
@@ -2309,9 +2309,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-151",
+      "case_id": "DBABRAIN-TC-151",
       "nodeid": "tests/test_sql_tasks_runner.py::test_folder_execution_sorts_by_filename",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_folder_execution_sorts_by_filename",
       "parameters": null,
@@ -2324,9 +2324,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-152",
+      "case_id": "DBABRAIN-TC-152",
       "nodeid": "tests/test_sql_tasks_runner.py::test_run_sql_id_dry_run_prints_folder_file_order",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_run_sql_id_dry_run_prints_folder_file_order",
       "parameters": null,
@@ -2339,9 +2339,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-153",
+      "case_id": "DBABRAIN-TC-153",
       "nodeid": "tests/test_sql_tasks_runner.py::test_invalid_script_configuration_handling",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_invalid_script_configuration_handling",
       "parameters": null,
@@ -2354,9 +2354,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-154",
+      "case_id": "DBABRAIN-TC-154",
       "nodeid": "tests/test_sql_tasks_runner.py::test_empty_folder_configuration_handling",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_empty_folder_configuration_handling",
       "parameters": null,
@@ -2369,9 +2369,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-155",
+      "case_id": "DBABRAIN-TC-155",
       "nodeid": "tests/test_sql_tasks_runner.py::test_run_sql_id_requires_force",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_run_sql_id_requires_force",
       "parameters": null,
@@ -2384,9 +2384,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-156",
+      "case_id": "DBABRAIN-TC-156",
       "nodeid": "tests/test_sql_tasks_runner.py::test_sql_task_log_uses_neutral_task_identity",
-      "file": "tools/db_ops/tests/test_sql_tasks_runner.py",
+      "file": "tools/dbabrain/tests/test_sql_tasks_runner.py",
       "component": "sql_tasks_runner",
       "test_name": "test_sql_task_log_uses_neutral_task_identity",
       "parameters": null,
@@ -2399,9 +2399,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-157",
+      "case_id": "DBABRAIN-TC-157",
       "nodeid": "tests/test_target_flags.py::test_target_flags_default_from_enabled_only",
-      "file": "tools/db_ops/tests/test_target_flags.py",
+      "file": "tools/dbabrain/tests/test_target_flags.py",
       "component": "target_flags",
       "test_name": "test_target_flags_default_from_enabled_only",
       "parameters": null,
@@ -2414,9 +2414,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-158",
+      "case_id": "DBABRAIN-TC-158",
       "nodeid": "tests/test_target_flags.py::test_metrics_enabled_false_cascades_to_reports_and_alerts_when_missing",
-      "file": "tools/db_ops/tests/test_target_flags.py",
+      "file": "tools/dbabrain/tests/test_target_flags.py",
       "component": "target_flags",
       "test_name": "test_metrics_enabled_false_cascades_to_reports_and_alerts_when_missing",
       "parameters": null,
@@ -2429,9 +2429,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-159",
+      "case_id": "DBABRAIN-TC-159",
       "nodeid": "tests/test_target_flags.py::test_reports_and_alerts_can_be_disabled_independently",
-      "file": "tools/db_ops/tests/test_target_flags.py",
+      "file": "tools/dbabrain/tests/test_target_flags.py",
       "component": "target_flags",
       "test_name": "test_reports_and_alerts_can_be_disabled_independently",
       "parameters": null,
@@ -2444,9 +2444,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-160",
+      "case_id": "DBABRAIN-TC-160",
       "nodeid": "tests/test_target_flags.py::test_reports_enabled_can_override_metrics_disabled",
-      "file": "tools/db_ops/tests/test_target_flags.py",
+      "file": "tools/dbabrain/tests/test_target_flags.py",
       "component": "target_flags",
       "test_name": "test_reports_enabled_can_override_metrics_disabled",
       "parameters": null,
@@ -2459,9 +2459,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-161",
+      "case_id": "DBABRAIN-TC-161",
       "nodeid": "tests/test_telegram_command_permissions.py::test_private_command_permission_denied_queues_reply",
-      "file": "tools/db_ops/tests/test_telegram_command_permissions.py",
+      "file": "tools/dbabrain/tests/test_telegram_command_permissions.py",
       "component": "telegram_command_permissions",
       "test_name": "test_private_command_permission_denied_queues_reply",
       "parameters": null,
@@ -2474,9 +2474,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-162",
+      "case_id": "DBABRAIN-TC-162",
       "nodeid": "tests/test_telegram_command_permissions.py::test_group_command_permission_denied_queues_reply_when_group_not_allowed",
-      "file": "tools/db_ops/tests/test_telegram_command_permissions.py",
+      "file": "tools/dbabrain/tests/test_telegram_command_permissions.py",
       "component": "telegram_command_permissions",
       "test_name": "test_group_command_permission_denied_queues_reply_when_group_not_allowed",
       "parameters": null,
@@ -2489,9 +2489,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-163",
+      "case_id": "DBABRAIN-TC-163",
       "nodeid": "tests/test_telegram_report_commands.py::test_report_force_hourly_missing_ip_returns_usage_message",
-      "file": "tools/db_ops/tests/test_telegram_report_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_report_commands.py",
       "component": "telegram_report_commands",
       "test_name": "test_report_force_hourly_missing_ip_returns_usage_message",
       "parameters": null,
@@ -2504,9 +2504,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-164",
+      "case_id": "DBABRAIN-TC-164",
       "nodeid": "tests/test_telegram_report_commands.py::test_report_force_hourly_invalid_ip_returns_validation_error",
-      "file": "tools/db_ops/tests/test_telegram_report_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_report_commands.py",
       "component": "telegram_report_commands",
       "test_name": "test_report_force_hourly_invalid_ip_returns_validation_error",
       "parameters": null,
@@ -2519,9 +2519,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-165",
+      "case_id": "DBABRAIN-TC-165",
       "nodeid": "tests/test_telegram_report_commands.py::test_report_force_hourly_cli_command_is_built_from_config_defaults",
-      "file": "tools/db_ops/tests/test_telegram_report_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_report_commands.py",
       "component": "telegram_report_commands",
       "test_name": "test_report_force_hourly_cli_command_is_built_from_config_defaults",
       "parameters": null,
@@ -2534,9 +2534,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-166",
+      "case_id": "DBABRAIN-TC-166",
       "nodeid": "tests/test_telegram_report_commands.py::test_report_force_hourly_unauthorized_user_cannot_execute",
-      "file": "tools/db_ops/tests/test_telegram_report_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_report_commands.py",
       "component": "telegram_report_commands",
       "test_name": "test_report_force_hourly_unauthorized_user_cannot_execute",
       "parameters": null,
@@ -2549,9 +2549,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-167",
+      "case_id": "DBABRAIN-TC-167",
       "nodeid": "tests/test_telegram_report_commands.py::test_report_force_hourly_failure_returns_safe_failure_message",
-      "file": "tools/db_ops/tests/test_telegram_report_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_report_commands.py",
       "component": "telegram_report_commands",
       "test_name": "test_report_force_hourly_failure_returns_safe_failure_message",
       "parameters": null,
@@ -2564,9 +2564,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-168",
+      "case_id": "DBABRAIN-TC-168",
       "nodeid": "tests/test_telegram_report_commands.py::test_cli_execute_masks_sensitive_values_in_metadata",
-      "file": "tools/db_ops/tests/test_telegram_report_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_report_commands.py",
       "component": "telegram_report_commands",
       "test_name": "test_cli_execute_masks_sensitive_values_in_metadata",
       "parameters": null,
@@ -2579,9 +2579,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-169",
+      "case_id": "DBABRAIN-TC-169",
       "nodeid": "tests/test_telegram_report_commands.py::test_report_force_hourly_action_type_is_not_hard_coded",
-      "file": "tools/db_ops/tests/test_telegram_report_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_report_commands.py",
       "component": "telegram_report_commands",
       "test_name": "test_report_force_hourly_action_type_is_not_hard_coded",
       "parameters": null,
@@ -2594,9 +2594,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-170",
+      "case_id": "DBABRAIN-TC-170",
       "nodeid": "tests/test_telegram_unknown_commands.py::test_valid_status_command_queues_existing_reply",
-      "file": "tools/db_ops/tests/test_telegram_unknown_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_unknown_commands.py",
       "component": "telegram_unknown_commands",
       "test_name": "test_valid_status_command_queues_existing_reply",
       "parameters": null,
@@ -2609,9 +2609,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-171",
+      "case_id": "DBABRAIN-TC-171",
       "nodeid": "tests/test_telegram_unknown_commands.py::test_valid_status_command_with_bot_suffix_queues_existing_reply",
-      "file": "tools/db_ops/tests/test_telegram_unknown_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_unknown_commands.py",
       "component": "telegram_unknown_commands",
       "test_name": "test_valid_status_command_with_bot_suffix_queues_existing_reply",
       "parameters": null,
@@ -2624,9 +2624,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-172",
+      "case_id": "DBABRAIN-TC-172",
       "nodeid": "tests/test_telegram_unknown_commands.py::test_unknown_spbot_command_queues_validation_reply",
-      "file": "tools/db_ops/tests/test_telegram_unknown_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_unknown_commands.py",
       "component": "telegram_unknown_commands",
       "test_name": "test_unknown_spbot_command_queues_validation_reply",
       "parameters": null,
@@ -2639,9 +2639,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-173",
+      "case_id": "DBABRAIN-TC-173",
       "nodeid": "tests/test_telegram_unknown_commands.py::test_unknown_spbot_command_with_bot_suffix_queues_validation_reply",
-      "file": "tools/db_ops/tests/test_telegram_unknown_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_unknown_commands.py",
       "component": "telegram_unknown_commands",
       "test_name": "test_unknown_spbot_command_with_bot_suffix_queues_validation_reply",
       "parameters": null,
@@ -2654,9 +2654,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-174",
+      "case_id": "DBABRAIN-TC-174",
       "nodeid": "tests/test_telegram_unknown_commands.py::test_normal_text_still_does_not_enter_support_command_flow",
-      "file": "tools/db_ops/tests/test_telegram_unknown_commands.py",
+      "file": "tools/dbabrain/tests/test_telegram_unknown_commands.py",
       "component": "telegram_unknown_commands",
       "test_name": "test_normal_text_still_does_not_enter_support_command_flow",
       "parameters": null,
@@ -2669,9 +2669,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-175",
+      "case_id": "DBABRAIN-TC-175",
       "nodeid": "tests/test_telegram_updates.py::test_save_updates_adds_new_chat_members_to_users_json",
-      "file": "tools/db_ops/tests/test_telegram_updates.py",
+      "file": "tools/dbabrain/tests/test_telegram_updates.py",
       "component": "telegram_updates",
       "test_name": "test_save_updates_adds_new_chat_members_to_users_json",
       "parameters": null,
@@ -2684,9 +2684,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-176",
+      "case_id": "DBABRAIN-TC-176",
       "nodeid": "tests/test_time_window_config.py::test_new_time_window_config_parses_schedule_and_timeout",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_new_time_window_config_parses_schedule_and_timeout",
       "parameters": null,
@@ -2699,9 +2699,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-177",
+      "case_id": "DBABRAIN-TC-177",
       "nodeid": "tests/test_time_window_config.py::test_old_time_window_config_is_supported_with_warnings",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_old_time_window_config_is_supported_with_warnings",
       "parameters": null,
@@ -2714,9 +2714,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-178",
+      "case_id": "DBABRAIN-TC-178",
       "nodeid": "tests/test_time_window_config.py::test_new_time_window_fields_take_priority_over_old_fields",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_new_time_window_fields_take_priority_over_old_fields",
       "parameters": null,
@@ -2729,9 +2729,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-179",
+      "case_id": "DBABRAIN-TC-179",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_allow_loose_positive_values",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_allow_loose_positive_values",
       "parameters": null,
@@ -2744,9 +2744,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-180",
+      "case_id": "DBABRAIN-TC-180",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_allow_from_greater_than_to",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_allow_from_greater_than_to",
       "parameters": null,
@@ -2759,9 +2759,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-181",
+      "case_id": "DBABRAIN-TC-181",
       "nodeid": "tests/test_time_window_config.py::test_time_window_checks_only_from_when_to_is_missing",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_checks_only_from_when_to_is_missing",
       "parameters": null,
@@ -2774,9 +2774,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-182",
+      "case_id": "DBABRAIN-TC-182",
       "nodeid": "tests/test_time_window_config.py::test_time_window_checks_only_to_when_from_is_missing",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_checks_only_to_when_from_is_missing",
       "parameters": null,
@@ -2789,9 +2789,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-183",
+      "case_id": "DBABRAIN-TC-183",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[from_year]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "from_year",
@@ -2804,9 +2804,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-184",
+      "case_id": "DBABRAIN-TC-184",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[to_year]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "to_year",
@@ -2819,9 +2819,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-185",
+      "case_id": "DBABRAIN-TC-185",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[from_month]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "from_month",
@@ -2834,9 +2834,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-186",
+      "case_id": "DBABRAIN-TC-186",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[to_month]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "to_month",
@@ -2849,9 +2849,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-187",
+      "case_id": "DBABRAIN-TC-187",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[from_day]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "from_day",
@@ -2864,9 +2864,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-188",
+      "case_id": "DBABRAIN-TC-188",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[to_day]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "to_day",
@@ -2879,9 +2879,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-189",
+      "case_id": "DBABRAIN-TC-189",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[from_hour]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "from_hour",
@@ -2894,9 +2894,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-190",
+      "case_id": "DBABRAIN-TC-190",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[to_hour]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "to_hour",
@@ -2909,9 +2909,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-191",
+      "case_id": "DBABRAIN-TC-191",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[from_minute]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "from_minute",
@@ -2924,9 +2924,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-192",
+      "case_id": "DBABRAIN-TC-192",
       "nodeid": "tests/test_time_window_config.py::test_time_window_bounds_must_not_be_negative[to_minute]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_time_window_bounds_must_not_be_negative",
       "parameters": "to_minute",
@@ -2939,9 +2939,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-193",
+      "case_id": "DBABRAIN-TC-193",
       "nodeid": "tests/test_time_window_config.py::test_repeat_interval_and_timeout_must_be_positive[repeat_interval]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_repeat_interval_and_timeout_must_be_positive",
       "parameters": "repeat_interval",
@@ -2954,9 +2954,9 @@
       "expected_status": "pass"
     },
     {
-      "case_id": "DBOPS-TC-194",
+      "case_id": "DBABRAIN-TC-194",
       "nodeid": "tests/test_time_window_config.py::test_repeat_interval_and_timeout_must_be_positive[timeout]",
-      "file": "tools/db_ops/tests/test_time_window_config.py",
+      "file": "tools/dbabrain/tests/test_time_window_config.py",
       "component": "time_window_config",
       "test_name": "test_repeat_interval_and_timeout_must_be_positive",
       "parameters": "timeout",
@@ -3097,8 +3097,8 @@
   "known_missing_tests": [
     {
       "area": "CI/CD pipeline invocation",
-      "reason": "No repository CI workflow was found that automatically runs the DB Ops pytest suite.",
-      "suggested_test": "Add pipeline job that runs .venv\\Scripts\\python.exe -m pytest tools/db_ops/tests."
+      "reason": "No repository CI workflow was found that automatically runs the dbabrain pytest suite.",
+      "suggested_test": "Add pipeline job that runs .venv\\Scripts\\python.exe -m pytest tools/dbabrain/tests."
     },
     {
       "area": "durable app command lock implementation",
@@ -3181,7 +3181,7 @@
     "tests/test_runtime_scope.py::test_nested_scope_all_running_blocks_single_target": "Design gap: due_sql_tasks checks exact run_key only, not nested/broader running scopes."
   },
   "notes": [
-    "STALENESS: `cases` is a curated, hand-annotated subset (194 entries) captured while db_ops still lived at tools/db_ops inside dba-runbooks. Its per-case `file` paths carry that old prefix. `total_cases` and `collected_files` are the CURRENT full collection, refreshed 2026-08-06; the two numbers are meant to differ.",
+    "STALENESS: `cases` is a curated, hand-annotated subset (194 entries) captured while dbabrain still lived at tools/dbabrain inside dba-runbooks. Its per-case `file` paths carry that old prefix. `total_cases` and `collected_files` are the CURRENT full collection, refreshed 2026-08-06; the two numbers are meant to differ.",
     "The business_capability / production_risk_covered annotations are written by hand, so this file is not regenerated wholesale from --collect-only. Extend `cases` when a new test covers a production risk that no listed case covers; the suite itself is the authority on what runs.",
     "Design-gap tests are marked pytest.mark.xfail(strict=True), so the regression suite stays green while preserving explicit coverage for missing durable lock/scope design.",
     "Do not make xfail tests pass by weakening assertions; make them pass by implementing the documented production design."

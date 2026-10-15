@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore import restore_script
+from dbabrain.backup_restore import restore_script
 
 LAB = "198.51.100.252"
 

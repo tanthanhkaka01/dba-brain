@@ -1,10 +1,10 @@
 import re
 from datetime import datetime, timedelta, timezone
 
-from db_ops.db import DbOpsStore
-from db_ops.metrics.models import MetricResult, MetricTarget
-from db_ops.metrics.storage import MetricStore
-from db_ops.reports.metrics_reports import (
+from dbabrain.db import DbaBrainStore
+from dbabrain.metrics.models import MetricResult, MetricTarget
+from dbabrain.metrics.storage import MetricStore
+from dbabrain.reports.metrics_reports import (
     TELEGRAM_SAFE_TEXT_LENGTH,
     create_metric_report_for_level,
     push_report_alerts,
@@ -110,7 +110,7 @@ def test_warning_events_count_is_preserved_across_telegram_message_split(tmp_pat
             for i in range(60)
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
 
     create_result = create_metric_report_for_level(
         sqlite_path=sqlite_path,
@@ -119,7 +119,7 @@ def test_warning_events_count_is_preserved_across_telegram_message_split(tmp_pat
         freshness_seconds=600,
         unreported_only=False,
     )
-    report = DbOpsStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
+    report = DbaBrainStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
     report_text = report["report_text"]
     raw, events = _event_counts(report_text)
 
@@ -156,7 +156,7 @@ def test_push_report_alerts_preserves_warning_event_count_across_queued_parts(tm
             for i in range(60)
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
 
     created = create_metric_report_for_level(
         sqlite_path=sqlite_path,
@@ -165,7 +165,7 @@ def test_push_report_alerts_preserves_warning_event_count_across_queued_parts(tm
         freshness_seconds=600,
         unreported_only=False,
     )
-    report = DbOpsStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
+    report = DbaBrainStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
     _, events = _event_counts(report["report_text"])
 
     push_result = push_report_alerts(
@@ -174,7 +174,7 @@ def test_push_report_alerts_preserves_warning_event_count_across_queued_parts(tm
         report_ids=created["report_ids"],
         dedupe_seconds=0,
     )
-    queued = DbOpsStore(sqlite_path).fetch_pending_telegram_send_messages(limit=20)
+    queued = DbaBrainStore(sqlite_path).fetch_pending_telegram_send_messages(limit=20)
 
     assert push_result["queued"] == len(queued)
     assert len(queued) > 1

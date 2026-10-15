@@ -1,4 +1,4 @@
-"""Tests for data/store_config.json — the declaration of which database db_ops stores
+"""Tests for data/store_config.json — the declaration of which database dbabrain stores
 its own runtime data in (SQLite or PostgreSQL) and the full connection details for it."""
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import db_ops.lib.config as config_module
-from db_ops.lib.config import (
+import dbabrain.lib.config as config_module
+from dbabrain.lib.config import (
     DEFAULT_STORE_CONFIG_FILE,
     POSTGRESQL_BACKEND,
     SQLITE_BACKEND,
@@ -78,8 +78,8 @@ def test_sqlite_path_comes_from_the_store_file(tmp_path):
 def test_relative_store_path_resolves_against_the_tool_root_not_data(tmp_path):
     """The store file lives in data/, so a relative path there must not land in data/runtime —
     the same trap _resolve_path_setting documents for configs that sit below the tool root."""
-    root = _tree(tmp_path, {"backend": "sqlite", "sqlite": {"path": "runtime/db_ops.sqlite"}})
-    assert _load_at(root).sqlite_path == (root / "runtime" / "db_ops.sqlite").resolve()
+    root = _tree(tmp_path, {"backend": "sqlite", "sqlite": {"path": "runtime/dbabrain.sqlite"}})
+    assert _load_at(root).sqlite_path == (root / "runtime" / "dbabrain.sqlite").resolve()
 
 
 def test_connection_string_wins_over_path_so_the_file_cannot_state_two_places(tmp_path):
@@ -97,7 +97,7 @@ def test_connection_string_wins_over_path_so_the_file_cannot_state_two_places(tm
 
 
 def test_absolute_sqlite_url_stays_absolute(tmp_path):
-    target = (tmp_path / "elsewhere" / "db_ops.sqlite").resolve()
+    target = (tmp_path / "elsewhere" / "dbabrain.sqlite").resolve()
     root = _tree(
         tmp_path,
         {"backend": "sqlite", "sqlite": {"connection_string": f"sqlite:///{target.as_posix()}"}},
@@ -160,7 +160,7 @@ def test_no_store_file_falls_back_to_legacy_sqlite_path(tmp_path):
 
 def test_no_store_file_and_no_key_uses_the_tool_default(tmp_path):
     root = _tree(tmp_path, None, {"app_name": "t"})
-    assert _load_at(root).sqlite_path == (root / "runtime" / "db_ops.sqlite").resolve()
+    assert _load_at(root).sqlite_path == (root / "runtime" / "dbabrain.sqlite").resolve()
 
 
 def test_env_var_points_at_another_store_file(tmp_path, monkeypatch):
@@ -197,14 +197,14 @@ def test_postgresql_backend_loads_and_is_selected(tmp_path):
 
     This used to raise "SQLite-only": the store classes spoke SQLite only, so the config layer
     refused the flip rather than let the app write to the SQLite file while claiming PostgreSQL.
-    They run on either backend now (see db_ops.db.backend), so the declaration must load.
+    They run on either backend now (see dbabrain.db.backend), so the declaration must load.
     """
     root = _tree(
         tmp_path,
         {
             "backend": "postgresql",
             "postgresql": {"host": "10.0.0.1", "port": 5433, "database": "db_ops",
-                           "username": "db_ops", "password_ref": "REF"},
+                           "username": "dbabrain", "password_ref": "REF"},
         },
     )
     store = _load_at(root).store
@@ -241,7 +241,7 @@ def test_unknown_backend_is_refused(tmp_path):
 def test_password_is_substituted_from_the_secret_store(tmp_path):
     """The file holds a password_ref and a {password} placeholder; the resolved string is the
     only place the secret appears."""
-    from db_ops.lib import secret_text
+    from dbabrain.lib import secret_text
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -251,7 +251,7 @@ def test_password_is_substituted_from_the_secret_store(tmp_path):
     )
 
     postgres = PostgresStoreConfig(
-        host="10.0.0.1", port=5433, database="db_ops", username="db_ops",
+        host="10.0.0.1", port=5433, database="db_ops", username="dbabrain",
         password_ref="STORE_PW", schema="db_ops", secret_text_dir=data_dir,
     )
     assert "{password}" in postgres.connection_string
@@ -264,7 +264,7 @@ def test_password_is_substituted_from_the_secret_store(tmp_path):
 
 
 def test_missing_password_ref_raises_instead_of_connecting_as_nobody(tmp_path):
-    from db_ops.lib import secret_text
+    from dbabrain.lib import secret_text
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -297,7 +297,7 @@ def test_describe_reports_the_backend_and_never_a_password(tmp_path):
         tmp_path,
         {
             "backend": "sqlite",
-            "sqlite": {"path": "runtime/db_ops.sqlite"},
+            "sqlite": {"path": "runtime/dbabrain.sqlite"},
             "postgresql": {"host": "h", "database": "db_ops", "username": "u",
                            "password_ref": "REF"},
         },

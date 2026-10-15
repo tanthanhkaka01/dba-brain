@@ -12,7 +12,7 @@ has no `config.json` and no `data/`, so a suite that reads them cannot pass ther
 
 `estate` gives a test the smallest inventory it needs, in a temporary directory, and points the
 one reader of the data folder at it. Everything else follows, because
-`db_ops.lib.data_sources` is that single reader — `_resolve_data_dir` reads the module global
+`dbabrain.lib.data_sources` is that single reader — `_resolve_data_dir` reads the module global
 at call time, so redirecting it redirects every loader that funnels through it.
 
     def test_something(estate):
@@ -47,7 +47,7 @@ class Estate:
         # tests/test_app_common_imports.py), so this is the only redirection needed for anything
         # that goes through it. Modules that imported the constant into their own namespace get
         # redirected on request, via `also_redirect`.
-        from db_ops.lib import data_sources
+        from dbabrain.lib import data_sources
 
         monkeypatch.setattr(data_sources, "DEFAULT_DATA_DIR", self.data_dir)
 
@@ -87,7 +87,7 @@ class Estate:
         appear to pass while reading the repository's real folder.
         """
         payload = {
-            "app_name": "db_ops-test",
+            "app_name": "dbabrain-test",
             "log_dir": str(self.root / "logs"),
             "runtime_dir": str(self.root / "runtime"),
             "console_level": "ERROR",
@@ -107,7 +107,7 @@ class Estate:
         `from ... import DEFAULT_DATA_DIR` binds the value once, so patching the definition does
         not reach the copy. Name the copies here rather than leaving a test to fail obscurely:
 
-            estate.also_redirect("db_ops.reports.metrics_reports.DEFAULT_DATA_DIR")
+            estate.also_redirect("dbabrain.reports.metrics_reports.DEFAULT_DATA_DIR")
         """
         for target in targets:
             self._monkeypatch.setattr(target, self.data_dir)
@@ -170,13 +170,13 @@ def write_catalogued_data(data: Path) -> Path:
         {
                 "app_command_id": "APP-BACKUP-RESTORE",
                 "app_code": "APP-BACKUP-RESTORE",
-                "app_name": "db_ops_backup",
+                "app_name": "dbabrain_backup",
                 "display_name": "Run backup then restore workflow",
                 "log_scope": "backup",
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "active": True,
                 "node_role": "worker",
-                "command_text": "python -m db_ops.backup_restore.cli workflow --config config.json",
+                "command_text": "python -m dbabrain.backup_restore.cli workflow --config config.json",
                 "time_window": {
                         "from_hour": 0,
                         "to_hour": 23,
@@ -188,13 +188,13 @@ def write_catalogued_data(data: Path) -> Path:
         {
                 "app_command_id": "APP-CONTROL",
                 "app_code": "APP-CONTROL",
-                "app_name": "db_ops_control",
-                "display_name": "Watch db_ops itself: alert on an app that starts failing, summarise every app hourly",
+                "app_name": "dbabrain_control",
+                "display_name": "Watch dbabrain itself: alert on an app that starts failing, summarise every app hourly",
                 "log_scope": "control",
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "active": True,
                 "node_role": "worker",
-                "command_text": "python -m db_ops.db.cli ops-status '{\"mode\": \"auto\", \"telegram_chat\": \"control\", \"summary_from_hour\": 8, \"summary_to_hour\": 20, \"summary_interval_seconds\": 3600, \"window_hours\": 24}'",
+                "command_text": "python -m dbabrain.db.cli ops-status '{\"mode\": \"auto\", \"telegram_chat\": \"control\", \"summary_from_hour\": 8, \"summary_to_hour\": 20, \"summary_interval_seconds\": 3600, \"window_hours\": 24}'",
                 "time_window": {
                         "from_hour": 0,
                         "to_hour": 23,
@@ -206,13 +206,13 @@ def write_catalogued_data(data: Path) -> Path:
         {
                 "app_command_id": "APP-METRICS",
                 "app_code": "APP-METRICS",
-                "app_name": "db_ops_metrics",
+                "app_name": "dbabrain_metrics",
                 "display_name": "Collect DB metrics",
                 "log_scope": "metrics",
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "active": True,
                 "node_role": "worker",
-                "command_text": "python -m db_ops.metrics.cli --config config.json collect",
+                "command_text": "python -m dbabrain.metrics.cli --config config.json collect",
                 "time_window": {
                         "from_hour": 0,
                         "to_hour": 23,
@@ -224,13 +224,13 @@ def write_catalogued_data(data: Path) -> Path:
         {
                 "app_command_id": "APP-REPORTS-CREATE",
                 "app_code": "APP-REPORTS-CREATE",
-                "app_name": "db_ops_reports",
+                "app_name": "dbabrain_reports",
                 "display_name": "Run scheduled reports",
                 "log_scope": "reports",
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "active": True,
                 "node_role": "worker",
-                "command_text": "python -m db_ops.reports.cli --config config.json run-scheduled --summary-limit 150 --backup-days 7",
+                "command_text": "python -m dbabrain.reports.cli --config config.json run-scheduled --summary-limit 150 --backup-days 7",
                 "time_window": {
                         "from_hour": 0,
                         "to_hour": 23,
@@ -242,13 +242,13 @@ def write_catalogued_data(data: Path) -> Path:
         {
                 "app_command_id": "APP-SLA-VALIDATE",
                 "app_code": "APP-SLA-VALIDATE",
-                "app_name": "db_ops_sla",
+                "app_name": "dbabrain_sla",
                 "display_name": "Validate SLA/SLO compliance",
                 "log_scope": "sla",
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "active": True,
                 "node_role": "worker",
-                "command_text": "python -m db_ops.sla.cli --config config.json validate --format text --notify --publish-web --allow-fail",
+                "command_text": "python -m dbabrain.sla.cli --config config.json validate --format text --notify --publish-web --allow-fail",
                 "time_window": {
                         "from_hour": 0,
                         "to_hour": 23,
@@ -260,13 +260,13 @@ def write_catalogued_data(data: Path) -> Path:
         {
                 "app_command_id": "APP-SQL_TASKS",
                 "app_code": "APP-SQL_TASKS",
-                "app_name": "db_ops_sql_tasks",
+                "app_name": "dbabrain_sql_tasks",
                 "display_name": "Run SQL task scheduler",
                 "log_scope": "sql_tasks",
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "active": True,
                 "node_role": "worker",
-                "command_text": "python -m db_ops.sql_tasks.runner --config config.json",
+                "command_text": "python -m dbabrain.sql_tasks.runner --config config.json",
                 "time_window": {
                         "from_hour": 0,
                         "to_hour": 23,
@@ -278,13 +278,13 @@ def write_catalogued_data(data: Path) -> Path:
         {
                 "app_command_id": "APP-TELEGRAM",
                 "app_code": "APP-TELEGRAM",
-                "app_name": "db_ops_telegram",
+                "app_name": "dbabrain_telegram",
                 "display_name": "Run Telegram workflow",
                 "log_scope": "telegram",
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "active": True,
                 "node_role": "worker",
-                "command_text": "python -m db_ops.telegram.cli --config config.json run-workflow",
+                "command_text": "python -m dbabrain.telegram.cli --config config.json run-workflow",
                 "time_window": {
                         "from_hour": 0,
                         "to_hour": 23,
@@ -296,13 +296,13 @@ def write_catalogued_data(data: Path) -> Path:
         {
                 "app_command_id": "APP-WEBHOST",
                 "app_code": "APP-WEBHOST",
-                "app_name": "db_ops_webhost",
+                "app_name": "dbabrain_webhost",
                 "display_name": "Serve inventory report over HTTP (web host)",
                 "log_scope": "webhost",
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "active": True,
                 "node_role": "worker",
-                "command_text": "python -m db_ops.webhost.cli --config config.json serve --root runtime/reports --mount report_dba --port 8080",
+                "command_text": "python -m dbabrain.webhost.cli --config config.json serve --root runtime/reports --mount report_dba --port 8080",
                 "time_window": {
                         "from_hour": 0,
                         "to_hour": 23,
@@ -340,7 +340,7 @@ def write_catalogued_data(data: Path) -> Path:
          "user_type": 1, "active": True},
     ]})
     write("webhost_config.json", {"schema_version": 1, "web": {
-        "mount": "db_ops", "cookie_name": "db_ops_session", "session_days": 7,
+        "mount": "dbabrain", "cookie_name": "dbabrain_session", "session_days": 7,
         "cookie_secure": False, "cookie_samesite": "Lax", "max_failed_logins": 5,
         "lockout_minutes": 10, "min_level_view": 1, "min_level_edit": 50, "min_level_run": 50,
     }, "apps": [
@@ -349,7 +349,7 @@ def write_catalogued_data(data: Path) -> Path:
                 "ord": 1,
                 "display_name": "Runtime Store",
                 "doc": "docs/01_runtime_store.md",
-                "summary": "The database db_ops keeps its own data in: job runs, metric results, reports, the Telegram queue, and the config mirror.",
+                "summary": "The database dbabrain keeps its own data in: job runs, metric results, reports, the Telegram queue, and the config mirror.",
                 "app_command_ids": []
         },
         {
@@ -441,7 +441,7 @@ def write_catalogued_data(data: Path) -> Path:
                 "ord": 11,
                 "display_name": "Control App",
                 "doc": "docs/11_control_app.md",
-                "summary": "Builds and deploys db_ops to the worker, and watches db_ops itself - the only app that reports on the others.",
+                "summary": "Builds and deploys dbabrain to the worker, and watches dbabrain itself - the only app that reports on the others.",
                 "app_command_ids": [
                         "APP-CONTROL"
                 ]
@@ -671,7 +671,7 @@ def write_sqlserver_instance_policy(data: Path) -> Path:
 
     They used to read `data/sqlserver_instance_policy.json` through `DEFAULT_DATA_DIR`, so they
     could not run without the operator's folder — and the loader refuses to invent a default,
-    deliberately: "db_ops has no built-in answer on purpose".
+    deliberately: "dbabrain has no built-in answer on purpose".
     """
     data.mkdir(parents=True, exist_ok=True)
     path = data / "sqlserver_instance_policy.json"
@@ -693,7 +693,7 @@ def shipped_config(name: str) -> Path:
     and it puts a real obligation on the example: it must contain the definitions the tests name,
     or those tests fail there. That is the right pressure. An example nobody exercises drifts.
     """
-    from db_ops.lib.paths import DEFAULT_DATA_DIR
+    from dbabrain.lib.paths import DEFAULT_DATA_DIR
 
     real = DEFAULT_DATA_DIR / name
     if real.exists():
@@ -734,14 +734,14 @@ def shipped_data_dir() -> Path:
     import shutil
     import tempfile
 
-    from db_ops.lib.paths import DEFAULT_DATA_DIR
+    from dbabrain.lib.paths import DEFAULT_DATA_DIR
 
     real = [path for path in DEFAULT_DATA_DIR.glob("*.json") if ".example." not in path.name]
     if real:
         _SHIPPED_DATA_DIR = DEFAULT_DATA_DIR
         return _SHIPPED_DATA_DIR
 
-    target = Path(tempfile.mkdtemp(prefix="db_ops_shipped_data_"))
+    target = Path(tempfile.mkdtemp(prefix="dbabrain_shipped_data_"))
     for example in DEFAULT_DATA_DIR.glob("*.example.json"):
         shutil.copy(example, target / example.name.replace(".example.json", ".json"))
     _SHIPPED_DATA_DIR = target
@@ -769,13 +769,13 @@ def shipped_tool_root() -> Path:
     import shutil
     import tempfile
 
-    from db_ops.lib.paths import TOOL_ROOT
+    from dbabrain.lib.paths import TOOL_ROOT
 
     if (TOOL_ROOT / "config.json").exists():
         _SHIPPED_TOOL_ROOT = TOOL_ROOT
         return _SHIPPED_TOOL_ROOT
 
-    target = Path(tempfile.mkdtemp(prefix="db_ops_shipped_root_"))
+    target = Path(tempfile.mkdtemp(prefix="dbabrain_shipped_root_"))
     shutil.copy(TOOL_ROOT / "config.example.json", target / "config.json")
     shutil.copytree(shipped_data_dir(), target / "data")
     _SHIPPED_TOOL_ROOT = target
@@ -799,7 +799,7 @@ def shipped_metric_catalog(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     """
     # The catalog and its caches live in server_series since the page was split (2026-10-03);
     # a patch on server_report's re-exported names would reach none of the functions that read them.
-    from db_ops.reports import server_series
+    from dbabrain.reports import server_series
 
     catalog_path = shipped_config("metric_definitions.json")
     assert catalog_path.exists(), f"no shipped metric catalog at {catalog_path}"
@@ -838,7 +838,7 @@ def _notify_vocabulary_is_declared_not_inherited(monkeypatch):
     function where the *mechanism* is the subject, and the rejection path still has teeth: a level
     that is in neither list — `urgent` — is refused exactly as before.
     """
-    from db_ops.lib import notify
+    from dbabrain.lib import notify
 
     monkeypatch.setattr(
         notify,
@@ -855,9 +855,9 @@ def _notify_vocabulary_is_declared_not_inherited(monkeypatch):
 #: checkout belongs to. The same test then passes here and fails in an export with `StopIteration`
 #: or an empty set, naming nothing that would lead you to a missing file.
 DEFAULT_PATHS_TO_REDIRECT: tuple[tuple[str, str], ...] = (
-    ("db_ops.reports.metrics_reports.DEFAULT_METRIC_DEFINITIONS_PATH", "metric_definitions.json"),
-    ("db_ops.reports.push.DEFAULT_REPORTS_CONFIG_PATH", "reports_config.json"),
-    ("db_ops.telegram.command_processor.DEFAULT_COMMANDS_PATH", "telegram_support_commands.json"),
+    ("dbabrain.reports.metrics_reports.DEFAULT_METRIC_DEFINITIONS_PATH", "metric_definitions.json"),
+    ("dbabrain.reports.push.DEFAULT_REPORTS_CONFIG_PATH", "reports_config.json"),
+    ("dbabrain.telegram.command_processor.DEFAULT_COMMANDS_PATH", "telegram_support_commands.json"),
 )
 
 
@@ -871,7 +871,7 @@ def _defaults_read_the_shipped_examples(monkeypatch):
     the same on every checkout.
 
     Redirection is skipped where the attribute does not exist, because the withheld packages are
-    absent from an exported tree and a fixture that fails on `db_ops.reports` would take the whole
+    absent from an exported tree and a fixture that fails on `dbabrain.reports` would take the whole
     suite with it there.
     """
     for target, example in DEFAULT_PATHS_TO_REDIRECT:
@@ -886,7 +886,7 @@ def _defaults_read_the_shipped_examples(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _the_operator_s_passphrase_is_not_in_scope(monkeypatch):
-    """No test may see the real ``DB_OPS_SECRET_KEY``, whatever the shell was exporting.
+    """No test may see the real ``DBABRAIN_SECRET_KEY``, whatever the shell was exporting.
 
     Found by an operator running the suite in the shell they had just used to start the daemon:
     `test_daemon_sets_secret_key_env_for_spawned_restore_command` failed with
@@ -894,7 +894,7 @@ def _the_operator_s_passphrase_is_not_in_scope(monkeypatch):
         assert '<the estate's passphrase, in clear>' == 'secret-phrase'
 
     Two things were wrong and only one of them was the test. The daemon was preferring an
-    inherited key over the `--key-base64` it had been given (fixed in `db_ops.jobs.daemon`), and
+    inherited key over the `--key-base64` it had been given (fixed in `dbabrain.jobs.daemon`), and
     the suite was reading the ambient environment at all — so a run's outcome depended on the
     shell, and a failure **printed the estate's passphrase into the test report**. A CI log is a
     place that keeps things - and so is a docstring: this one quoted that failure verbatim, and the
@@ -904,7 +904,7 @@ def _the_operator_s_passphrase_is_not_in_scope(monkeypatch):
     Cleared for every test rather than for the ones known to look: a test that starts reading it
     tomorrow gets the isolation without anybody remembering to ask for it.
     """
-    monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("DBABRAIN_SECRET_KEY", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -921,7 +921,7 @@ def _the_display_timezone_starts_at_its_default(monkeypatch):
     isolation without anybody knowing it needed it. `monkeypatch` restores the pre-test value on
     teardown, so a test that binds a zone on purpose still cannot leak it.
     """
-    from db_ops.lib import timezone as display_timezone
+    from dbabrain.lib import timezone as display_timezone
 
     monkeypatch.setattr(display_timezone, "_display_declaration", display_timezone.DEFAULT_TIMEZONE)
     monkeypatch.setattr(display_timezone, "_display_zone", display_timezone.resolve(
@@ -959,14 +959,14 @@ def _metric_batch_runs_in_this_process(monkeypatch):
     and a test must break there too. A real-process run is its own test
     (`tests/test_metric_batch_runs_as_its_own_process.py`).
     """
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
 
     real_run = common_cli.run
 
     def run(command, request, **kwargs):
         if command != "metric-batch":
             return real_run(command, request, **kwargs)
-        from db_ops.common import metric_batch
+        from dbabrain.common import metric_batch
 
         return json.loads(json.dumps(metric_batch.run(json.loads(json.dumps(request)))))
 
@@ -981,7 +981,7 @@ def answer_metric_items(monkeypatch, answer):
     For a test about what the app *sends* and what it makes of an answer, where running the item
     - even in-process - would reach for a driver or a host the test has no business touching.
     """
-    from db_ops.metrics import batch
+    from dbabrain.metrics import batch
 
     sent: list[dict[str, Any]] = []
 
@@ -1005,7 +1005,7 @@ def patch_restore(monkeypatch, name: str, value) -> None:
     """Replace ``name`` in every split restore module that binds it."""
     hit = False
     for module_name in RESTORE_MODULES:
-        module = importlib.import_module(f"db_ops.backup_restore.{module_name}")
+        module = importlib.import_module(f"dbabrain.backup_restore.{module_name}")
         if hasattr(module, name):
             monkeypatch.setattr(module, name, value)
             hit = True
@@ -1025,7 +1025,7 @@ def patch_telegram(monkeypatch, name: str, value, raising: bool = True) -> None:
     ``raising=False`` is for a name no module binds yet (a builtin such as ``open``): it is then
     set on every one of them, as ``monkeypatch.setattr(..., raising=False)`` would on the one.
     """
-    modules = [importlib.import_module(f"db_ops.telegram.{m}") for m in TELEGRAM_COMMAND_MODULES]
+    modules = [importlib.import_module(f"dbabrain.telegram.{m}") for m in TELEGRAM_COMMAND_MODULES]
     bound = [module for module in modules if hasattr(module, name)]
     if not bound and not raising:
         bound = modules
@@ -1043,7 +1043,7 @@ def patch_sql_runner(monkeypatch, name: str, value) -> None:
     """Replace ``name`` in every split SQL-task runner module that binds it."""
     hit = False
     for module_name in SQL_RUNNER_MODULES:
-        module = importlib.import_module(f"db_ops.sql_tasks.{module_name}")
+        module = importlib.import_module(f"dbabrain.sql_tasks.{module_name}")
         if hasattr(module, name):
             monkeypatch.setattr(module, name, value)
             hit = True

@@ -18,7 +18,7 @@ values are untouched, and those are what this test is about.
 
 from __future__ import annotations
 
-from db_ops.reports.index_report import _kv, collect_index_rows
+from dbabrain.reports.index_report import _kv, collect_index_rows
 
 FRAGMENTATION_MESSAGE = (
     "db=APPDB_Prod | schema=schedule | table=EmployeeProfileDay "
@@ -71,7 +71,7 @@ def test_the_kind_prefix_is_stripped_and_a_timestamp_is_not_mistaken_for_one():
 def test_the_fragmented_table_shows_the_measurements_rather_than_dashes(monkeypatch):
     """End to end, through the builder: a partitioned row reaches the page with its identity, its
     size and the collector's action — the five columns that were `-` on all 162 rows."""
-    from db_ops.reports import index_report
+    from dbabrain.reports import index_report
 
     rows = [{
         "server_id": "ACME-198-51-100-9", "ip": "198.51.100.9", "db_type": "sqlserver",
@@ -103,7 +103,7 @@ def test_the_fragmented_table_shows_the_measurements_rather_than_dashes(monkeypa
 def test_the_rendered_table_carries_the_size_it_totals():
     """`Total N MB of index to rebuild` is summed from `size_mb`. With the parse broken it summed
     to zero and the line disappeared, so the page could not say how big the job was."""
-    from db_ops.reports.index_report import _fragmented_section
+    from dbabrain.reports.index_report import _fragmented_section
 
     rendered = "\n".join(_fragmented_section(
         [{"item": "APPDB_Prod\\schedule.T.IX_T#p9", "pct": "99.9", "message": FRAGMENTATION_MESSAGE,
@@ -124,7 +124,7 @@ def test_every_field_the_fragmentation_collector_writes_is_one_the_page_can_read
     import re
     from pathlib import Path
 
-    sql = Path("db_ops/metrics/collectors/sqlserver/061_sqlserver_index_fragmentation.sql").read_text(
+    sql = Path("dbabrain/metrics/collectors/sqlserver/061_sqlserver_index_fragmentation.sql").read_text(
         encoding="utf-8")
     # The per-index message only. The summary row below it is a different shape with its own
     # fields (`distinct_indexes`, `total_mb`) that no per-index row carries.

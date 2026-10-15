@@ -26,9 +26,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.lib import process_liveness, run_claim
-from db_ops.sql_tasks import runner
+from dbabrain.db import DbaBrainStore
+from dbabrain.lib import process_liveness, run_claim
+from dbabrain.sql_tasks import runner
 from tests.test_sql_task_claims import FakeLogger, RecordingSqlRunStore, sql_command, sql_target
 
 from conftest import patch_sql_runner
@@ -212,7 +212,7 @@ def test_a_run_by_hand_first_closes_that_task_s_overdue_runs(tmp_path, monkeypat
 # The claim says when its process started
 # --------------------------------------------------------------------------- #
 def test_a_claim_records_when_its_process_started(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     store.insert_sql_run(
         run_key="9|1|server|sqlserver|svc|inst|APPDB", sql_id=9, sql_code="SQLSERVER-009",

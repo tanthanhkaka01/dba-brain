@@ -6,7 +6,7 @@ The SLA/SLO Compliance App turns the metric history already collected by the Met
 
 ## Package / Files
 
-- `db_ops/sla/` — `models.py`, `policies.py`, `compliance.py` (SLI/SLO compute), `storage.py` (`SlaStore`), `publish.py` (Telegram + web), `cli.py`.
+- `dbabrain/sla/` — `models.py`, `policies.py`, `compliance.py` (SLI/SLO compute), `storage.py` (`SlaStore`), `publish.py` (Telegram + web), `cli.py`.
 - `data/sla_policies.json` — policy definitions.
 - the runtime store declared in `data/store_config.json` — reads `metric_results`; writes `sla_runs` / `sla_results`.
 - `runtime/reports/sla.html`, `runtime/reports/index.html` — published web pages (with `--publish-web`).
@@ -58,20 +58,20 @@ sla_policies.json (active) -> per policy: fetch metric_results in scope+window
 
 ```powershell
 # Compute per-instance SLIs, evaluate SLOs, and store the run (default persists):
-python -m db_ops.sla.cli --config config.json validate --format text
+python -m dbabrain.sla.cli --config config.json validate --format text
 
 # Full scheduled form: store + Telegram + web page, never fail the daemon:
-python -m db_ops.sla.cli --config config.json validate --format text --notify --publish-web --allow-fail
+python -m dbabrain.sla.cli --config config.json validate --format text --notify --publish-web --allow-fail
 
 # Compute only, no writes:
-python -m db_ops.sla.cli --config config.json validate --no-store
+python -m dbabrain.sla.cli --config config.json validate --no-store
 
 # Evaluate against a fixed window end (backfill/debug):
-python -m db_ops.sla.cli --config config.json validate --window-end 2026-05-28T04:00:00Z
+python -m dbabrain.sla.cli --config config.json validate --window-end 2026-05-28T04:00:00Z
 
 # Read stored history:
-python -m db_ops.sla.cli --config config.json history --limit 10
-python -m db_ops.sla.cli --config config.json history --run-id 2
+python -m dbabrain.sla.cli --config config.json history --limit 10
+python -m dbabrain.sla.cli --config config.json history --run-id 2
 ```
 
 `validate` flags: `--policies <path>`, `--window-end <iso>`, `--format json|text`, `--no-store`, `--notify`, `--notify-always`, `--publish-web`, `--web-dir <dir>`, `--allow-fail`.
@@ -79,7 +79,7 @@ python -m db_ops.sla.cli --config config.json history --run-id 2
 `data/app_commands.json` runs `APP-SLA-VALIDATE` on the **worker**, hourly (`repeat_interval: 3600`):
 
 ```text
-python -m db_ops.sla.cli --config config.json validate --format text --notify --publish-web --allow-fail
+python -m dbabrain.sla.cli --config config.json validate --format text --notify --publish-web --allow-fail
 ```
 
 ## Delivery Channels
@@ -161,7 +161,7 @@ The body carries the headline movement, the `new failed / recovered / unchanged`
 
 A key that was failing and is simply **absent** from this run is reported as "no longer evaluated", never as recovered — a retired policy must not announce a fix that never happened.
 
-Routed by severity to `config.telegram.groups`: any `FAILED` -> `critical`/`error` group, any `AT_RISK`/`NO_DATA` -> `warning` group, else `logging` group. The message's own emoji reflects the **change** (new failure -> critical, recovery-only -> success), applied centrally by `db_ops/telegram/severity.py`; the producer does not tag. `--notify-always` bypasses all suppression. Requires `config.telegram.enabled = true` and a group for the routed level; otherwise it logs a skip (never errors).
+Routed by severity to `config.telegram.groups`: any `FAILED` -> `critical`/`error` group, any `AT_RISK`/`NO_DATA` -> `warning` group, else `logging` group. The message's own emoji reflects the **change** (new failure -> critical, recovery-only -> success), applied centrally by `dbabrain/telegram/severity.py`; the producer does not tag. `--notify-always` bypasses all suppression. Requires `config.telegram.enabled = true` and a group for the routed level; otherwise it logs a skip (never errors).
 
 **Web (`--publish-web`)** — renders a self-contained themed page to `<runtime>/reports/sla.html` (plus a dated `*_sla-report.html` archive) and refreshes `<runtime>/reports/index.html`, a landing hub linking to the SLA page and the inventory report. Served by the Web host app at `http://<worker>:8080/report_dba/sla.html` and `/report_dba/`. The page is only rewritten when `validate --publish-web` runs (hourly by default), so a browser hard-refresh may be needed to see a new run.
 
@@ -196,7 +196,7 @@ FROM sla_runs ORDER BY sla_run_id DESC LIMIT 10;
 The SLA app resolves its config file using this chain:
 
 1. `--config <path>` CLI argument.
-2. `DB_OPS_SLA_CONFIG` environment variable.
+2. `DBABRAIN_SLA_CONFIG` environment variable.
 3. `config.sla.json` next to `config.json`, or in the current working directory.
 4. `config.json` shared fallback.
 

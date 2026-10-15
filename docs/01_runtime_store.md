@@ -2,11 +2,11 @@
 
 ## Purpose
 
-The Runtime Store is the central state layer for `db_ops`. It stores operational history for app commands, SQL tasks, metrics, reports, Telegram messages, the Telegram send queue, SLA runs and backup restore history.
+The Runtime Store is the central state layer for `dbabrain`. It stores operational history for app commands, SQL tasks, metrics, reports, Telegram messages, the Telegram send queue, SLA runs and backup restore history.
 
-It runs on **PostgreSQL or SQLite**, chosen by one key in `data/store_config.json`. Nothing else in the codebase decides it: the four store classes go through `db_ops/db/backend.py`, and no app opens a database connection of its own.
+It runs on **PostgreSQL or SQLite**, chosen by one key in `data/store_config.json`. Nothing else in the codebase decides it: the four store classes go through `dbabrain/db/backend.py`, and no app opens a database connection of its own.
 
-> This is the store db_ops keeps its **own** data in. The databases db_ops *monitors* are unrelated and live in `data/db_instances.json`.
+> This is the store dbabrain keeps its **own** data in. The databases dbabrain *monitors* are unrelated and live in `data/db_instances.json`.
 
 **SQLite is the right start** — it needs nothing installed, and a first install should not begin by
 provisioning a database for the tool itself. **PostgreSQL is the right answer once the store
@@ -18,18 +18,18 @@ Switching is one word in `data/store_config.json` plus a migration (see [Migrati
 stay in the file afterwards, fully specified, so switching back is not a rediscovery of host, port
 and credentials.
 
-**A leftover `runtime/db_ops.sqlite` after a cutover is a trap.** It still exists, it is no longer
+**A leftover `runtime/dbabrain.sqlite` after a cutover is a trap.** It still exists, it is no longer
 written to, and reading it gives stale answers that look current. Ask a node what it is actually
 writing to rather than inferring from a path:
 
 ```bash
-python -m db_ops.db.cli --config config.json store-info
+python -m dbabrain.db.cli --config config.json store-info
 ```
 
 ### `runtime_nodes` — which clock each node is on
 
 One row per node, keyed by `node_id`, upserted by
-`python -m db_ops.db.cli --config config.json timezone --record` and by the daemon at start-up.
+`python -m dbabrain.db.cli --config config.json timezone --record` and by the daemon at start-up.
 (Without `--record` it reports and writes nothing, and opens no store - `common.cli timezone` did
 that until 0.24.0 and went, one command per job: rules R43.)
 
@@ -71,23 +71,23 @@ other column in the store. See `docs/14_lib.md` §Timezone for why that line mus
 
 | Layer | Rule |
 | --- | --- |
-| `db_ops/db/store.py` — `DbOpsStore` | owns `schema_meta`, `runtime_nodes`, `job_runs`, `sql_runs`, `reports*`, `telegram_*`. Since 2026-10-03 composed of one mixin per table family - `store_job_runs.py` (job runs, runtime nodes, the archive), `store_telegram.py`, `store_reports.py`, `store_sql_runs.py` - with `store_base.py` (run claims, archive columns, `utc_now_text`) and `store_schema.py` (`SCHEMA_SQL` and the migrations); `store.py` keeps the constructor, `initialize` and `connect`, and re-exports every name it used to define |
-| `db_ops/db/metric_store.py` — `MetricStore` | owns `metric_runs`, `metric_results`, `metric_results_archive`, `target_health` |
-| `db_ops/db/sla_store.py` — `SlaStore` | owns `sla_runs`, `sla_results` |
-| `db_ops/db/backup_restore_history.py` — `BackupRestoreHistory` | owns `backup_restore_history` |
+| `dbabrain/db/store.py` — `DbaBrainStore` | owns `schema_meta`, `runtime_nodes`, `job_runs`, `sql_runs`, `reports*`, `telegram_*`. Since 2026-10-03 composed of one mixin per table family - `store_job_runs.py` (job runs, runtime nodes, the archive), `store_telegram.py`, `store_reports.py`, `store_sql_runs.py` - with `store_base.py` (run claims, archive columns, `utc_now_text`) and `store_schema.py` (`SCHEMA_SQL` and the migrations); `store.py` keeps the constructor, `initialize` and `connect`, and re-exports every name it used to define |
+| `dbabrain/db/metric_store.py` — `MetricStore` | owns `metric_runs`, `metric_results`, `metric_results_archive`, `target_health` |
+| `dbabrain/db/sla_store.py` — `SlaStore` | owns `sla_runs`, `sla_results` |
+| `dbabrain/db/backup_restore_history.py` — `BackupRestoreHistory` | owns `backup_restore_history` |
 | every other module | **must not open a connection.** Call a store method. |
 
 **All four now live below the apps.** They did not always: `MetricStore` moved out of `metrics/`, and `SlaStore` and `BackupRestoreHistory` out of their apps on 2026-08-11. A store class inside an app is shared API in a place nothing else may import from, and the cost was concrete — `db/cli.py` composes the schema from all four, so it had to import *up* into `sla` and `backup_restore`, the one standing exception in `tests/test_import_boundaries.py`. Each old path keeps a re-export shim, and no DDL or schema version changed in the move, so a deployed store needed no migration.
 
-That last table row is enforced by convention, and it is worth keeping: four modules used to call `sqlite3.connect()` themselves — `jobs/status.py`, `reports/inventory_health.py`, `reports/server_report.py` and `control/worker_status.py`. Each worked only because the store happened to be SQLite, and together they were four copies of "read `metric_results`" that had already drifted apart. They now call `MetricStore.fetch_freshness()`, `fetch_health_metrics()` and `fetch_server_series()`. The last three raw queries in app code — the backup-health report's evidence rows, its daily guard and the alert dedupe check — became `MetricStore.fetch_results_since()`, `DbOpsStore.report_exists_on_local_date()` and `DbOpsStore.recent_alert_exists()` on the same date. If you need a new read, add a method to the owning store class rather than opening a connection.
+That last table row is enforced by convention, and it is worth keeping: four modules used to call `sqlite3.connect()` themselves — `jobs/status.py`, `reports/inventory_health.py`, `reports/server_report.py` and `control/worker_status.py`. Each worked only because the store happened to be SQLite, and together they were four copies of "read `metric_results`" that had already drifted apart. They now call `MetricStore.fetch_freshness()`, `fetch_health_metrics()` and `fetch_server_series()`. The last three raw queries in app code — the backup-health report's evidence rows, its daily guard and the alert dedupe check — became `MetricStore.fetch_results_since()`, `DbaBrainStore.report_exists_on_local_date()` and `DbaBrainStore.recent_alert_exists()` on the same date. If you need a new read, add a method to the owning store class rather than opening a connection.
 
 To check nothing has regressed:
 
 ```bash
-grep -rn "sqlite3.connect" --include=*.py db_ops/ | grep -v "db_ops/db/"
+grep -rn "sqlite3.connect" --include=*.py dbabrain/ | grep -v "dbabrain/db/"
 ```
 
-That should return nothing. `db_ops/db/backend.py` is the only place a connection is opened; `schema_export.py` and `sqlite_to_postgres.py` are SQLite-specific tools by design.
+That should return nothing. `dbabrain/db/backend.py` is the only place a connection is opened; `schema_export.py` and `sqlite_to_postgres.py` are SQLite-specific tools by design.
 
 ## Backend Declaration
 
@@ -97,17 +97,17 @@ Which database the store uses is declared in one file:
 data/store_config.json
 ```
 
-`backend` is the switch — `sqlite` or `postgresql` — and the section it names carries the full connection details for that backend. `db_ops.lib.config.load_config` parses it into `config.store` (a `StoreConfig`), and `python -m db_ops.jobs.status` reports the resolved backend so a node can be asked what it is actually writing to.
+`backend` is the switch — `sqlite` or `postgresql` — and the section it names carries the full connection details for that backend. `dbabrain.lib.config.load_config` parses it into `config.store` (a `StoreConfig`), and `python -m dbabrain.jobs.status` reports the resolved backend so a node can be asked what it is actually writing to.
 
 | Field | Meaning |
 | --- | --- |
 | `backend` | `sqlite` or `postgresql`. `postgres` is accepted as an alias. |
-| `sqlite.path` | Store file location. Relative paths resolve against the tool root, so `runtime/db_ops.sqlite` means `<tool_root>/runtime/db_ops.sqlite` on every node. |
+| `sqlite.path` | Store file location. Relative paths resolve against the tool root, so `runtime/dbabrain.sqlite` means `<tool_root>/runtime/dbabrain.sqlite` on every node. |
 | `sqlite.connection_string` | `sqlite:///<path>` URL. Authoritative when set — the path is read back out of it, so the file cannot name two destinations. |
 | `postgresql.*` | Host, port, database, schema, username, `password_ref`, sslmode, connect timeout, application name. `sslmode` means what libpq means since 0.26.0 - `require` encrypts, `verify-ca` checks the chain, `verify-full` the chain and the name; `disable`/`allow`/`prefer` (the default) connect without TLS, as every store did before, because the setting never reached pg8000 (review 0.25.0, B5.5). |
 | `postgresql.connection_string` | Full URL with a `{password}` placeholder. Authoritative when set; otherwise built from the fields above. |
 
-No password is ever written to this file. `password_ref` names a key in `data/encrypted_secret_text.json`, decrypted at runtime with `DB_OPS_SECRET_KEY` and substituted into `{password}` by `StoreConfig.resolved_connection_string()`. The `connection_string` property is the password-free form and is what gets logged.
+No password is ever written to this file. `password_ref` names a key in `data/encrypted_secret_text.json`, decrypted at runtime with `DBABRAIN_SECRET_KEY` and substituted into `{password}` by `StoreConfig.resolved_connection_string()`. The `connection_string` property is the password-free form and is what gets logged.
 
 ### Who creates what
 
@@ -116,11 +116,11 @@ install trips over.
 
 | | SQLite | PostgreSQL |
 | --- | --- | --- |
-| The container (file / database + schema) | **db_ops creates it** — the file and its parent folder, on first use | **must already exist** — db_ops creates neither |
-| The 29 tables, indexes and seed rows | db_ops creates them on first use | db_ops creates them on first use |
+| The container (file / database + schema) | **dbabrain creates it** — the file and its parent folder, on first use | **must already exist** — dbabrain creates neither |
+| The 29 tables, indexes and seed rows | dbabrain creates them on first use | dbabrain creates them on first use |
 | A login | none — whoever can read the file | **`username` + `password_ref`, both already in place** |
 
-So on SQLite a path is the whole configuration. On PostgreSQL you point db_ops at a database and a
+So on SQLite a path is the whole configuration. On PostgreSQL you point dbabrain at a database and a
 schema that already exist, and it builds only the tables inside them. `StoreTarget.prepare()` is
 where the asymmetry lives: it makes a directory for SQLite and deliberately does nothing for
 PostgreSQL, because a `mkdir` there would leave a stray `runtime/` folder on every node.
@@ -141,7 +141,7 @@ created for you:
 | --- | --- | --- |
 | `username` | `data/store_config.json` → `postgresql.username` | `28P01 password authentication failed for user "..."` |
 | The password | `data/encrypted_secret_text.json`, under the name `postgresql.password_ref` gives | `Store password ref '...' was not found in the secret text under ...` |
-| The passphrase that decrypts it | `DB_OPS_SECRET_KEY`, or `--key` / `--key-base64` at run time | the same "not found" — a wrong key yields an empty store, not an error |
+| The passphrase that decrypts it | `DBABRAIN_SECRET_KEY`, or `--key` / `--key-base64` at run time | the same "not found" — a wrong key yields an empty store, not an error |
 
 **A missing role and a wrong password look identical** — measured on PostgreSQL 18.6, an unknown
 user gives `28P01 password authentication failed`, not "role does not exist". That is deliberate on
@@ -151,8 +151,8 @@ The password is never written into `store_config.json`. Put it in `secrets/secre
 flat `{"REF": "the password"}` entry, encrypt it, and delete the plaintext:
 
 ```bash
-db-ops encrypt-secret --key-base64 <passphrase, base64>
-python -m db_ops.common.cli check-secret '{"ref": "DB_OPS_STORE_PASSWORD"}'
+dbabrain encrypt-secret --key-base64 <passphrase, base64>
+python -m dbabrain.common.cli check-secret '{"ref": "DBABRAIN_STORE_PASSWORD"}'
 ```
 
 The role also needs rights on the objects it was pointed at — `CONNECT` on the database, and
@@ -169,15 +169,15 @@ idempotent, has `--dry-run`, and refuses a hot standby. Where a DBA provisions t
 schema instead, skip it and run `init` alone:
 
 ```bash
-# only when db_ops may create them itself; otherwise have the DBA do it
-python -m db_ops.db.cli --config config.json create-store-database
+# only when dbabrain may create them itself; otherwise have the DBA do it
+python -m dbabrain.db.cli --config config.json create-store-database
 
 # always: build the tables in whatever database + schema store_config.json names
-python -m db_ops.db.cli --config config.json init
-python -m db_ops.db.cli --config config.json check --counts
+python -m dbabrain.db.cli --config config.json init
+python -m dbabrain.db.cli --config config.json check --counts
 ```
 
-**The schema name is free.** `db_ops` is only what this repository's `store_config.json` happens to
+**The schema name is free.** `dbabrain` is only what this repository's `store_config.json` happens to
 say. Any identifier works and the tables land there rather than in `public` — including the two
 JSON compatibility functions, which is why they are created inside the store's own schema — and a
 blank `schema` means `public`. Measured with `"schema": "brain_ops"` on a fresh database:
@@ -193,7 +193,7 @@ Leaving it blank and letting the fields build the string cannot disagree with it
 
 ### How one codebase speaks both dialects
 
-`db_ops/db/backend.py` is the whole of it. The store classes were written against `sqlite3` — ~69 `with self.connect()` blocks across the four of them, and ~370 `row["column"]` accesses package-wide — so branching at each site was never an option. Instead:
+`dbabrain/db/backend.py` is the whole of it. The store classes were written against `sqlite3` — ~69 `with self.connect()` blocks across the four of them, and ~370 `row["column"]` accesses package-wide — so branching at each site was never an option. Instead:
 
 * **SQLite returns a real `sqlite3.Connection`.** No wrapper, no translation. The default path is byte-for-byte what it always was, so this work cannot regress an existing deployment.
 * **PostgreSQL returns `PostgresConnection`**, which presents the same connection/cursor/row surface on top of pg8000 — the driver already shipped for Postgres metrics, so there is no new dependency.
@@ -226,7 +226,7 @@ What the adapter does translate:
 2. **`schema_meta` version check** — the daemon's app commands are new processes every run, so the memo never helps them. One indexed `SELECT` answers "already built?" instead of running the DDL. Each store owns a version constant (`SCHEMA_VERSION`, `METRIC_SCHEMA_VERSION`, `SLA_SCHEMA_VERSION`, `HISTORY_SCHEMA_VERSION`); bump one when its tables or additive migrations change.
 3. **Session-scoped advisory lock** — serializes the DDL when it does run. It must be *session*-scoped: `pg_advisory_xact_lock` looked right and protected nothing, because `executescript` commits after each script and that commit released the lock mid-initialization.
 
-`python -m db_ops.db.cli init` passes `force=True`, which skips both guards — an explicit "build the schema" request should do the work, and it is the only way to re-run a repair on a store whose recorded version has not changed.
+`python -m dbabrain.db.cli init` passes `force=True`, which skips both guards — an explicit "build the schema" request should do the work, and it is the only way to re-run a repair on a store whose recorded version has not changed.
 
 ### Pitfalls this port hit, and what fixes them
 
@@ -242,13 +242,13 @@ Every one of these was found by running the real thing, not by reading code. The
 | `cannot truncate a table referenced in a foreign key constraint` | Re-running the migration when FKs already exist. | Foreign keys are read from `pg_constraint` and dropped before loading — names cannot be reconstructed, because the store's rebuilds leave PostgreSQL-generated ones like `reports_new_report_type_fkey`. |
 | `timed out` mid-`CREATE INDEX` | pg8000's `timeout` is a **socket** timeout on every operation, so `connect_timeout_seconds` silently became a statement timeout. | The socket returns to blocking once connected. |
 
-**Before switching a node's backend, rehearse it.** Run the store classes and the real app commands against a scratch schema (`DB_OPS_STORE_CONFIG` pointing at a config with a different `schema`), with several processes at once. Every failure above would have surfaced there in minutes instead of on the live worker — that check is what finally made the cutover clean.
+**Before switching a node's backend, rehearse it.** Run the store classes and the real app commands against a scratch schema (`DBABRAIN_STORE_CONFIG` pointing at a config with a different `schema`), with several processes at once. Every failure above would have surfaced there in minutes instead of on the live worker — that check is what finally made the cutover clean.
 
 Windows are compared against a cutoff computed in Python (`metrics.storage.cutoff_text`) rather than with `strftime('…','now','-N days')`. One of those queries passed the `-N days` modifier as a **bound parameter**, which no textual rewrite could have reached.
 
 ### Store CLI
 
-`python -m db_ops.db.cli` owns the PostgreSQL store's provisioning and the migration off SQLite:
+`python -m dbabrain.db.cli` owns the PostgreSQL store's provisioning and the migration off SQLite:
 
 | Command | What it does |
 | --- | --- |
@@ -264,7 +264,7 @@ Windows are compared against a cutoff computed in Python (`metrics.storage.cutof
 `init` and `check` never name a backend — they use whatever `store_config.json` declares, so the same two commands work on both. The same tree, switched only by `backend`, gives the same shape of answer:
 
 ```
-$ python -m db_ops.db.cli --config config.json check --counts     # live, backend: postgresql
+$ python -m dbabrain.db.cli --config config.json check --counts     # live, backend: postgresql
 backend: postgresql
 target : postgresql://postgres:{password}@192.0.2.249:5433/db_ops?...
 tables : 18
@@ -278,16 +278,16 @@ schema_version: 1
   telegram_send_messages        14388
 ```
 
-`check` needs the passphrase (`--key-base64`, or `DB_OPS_SECRET_KEY` in the environment) to
+`check` needs the passphrase (`--key-base64`, or `DBABRAIN_SECRET_KEY` in the environment) to
 resolve `password_ref` — a PostgreSQL backend cannot be inspected without it. `store-info` is the
 read-only exception: it prints the declaration and the password-free connection string.
 
 The provisioning and migration commands read the `postgresql` block even **while `backend` is still `sqlite`**, so you can build and verify the new store before flipping the switch.
 
-`DB_OPS_STORE_CONFIG` points at a different store declaration without editing the shipped file — useful for testing a Postgres target from a workstation:
+`DBABRAIN_STORE_CONFIG` points at a different store declaration without editing the shipped file — useful for testing a Postgres target from a workstation:
 
 ```bash
-DB_OPS_STORE_CONFIG=/tmp/pg_store_config.json python -m db_ops.db.cli check
+DBABRAIN_STORE_CONFIG=/tmp/pg_store_config.json python -m dbabrain.db.cli check
 ```
 
 ### Migrating SQLite to PostgreSQL
@@ -306,14 +306,14 @@ Order is tables → `COPY` → indexes → foreign keys → identity re-base →
 **Run it on the node that owns the SQLite file.** On the worker both databases are local, so drive it through the control app rather than copying 5 GB over the network:
 
 ```bash
-python -m db_ops.control.cli worker-run --key-base64 "<K>" -- \
-    python -m db_ops.db.cli create-store-database --key-base64 "<K>"
+python -m dbabrain.control.cli worker-run --key-base64 "<K>" -- \
+    python -m dbabrain.db.cli create-store-database --key-base64 "<K>"
 
-python -m db_ops.control.cli worker-run --key-base64 "<K>" -- \
-    python -m db_ops.db.cli migrate-sqlite-to-postgres --key-base64 "<K>" --dry-run
+python -m dbabrain.control.cli worker-run --key-base64 "<K>" -- \
+    python -m dbabrain.db.cli migrate-sqlite-to-postgres --key-base64 "<K>" --dry-run
 
-python -m db_ops.control.cli worker-run --key-base64 "<K>" -- \
-    python -m db_ops.db.cli migrate-sqlite-to-postgres --key-base64 "<K>"
+python -m dbabrain.control.cli worker-run --key-base64 "<K>" -- \
+    python -m dbabrain.db.cli migrate-sqlite-to-postgres --key-base64 "<K>"
 ```
 
 Restartability is per table: each table is truncated immediately before it is loaded, so an interrupted run resumes with `--only-tables <names>` without duplicating rows. Add `--skip-indexes` when loading in several passes and run once more without it at the end.
@@ -324,23 +324,23 @@ A migration against the live store is a point-in-time copy — the daemon keeps 
 
 ```bash
 # 1. deploy the current build, so the worker has the store CLI (backend still sqlite)
-python -m db_ops.control.cli deploy --key-base64 "<K>"
+python -m dbabrain.control.cli deploy --key-base64 "<K>"
 
 # 2. stop the daemon so SQLite stops changing
-ssh <worker> 'cd /opt/db_ops && docker compose stop db_ops_daemon'
+ssh <worker> 'cd /opt/db_ops && docker compose stop dbabrain_daemon'
 
 # 3. provision + migrate + verify (run on the worker: both databases are local there)
-python -m db_ops.db.cli create-store-database --key-base64 "<K>"
-python -m db_ops.db.cli migrate-sqlite-to-postgres --key-base64 "<K>"
-python -m db_ops.db.cli verify-migration --key-base64 "<K>"
+python -m dbabrain.db.cli create-store-database --key-base64 "<K>"
+python -m dbabrain.db.cli migrate-sqlite-to-postgres --key-base64 "<K>"
+python -m dbabrain.db.cli verify-migration --key-base64 "<K>"
 
 # 4. point this node at it (never a hand-edit of store_config.json - see use-store below)
-python -m db_ops.db.cli use-store postgresql --dry-run
-python -m db_ops.db.cli use-store postgresql
+python -m dbabrain.db.cli use-store postgresql --dry-run
+python -m dbabrain.db.cli use-store postgresql
 
 # 5. deploy again so the worker gets the changed config, and start the daemon
-python -m db_ops.control.cli deploy --key-base64 "<K>"
-python -m db_ops.db.cli check --counts --key-base64 "<K>"
+python -m dbabrain.control.cli deploy --key-base64 "<K>"
+python -m dbabrain.db.cli check --counts --key-base64 "<K>"
 ```
 
 **`--delta` is what you want for a re-run.** A full copy of this store is ~10 minutes; the delta is ~3. Per table it picks one of three strategies: reload whole (small, or no identity key — exact, and the only way to pick up `UPDATE`s, which nearly every store table receives), append rows above the target's max id plus re-sync the recent window, or — for a table with no identity key, like `metric_results_archive` — delta on its timestamp column. It also **prunes** rows the source no longer has, because `archive_old_results()` trims old rows and an append-only delta would otherwise leave the target *larger* than the source.
@@ -351,25 +351,25 @@ python -m db_ops.db.cli check --counts --key-base64 "<K>"
 
 Both backends are supported, so nothing blocks the flip. Two things to know before doing it:
 
-* `db_ops.jobs.status` and `db_ops.db.cli check` both report the active backend — use them to confirm what a node is actually writing to, rather than inferring it from a path. (`db_ops.jobs.cli` is the daemon runner and has no subcommands; the status report is its own module.)
+* `dbabrain.jobs.status` and `dbabrain.db.cli check` both report the active backend — use them to confirm what a node is actually writing to, rather than inferring it from a path. (`dbabrain.jobs.cli` is the daemon runner and has no subcommands; the status report is its own module.)
 * The worker's image must contain the store CLI. An image predating it cannot report its own status, and `control worker-status` now says so and exits rather than falling back to a second, divergent SQLite query with a hardcoded path.
 
 ### Path Resolution Priority
 
 1. `sqlite_path` set explicitly in the config being loaded — still supported, still what the standalone-EXE layouts use, and it overrides the store file.
 2. An inline `store` block in the main config, merged key-by-key over the file.
-3. `data/store_config.json` (or `store_config_file` / `DB_OPS_STORE_CONFIG` when they point elsewhere).
-4. The tool default, `<tool_root>/runtime/db_ops.sqlite`.
+3. `data/store_config.json` (or `store_config_file` / `DBABRAIN_STORE_CONFIG` when they point elsewhere).
+4. The tool default, `<tool_root>/runtime/dbabrain.sqlite`.
 
 Every app keeps reading `config.sqlite_path`; that value is now derived from the store declaration, so the two can never point at different files.
 
 ## Schema Initialization
 
-Most tables are initialized by `DbOpsStore.initialize()` in `db_ops/db/store.py`, from `SCHEMA_SQL` and the migrations in `db_ops/db/store_schema.py`. Metrics also initialize `metric_runs`, `metric_results`, `metric_results_archive` and `target_health` from `db_ops/db/metric_store.py`. Backup restore initializes `backup_restore_history` from `db_ops/db/backup_restore_history.py`. The SLA/SLO app initializes `sla_runs` and `sla_results` from `db_ops/db/sla_store.py`.
+Most tables are initialized by `DbaBrainStore.initialize()` in `dbabrain/db/store.py`, from `SCHEMA_SQL` and the migrations in `dbabrain/db/store_schema.py`. Metrics also initialize `metric_runs`, `metric_results`, `metric_results_archive` and `target_health` from `dbabrain/db/metric_store.py`. Backup restore initializes `backup_restore_history` from `dbabrain/db/backup_restore_history.py`. The SLA/SLO app initializes `sla_runs` and `sla_results` from `dbabrain/db/sla_store.py`.
 
-The config mirror initializes `config_sources`, `config_collections`, `config_items` and `config_item_revisions` from `db_ops/db/config_store.py`. The web console initializes `web_users`, `web_sessions` and `web_login_attempts` from `db_ops/db/web_auth_store.py`, and the run queue initializes `app_command_requests` from `db_ops/db/run_requests.py`.
+The config mirror initializes `config_sources`, `config_collections`, `config_items` and `config_item_revisions` from `dbabrain/db/config_store.py`. The web console initializes `web_users`, `web_sessions` and `web_login_attempts` from `dbabrain/db/web_auth_store.py`, and the run queue initializes `app_command_requests` from `dbabrain/db/run_requests.py`.
 
-`python -m db_ops.db.cli init` runs all seven against the active backend, which is the easiest way to create a store from scratch.
+`python -m dbabrain.db.cli init` runs all seven against the active backend, which is the easiest way to create a store from scratch.
 
 **Before the schema script, `prepare_run_claims` makes an existing store fit to carry the two claim indexes.** `CREATE TABLE IF NOT EXISTS` will not add a column to a table that already exists, and a unique index cannot be built over data that already violates it: every node killed mid-run left a key holding two `running` rows. So the columns are added, the duplicates are **closed rather than deleted** — the newest row of each key keeps running and the older ones become `timeout`, which is what they always were in fact — and the count is returned so the upgrade can say what it did. On a fresh store it finds no tables and does nothing.
 
@@ -378,11 +378,11 @@ On SQLite the store enables WAL mode, `synchronous=NORMAL`, foreign keys and a b
 Each store class takes either a path or a config:
 
 ```python
-DbOpsStore(config.sqlite_path)        # a path always means SQLite
-DbOpsStore.from_config(config)        # follows data/store_config.json
+DbaBrainStore(config.sqlite_path)        # a path always means SQLite
+DbaBrainStore.from_config(config)        # follows data/store_config.json
 ```
 
-The path form is deliberate: ~20 call sites in `db_ops/` and the whole test suite (~75 together) pass one, and none of them should be able to reach a real PostgreSQL server by accident. Application code should use `from_config`.
+The path form is deliberate: ~20 call sites in `dbabrain/` and the whole test suite (~75 together) pass one, and none of them should be able to reach a real PostgreSQL server by accident. Application code should use `from_config`.
 
 ## Table Ownership by App
 
@@ -430,14 +430,14 @@ PostgreSQL - a key, not an identity, so the migration tool still copies the arch
 timestamp).
 
 A store made before keeps its tables: `CREATE TABLE IF NOT EXISTS` changes nothing that exists.
-**No app adds the key on its own.** On this estate's `db_ops` schema the archive is ~14 million rows
+**No app adds the key on its own.** On this estate's `dbabrain` schema the archive is ~14 million rows
 (7 GB): adding the key reads all of it and holds the table while the index builds, and one
 duplicated id would make it fail - on every start, if an app tried. So it is a command, run when the
 store can take it:
 
 ```bash
-python -m db_ops.db.cli archive-keys                # reads only: rows, missing ids, duplicate ids
-python -m db_ops.db.cli archive-keys --apply        # keys every table the report found clean
+python -m dbabrain.db.cli archive-keys                # reads only: rows, missing ids, duplicate ids
+python -m dbabrain.db.cli archive-keys --apply        # keys every table the report found clean
 ```
 
 Each table answers `keyed` (nothing to do), `ready`, `blocked` (a missing or duplicated id - left
@@ -446,7 +446,7 @@ table stands; a SQLite table is rebuilt from the new declaration and its indexes
 
 ## Core Tables
 
-Key columns, read from the live PostgreSQL store's `information_schema.columns`. (`runtime/db_ops_sqlite_structure.json` is a **SQLite-only, point-in-time** export — see [Schema Export Command](#schema-export-command) — so verify against the active backend, not against that file.)
+Key columns, read from the live PostgreSQL store's `information_schema.columns`. (`runtime/dbabrain_sqlite_structure.json` is a **SQLite-only, point-in-time** export — see [Schema Export Command](#schema-export-command) — so verify against the active backend, not against that file.)
 
 | Table | Key columns |
 | --- | --- |
@@ -494,7 +494,7 @@ High-use indexes include:
 ## Config Mirror (`config_*` tables)
 
 The store holds a copy of `data/*.json`, **record by record**. This is what lets something other
-than a text editor change what db_ops runs: a web UI can list what is configured, edit one record,
+than a text editor change what dbabrain runs: a web UI can list what is configured, edit one record,
 and show who changed it — none of which a JSON file on a worker's disk can answer.
 
 `data/config_catalog.json` declares which files are mirrored, which app owns each, and how one
@@ -520,17 +520,17 @@ it, so the old record still reads exactly as it did when it was retired.
 
 ```bash
 # what would change, writing no config row
-python -m db_ops.db.cli sync-config '{"dry_run": true}'
+python -m dbabrain.db.cli sync-config '{"dry_run": true}'
 
 # mirror everything, recording who did it
-python -m db_ops.db.cli sync-config '{"actor": "thanh"}'
+python -m dbabrain.db.cli sync-config '{"actor": "thanh"}'
 
 # one file, or one app's files
-python -m db_ops.db.cli sync-config '{"files": ["metric_definitions.json"]}'
-python -m db_ops.db.cli sync-config '{"apps": ["telegram"]}'
+python -m dbabrain.db.cli sync-config '{"files": ["metric_definitions.json"]}'
+python -m dbabrain.db.cli sync-config '{"apps": ["telegram"]}'
 
 # read it back (the read side the web UI is built on)
-python -m db_ops.db.cli config-items '{"app_code": "metrics", "payloads": false}'
+python -m dbabrain.db.cli config-items '{"app_code": "metrics", "payloads": false}'
 ```
 
 **A catalogued file this node does not have is named in the headline**, not only counted in
@@ -548,8 +548,8 @@ rebuilt from the store rather than patched, so the two cannot drift apart.
 
 ```bash
 # store -> data/*.json (the console does this on every save)
-python -m db_ops.db.cli export-config '{}'
-python -m db_ops.db.cli export-config '{"files": ["reports_config.json"]}'
+python -m dbabrain.db.cli export-config '{}'
+python -m dbabrain.db.cli export-config '{"files": ["reports_config.json"]}'
 ```
 
 A file is left untouched when its rebuilt text already matches — these files sit on a bind mount
@@ -557,7 +557,7 @@ the deploy compares, and an identical rewrite still shows as an edit nobody made
 knows nothing about is **skipped, never emptied**: no rows means "the sync has not run", never
 "the file should be blank".
 
-Editing goes through `db_ops/db/config_edit.py`, which the console and the CLI both call, so a
+Editing goes through `dbabrain/db/config_edit.py`, which the console and the CLI both call, so a
 record saved from a browser is validated by exactly the rules a record saved from a shell is. It
 refuses: renaming a record in place (that is a delete and an add, and doing half of it silently
 leaves two records under one identity), a key that is already live, a literal secret, and retiring
@@ -570,7 +570,7 @@ worker; `data/` is per node. A record edited in the console lands in the store a
 and stop rather than shipping the old values back. See "The config-drift gate" in
 [11_control_app.md](11_control_app.md).
 
-Both commands take the JSON-object payload every db_ops CLI command takes, and both accept a
+Both commands take the JSON-object payload every dbabrain CLI command takes, and both accept a
 `store` declaration block so a caller can name a store that is not this node's own.
 
 Three things are refused rather than stored, each per file, so one bad file costs one file and not
@@ -578,7 +578,7 @@ the estate:
 
 - **two records on one key** — one would silently overwrite the other;
 - **a literal secret** (`password`, `bot_token`, …) — these rows are queried, rendered and backed
-  up; db_ops names secrets by ref (`password_ref`) and the value belongs in the encrypted store;
+  up; dbabrain names secrets by ref (`password_ref`) and the value belongs in the encrypted store;
 - **a file that is missing** is reported, never applied — deactivating every record of a file that
   is simply not on this node would look exactly like an operator deleting them all.
 
@@ -591,7 +591,7 @@ worker's disk, and "who is signed in" is state.
 Two things are deliberately **not** in these tables:
 
 - **the password** — only a PBKDF2-HMAC-SHA256 encoding of it, at the same 200 000 iterations
-  `data/encrypted_secret_text.json` uses (the constant is imported from `db_ops.lib.secret_text`,
+  `data/encrypted_secret_text.json` uses (the constant is imported from `dbabrain.lib.secret_text`,
   so the tool has one KDF setting and not two);
 - **the session token** — only its SHA-256 fingerprint. Reading `web_sessions` from a backup, a
   replica or a psql prompt does not let anyone log in as anybody.
@@ -606,7 +606,7 @@ path never consults it, so it is a note for a person, not a second way in.
 
 A session expires on its own `expires_at`, applied when it is read, so a stale session stops
 working whether or not any sweeper is running. Accounts are managed from
-`python -m db_ops.webhost.cli user-add | user-level | user-password | user-password-show |
+`python -m dbabrain.webhost.cli user-add | user-level | user-password | user-password-show |
 user-disable | sessions`.
 
 ## Run Requests (`app_command_requests`)
@@ -618,8 +618,8 @@ console that spawned its own subprocess would be a second executor with none of 
 so a hung command runs forever, and a `job_runs` row saying `running` until somebody notices.
 
 ```bash
-python -m db_ops.db.cli run-app '{"app_command_id": "APP-METRICS", "requested_by": "thanh"}'
-python -m db_ops.db.cli run-app '{"list": true}'
+python -m dbabrain.db.cli run-app '{"app_command_id": "APP-METRICS", "requested_by": "thanh"}'
+python -m dbabrain.db.cli run-app '{"list": true}'
 ```
 
 What the shape guarantees:
@@ -714,8 +714,8 @@ ORDER BY created_at ASC, report_id ASC;
 
 ## Cleanup / Retention Queries
 
-**`job_runs` retention is automatic too — the daemon sweeps it.** `db_ops.jobs.daemon` calls
-`DbOpsStore.archive_old_job_runs(retention_days=15)` once every 300 s, right after it has
+**`job_runs` retention is automatic too — the daemon sweeps it.** `dbabrain.jobs.daemon` calls
+`DbaBrainStore.archive_old_job_runs(retention_days=15)` once every 300 s, right after it has
 scheduled due app commands, and **moves** aged rows into `job_runs_history` (`archived_at`
 stamped on the way in). Nothing is deleted.
 
@@ -728,7 +728,7 @@ Two properties make it safe to run from the scheduler loop:
 * **Every failure is swallowed.** A daemon that cannot archive is a table that grows; a daemon
   that dies is every app command on the node not running.
 
-Tuning lives in `db_ops/jobs/daemon.py` (`JOB_RUNS_RETENTION_DAYS`,
+Tuning lives in `dbabrain/jobs/daemon.py` (`JOB_RUNS_RETENTION_DAYS`,
 `JOB_RUNS_SWEEP_INTERVAL_SECONDS`, `JOB_RUNS_SWEEP_BATCH_SIZE`, `JOB_RUNS_SWEEP_MAX_BATCHES`).
 A sweep that moved anything logs `app.daemon.job_runs_sweep`.
 
@@ -783,8 +783,8 @@ nobody queries, and the shared store shows a hole exactly as wide as the outage.
 asked of history afterwards is then answered from a series with a gap in it.
 
 ```bash
-python -m db_ops.db.cli backfill-from-sqlite --source <stand-in>/runtime/db_ops.sqlite --plan-only
-python -m db_ops.db.cli backfill-from-sqlite --source <stand-in>/runtime/db_ops.sqlite
+python -m dbabrain.db.cli backfill-from-sqlite --source <stand-in>/runtime/dbabrain.sqlite --plan-only
+python -m dbabrain.db.cli backfill-from-sqlite --source <stand-in>/runtime/dbabrain.sqlite
 ```
 
 **Read the plan first.** It names, per table, how many rows the source holds and the destination's
@@ -803,7 +803,7 @@ their key and the new key is read back — which makes the links the whole probl
 
 The second is worse, because nothing reports it. So parents are carried first, their old-to-new
 mapping is kept, and every child is rewritten through it — which is also why the table order in
-`db_ops/db/backfill.py` is not cosmetic.
+`dbabrain/db/backfill.py` is not cosmetic.
 
 A link whose parent predates the window has no mapping, and what that costs depends on the column:
 nullable (`reports.telegram_send_message_id`) means the row crosses without the link and the count
@@ -817,18 +817,18 @@ has — `sla_runs` on a store whose SLA app never ran — is skipped rather than
 
 ## Schema Export Command
 
-The store's own command (`db.cli`). The root entry point's copy of it - `db-ops --export-sqlite-schema`,
+The store's own command (`db.cli`). The root entry point's copy of it - `dbabrain --export-sqlite-schema`,
 with the `--message` / `--recent` smoke test beside it - went in 0.24.0: the root holds nothing of its
 own (rules R41).
 
 ```powershell
-python -m db_ops.db.cli --config config.json export-sqlite-schema
+python -m dbabrain.db.cli --config config.json export-sqlite-schema
 ```
 
 **This is SQLite-only, whatever the active backend is.** `db/schema_export.py` opens
-`DbOpsStore(sqlite_path)` — the path form, which always means SQLite — initializes it, and reads
+`DbaBrainStore(sqlite_path)` — the path form, which always means SQLite — initializes it, and reads
 `sqlite_master`/`PRAGMA`. On a PostgreSQL node it therefore describes the local
-`runtime/db_ops.sqlite` file, not the store the apps are writing to, and `runtime/db_ops_sqlite_structure.json`
+`runtime/dbabrain.sqlite` file, not the store the apps are writing to, and `runtime/dbabrain_sqlite_structure.json`
 is a snapshot of exactly that. It stays useful for the migration path (the SQLite schema is what
 `migrate-sqlite-to-postgres` introspects) and as a schema reference, since both backends are built
 from the same four `initialize()` methods.
@@ -836,7 +836,7 @@ from the same four `initialize()` methods.
 To describe the **live** store instead, ask the active backend:
 
 ```bash
-python -m db_ops.db.cli --config config.json check --counts        # tables, schema_version, rows
+python -m dbabrain.db.cli --config config.json check --counts        # tables, schema_version, rows
 ```
 
 ```sql
@@ -847,7 +847,7 @@ WHERE table_schema = 'db_ops'
 ORDER BY table_name, ordinal_position;
 ```
 
-### Pointing a node at its own store — `db-ops db use-store` (2026-09-09)
+### Pointing a node at its own store — `dbabrain db use-store` (2026-09-09)
 
 `data/store_config.json` is catalogued configuration, so it **travels inside a config bundle**: an
 `import-data` faithfully points a machine that has never run at the store the bundle came from —
@@ -860,9 +860,9 @@ is the one where skipping it writes an unproven build's rows into the record eve
 shares:
 
 ```bash
-db-ops db --config config.json use-store sqlite              # this node writes to its own file
-db-ops db --config config.json use-store sqlite --dry-run    # print the change, write nothing
-db-ops db --config config.json use-store postgresql          # and back, once it has proved itself
+dbabrain db --config config.json use-store sqlite              # this node writes to its own file
+dbabrain db --config config.json use-store sqlite --dry-run    # print the change, write nothing
+dbabrain db --config config.json use-store postgresql          # and back, once it has proved itself
 ```
 
 **And which PostgreSQL store**, since 2026-09-14. The backend flag was all this could set, so
@@ -870,12 +870,12 @@ moving a node onto a *named* store was still the hand-edit the command exists to
 
 ```bash
 # its own schema on the shared server - a store of its own without a server of its own
-db-ops db --config config.json use-store postgresql --schema dba_brain --dry-run
-db-ops db --config config.json use-store postgresql --schema dba_brain
+dbabrain db --config config.json use-store postgresql --schema dba_brain --dry-run
+dbabrain db --config config.json use-store postgresql --schema dba_brain
 
 # or a different server entirely
-db-ops db --config config.json use-store postgresql \
-    --host 192.0.2.115 --port 5433 --database db_ops --schema db_ops \
+dbabrain db --config config.json use-store postgresql \
+    --host 192.0.2.115 --port 5433 --database dbabrain --schema dbabrain \
     --username postgres --password-ref POSTGRE_192_0_2_115_5433_POSTGRES
 ```
 

@@ -23,11 +23,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.backup_restore import events, restore_by_id, restore_script
-from db_ops.common import backup_copy, cli_restorestep
-from db_ops.common import backup_copy as transfer
-from db_ops.common.backupfiles import BackupListError
-from db_ops.common.backupfiles import sqlserver as listing
+from dbabrain.backup_restore import events, restore_by_id, restore_script
+from dbabrain.common import backup_copy, cli_restorestep
+from dbabrain.common import backup_copy as transfer
+from dbabrain.common.backupfiles import BackupListError
+from dbabrain.common.backupfiles import sqlserver as listing
 from tests.test_backup_transfer_stream import _Client, _Sftp
 
 
@@ -35,7 +35,7 @@ from tests.test_backup_transfer_stream import _Client, _Sftp
 # 1.11 - a restore step reports with the name it answers with
 # --------------------------------------------------------------------------- #
 def test_a_restore_step_summary_reads_db_type(monkeypatch):
-    import db_ops.common.restorestep as restorestep
+    import dbabrain.common.restorestep as restorestep
 
     monkeypatch.setattr(restorestep, "restore_step",
                         lambda level, request: {"db_type": "sqlserver", "level": level, "applied": ["a.bak"]})
@@ -153,7 +153,7 @@ def plan(monkeypatch):
                 "newest_finished_at": "2026-09-24T10:00:00"}
 
     monkeypatch.setattr(restore_by_id, "_list_backup_files", listing_)
-    import db_ops.lib.data_sources as data_sources
+    import dbabrain.lib.data_sources as data_sources
     monkeypatch.setattr(data_sources, "load_db_instances", lambda _d=None: [
         {"server_id": "TGT-11433", "db_type": "sqlserver", "port": 11433}])
     secrets = {"SA_REF": "pw", "ENC_REF": "enc"}
@@ -239,7 +239,7 @@ class _Conn:
 
 
 def _list_with(monkeypatch, error):
-    import db_ops.common.db_connect as db_connect
+    import dbabrain.common.db_connect as db_connect
     monkeypatch.setattr(db_connect, "connect_engine", lambda **_: _Conn(error))
     return listing.list_files({"path": "/in", "target": {"host": "192.0.2.250"}})
 
@@ -251,8 +251,8 @@ def test_a_file_sql_server_calls_not_a_backup_is_skipped(monkeypatch):
 def test_an_empty_file_is_not_a_backup_either(monkeypatch):
     """The staging marker a copy leaves in the folder is one. With it there, the SQL Server
     restore of the soak's lab failed at the listing on its first run (2026-10-02):
-    *cannot read /opt/db_ops/backup/.../.dbops-staging ... is empty. (3254)*."""
-    error = ("The volume on device '/in/.dbops-staging' is empty. (3254) (SQLExecDirectW); "
+    *cannot read /opt/db_ops/backup/.../.dbabrain-staging ... is empty. (3254)*."""
+    error = ("The volume on device '/in/.dbabrain-staging' is empty. (3254) (SQLExecDirectW); "
              "RESTORE HEADERONLY is terminating abnormally. (3013)")
     assert _list_with(monkeypatch, error) == []
 

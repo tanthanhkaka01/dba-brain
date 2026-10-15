@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from db_ops.lib import data_sources
-from db_ops.lib import secret_text
-from db_ops.lib.config import TelegramConfig
+from dbabrain.lib import data_sources
+from dbabrain.lib import secret_text
+from dbabrain.lib.config import TelegramConfig
 
 
 KEY = "Ahdsf#hsdf$%238Hfs#"

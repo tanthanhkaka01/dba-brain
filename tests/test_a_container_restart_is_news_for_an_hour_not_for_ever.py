@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.metrics import collector
+from dbabrain.metrics import collector
 
 SCRIPT = Path(collector.__file__).parent / "collectors" / "docker" / "009_docker_container_stats.sh"
 BASH = shutil.which("bash")

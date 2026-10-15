@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import log_tail
+from dbabrain.lib import log_tail
 
 LINES = [
     f"2026-08-21 08:{index // 60:02d}:{index % 60:02d}|LOGGING|metrics|host|metrics.collect|line {index}"
@@ -164,7 +164,7 @@ def test_the_file_header_is_not_read_as_a_log_line() -> None:
 
 
 def log_tail_header() -> str:
-    from db_ops.logging_ops.formatter import LOG_HEADER
+    from dbabrain.logging_ops.formatter import LOG_HEADER
 
     return LOG_HEADER
 

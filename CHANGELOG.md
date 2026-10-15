@@ -15,6 +15,100 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-12
+
+### Changed
+
+- **The package is `dbabrain`, and `db_ops` is gone - no alias, no fallback.** `import db_ops`
+  becomes `import dbabrain`, `python -m db_ops.<app>.cli` becomes `python -m dbabrain.<app>.cli`,
+  the `db-ops` command is removed (`dbabrain` is the one command), and every environment variable
+  `DB_OPS_*` becomes `DBABRAIN_*` - `DBABRAIN_SECRET_KEY`, `DBABRAIN_NODE_ROLE`, `DBABRAIN_HOME`,
+  `DBABRAIN_DATA_DIR`, `DBABRAIN_TIMEZONE` and the rest. **An old name is not read**: a service
+  that still sets `DB_OPS_SECRET_KEY` starts without its passphrase. The image lays the tool out
+  under `/app/tools/dbabrain`, and the console's default mount is `/dbabrain/`.
+- **What keeps its name** is what lives outside the code: the store's database and schema (as your
+  `store_config.json` states them), its schema-version rows, a host folder, a certificate, a
+  docker container or network, the marker inside the secret store. Nothing in the store changes.
+- **The display name and the scratch names follow.** Help text, one log line and two page titles
+  (`DBA Brain · Reports`, `DBA Brain · SLA / SLO compliance`) no longer say `DB Ops`. A transfer's
+  partial file is `<name>.dbabrain_partial`, the Oracle restore's work files are
+  `/tmp/dbabrain_restore.rman` and `.sql`, the PostgreSQL restore's start log is
+  `dbabrain_restore.log`, and it stages in `dbabrain_staging` (`<data_dir>_dbabrain_staging`,
+  `dbabrain_restore_staging`) and copies WAL to `dbabrain_wal` unless the entry states
+  `PG_STAGING` / `RESTORE_STAGING`. What an earlier version left under the old scratch name is
+  read by nothing and can be removed - on a PostgreSQL restore target, `dbops_wal` and a
+  `dbops` staging folder a failed restore left. The backup folders (`.../backup/dbops`) and the
+  RMAN tags keep their names: they are on your hosts, or they are the name a backup carries.
+- **The file that marks a restore's staging folder is `.dbabrain-staging`, and a folder that is
+  already marked keeps its marker.** The name is the restore entry's to state (`staging_marker`;
+  `copy-backup-dir` and `prune-staged-backups` take it as a request field). `upgrade-config` (step
+  `earlier-defaults`) writes `.dbops-staging` into every entry that has a `target_backup_dir` and
+  states none, because that is the file its folder on the target carries - and retention prunes
+  every staged file and never the marker, so a folder holding the marker alone would have been
+  refused under a default of another name. An entry added afterwards marks its own new folder
+  with the new name.
+- **The two folders a lab database lives in are the node's to state, and the code holds neither.**
+  `sre_config.json` gains `sre.docker_db.containers_dir` and `sre.docker_db.backup_mount`.
+  `sre.cli create-db-docker`, `move-db-docker` and `control.cli worker-create-db-docker` take a
+  flag, else that block, and nothing else: `create-db-docker` and `move-db-docker` require
+  `containers_dir` in their request, and a SQL Server lab requires `backup_mount` (an empty string
+  asks for none). Until now both were constants in the code - a move and a forced re-create find a
+  lab under the folder and its name, so a folder the code assumes is a folder nobody chose.
+  `upgrade-config` (step `earlier-defaults`) writes the two earlier constants,
+  `/opt/db_ops/containers` and `/opt/db_ops/backup`, into a node that states none, and the shipped
+  `sre_config.json` states them for a new node; a node that states none and gives no flag is
+  refused by name.
+- **The backup certificate's default name is `dbabrain_backup_cert`, and no existing record changes
+  certificate.** A SQL Server backup job, a script-driven restore (`env.BACKUP_CERT_NAME`) or a
+  share-driven restore (`source.backup_certificate.name`) that names no certificate took
+  `db_ops_backup_cert`. A certificate is an object on your server and your backups are encrypted
+  with it, so `upgrade-config` (step `earlier-defaults`) **writes that name into every record that
+  had been leaving it to the default** before the code's default changes; only a record you add
+  afterwards, naming none, takes the new one. The one value now lives in
+  `lib.sqlserver_certificate`; three modules and three scripts each held a copy.
+
+### Added
+
+- **`control.cli deploy-code` ships the code only.** It builds the image here, loads it on the
+  worker, points the worker's compose file at it, runs `upgrade-config` and `sync-config` in the new
+  image and starts it - the worker keeps its own `data/`, `assets/` and `config.json`. The compose
+  file and a tar of the configuration are kept first; without `--apply` it only prints the plan.
+
+### Fixed
+
+- **A file transfer refuses a remote path that is not absolute.** `fetch-file`, `send-file` and
+  `relay-file` took `opt/...` - or `C:/Program Files/Git/opt/...`, which is what Git Bash makes of
+  `/opt/...` - resolved it against the login's home on the host, and answered `COPIED`. They now
+  refuse it before connecting, and say when a Windows shell rewrote the path.
+- **`upgrade-config` tells a path into the package from a folder on a host.** `package-rename`
+  took `/opt/db_ops/reports/a.html` - a host folder whose next part is named like a component -
+  for a path into the package and renamed it, and left `../db_ops/sre`, a path that ends at a
+  component's own folder, as it was. What comes before the name now decides: a relative step, the
+  tool root, a checkout or `site-packages` hold the package; anything else is a folder of yours
+  and keeps its name.
+- **`control.cli inventory-health` fetches from the worker's folder.** Its `--host-runtime`
+  default still named the folder the worker had left, so the health overlay was read from where
+  nothing writes; it follows the worker's folder (`/opt/dbabrain`) now.
+
+### Upgrading
+
+1. **After `pip install --upgrade dbabrain`, run `upgrade-config`**
+   (`python -m dbabrain.common.cli upgrade-config '{"dry_run": false}'`). Its new step
+   `package-rename` points every module path, path into the package, `tools/` alias (a path
+   with either slash) and environment-variable name in your `data/*.json` at the new name, and
+   its step `earlier-defaults` writes `BACKUP_CERT_NAME: db_ops_backup_cert` into each SQL Server
+   backup job and restore that named no certificate - **run it before the first backup on this
+   version**, or that backup looks for a certificate of the new default name; read the plan first
+   (`'{}'`). Then `python -m dbabrain.db.cli --config config.json sync-config '{}'`.
+2. **Rename the environment variables** wherever you set them - a compose file, a service unit,
+   a shell profile, a scheduled task: `DB_OPS_` becomes `DBABRAIN_`.
+3. **A container deployment**: mount the tool root's folders at `/app/tools/dbabrain/...` instead
+   of `/app/tools/db_ops/...`.
+4. **Your own scripts** that `import db_ops` (a SQL task's `input` script, a helper under
+   `assets/`) import `dbabrain`, and read `DBABRAIN_SECRET_KEY`.
+5. **The console**: if your `webhost_config.json` states `"mount": "db_ops"`, the console stays at
+   `/db_ops/` - that is your configuration; change it to `dbabrain` to follow the new default.
+
 ## [0.28.0] - 2026-10-09
 
 ### Added

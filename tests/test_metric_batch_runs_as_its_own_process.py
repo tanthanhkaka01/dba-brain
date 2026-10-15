@@ -21,7 +21,7 @@ ROW = {"metric_item": "probe", "metric_value": "1", "metric_unit": "count", "sta
 def _run(request: dict | None, *args: str) -> dict:
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONPATH": str(REPO)}
     completed = subprocess.run(
-        [sys.executable, "-m", "db_ops.common.cli", "metric-batch", *args],
+        [sys.executable, "-m", "dbabrain.common.cli", "metric-batch", *args],
         input=json.dumps(request) if request is not None else "", capture_output=True, text=True,
         encoding="utf-8", cwd=REPO, env=env, timeout=120)
     return json.loads(completed.stdout)

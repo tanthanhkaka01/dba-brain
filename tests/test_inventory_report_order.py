@@ -1,5 +1,5 @@
 """Inventory report model ordering and capacity/status data used by the HTML template."""
-from db_ops.reports.inventory_report import _build_backup, _disk_text, build_models, render_html, render_md
+from dbabrain.reports.inventory_report import _build_backup, _disk_text, build_models, render_html, render_md
 
 
 def _srv(server_id, **extra):

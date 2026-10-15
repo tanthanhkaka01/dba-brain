@@ -15,7 +15,7 @@ the same day, so hour-bounded windows flip. Two further instants below cross a *
 *month* boundary, because a zone shift moves the calendar as well as the clock, and a `from_day`
 bound that only ever gets tested at midday would never show it.
 
-The clock is frozen at `db_ops.lib.timezone.datetime` only. That is the single point every caller
+The clock is frozen at `dbabrain.lib.timezone.datetime` only. That is the single point every caller
 is supposed to go through, so a caller that reaches around it keeps reading real wall-clock time
 and fails here rather than passing by luck. That is the property this file exists to hold.
 """
@@ -25,8 +25,8 @@ from unittest.mock import patch
 
 import pytest
 
-from db_ops.lib import timezone as tz
-from db_ops.lib.time_window import RUN_ONCE, TimeWindow, job_due, repeat_due
+from dbabrain.lib import timezone as tz
+from dbabrain.lib.time_window import RUN_ONCE, TimeWindow, job_due, repeat_due
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -67,7 +67,7 @@ def _restore_zone():
 def at(zone: str, moment: dt.datetime = MIDMORNING):
     """Bind `zone` and freeze the display clock at `moment`. Use as a context manager."""
     tz.bind_display_timezone(zone)
-    return patch("db_ops.lib.timezone.datetime", _frozen(moment))
+    return patch("dbabrain.lib.timezone.datetime", _frozen(moment))
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -101,7 +101,7 @@ def test_a_zone_shift_moves_the_calendar_day_not_only_the_hour():
 # --------------------------------------------------------------------------------------------- #
 
 def _app_command(window: TimeWindow):
-    from db_ops.jobs.daemon import AppCommand
+    from dbabrain.jobs.daemon import AppCommand
     return AppCommand(
         app_command_id="APP-PROBE", app_code="probe", app_name="probe", display_name="Probe",
         log_scope="probe", working_dir=".", command_text="x", time_window=window, active=True)
@@ -109,7 +109,7 @@ def _app_command(window: TimeWindow):
 
 @pytest.mark.parametrize("zone,expected", [(PLUS7, True), (UTC, False)])
 def test_an_app_commands_window_follows_the_configured_zone(zone, expected):
-    from db_ops.jobs import daemon
+    from dbabrain.jobs import daemon
     with at(zone):
         assert daemon.app_command_in_schedule_window(_app_command(MORNING)) is expected
 
@@ -117,7 +117,7 @@ def test_an_app_commands_window_follows_the_configured_zone(zone, expected):
 @pytest.mark.parametrize("zone,expected", [(PLUS7, True), (UTC, False)])
 def test_an_app_commands_day_bound_follows_the_configured_zone(zone, expected):
     """`from_day: 8` at the instant that is the 8th in one zone and the 7th in the other."""
-    from db_ops.jobs import daemon
+    from dbabrain.jobs import daemon
     window = TimeWindow(from_day=8, to_day=8, repeat_interval=300)
     with at(zone, ACROSS_MIDNIGHT):
         assert daemon.app_command_in_schedule_window(_app_command(window)) is expected
@@ -125,7 +125,7 @@ def test_an_app_commands_day_bound_follows_the_configured_zone(zone, expected):
 
 @pytest.mark.parametrize("zone,expected", [(PLUS7, True), (UTC, False)])
 def test_an_app_commands_month_bound_follows_the_configured_zone(zone, expected):
-    from db_ops.jobs import daemon
+    from dbabrain.jobs import daemon
     window = TimeWindow(from_month=10, to_month=10, repeat_interval=300)
     with at(zone, ACROSS_MONTH_END):
         assert daemon.app_command_in_schedule_window(_app_command(window)) is expected
@@ -136,7 +136,7 @@ def test_a_wrapping_overnight_window_is_open_in_both_zones_at_its_own_small_hour
     """`from_hour: 22, to_hour: 6` is where a zone mistake hides best — it is open for eight hours
     of the day, so the wrong clock still looks plausible. Asserted from the zone's own side: at
     each zone, pick the instant that is 02:00 *there*, and the window must be open."""
-    from db_ops.jobs import daemon
+    from dbabrain.jobs import daemon
     window = TimeWindow(from_hour=22, to_hour=6, repeat_interval=300)
     local_2am = {UTC: dt.datetime(2026, 9, 7, 2, 0, tzinfo=dt.timezone.utc),
                  PLUS7: dt.datetime(2026, 9, 6, 19, 0, tzinfo=dt.timezone.utc)}[zone]
@@ -149,7 +149,7 @@ def test_a_wrapping_overnight_window_is_open_in_both_zones_at_its_own_small_hour
 def test_an_app_commands_repeat_interval_is_unaffected_by_the_zone(zone):
     """The other half of the contract. Elapsed time is UTC arithmetic against a stored timestamp,
     so a schedule must not fire early because the reports moved to another clock."""
-    from db_ops.jobs import daemon
+    from dbabrain.jobs import daemon
     command = _app_command(TimeWindow(from_hour=0, to_hour=23, repeat_interval=300))
     # `started_at` is the column both readers look at first (daemon.row_time,
     # backup_restore.run_time); `finished_at` is present because row_time reads all three.
@@ -168,7 +168,7 @@ def test_an_app_commands_repeat_interval_is_unaffected_by_the_zone(zone):
 def test_a_metrics_schedule_window_follows_the_configured_zone(zone, expected):
     """The 22 metrics declared `from_hour: 1, to_hour: 6` are the heavy overnight scans. On the
     wrong clock they run during the working day against production."""
-    from db_ops.metrics import collector
+    from dbabrain.metrics import collector
     metric = type("M", (), {"schedule_window": MORNING})()
     with at(zone):
         assert collector._metric_window_open(metric=metric, now=MIDMORNING) is expected
@@ -178,7 +178,7 @@ def test_a_metrics_schedule_window_follows_the_configured_zone(zone, expected):
 def test_a_metric_with_no_window_is_always_open_in_either_zone(zone):
     """"Not configured" is a state, not a failure: a real-time metric has no window and must not
     become zone-sensitive by accident."""
-    from db_ops.metrics import collector
+    from dbabrain.metrics import collector
     metric = type("M", (), {"schedule_window": None})()
     with at(zone):
         assert collector._metric_window_open(metric=metric, now=MIDMORNING) is True
@@ -200,7 +200,7 @@ def test_a_metrics_collection_interval_is_unaffected_by_the_zone(zone):
 def test_a_backup_jobs_window_follows_the_configured_zone(zone, expected):
     """`data/restore_config.json` has 17 hour-bounded jobs, most of them `1..5` — the maintenance
     window. Running those at the wrong hour is a restore drill against a busy instance."""
-    from db_ops.backup_restore import schedule
+    from dbabrain.backup_restore import schedule
     with at(zone):
         assert schedule.is_due(job_code="probe", time_window=MORNING,
                                latest_runs={}, now=MIDMORNING) is expected
@@ -209,7 +209,7 @@ def test_a_backup_jobs_window_follows_the_configured_zone(zone, expected):
 @pytest.mark.parametrize("zone", [UTC, PLUS7])
 def test_a_backup_job_inside_its_window_still_respects_its_interval(zone):
     """Window open is necessary, not sufficient — and the interval half must stay zone-blind."""
-    from db_ops.backup_restore import schedule
+    from dbabrain.backup_restore import schedule
     always_open = TimeWindow(from_hour=0, to_hour=23, repeat_interval=3600)
     latest = {"probe": {"status": "done", "started_at": "2026-09-07T02:00:00Z",
                         "created_at": "2026-09-07T02:00:00Z"}}
@@ -224,7 +224,7 @@ def test_a_backup_job_inside_its_window_still_respects_its_interval(zone):
 # --------------------------------------------------------------------------------------------- #
 
 def _sql_pair(window: TimeWindow):
-    from db_ops.sql_tasks.runner import SqlCommand, SqlTarget
+    from dbabrain.sql_tasks.runner import SqlCommand, SqlTarget
     command = SqlCommand(
         sql_id=1, sql_code="PROBE", sql_name="Probe", db_type="sqlserver", script_type="sql",
         script_path=None, script_paths=(), script_files=(), active=True)
@@ -238,7 +238,7 @@ def _sql_pair(window: TimeWindow):
 def test_the_sql_task_scan_follows_the_configured_zone(zone, expected_count):
     """`due_sql_tasks` is the real entry point the runner calls, and it reads the clock itself
     rather than being handed one — so this covers the wiring, not just the comparison."""
-    from db_ops.sql_tasks import runner
+    from dbabrain.sql_tasks import runner
     commands, targets = _sql_pair(MORNING)
     with at(zone):
         due = runner.due_sql_tasks(commands=commands, targets=targets, latest_runs={})
@@ -248,7 +248,7 @@ def test_the_sql_task_scan_follows_the_configured_zone(zone, expected_count):
 @pytest.mark.parametrize("zone", [UTC, PLUS7])
 def test_a_manual_sql_target_is_never_scheduled_in_either_zone(zone):
     """`repeat_interval: -1` means a human asks. No zone makes it due."""
-    from db_ops.sql_tasks import runner
+    from dbabrain.sql_tasks import runner
     commands, targets = _sql_pair(TimeWindow(from_hour=0, to_hour=23, repeat_interval=-1))
     with at(zone):
         assert runner.due_sql_tasks(commands=commands, targets=targets, latest_runs={}) == []
@@ -262,7 +262,7 @@ def test_a_manual_sql_target_is_never_scheduled_in_either_zone(zone):
 def test_a_scheduled_reports_window_and_its_skip_reason_follow_the_zone(zone, expected):
     """The reason has to name an hour the operator recognises. "hour window: 2" is only useful if
     2 is the hour on *their* clock — it used to be the hour on the reports app's hardcoded +07."""
-    from db_ops.reports import metrics_reports
+    from dbabrain.reports import metrics_reports
     with at(zone):
         reason = metrics_reports._schedule_skip_reason(
             report_config={"active": True,
@@ -279,7 +279,7 @@ def test_a_scheduled_reports_window_and_its_skip_reason_follow_the_zone(zone, ex
 def test_a_maintenance_window_gate_follows_the_configured_zone(zone, expected):
     """This one gates a host restart. Getting the clock wrong here reboots a machine outside the
     window somebody agreed with the business."""
-    from db_ops.common import evidence, host_ops
+    from dbabrain.common import evidence, host_ops
     with at(zone):
         report = evidence.GateReport("probe")
         host_ops.check_maintenance_window(
@@ -320,9 +320,9 @@ def test_a_report_header_and_its_filename_stamp_agree(zone, expected):
 def test_the_once_a_day_report_guard_uses_the_operators_midnight(tmp_path):
     """A report generated at 07:30 local is still *yesterday* in UTC, so a UTC-day guard lets the
     same daily report out twice. The offset is passed in from the configured zone."""
-    from db_ops.db import DbOpsStore
+    from dbabrain.db import DbaBrainStore
 
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     report_id = store.insert_report(
         report_code="rp_daily", report_name="Daily", report_type="BACKUP_HEALTH",
@@ -350,7 +350,7 @@ def test_the_log_rotation_boundary_follows_the_configured_zone(zone, expected_ar
     file. Checking the imported `display_today` symbol instead passed while the code underneath
     was reverted to the host clock — measured, which is why it is written this way.
     """
-    from db_ops.logging_ops.handlers import archive_yesterday_if_missing
+    from dbabrain.logging_ops.handlers import archive_yesterday_if_missing
 
     import os
 
@@ -372,7 +372,7 @@ def test_the_log_rotation_boundary_follows_the_configured_zone(zone, expected_ar
 def test_a_backfilled_day_ends_at_the_operators_midnight(zone, expected):
     """`?date=2026-09-07` means the operator's 7th. On a UTC day it swept in the first seven hours
     of their 8th and dropped their evening."""
-    from db_ops.reports.backfill import _end_of_day
+    from dbabrain.reports.backfill import _end_of_day
     with at(zone):
         assert _end_of_day("2026-09-07") == expected
 
@@ -385,10 +385,10 @@ def test_a_backfilled_day_ends_at_the_operators_midnight(zone, expected):
 def test_a_stored_timestamp_is_utc_whatever_the_display_zone_is(zone, tmp_path):
     """Every range query in the tool compares stored text lexically. A row written at +07 would
     sort between two UTC rows and land in the wrong window, seven hours wide."""
-    from db_ops.db import DbOpsStore
+    from dbabrain.db import DbaBrainStore
 
     tz.bind_display_timezone(zone)
-    store = DbOpsStore(tmp_path / f"store_{zone.replace(':', '')}.sqlite")
+    store = DbaBrainStore(tmp_path / f"store_{zone.replace(':', '')}.sqlite")
     store.initialize()
     report_id = store.insert_report(
         report_code="rp", report_name="R", report_type="BACKUP_HEALTH",
@@ -427,7 +427,7 @@ def test_the_run_line_of_a_report_carries_its_offset(zone, offset):
     remove — because it borrowed the *column* renderer, which may omit the offset only because a
     table header states it once. A line that stands on its own has no header to lean on.
     """
-    from db_ops.reports import metrics_reports
+    from dbabrain.reports import metrics_reports
 
     tz.bind_display_timezone(zone)
     text = metrics_reports._run_time_text(
@@ -439,7 +439,7 @@ def test_the_run_line_of_a_report_carries_its_offset(zone, offset):
 def test_a_window_refusal_says_what_time_it_thinks_it_is():
     """The message explaining why a host restart was blocked. If it names an hour without a zone,
     the reader cannot tell whether the tool disagrees with them about the time or about the rule."""
-    from db_ops.common import evidence, host_ops
+    from dbabrain.common import evidence, host_ops
 
     with at(UTC):
         report = evidence.GateReport("probe")
@@ -462,16 +462,16 @@ def test_no_producer_renders_a_bare_wall_clock():
 
     ALLOWED = {
         # A table cell: the column header carries the offset once for every row.
-        "db_ops/reports/metrics_reports.py",
+        "dbabrain/reports/metrics_reports.py",
         # A comparison key compared against server-local file mtimes as text, not a rendered time.
-        "db_ops/lib/backupfiles_retention.py",
+        "dbabrain/lib/backupfiles_retention.py",
         # A moment in the database SERVER's clock for STOPAT / TO_DATE and the listings' window -
         # an engine reads it, not a person; an offset is exactly what STOPAT refuses (Msg 3217).
-        "db_ops/lib/restore/moment.py",
+        "dbabrain/lib/restore/moment.py",
     }
     pattern = re.compile(r'strftime\("%Y-%m-%d %H:%M')
     offenders = []
-    for path in Path("db_ops").rglob("*.py"):
+    for path in Path("dbabrain").rglob("*.py"):
         rel = path.as_posix()
         if rel in ALLOWED or rel.endswith("lib/timezone.py"):
             continue
@@ -480,7 +480,7 @@ def test_no_producer_renders_a_bare_wall_clock():
 
     assert not offenders, (
         f"these render a wall clock with no offset: {offenders}. Use "
-        f"db_ops.lib.timezone.format_display / format_display_text, or add the file to ALLOWED "
+        f"dbabrain.lib.timezone.format_display / format_display_text, or add the file to ALLOWED "
         f"with the reason it is an exception.")
 
 
@@ -490,12 +490,12 @@ def test_no_producer_renders_a_bare_wall_clock():
 
 def _every_scheduler_says_open() -> dict[str, bool]:
     """Ask every app whose schedule reads a wall clock, at whatever zone/instant is bound."""
-    from db_ops.backup_restore import schedule
-    from db_ops.common import evidence, host_ops
-    from db_ops.jobs import daemon
-    from db_ops.metrics import collector
-    from db_ops.reports import metrics_reports
-    from db_ops.sql_tasks import runner
+    from dbabrain.backup_restore import schedule
+    from dbabrain.common import evidence, host_ops
+    from dbabrain.jobs import daemon
+    from dbabrain.metrics import collector
+    from dbabrain.reports import metrics_reports
+    from dbabrain.sql_tasks import runner
 
     report = evidence.GateReport("probe")
     host_ops.check_maintenance_window(report, window={"from_hour": 9, "to_hour": 10}, ignore=False)

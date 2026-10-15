@@ -11,9 +11,9 @@ import subprocess
 
 import pytest
 
-from db_ops.backup_restore import preflight, shell_quoting
-from db_ops.common import deletefiles
-from db_ops.lib.powershell import quote_powershell
+from dbabrain.backup_restore import preflight, shell_quoting
+from dbabrain.common import deletefiles
+from dbabrain.lib.powershell import quote_powershell
 
 QUOTES = ["'", "\u2018", "\u2019", "\u201a", "\u201b"]
 

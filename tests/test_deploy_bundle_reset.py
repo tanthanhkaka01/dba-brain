@@ -21,11 +21,11 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.control import deploy
+from dbabrain.control import deploy
 
 
 def test_a_previous_bundle_does_not_survive_the_reset(tmp_path, monkeypatch) -> None:
-    bundle = tmp_path / "db_ops_deploy"
+    bundle = tmp_path / "dbabrain_deploy"
     (bundle / "assets" / "metrics").mkdir(parents=True)
     (bundle / "assets" / "metrics" / "old.sql").write_text("SELECT 1", encoding="utf-8")
     (bundle / "data").mkdir()

@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import data_sources
-from db_ops.common.oracle_bridge import LegacyOracleError, resolve_secret
+from dbabrain.lib import data_sources
+from dbabrain.common.oracle_bridge import LegacyOracleError, resolve_secret
 
 
 # --------------------------------------------------------------------------- #
@@ -74,7 +74,7 @@ def test_the_secret_store_answers_first() -> None:
 
 
 def test_the_ref_names_its_own_environment_variable(monkeypatch) -> None:
-    """The convention the rest of db_ops already uses: refs double as env var names.
+    """The convention the rest of dbabrain already uses: refs double as env var names.
 
     This is what a second bridge on a second host needs — its own ref, its own variable.
     """

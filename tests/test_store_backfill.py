@@ -15,9 +15,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.db import DbOpsStore, backfill
-from db_ops.db.job_runs import JobRun
-from db_ops.db.metric_store import MetricStore
+from dbabrain.db import DbaBrainStore, backfill
+from dbabrain.db.job_runs import JobRun
+from dbabrain.db.metric_store import MetricStore
 
 
 def _stamp(minutes_ago: int) -> str:
@@ -26,7 +26,7 @@ def _stamp(minutes_ago: int) -> str:
 
 
 def _store(tmp_path, name):
-    store = DbOpsStore(tmp_path / f"{name}.sqlite")
+    store = DbaBrainStore(tmp_path / f"{name}.sqlite")
     store.initialize()
     MetricStore(tmp_path / f"{name}.sqlite").initialize()
     return store

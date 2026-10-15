@@ -2,13 +2,13 @@
 
 Twice a lab bridge has taken a production database off the map. Docker's default pool hands out
 172.17.0.0/16 … 172.31.0.0/16, and this estate routes real hosts inside that space: on 2026-08-05
-the db_ops network itself was given 172.18.0.0/16 and the worker answered "No route to host" for
+the dbabrain network itself was given 172.18.0.0/16 and the worker answered "No route to host" for
 the SQL Server at 192.0.2.41; on 2026-08-14 `ora11g_lab` was created, took the same /16, and the
 same instance vanished for two hours — every metric on it failed to connect while the database was
 perfectly healthy and reachable from everywhere else.
 
 The collision is decided in the *host* route table, so pinning one project fixes nothing: after the
-first incident db_ops pinned its own network to 172.30.240.0/24, and the second incident happened
+first incident dbabrain pinned its own network to 172.30.240.0/24, and the second incident happened
 anyway, through a different project. The rule that holds is the one these tests enforce — every
 generated compose file names its own subnet, in a range nothing in the estate routes.
 """
@@ -18,8 +18,8 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from db_ops.common.docker_db import templates
-from db_ops.lib.docker_db_spec import (
+from dbabrain.common.docker_db import templates
+from dbabrain.lib.docker_db_spec import (
     LAB_NETWORK_FIRST_OCTET,
     LAB_NETWORK_LAST_OCTET,
     LAB_NETWORK_PREFIX,
@@ -87,7 +87,7 @@ def test_the_subnet_is_derived_from_the_name_so_a_re_provision_keeps_it():
 
 
 def test_derived_subnets_stay_inside_the_reserved_lab_window():
-    """Below .240, which is the db_ops runtime network, and above .0, which is docker0's bip."""
+    """Below .240, which is the dbabrain runtime network, and above .0, which is docker0's bip."""
     for name in ("a", "pg_ha_01", "MSSQL_LAB_HA_01", "ora_dg_lab", "lab-with-a-very-long-name"):
         subnet = lab_network_subnet(name)
         prefix, third = subnet.rsplit(".", 2)[0], int(subnet.split(".")[2])

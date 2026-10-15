@@ -21,12 +21,12 @@ import json
 import subprocess
 import sys
 
-from db_ops.transport import common_cli
-from db_ops.transport import process as transport_process
+from dbabrain.transport import common_cli
+from dbabrain.transport import process as transport_process
 
 
 def _child_that_prints(prelude: bytes, answer: dict) -> str:
-    """A program that writes raw bytes to stdout, then the JSON answer db_ops expects."""
+    """A program that writes raw bytes to stdout, then the JSON answer dbabrain expects."""
     return (
         "import sys, json\n"
         f"sys.stdout.buffer.write({prelude!r})\n"

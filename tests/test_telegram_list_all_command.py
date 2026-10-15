@@ -7,7 +7,7 @@ write a sentence somewhere else. Two hand-maintained listings already exist for 
 twice before anyone noticed — this one cannot drift, and these tests are what holds that.
 
 It also must not advertise what the caller will be refused. Offering an id that cannot work is the
-failure `db_ops.lib.listing` exists to prevent, and it is worse here than in the other listings:
+failure `dbabrain.lib.listing` exists to prevent, and it is worse here than in the other listings:
 this is the command someone types precisely because they do not yet know what they may run.
 """
 
@@ -19,8 +19,8 @@ import pytest
 
 from conftest import patch_telegram
 
-from db_ops.telegram import command_processor
-from db_ops.telegram.command_processor import (
+from dbabrain.telegram import command_processor
+from dbabrain.telegram.command_processor import (
     SupportCommand,
     _command_parameter_summary,
     execute_list_all_command_command,

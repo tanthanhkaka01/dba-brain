@@ -15,8 +15,8 @@ import threading
 import time
 from pathlib import Path
 
-from db_ops.lib.file_lock import FileLock
-from db_ops.telegram import updates
+from dbabrain.lib.file_lock import FileLock
+from dbabrain.telegram import updates
 
 
 def _files(tmp_path: Path) -> updates.TelegramUpdatePaths:

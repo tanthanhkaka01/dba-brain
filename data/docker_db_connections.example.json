@@ -23,7 +23,7 @@
         "compose_path": "/opt/db_ops/containers/pg_lab_01/docker-compose.yml",
         "replicas": 2
       },
-      "created_by": "db_ops.sre.create-db-docker"
+      "created_by": "dbabrain.sre.create-db-docker"
     },
     {
       "id": "MSSQL_LAB_01",
@@ -39,7 +39,7 @@
         "version": "2022-latest",
         "compose_path": "/opt/db_ops/containers/mssql_lab_01/docker-compose.yml"
       },
-      "created_by": "db_ops.sre.create-db-docker",
+      "created_by": "dbabrain.sre.create-db-docker",
       "worker_host": "192.0.2.40",
       "_note": "The restore target for the drill in restore_config.json. 'database': 'master' because that is what the tool connects to; a restore names its own databases."
     },
@@ -57,7 +57,7 @@
         "version": "21",
         "compose_path": "/opt/db_ops/containers/ora_lab_01/docker-compose.yml"
       },
-      "created_by": "db_ops.sre.create-db-docker",
+      "created_by": "dbabrain.sre.create-db-docker",
       "worker_host": "192.0.2.40"
     }
   ]

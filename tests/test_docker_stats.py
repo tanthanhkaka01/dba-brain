@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from conftest import answer_metric_items
-from db_ops.metrics import collector
-from db_ops.metrics.models import MetricDefinition, MetricTarget
+from dbabrain.metrics import collector
+from dbabrain.metrics.models import MetricDefinition, MetricTarget
 
 
 def _docker_metric():
@@ -48,9 +48,9 @@ def test_run_docker_metric_passes_container_env(monkeypatch):
 
     [item] = sent
     assert item["kind"] == "local"
-    # DB_OPS_TARGET_HOST rides along on every cmd collector; with no cmd_access it falls back to
+    # DBABRAIN_TARGET_HOST rides along on every cmd collector; with no cmd_access it falls back to
     # the target's ip, which for a local docker host is the host the containers run on.
-    assert item["env"] == {"DB_OPS_TARGET_HOST": "10.0.0.1",
+    assert item["env"] == {"DBABRAIN_TARGET_HOST": "10.0.0.1",
                            "DOCKER_CONTAINER": "MSSQL_LAB_HA_01-primary"}
     assert item["path"].endswith("009_docker_container_stats.sh")
     assert item["timeout_seconds"] == 20
@@ -69,7 +69,7 @@ def test_run_docker_metric_ships_over_ssh_when_cmd_access_ssh(monkeypatch):
     [item] = sent
     assert item["kind"] == "script", "a remote docker host runs the script there, not locally"
     # cmd_access.host wins over ip: it is the address already proven reachable.
-    assert item["env"] == {"DB_OPS_TARGET_HOST": "203.0.113.188",
+    assert item["env"] == {"DBABRAIN_TARGET_HOST": "203.0.113.188",
                            "DOCKER_CONTAINER": "pg_ha-primary"}
     assert item["access"]["host"] == "203.0.113.188"
     assert result.rows[0]["status"] == "OK"

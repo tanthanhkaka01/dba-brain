@@ -10,8 +10,8 @@
   ],
 
   "web": {
-    "mount": "db_ops",
-    "cookie_name": "db_ops_session",
+    "mount": "dbabrain",
+    "cookie_name": "dbabrain_session",
     "session_days": 30,
     "cookie_secure": false,
     "cookie_samesite": "Lax",

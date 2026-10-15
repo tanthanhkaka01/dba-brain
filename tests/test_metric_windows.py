@@ -13,9 +13,9 @@ from datetime import datetime
 
 import pytest
 
-from db_ops.lib.time_window import TimeWindow
-from db_ops.metrics.collector import _metric_due, _metric_window_open, _window_label
-from db_ops.metrics.models import MetricDefinition, MetricTarget
+from dbabrain.lib.time_window import TimeWindow
+from dbabrain.metrics.collector import _metric_due, _metric_window_open, _window_label
+from dbabrain.metrics.models import MetricDefinition, MetricTarget
 
 
 def _metric(**kwargs):
@@ -85,7 +85,7 @@ def _hourly_command():
     whether `consume_rest` swallows it — so the definition only has to have the shape the parser
     sees. Declaring it makes the test say what it depends on.
     """
-    from db_ops.telegram.command_processor import SupportCommand
+    from dbabrain.telegram.command_processor import SupportCommand
 
     return SupportCommand(
         command_id=1,
@@ -98,9 +98,9 @@ def _hourly_command():
         is_private=True,
         need_file=False,
         action_config={
-            "working_dir": "tools/db_ops",
+            "working_dir": "tools/dbabrain",
             "command_argv": [
-                "{python}", "-m", "db_ops.reports.cli", "--config", "{config_path}",
+                "{python}", "-m", "dbabrain.reports.cli", "--config", "{config_path}",
                 "force-hourly-report", "--server-id", "{server_id}",
             ],
             "defaults": {"summary_limit": 150, "dedupe_seconds": 0},
@@ -127,7 +127,7 @@ def _hourly_command():
 def test_the_telegram_command_adds_the_flag_only_when_the_word_is_typed(estate, args, expected):
     """End to end through the parser: the word the operator types has to survive into the argv.
     Testing the collector alone would pass while the command still never sent the flag."""
-    from db_ops.telegram.command_processor import build_cli_argv, cli_action_values
+    from dbabrain.telegram.command_processor import build_cli_argv, cli_action_values
 
     estate.db_instances(estate.instance(server_id="ACME-192-0-2-248", ip="192.0.2.248"))
     command = _hourly_command()
@@ -140,7 +140,7 @@ def test_the_telegram_command_adds_the_flag_only_when_the_word_is_typed(estate, 
 def test_the_flag_word_is_not_swallowed_by_the_target(estate):
     """`target` is a consume_rest parameter, so it would otherwise eat the keyword and hand
     "mssql 192.0.2.248 full" to the target resolver as one spec."""
-    from db_ops.telegram.command_processor import cli_action_values
+    from dbabrain.telegram.command_processor import cli_action_values
 
     estate.db_instances(estate.instance(server_id="ACME-192-0-2-248", ip="192.0.2.248"))
     values = cli_action_values(command=_hourly_command(),

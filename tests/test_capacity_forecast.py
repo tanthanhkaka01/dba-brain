@@ -10,7 +10,7 @@ shrink/regrow spike, and not enough history — so those are what these tests ar
 
 from datetime import datetime, timedelta, timezone
 
-from db_ops.lib import capacity_forecast as cf
+from dbabrain.lib import capacity_forecast as cf
 
 START = datetime(2026, 8, 1, 0, 0, 0, tzinfo=timezone.utc)
 

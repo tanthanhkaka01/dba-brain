@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.lib.inventory_render import _measured
-from db_ops.reports.inventory_health import build_performance_health
+from dbabrain.lib.inventory_render import _measured
+from dbabrain.reports.inventory_health import build_performance_health
 
 
 def _row(value, message=""):

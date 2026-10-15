@@ -10,10 +10,10 @@ page, and no page carries a private copy of the parts.
 
 from __future__ import annotations
 
-from db_ops.lib import page_style
-from db_ops.reports import index_report as ir
-from db_ops.sla.models import SlaValidationSummary
-from db_ops.sla.publish import render_html
+from dbabrain.lib import page_style
+from dbabrain.reports import index_report as ir
+from dbabrain.sla.models import SlaValidationSummary
+from dbabrain.sla.publish import render_html
 
 
 def _entry(**totals):
@@ -71,7 +71,7 @@ def test_every_report_page_takes_the_whole_window():
     margin while the tables inside scrolled sideways. The model's own answer is its fluid layout."""
     from pathlib import Path
 
-    import db_ops.reports as reports
+    import dbabrain.reports as reports
 
     templates = Path(reports.__file__).resolve().parent / "templates"
     sheets = {"lib.page_style": page_style.CSS,
@@ -117,7 +117,7 @@ def test_an_index_is_named_one_way_in_every_table_of_the_page():
 def test_the_fleet_matrix_lets_a_long_mount_point_wrap():
     from pathlib import Path
 
-    import db_ops.reports as reports
+    import dbabrain.reports as reports
 
     css = (Path(reports.__file__).resolve().parent / "templates" / "inventory_report.html").read_text(encoding="utf-8")
     assert ".fill-cell{white-space:normal; overflow-wrap:anywhere}" in css

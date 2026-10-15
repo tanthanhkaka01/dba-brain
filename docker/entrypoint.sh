@@ -4,21 +4,21 @@
 #   daemon [args...]  run the app-command scheduler (default CMD). Give the decryption passphrase
 #                     in the environment, never as an argument (it would be in `ps` and
 #                     `docker inspect` for the container's life):
-#                       read -rs DB_OPS_SECRET_KEY && export DB_OPS_SECRET_KEY
-#                       docker compose run -d --name db_ops_daemon -e DB_OPS_SECRET_KEY db_ops daemon
+#                       read -rs DBABRAIN_SECRET_KEY && export DBABRAIN_SECRET_KEY
+#                       docker compose run -d --name dbabrain_daemon -e DBABRAIN_SECRET_KEY dbabrain daemon
 #   shell             drop into an interactive bash shell
 #   <command...>      exec verbatim, e.g.:
-#                       docker run --rm db_ops \
-#                         python -m db_ops.metrics.cli --config config.json collect --dry-run --key "<passphrase>"
+#                       docker run --rm dbabrain \
+#                         python -m dbabrain.metrics.cli --config config.json collect --dry-run --key "<passphrase>"
 #
-# DB_OPS_CONFIG       config path passed to the daemon (default: config.json)
-# DB_OPS_DAEMON_DELAY daemon scan delay in seconds (default: 2)
+# DBABRAIN_CONFIG       config path passed to the daemon (default: config.json)
+# DBABRAIN_DAEMON_DELAY daemon scan delay in seconds (default: 2)
 #
-# The decryption passphrase is supplied at runtime in DB_OPS_SECRET_KEY and is never stored
+# The decryption passphrase is supplied at runtime in DBABRAIN_SECRET_KEY and is never stored
 # in the image, compose file, or any env file.
 set -euo pipefail
 
-CONFIG="${DB_OPS_CONFIG:-config.json}"
+CONFIG="${DBABRAIN_CONFIG:-config.json}"
 
 # The image runs as a non-root user (uid 10001). `data/`, `logs/` and `runtime/` are bind mounts
 # owned by whoever created them on the host, so an unwritable one is the first thing that goes
@@ -48,10 +48,10 @@ dbabrain - DBA operations toolkit.
 
   docker run <image>                      run the scheduler (default; needs data/ and a config)
   docker run <image> shell                an interactive shell in the container
-  docker run <image> db-ops --help        any toolkit command; db-ops is on the PATH
-  docker run <image> db-ops init          write a starter tool root into the working directory
+  docker run <image> dbabrain --help        any toolkit command; dbabrain is on the PATH
+  docker run <image> dbabrain init          write a starter tool root into the working directory
 
-The scheduler reads $DB_OPS_CONFIG (default: config.json) and expects data/, logs/ and runtime/
+The scheduler reads $DBABRAIN_CONFIG (default: config.json) and expects data/, logs/ and runtime/
 to be present and writable. This image runs as a non-root user, so bind mounts must be writable
 by it - the error names the uid and the fix if they are not.
 USAGE
@@ -59,7 +59,7 @@ USAGE
     ;;
   daemon)
     shift || true
-    exec python -m db_ops.jobs.daemon --config "$CONFIG" --delay-seconds "${DB_OPS_DAEMON_DELAY:-2}" "$@"
+    exec python -m dbabrain.jobs.daemon --config "$CONFIG" --delay-seconds "${DBABRAIN_DAEMON_DELAY:-2}" "$@"
     ;;
   shell)
     exec /bin/bash

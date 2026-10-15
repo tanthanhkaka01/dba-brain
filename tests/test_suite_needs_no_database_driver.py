@@ -12,7 +12,7 @@ virtualenv has the drivers; the first environment that did not was CI, on the da
 
 The file itself was not a test. It had no `def test_`, no assertion, and a hardcoded connection
 string: a scratch "can I connect" script that pytest picked up because of its name. It is deleted,
-and `db-ops common run-sql` is the supported way to ask that question — a real command, with tests,
+and `dbabrain common run-sql` is the supported way to ask that question — a real command, with tests,
 that takes its target from configuration instead of a literal.
 
 So this guard is about the class, not the file. It is cheap, it is static, and it fails in the

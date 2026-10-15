@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.jobs import daemon
-from db_ops.lib.config import parse_config
+from dbabrain.jobs import daemon
+from dbabrain.lib.config import parse_config
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,7 @@ def _file(path: Path, *, age_days: float) -> Path:
 def test_an_old_result_file_goes_and_a_new_one_stays(tmp_path):
     old = _file(tmp_path / "output" / "sql_tasks" / "result_old.xlsx", age_days=10)
     new = _file(tmp_path / "output" / "telegram" / "config_exports" / "export_new.json", age_days=1)
-    beside = _file(tmp_path / "db_ops.sqlite", age_days=30)
+    beside = _file(tmp_path / "dbabrain.sqlite", age_days=30)
 
     removed = daemon.sweep_output_files(runtime_dir=tmp_path, retention_days=7)
 

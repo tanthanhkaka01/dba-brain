@@ -39,7 +39,7 @@ spbot_restart_server - EMERGENCY: restart a server (asks yes, then the server id
 | Command | Description |
 |---|---|
 | `/spbot_status` | Get bot status |
-| `/spbot_self_status` | What the installation answering you actually is: product (published **DBA Brain** or a private **db_ops** build), version, whether it runs in Docker or straight on the OS, which OS, host name and ip, node role, store, cpu, memory and disk, then one line per app command with its last run. Reads itself - no SSH - and the store only for the last-run column, so it still answers when the store is the thing that is down. No parameters. |
+| `/spbot_self_status` | What the installation answering you actually is: product (published **DBA Brain** or a private **dbabrain** build), version, whether it runs in Docker or straight on the OS, which OS, host name and ip, node role, store, cpu, memory and disk, then one line per app command with its last run. Reads itself - no SSH - and the store only for the last-run column, so it still answers when the store is the thing that is down. No parameters. |
 | `/spbot_list_all_command` | List every command **you** can run in **this** chat, with its real arguments and clearance. Built from `telegram_support_commands.json` at run time — a command added to that file appears here with no other edit. Commands above your clearance, commands that only run in the other kind of chat, and disabled ones are hidden, each counted with its own reason. Public (clearance 0), no parameters. |
 | `/spbot_list_my_commands` | Your own last 10 **distinct** commands, newest first, each written back as the one line that runs it again — including the ones you answered a prompt at a time, whose arguments are separate messages in the chat and cannot be copied out of it. Repeats are counted, not listed twice. Private chat only: the history spans every chat, so a group would hear a private command read out. No parameters. |
 | `/spbot_list_server_id` | List the database targets you can address in other commands: `server_id`, `db_type`, `ip:port`, instance name. Use it to find the value to pass as a target. |
@@ -52,7 +52,7 @@ spbot_restart_server - EMERGENCY: restart a server (asks yes, then the server id
 | `/spbot_report_inventory` | Rebuild the Database Inventory & Health report from the last 7 days of metrics (no parameters) and reply with the report URL |
 | `/spbot_report_hourly_metrics` | Force hourly metrics report for a target (a `server_id`, or `<db_type> <ip> [port]`). Resolves to the unique `server_id` internally. |
 | `/spbot_report_metric_history` | Report one stored metric for one server over a recent hourly window without collecting metrics |
-| `/spbot_sql_to_xlsx` | Run a **read-only SELECT** on a server and send the first result set back as an `.xlsx` document. Asks for a **target** (a `server_id`, or `<db_type> <ip> [port]`) and the SQL text (paste it or attach a `.sql` file). Works on **any** engine in the inventory — SQL Server, PostgreSQL, MySQL, Oracle. Any statement that changes rows is refused and rolled back — but rollback is **not** a sandbox (see `db_ops/common/sql_run.py`), so this runs as the instance's DBA login. Clearance 10, runs on the worker. |
+| `/spbot_sql_to_xlsx` | Run a **read-only SELECT** on a server and send the first result set back as an `.xlsx` document. Asks for a **target** (a `server_id`, or `<db_type> <ip> [port]`) and the SQL text (paste it or attach a `.sql` file). Works on **any** engine in the inventory — SQL Server, PostgreSQL, MySQL, Oracle. Any statement that changes rows is refused and rolled back — but rollback is **not** a sandbox (see `dbabrain/common/sql_run.py`), so this runs as the instance's DBA login. Clearance 10, runs on the worker. |
 | `/spbot_sql_export` | The same read-only SELECT as `/spbot_sql_to_xlsx`, but you choose the file: **xlsx**, **csv**, **txt** (aligned table) or **xml**. Asks for a **target**, then the **format**, then the SQL text. The format comes *before* the SQL because the SQL argument consumes the rest of the message. Clearance 10, runs on the worker. |
 | `/spbot_xlsx_to_table` | Attach an `.xlsx` **or a delimited text file** (`.txt` / `.csv` / `.tsv`, including a block copied straight out of Excel — tab, comma, semicolon or pipe) and get a **queryable table**. Asks for a **server_id**, a **database**, a **schema**, then the file; the format is read from the file itself, not from its name. Every column is created `NVARCHAR(4000)` (or the engine's equivalent) — a type guessed from a spreadsheet is wrong on the row nobody checked; `ALTER` afterwards, having seen the data. Row 1 (of the first sheet, for a workbook) is the column names; blanks become `column_2`, duplicates get a suffix. For a text file the reply says how it was read (`tab-delimited text (utf-16-le)`), because the delimiter and encoding are guessed. The table name is **not** asked for: it is `temp_<random>` and the reply tells you what it was. Pass a 5th word to choose one. **An existing table is never overwritten** — the command fails and says so. **No size limit of ours**, but Telegram itself will not serve a bot more than **20 MB** per file, whatever you attached; above that, put the file on the worker and use the `create-table-from-xlsx` CLI with `"file_path"`. Private chat only, clearance 10, runs on the worker. |
 | `/spbot_add_sql` | Register and enable a new SQL task from a conversation: **server_id → display_name → schedule → output → sql_text**. `db_type`, instance and credential are read from `db_instances.json` by `server_id`, never typed. Schedule accepts `manual` (runs only via `/spbot_run_sql_task`), `default`, or `from_hour to_hour repeat_interval timeout`. Output accepts `xlsx` (send a workbook), `plain` (rows as text), `none` (status only). Private chat only. |
@@ -98,14 +98,14 @@ Run `/spbot_list_server_id` to see every valid target. The multi-word `<db_type>
 Replies with what this installation is and how much room it has left:
 
 ```
-DBA Brain / db_ops - current state
-product   : db_ops (private build)  [pip: db_ops 2.87.1]
+DBA Brain / dbabrain - current state
+product   : dbabrain (private build)  [pip: dbabrain 2.87.1]
 version   : 2.87.01  (public 0.5.0)
 running   : in Docker, on Ubuntu 24.04.4 LTS (6.8.0-generic)
 python    : 3.12.3
 host      : d247fe5052dd
 ip        : 192.0.2.115
-tool root : /app/tools/db_ops
+tool root : /app/tools/dbabrain
 node_role : worker
 store     : postgresql postgres@192.0.2.115:5433/db_ops
 cpu       : 8 core(s), load 1.24 / 0.98 / 0.71 (0.16 per core)
@@ -132,7 +132,7 @@ somebody uses to wrongly rule memory out.
 
 **The `apps` block says what this node schedules** (0.22.0): every app command in
 `data/app_commands.json`, including inactive ones (`off`) and ones for another role (`worker only`),
-with how it runs, when, and its last run. It runs `python -m db_ops.db.cli self-status`, because the
+with how it runs, when, and its last run. It runs `python -m dbabrain.db.cli self-status`, because the
 last run is read from `job_runs`; when the store cannot be read the column is replaced by one line
 saying why, and the rest of the reply still arrives.
 
@@ -168,7 +168,7 @@ What it hides, and why each is counted separately rather than as one number:
 - **only runs in a group / in a private chat** — something to fix by moving;
 - **turned off with `command_type < 0`** — a config change, not a permission.
 
-Offering a command the permission check would refuse is the failure `db_ops/common/listing.py`
+Offering a command the permission check would refuse is the failure `dbabrain/common/listing.py`
 exists to prevent, and it matters most here: this is the command someone types *because* they do
 not yet know what they may run.
 
@@ -206,7 +206,7 @@ the argument that was refused: after a failure it is the line most likely to be 
 
 Whose history it is comes from the message, never from an argument — there is no way to ask for
 somebody else's. Reads `telegram_command_messages` and `telegram_conversation_states` through
-`db-ops db telegram-command-history`, which takes `{"user_id": "...", "limit": N}`. No parameters
+`dbabrain db telegram-command-history`, which takes `{"user_id": "...", "limit": N}`. No parameters
 on the Telegram side.
 
 ### `/spbot_list_server_id`
@@ -280,12 +280,12 @@ carries the first line of its reason — without it the reader has to open the s
 trip this command exists to save. The listing stops before Telegram's 4096-character limit and says
 how many it dropped, rather than letting the transport cut the newest rows off silently.
 
-Reads `sql_runs` through `db-ops db sql-run-history`, which takes `{"limit": N, "sql_id": N}` if you
+Reads `sql_runs` through `dbabrain db sql-run-history`, which takes `{"limit": N, "sql_id": N}` if you
 want a different depth or one task's history. No parameters on the Telegram side.
 
 ### `/spbot_report_metric_history`
 
-Builds and queues a report from metric data already stored in DB Ops. It does not run metric collection. The time window starts at the current time minus `hours` and ends at the current time.
+Builds and queues a report from metric data already stored in dbabrain. It does not run metric collection. The time window starts at the current time minus `hours` and ends at the current time.
 
 **Inline (all args at once):**
 ```
@@ -355,7 +355,7 @@ Arguments:
 
 In `csv` a SQL NULL is an empty **unquoted** field and `""` is the empty string (PostgreSQL's
 `COPY ... WITH CSV` convention); in `txt` and `xml` it is spelled out. The rendering is
-`db_ops/common/result_format.py`, the same code a scheduled SQL task's `output.format` uses, so an
+`dbabrain/common/result_format.py`, the same code a scheduled SQL task's `output.format` uses, so an
 ad-hoc export and a scheduled one are the same artifact.
 
 The command is restricted to bot administrators (`command_type=10`) and runs on the worker node.

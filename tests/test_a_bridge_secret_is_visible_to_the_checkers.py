@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from db_ops.common import secret_check as sc
+from dbabrain.common import secret_check as sc
 
 
 BRIDGE_REF = "TOKEN_198_51_100_7_ORACLE_BRIDGE"
@@ -144,7 +144,7 @@ def test_an_instance_with_no_credential_says_that_rather_than_blaming_the_bridge
 def test_check_credentials_no_longer_skips_a_target_it_cannot_prove(tmp_path, capsys):
     """The skip read "API-bridge targets carry no DB login by design". They carry one: the connect
     string is built from the target's own credential, exactly as a direct target's is."""
-    from db_ops import cli
+    from dbabrain import cli
 
     _write_config(tmp_path, instance=dict(INSTANCE, default_credential_name=""))
 
@@ -154,7 +154,7 @@ def test_check_credentials_no_longer_skips_a_target_it_cannot_prove(tmp_path, ca
 
 
 def test_an_api_target_that_names_no_token_secret_is_reported(tmp_path, capsys):
-    from db_ops import cli
+    from dbabrain import cli
 
     access = {"method": "api", "bridge_url": "http://198.51.100.9:8900/run"}
     _write_config(tmp_path, instance=dict(INSTANCE, sql_access=access))
@@ -167,8 +167,8 @@ def test_an_api_target_that_names_no_token_secret_is_reported(tmp_path, capsys):
 def test_a_ref_that_is_named_but_not_in_the_store_is_reported(tmp_path, capsys, monkeypatch):
     """The shape the estate actually met: the secret existed on the master and not on the node
     running the collection. A ref that is named and absent fails exactly like one never named."""
-    from db_ops import cli
-    from db_ops.lib import data_sources
+    from dbabrain import cli
+    from dbabrain.lib import data_sources
 
     _write_config(tmp_path, instance=INSTANCE)
     (tmp_path / "encrypted_secret_text.json").write_text("{}", encoding="utf-8")
@@ -183,7 +183,7 @@ def test_a_ref_that_is_named_but_not_in_the_store_is_reported(tmp_path, capsys, 
 def test_a_node_that_cannot_open_the_store_keeps_the_config_level_answer(tmp_path, capsys):
     """This command is documented as needing no key. Without one it must not turn every configured
     ref into a finding — "I could not look" and "it is not there" are different answers."""
-    from db_ops import cli
+    from dbabrain import cli
 
     _write_config(tmp_path, instance=INSTANCE)
 

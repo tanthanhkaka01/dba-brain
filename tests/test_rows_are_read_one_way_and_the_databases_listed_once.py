@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import db_catalog, restorekey, sql_run
+from dbabrain.common import db_catalog, restorekey, sql_run
 
-DB_OPS = Path(__file__).resolve().parents[1] / "db_ops"
+DBABRAIN = Path(__file__).resolve().parents[1] / "dbabrain"
 
 
 class _Cursor:
@@ -109,7 +109,7 @@ def test_a_single_value_is_read_by_position_whatever_the_driver_calls_it():
 def test_the_certificate_import_reads_the_answer_its_batch_ends_with(monkeypatch):
     """The batch declares, checks and creates before its one ``SELECT``; over a driver the answer
     is that set - not a guess across ``fetchone`` calls that swallowed any error."""
-    import db_ops.common.db_connect as db_connect
+    import dbabrain.common.db_connect as db_connect
 
     cursor = _Cursor(None, None, (["certificate_name", "thumbprint", "imported"],
                                   [("db_ops_backup_cert_source", "A1B2", 1)]))
@@ -166,10 +166,10 @@ _ONE_ROW_OR_A_JOIN = {
 
 def test_no_module_lists_the_databases_itself():
     found = {}
-    for path in DB_OPS.rglob("*.py"):
+    for path in DBABRAIN.rglob("*.py"):
         count = len(_CATALOGUE_TABLE.findall(path.read_text(encoding="utf-8")))
         if count:
-            found[path.relative_to(DB_OPS).as_posix()] = count
+            found[path.relative_to(DBABRAIN).as_posix()] = count
     assert found == _ONE_ROW_OR_A_JOIN, (
         "a module reads sys.databases / pg_database: list the databases with "
         "db_catalog.databases(cursor, engine) - or `common.cli list-databases` from an app - and "
@@ -203,8 +203,8 @@ def test_no_module_of_common_reads_a_cursor_itself():
     batch reader beside ``execute_capture``, until 0.25.0; ``sql_execution`` holds only the pymssql
     adapter now, and a reader added back beside it fails here."""
     readers = set()
-    for path in (DB_OPS / "common").rglob("*.py"):
-        relative = path.relative_to(DB_OPS).as_posix()
+    for path in (DBABRAIN / "common").rglob("*.py"):
+        relative = path.relative_to(DBABRAIN).as_posix()
         if _CURSOR_READ.search(_without_adapter(relative, path.read_text(encoding="utf-8"))):
             readers.add(relative)
     assert readers == _READS_A_CURSOR, (

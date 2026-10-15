@@ -3,11 +3,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.lib import timezone as display_timezone_lib
-from db_ops.metrics.models import MetricDefinition, MetricResult, MetricTarget
-from db_ops.metrics.storage import MetricStore
-from db_ops.reports.metrics_reports import (
+from dbabrain.db import DbaBrainStore
+from dbabrain.lib import timezone as display_timezone_lib
+from dbabrain.metrics.models import MetricDefinition, MetricResult, MetricTarget
+from dbabrain.metrics.storage import MetricStore
+from dbabrain.reports.metrics_reports import (
     DEFAULT_REPORTS_CONFIG_PATH,
     TELEGRAM_SAFE_TEXT_LENGTH,
     create_backup_health_report,
@@ -46,7 +46,7 @@ class FrozenDateTime(datetime):
 
 
 def insert_backup_health_report(sqlite_path):
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     return store.insert_report(
         report_code="BACKUP_HEALTH",
         report_name="Backup health report",
@@ -68,7 +68,7 @@ def test_push_report_alerts_queues_backup_health_to_logging_group(tmp_path):
         dedupe_seconds=0,
     )
 
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     queued = store.fetch_pending_telegram_send_messages(limit=10)
     assert result["queued"] == 1
     assert result["pushed"] == 1
@@ -196,8 +196,8 @@ def test_run_scheduled_reports_queues_once_then_skips_by_report_state(tmp_path, 
         sqlite_path,
         collected_at=(datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
 
     first = run_scheduled_reports(
         sqlite_path=sqlite_path,
@@ -212,7 +212,7 @@ def test_run_scheduled_reports_queues_once_then_skips_by_report_state(tmp_path, 
         summary_limit=150,
     )
 
-    queued = DbOpsStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
+    queued = DbaBrainStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
     assert first["created"] == 1
     assert first["queued"] == 1
     assert second["created"] == 0
@@ -227,9 +227,9 @@ def test_daily_logging_report_runs_only_inside_allowed_window(tmp_path, monkeypa
     reports_config_path = tmp_path / "reports_config.json"
     write_report_config(reports_config_path, allowed_from_hour=10, allowed_to_hour=11, metric_max_age=600)
     target, definition = insert_logging_metric(sqlite_path, collected_at="2026-06-04T03:29:00Z")
-    monkeypatch.setattr("db_ops.reports.metrics_reports.datetime", FrozenDateTime)
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.datetime", FrozenDateTime)
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
 
     result = run_scheduled_reports(
         sqlite_path=sqlite_path,
@@ -283,10 +283,10 @@ def test_daily_logging_report_uses_metric_max_age_as_summary_window(tmp_path, mo
             ),
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.datetime", FrozenDateTime)
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
-    monkeypatch.setattr("db_ops.reports.metrics_reports._metric_config_intervals", lambda: {"INSTANCE_STATUS": 60})
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.datetime", FrozenDateTime)
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports._metric_config_intervals", lambda: {"INSTANCE_STATUS": 60})
 
     result = run_scheduled_reports(
         sqlite_path=sqlite_path,
@@ -295,7 +295,7 @@ def test_daily_logging_report_uses_metric_max_age_as_summary_window(tmp_path, mo
         summary_limit=150,
     )
 
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     queued = store.fetch_pending_telegram_send_messages(limit=10)
     report_text = queued[0]["message_text"]
     rows = MetricStore(sqlite_path).fetch_latest_results(limit=10)
@@ -313,7 +313,7 @@ def test_daily_logging_report_skips_outside_allowed_window(tmp_path, monkeypatch
     sqlite_path = tmp_path / "runtime.sqlite"
     reports_config_path = tmp_path / "reports_config.json"
     write_report_config(reports_config_path, allowed_from_hour=10, allowed_to_hour=11)
-    monkeypatch.setattr("db_ops.reports.metrics_reports.datetime", FrozenDateTime)
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.datetime", FrozenDateTime)
     FrozenDateTime.fixed_now = datetime(2026, 6, 4, 2, 30, 0, tzinfo=timezone.utc)
 
     result = run_scheduled_reports(
@@ -339,7 +339,7 @@ def test_the_same_window_and_the_same_instant_answer_differently_in_two_zones(tm
     """
     reports_config_path = tmp_path / "reports_config.json"
     write_report_config(reports_config_path, allowed_from_hour=10, allowed_to_hour=11)
-    monkeypatch.setattr("db_ops.reports.metrics_reports.datetime", FrozenDateTime)
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.datetime", FrozenDateTime)
     FrozenDateTime.fixed_now = datetime(2026, 6, 4, 3, 30, 0, tzinfo=timezone.utc)
 
     def run(zone, path):
@@ -362,7 +362,7 @@ def test_daily_logging_report_respects_legacy_send_state_repeat_interval(tmp_pat
     sqlite_path = tmp_path / "runtime.sqlite"
     reports_config_path = tmp_path / "reports_config.json"
     write_report_config(reports_config_path, allowed_from_hour=10, allowed_to_hour=11)
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     store.upsert_report_send_state(
         report_code="rp_metric_hourly_logging",
         channel="logging",
@@ -371,7 +371,7 @@ def test_daily_logging_report_respects_legacy_send_state_repeat_interval(tmp_pat
         last_status="queued",
         last_skipped_reason="",
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.datetime", FrozenDateTime)
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.datetime", FrozenDateTime)
 
     result = run_scheduled_reports(
         sqlite_path=sqlite_path,
@@ -393,9 +393,9 @@ def test_daily_logging_report_ignores_stale_metric_rows_by_max_age(tmp_path, mon
     reports_config_path = tmp_path / "reports_config.json"
     write_report_config(reports_config_path, allowed_from_hour=10, allowed_to_hour=11, metric_max_age=600)
     target, definition = insert_logging_metric(sqlite_path, collected_at="2026-06-04T03:00:00Z")
-    monkeypatch.setattr("db_ops.reports.metrics_reports.datetime", FrozenDateTime)
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.datetime", FrozenDateTime)
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
 
     result = run_scheduled_reports(
         sqlite_path=sqlite_path,
@@ -412,7 +412,7 @@ def test_daily_logging_report_ignores_stale_metric_rows_by_max_age(tmp_path, mon
 def test_push_report_alerts_can_filter_report_ids(tmp_path):
     sqlite_path = tmp_path / "runtime.sqlite"
     first_report_id = insert_backup_health_report(sqlite_path)
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     second_report_id = store.insert_report(
         report_code="BACKUP_HEALTH",
         report_name="Backup health report",
@@ -456,7 +456,7 @@ def test_create_metrics_reports_skips_reports_disabled_target(tmp_path, monkeypa
             }
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.DEFAULT_DATA_DIR", data_dir)
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.DEFAULT_DATA_DIR", data_dir)
     metric_store = MetricStore(sqlite_path)
     metric_store.insert_results(
         run_id=1,
@@ -505,8 +505,8 @@ def test_push_report_alerts_skips_alerts_disabled_target(tmp_path, monkeypatch):
             }
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.DEFAULT_DATA_DIR", data_dir)
-    store = DbOpsStore(sqlite_path)
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.DEFAULT_DATA_DIR", data_dir)
+    store = DbaBrainStore(sqlite_path)
     report_id = store.insert_report(
         report_code="rp_metric_daily_logging",
         report_name="Daily Metrics Logging Summary",
@@ -573,11 +573,11 @@ def test_backup_health_report_ignores_synthetic_target_db_name_from_no_data(tmp_
             ),
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
 
     result = create_backup_health_report(sqlite_path=sqlite_path, force=True)
 
-    report = DbOpsStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
+    report = DbaBrainStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
     assert result["created"] == 1
     assert "- APPDB_Prod:" in report["report_text"]
     assert "- APPDB-PROD:" not in report["report_text"]
@@ -622,13 +622,13 @@ def test_create_metrics_reports_marks_metric_rows_without_queueing_telegram(tmp_
             )
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
 
     result = create_metrics_reports(sqlite_path=sqlite_path, summary_limit=150)
 
     rows = metric_store.fetch_latest_report_results(metric_codes={definition.metric_code})
-    queued = DbOpsStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
+    queued = DbaBrainStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
     assert result["created"] == 1
     assert result["marked_daily_report_rows"] == 1
     assert rows[0]["daily_report_created"] == 1
@@ -699,14 +699,14 @@ def test_create_metrics_reports_can_scope_to_one_target(tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setattr(
-        "db_ops.reports.metrics_reports.load_metric_targets",
+        "dbabrain.reports.metrics_reports.load_metric_targets",
         lambda **kwargs: [target for target in [target_a, target_b] if not kwargs.get("target_id") or target.target_id == kwargs["target_id"]],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
 
     result = create_metrics_reports(sqlite_path=sqlite_path, summary_limit=150, target_id=target_a.target_id)
     rows = metric_store.fetch_latest_results(limit=10, metric_code=definition.metric_code)
-    report = DbOpsStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
+    report = DbaBrainStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
 
     marked_by_target = {row["target_id"]: row["daily_report_created"] for row in rows}
     assert result["created"] == 1
@@ -768,11 +768,11 @@ def test_create_metrics_reports_preserves_query_store_message(tmp_path, monkeypa
             )
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
 
     result = create_metrics_reports(sqlite_path=sqlite_path, summary_limit=150)
-    report = DbOpsStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
+    report = DbaBrainStore(sqlite_path).fetch_reports_for_push(limit=10)[0]
 
     assert result["created"] == 1
     assert "QUERY_STORE_QUERY_ISSUES" in report["report_text"]
@@ -790,7 +790,7 @@ def test_create_metrics_reports_preserves_query_store_message(tmp_path, monkeypa
         telegram_groups={"critical": "-100"},
         dedupe_seconds=0,
     )
-    queued = DbOpsStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
+    queued = DbaBrainStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
 
     assert push_result["queued"] == 3
     assert len(queued) == 3
@@ -841,8 +841,8 @@ def test_create_metrics_reports_skips_latest_rows_already_marked_daily_report(tm
             )
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
 
     first_create = create_metrics_reports(sqlite_path=sqlite_path, summary_limit=150)
     second_create = create_metrics_reports(sqlite_path=sqlite_path, summary_limit=150)
@@ -852,7 +852,7 @@ def test_create_metrics_reports_skips_latest_rows_already_marked_daily_report(tm
         dedupe_seconds=0,
     )
 
-    queued = DbOpsStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
+    queued = DbaBrainStore(sqlite_path).fetch_pending_telegram_send_messages(limit=10)
     assert first_create["created"] == 1
     assert second_create["created"] == 0
     assert second_create["skipped"] == [{"reason": "latest metric rows already have daily_report_created=1"}]
@@ -920,12 +920,12 @@ def test_create_metrics_reports_marks_previous_collect_rows_as_reported(tmp_path
             )
         ],
     )
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_targets", lambda **_: [target])
-    monkeypatch.setattr("db_ops.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.reports.metrics_reports.load_metric_definitions", lambda *_, **__: [definition])
 
     result = create_metrics_reports(sqlite_path=sqlite_path, summary_limit=150)
     rows = metric_store.fetch_latest_results(limit=10, metric_code=definition.metric_code)
-    report_store = DbOpsStore(sqlite_path)
+    report_store = DbaBrainStore(sqlite_path)
     report = report_store.fetch_reports_for_push(limit=10)[0]
 
     assert result["created"] == 1
@@ -945,7 +945,7 @@ def test_push_report_alerts_skips_backup_health_when_logging_group_missing(tmp_p
         dedupe_seconds=0,
     )
 
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     queued = store.fetch_pending_telegram_send_messages(limit=10)
     assert result["queued"] == 0
     assert result["pushed"] == 0
@@ -973,7 +973,7 @@ def test_long_report_text_is_split_for_telegram_limit():
 def test_push_report_alerts_queues_long_report_as_multiple_messages(tmp_path):
     sqlite_path = tmp_path / "runtime.sqlite"
     long_text = "[BACKUP HEALTH]\n" + "\n".join(f"- DB{i}: FULL 1/1 DIFF 1/1 LOG 1/1 age=1h/OK" for i in range(500))
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     report_id = store.insert_report(
         report_code="BACKUP_HEALTH",
         report_name="Backup health report",

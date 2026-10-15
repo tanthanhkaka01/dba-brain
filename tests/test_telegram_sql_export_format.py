@@ -13,8 +13,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from db_ops.common.config_admin import FILE_OUTPUT_FORMATS
-from db_ops.telegram.command_processor import _format_argument_position
+from dbabrain.common.config_admin import FILE_OUTPUT_FORMATS
+from dbabrain.telegram.command_processor import _format_argument_position
 from conftest import shipped_config
 
 COMMANDS_PATH = shipped_config("telegram_support_commands.json")

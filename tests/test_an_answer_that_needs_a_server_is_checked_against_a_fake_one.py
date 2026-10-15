@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.common import cli, db_connect, remote_exec, sql_run
+from dbabrain.common import cli, db_connect, remote_exec, sql_run
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -309,8 +309,8 @@ def host(monkeypatch) -> _Host:
 def _nothing_configured(monkeypatch, tmp_path):
     """An empty tool root: an operation answers from its request (R09), so nothing here is read."""
     (tmp_path / "data").mkdir()
-    monkeypatch.setenv("DB_OPS_HOME", str(tmp_path))
-    monkeypatch.setenv("DB_OPS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("DBABRAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("DBABRAIN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.chdir(tmp_path)
 
 
@@ -327,7 +327,7 @@ def _answer(monkeypatch, capsys, command: str, request: dict) -> dict:
 
 
 def _described() -> dict[str, set[str]]:
-    reference = json.loads((REPO / "db_ops" / "common" / "catalogue" / "shared_config_objects.json")
+    reference = json.loads((REPO / "dbabrain" / "common" / "catalogue" / "shared_config_objects.json")
                            .read_text(encoding="utf-8"))
     return {command: {field["field"] for field in entry["fields"]}
             for entry in reference["shared_config_objects"] if entry.get("kind") == "output"
@@ -509,7 +509,7 @@ def test_sqlserver_verify_build(server, host, monkeypatch, capsys):
 
 
 def _instance_policy() -> dict:
-    shipped = json.loads((REPO / "db_ops" / "common" / "catalogue" / "sqlserver_instance_policy.json")
+    shipped = json.loads((REPO / "dbabrain" / "common" / "catalogue" / "sqlserver_instance_policy.json")
                          .read_text(encoding="utf-8"))
     return shipped.get("sqlserver_instance_policy", shipped)
 
@@ -659,7 +659,7 @@ def test_move_db_docker(host, monkeypatch, capsys):
         "docker network inspect": (0, "10.77.1.0/24 \n"),
     })
     _holds(_answer(monkeypatch, capsys, "move-db-docker", {
-        "name": "PG_LAB_A", "engine": "postgres",
+        "name": "PG_LAB_A", "engine": "postgres", "containers_dir": "/opt/db_ops/containers",
         "source": {"label": "LAB-A", "host": "192.0.2.20", "port": 22, "username": "u", "password": "p"},
         "destination": {"label": "LAB-B", "host": "192.0.2.21", "port": 22, "username": "u",
                         "password": "p"}, "dry_run": True}),
@@ -707,7 +707,7 @@ def smb_node(monkeypatch):
     """`smbclient` and `cmdkey`, faked where `common.smb` starts them - this node, not a host."""
     import subprocess
 
-    from db_ops.common import smb
+    from dbabrain.common import smb
 
     ran: list[list[str]] = []
 
@@ -776,12 +776,12 @@ def test_rotate_password(monkeypatch, capsys, server, tmp_path):
     """Its job is the store (R09's first kind), so it reads a real one - on this test's own root: the
     inventory names the login, `users.json` its ref, and the encrypted store its current password.
     A dry run proves the password on the (fake) server and changes nothing."""
-    from db_ops.lib import data_sources, secret_text
+    from dbabrain.lib import data_sources, secret_text
 
     data = tmp_path / "data"
     # The module-level default is the checkout's own data/; it must never be the one read here.
     monkeypatch.setattr(data_sources, "DEFAULT_DATA_DIR", data)
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "a key for this test only")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "a key for this test only")
     (data / "db_instances.json").write_text(json.dumps({"db_instances": [{
         "server_id": "LAB", "db_type": "sqlserver", "ip": "192.0.2.10", "port": 1433,
         "instance_name": "MSSQLSERVER", "default_credential_name": "lab_dba", "active": True}]}),

@@ -3,7 +3,7 @@
 `worker-run` echoes each line it sends (`[remote] $ ...`) and names it again when it fails. On
 2026-10-05 the upgrade procedure's own `restore-add @... --key-base64 <key>` came back verbatim, the
 base64 key in clear on the console and in any log of that session (0.27.0 item 1.92). The same lines
-carry the key a second way, `-e DB_OPS_SECRET_KEY="$(echo <key> | base64 -d)"`, inside quotes.
+carry the key a second way, `-e DBABRAIN_SECRET_KEY="$(echo <key> | base64 -d)"`, inside quotes.
 
 What is shown is redacted; what is run is not - the remote side still needs the value.
 """
@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.control import _support
-from db_ops.lib.remote_host import RemoteError, RemoteRun
-from db_ops.lib.secret_text import redact_key_arguments
+from dbabrain.control import _support
+from dbabrain.lib.remote_host import RemoteError, RemoteRun
+from dbabrain.lib.secret_text import redact_key_arguments
 
 # Built, not written: a key-shaped literal here is what the secret scan exists to catch, and a
 # test placeholder that trips it trains people to allowlist (release_process.md §2.1).
@@ -27,9 +27,9 @@ KEY = "-".join(("made", "up", "passphrase", "of", "this", "test"))
     f"python -m x daemon --key-base64={KEY}",
     f"python -m x daemon --key {KEY}",
     f'python -m x daemon --key "{KEY} with spaces"',
-    f"docker compose run -e DB_OPS_SECRET_KEY=\"$(echo {KEY} | base64 -d)\" dbabrain check",
-    f"env DB_OPS_KEY_BASE64={KEY} python -m x check",
-    f"env DB_OPS_SECRET_KEY='{KEY}' python -m x check",
+    f"docker compose run -e DBABRAIN_SECRET_KEY=\"$(echo {KEY} | base64 -d)\" dbabrain check",
+    f"env DBABRAIN_KEY_BASE64={KEY} python -m x check",
+    f"env DBABRAIN_SECRET_KEY='{KEY}' python -m x check",
 ])
 def test_every_way_a_line_carries_the_passphrase_is_hidden(line):
     shown = redact_key_arguments(line)
@@ -39,9 +39,9 @@ def test_every_way_a_line_carries_the_passphrase_is_hidden(line):
 
 
 def test_a_variable_named_without_a_value_leaves_the_next_word_alone():
-    """`-e DB_OPS_SECRET_KEY` passes the caller's value without naming it; `dbabrain` is the
+    """`-e DBABRAIN_SECRET_KEY` passes the caller's value without naming it; `dbabrain` is the
     service, and hiding it would make the line unreadable for no gain."""
-    line = "docker compose run -e DB_OPS_SECRET_KEY dbabrain check"
+    line = "docker compose run -e DBABRAIN_SECRET_KEY dbabrain check"
 
     assert redact_key_arguments(line) == line
 

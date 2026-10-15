@@ -34,14 +34,14 @@ toolkit, so that guide is also where configuring the node continues (step 7).
 | Disk | about 1.5 GB per image. You keep two while you upgrade: the new one, and the one you roll back to |
 | A passphrase | you choose it once. It encrypts the secret store, and **nothing else can decrypt that store** |
 | Reach | from this host to your databases, and to `ghcr.io` for the image |
-| Port 8080 | the console (`/db_ops/`) and the report pages (`/report_dba/`) |
+| Port 8080 | the console (`/dbabrain/`) and the report pages (`/report_dba/`) |
 
 ## 1. Pull the image and look at it
 
 ```bash
 IMAGE=ghcr.io/tanthanhkaka01/dbabrain
 docker pull $IMAGE:latest
-docker run --rm $IMAGE:latest db-ops --version
+docker run --rm $IMAGE:latest dbabrain --version
 docker run --rm --entrypoint id $IMAGE:latest
 docker run --rm $IMAGE:latest --help
 ```
@@ -62,9 +62,9 @@ root, and the next two steps follow from that.
 ```bash
 sudo mkdir -p /opt/dbabrain && sudo chown "$USER": /opt/dbabrain
 cd /opt/dbabrain
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work $IMAGE:latest db-ops init
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work $IMAGE:latest dbabrain init
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work $IMAGE:latest \
-  db-ops db --config config.json timezone --set Europe/Berlin
+  dbabrain db --config config.json timezone --set Europe/Berlin
 ```
 
 `init` writes the tool root into the folder you mounted:
@@ -123,8 +123,8 @@ The ones that cost something when they were missing:
 | `image: ...:${DBABRAIN_TAG:-latest}` | The version lives in `.env`. Upgrading and rolling back never edit the compose file |
 | `hostname: dbabrain` | The store knows the node, and every run it has open, by its host name. Left to Docker, the name is the container id, and it changes on every recreate. The next container then finds its predecessor's open runs belonging to *another host* and waits out their timeouts. Measured in the rehearsal: the two containers started before this line each added a row to the node list; the pinned one kept a single row through three recreates |
 | `init: true` | Something that reaps as PID 1. Without it, the commands the bot starts in the background become zombies, and the bot reports a finished command as still running |
-| `DB_OPS_NODE_ROLE=worker` | A daemon not told its role is `master`, which schedules nothing and looks healthy and idle |
-| `- DB_OPS_SECRET_KEY` | The passphrase is passed through from the shell that runs `docker compose up`. It is never a value in this file or in `.env` |
+| `DBABRAIN_NODE_ROLE=worker` | A daemon not told its role is `master`, which schedules nothing and looks healthy and idle |
+| `- DBABRAIN_SECRET_KEY` | The passphrase is passed through from the shell that runs `docker compose up`. It is never a value in this file or in `.env` |
 | `config.json:ro` | The configuration is yours and read-only to the service. `data/` is where it writes |
 | `networks: ... subnet` | A network on a /24 you chose. Docker's default pool once handed a stack a /16 holding a real database server, which the host then could not reach (*No route to host*). Pick a /24 none of your monitored machines is in |
 | the `docker.sock` lines | Commented out. Only `sre create-db-docker` needs them, and the socket is root on this host |
@@ -132,7 +132,7 @@ The ones that cost something when they were missing:
 ## 5. Run everything once, before configuring anything
 
 ```bash
-read -rsp 'passphrase: ' DB_OPS_SECRET_KEY; echo; export DB_OPS_SECRET_KEY
+read -rsp 'passphrase: ' DBABRAIN_SECRET_KEY; echo; export DBABRAIN_SECRET_KEY
 docker compose run --rm dbabrain daemon --once
 cat logs/errors.log
 ```
@@ -148,7 +148,7 @@ and `--once` waits for what it starts. `logs/errors.log` holds only its header.
 
 ```bash
 docker compose up -d
-docker compose exec dbabrain db-ops db --config config.json sync-config '{}'
+docker compose exec dbabrain dbabrain db --config config.json sync-config '{}'
 ```
 
 `sync-config` gives the store its copy of `data/`, which is what the console shows.
@@ -157,12 +157,12 @@ After two or three minutes:
 
 ```bash
 docker compose ps
-echo '{}' | docker compose exec -T dbabrain db-ops common self-status -
-docker compose exec dbabrain db-ops db --config config.json ops-status '{}'
-curl -s -o /dev/null -w 'console %{http_code}\n' http://127.0.0.1:8080/db_ops/login
+echo '{}' | docker compose exec -T dbabrain dbabrain common self-status -
+docker compose exec dbabrain dbabrain db --config config.json ops-status '{}'
+curl -s -o /dev/null -w 'console %{http_code}\n' http://127.0.0.1:8080/dbabrain/login
 curl -s -o /dev/null -w 'reports %{http_code}\n' http://127.0.0.1:8080/report_dba/
 cat logs/errors.log
-docker compose exec -T dbabrain sh -c 'echo "passphrase length: ${#DB_OPS_SECRET_KEY}"'
+docker compose exec -T dbabrain sh -c 'echo "passphrase length: ${#DBABRAIN_SECRET_KEY}"'
 ```
 
 **Proves:**
@@ -183,7 +183,7 @@ there.
 ## 7. Configure it
 
 From here the node is configured as in [`standing-up-a-node.md`](../standing-up-a-node.md), from
-its step 5. Each `db-ops ...` there runs here as `docker compose exec dbabrain db-ops ...`. Three
+its step 5. Each `dbabrain ...` there runs here as `docker compose exec dbabrain dbabrain ...`. Three
 things differ in a container.
 
 **A secret goes in on stdin, and `-T` passes stdin through.** `read -s` keeps it off the screen;
@@ -191,7 +191,7 @@ things differ in a container.
 
 ```bash
 read -rsp 'bot token: ' T; echo
-printf '{"ref": "TELEGRAM_BOT_TOKEN", "value": "%s"}' "$T" | docker compose exec -T dbabrain db-ops common secret-set -
+printf '{"ref": "TELEGRAM_BOT_TOKEN", "value": "%s"}' "$T" | docker compose exec -T dbabrain dbabrain common secret-set -
 unset T
 ```
 
@@ -200,7 +200,7 @@ see is on Docker's private network, so `use-base-url --this-node` refuses there 
 reason. Give this host's own:
 
 ```bash
-docker compose exec dbabrain db-ops reports --config config.json use-base-url http://192.0.2.10:8080/report_dba/
+docker compose exec dbabrain dbabrain reports --config config.json use-base-url http://192.0.2.10:8080/report_dba/
 ```
 
 **Edit `data/*.json` through the toolkit**, with its registrars, the console or the bot: `data/`
@@ -213,7 +213,7 @@ belongs to uid 10001 now. For a hand edit, use `sudo`, then `sync-config` as in 
 ```bash
 cd /opt/dbabrain
 IMAGE=ghcr.io/tanthanhkaka01/dbabrain
-OLD=$(docker compose exec -T dbabrain db-ops --version); echo "$OLD"
+OLD=$(docker compose exec -T dbabrain dbabrain --version); echo "$OLD"
 curl -s https://pypi.org/pypi/dbabrain/json | python3 -c "import json,sys;print(json.load(sys.stdin)['info']['version'])"
 tail -5 logs/backup.log
 ```
@@ -233,7 +233,7 @@ mkdir -p ~/dbabrain_backups
 tar czf ~/dbabrain_backups/before_$V.tgz config.json data assets docker-compose.yml .env
 docker tag $IMAGE:latest $IMAGE:$OLD       # BEFORE the pull, or the old image loses its name
 docker compose pull
-docker run --rm $IMAGE:latest db-ops --version
+docker run --rm $IMAGE:latest dbabrain --version
 ```
 
 On a pinned tag, put the new version in `.env` (`DBABRAIN_TAG=0.24.0`) before `docker compose
@@ -247,10 +247,10 @@ image, and the new one prints `$V`.
 
 ```bash
 docker compose stop
-docker compose run --rm --no-deps -T dbabrain db-ops common upgrade-config '{}'
-docker compose run --rm --no-deps -T dbabrain db-ops common upgrade-config '{"dry_run": false}'
-docker compose run --rm --no-deps -T dbabrain db-ops db --config config.json init
-docker compose run --rm --no-deps -T dbabrain db-ops db --config config.json sync-config '{}'
+docker compose run --rm --no-deps -T dbabrain dbabrain common upgrade-config '{}'
+docker compose run --rm --no-deps -T dbabrain dbabrain common upgrade-config '{"dry_run": false}'
+docker compose run --rm --no-deps -T dbabrain dbabrain db --config config.json init
+docker compose run --rm --no-deps -T dbabrain dbabrain db --config config.json sync-config '{}'
 ```
 
 `docker compose run` starts a throwaway container of the **new** image, with the service's own
@@ -282,7 +282,7 @@ registrar that owns the record (`backup-add` / `restore-add` with `"replace": tr
 
 ```bash
 docker compose up -d
-docker compose exec -T dbabrain db-ops --version
+docker compose exec -T dbabrain dbabrain --version
 docker inspect dbabrain --format '{{.Config.Image}} restarts={{.RestartCount}}'
 ```
 
@@ -298,9 +298,9 @@ ls runtime/config_upgrade/                  # the newest stamp is this upgrade's
 STAMP=20260928T013945Z                       # yours
 docker compose run --rm --no-deps -T --entrypoint sh dbabrain -c "cp runtime/config_upgrade/$STAMP/*.json data/"
 sed -i "s/^DBABRAIN_TAG=.*/DBABRAIN_TAG=$OLD/" .env
-docker compose run --rm --no-deps -T dbabrain db-ops db --config config.json sync-config '{}'
+docker compose run --rm --no-deps -T dbabrain dbabrain db --config config.json sync-config '{}'
 docker compose up -d
-docker compose exec -T dbabrain db-ops --version
+docker compose exec -T dbabrain dbabrain --version
 ```
 
 **Both halves, or neither.** The old image on moved files runs something other than what you had:
@@ -335,12 +335,12 @@ Put `DBABRAIN_TAG=latest` back in `.env` before the next upgrade that follows `l
   ```bash
   sed -i 's#"timezone": "[^"]*"#"timezone": "UTC"#' config.json
   docker compose restart
-  echo '{}' | docker compose exec -T dbabrain db-ops common self-status - | grep -E '"timezone"|"utc_offset"'
+  echo '{}' | docker compose exec -T dbabrain dbabrain common self-status - | grep -E '"timezone"|"utc_offset"'
   ```
 
   The step-2 form no longer works here: the entrypoint refuses your uid once `logs/` is 10001's.
 - **`-T`** on `docker compose exec` and `run` whenever stdin is piped, or the request never
   arrives.
-- **`DB_OPS_NODE_ROLE`**, **`init: true`** and the **network** are in the compose file for the
+- **`DBABRAIN_NODE_ROLE`**, **`init: true`** and the **network** are in the compose file for the
   reasons beside them. A file of your own that drops one gets back the failure that line was
   written against.

@@ -1,6 +1,6 @@
 """An install with no targets has nothing to be compliant about.
 
-`db-ops init` writes a schedule that includes `APP-SLA-VALIDATE`, and on a root that has only ever
+`dbabrain init` writes a schedule that includes `APP-SLA-VALIDATE`, and on a root that has only ever
 run `init` there are five required policies, no inventory, and therefore no data. Until 2026-09-10
 that produced `status: FAILED` and exit 1 — so a correct new install logged a failing app command
 every cycle, on its first day, with nothing wrong.
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 
-from db_ops.sla import compliance
+from dbabrain.sla import compliance
 
 
 def _inventory(tmp_path, records):
@@ -62,7 +62,7 @@ def test_a_missing_inventory_file_is_no_targets(tmp_path):
 
 def test_no_data_exits_zero_while_a_real_failure_still_exits_one():
     """The exit code is what the daemon records as a failing app command."""
-    from db_ops.sla.cli import exit_code_for
+    from dbabrain.sla.cli import exit_code_for
 
     assert exit_code_for("NO_DATA") == 0
     assert exit_code_for("PASSED") == 0
@@ -72,13 +72,13 @@ def test_no_data_exits_zero_while_a_real_failure_still_exits_one():
 
 
 def test_allow_fail_still_silences_everything():
-    from db_ops.sla.cli import exit_code_for
+    from dbabrain.sla.cli import exit_code_for
 
     assert exit_code_for("FAILED", allow_fail=True) == 0
 
 
 def test_an_unknown_status_is_treated_as_a_failure_rather_than_waved_through():
-    from db_ops.sla.cli import exit_code_for
+    from dbabrain.sla.cli import exit_code_for
 
     assert exit_code_for("") == 1
     assert exit_code_for("SOMETHING_NEW") == 1

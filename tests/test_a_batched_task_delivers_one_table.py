@@ -19,8 +19,8 @@ import json
 
 import pytest
 
-from db_ops.lib.task_output import TaskOutputError, merge_result_sets, parse_output
-from db_ops.sql_tasks import runner
+from dbabrain.lib.task_output import TaskOutputError, merge_result_sets, parse_output
+from dbabrain.sql_tasks import runner
 
 from test_sql_task_claims import sql_command, sql_target
 
@@ -119,7 +119,7 @@ def _run_batched_task(tmp_path, monkeypatch, *, progress_per_file=None, batches=
 
     from test_sql_task_claims import RecordingSqlRunStore, inventory_and_credentials
 
-    from db_ops.sql_tasks.python_source import PythonSource
+    from dbabrain.sql_tasks.python_source import PythonSource
 
     data_dir = tmp_path / "data"
     (data_dir / "sql").mkdir(parents=True)

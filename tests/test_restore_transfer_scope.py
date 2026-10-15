@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import backup_copy
+from dbabrain.common import backup_copy
 
 
 # The chain moved into common with the copy (0.23.0); the job objects below are what the app
@@ -119,7 +119,7 @@ def test_the_wal_directory_always_travels_whole():
 def test_a_source_with_no_full_backup_is_refused_not_copied_whole():
     """Owner decision 2026-10-01 (review 0.25.0, G2.9): no fallback. There is no chain to restore
     from, so nothing is copied and the restore fails saying so."""
-    from db_ops.common.backup_copy import ChainUnknownError
+    from dbabrain.common.backup_copy import ChainUnknownError
 
     only_incrementals = "/b/base/20260803T185512Z_INCR\n"
     with pytest.raises(ChainUnknownError, match="no _FULL backup"):
@@ -214,7 +214,7 @@ def test_oracle_asks_rman_and_never_reads_the_file_names():
 
 def test_a_preview_that_names_no_pieces_is_refused():
     """No fallback to the whole directory (review 0.25.0, G2.9): the chain is unknown, so say so."""
-    from db_ops.common.backup_copy import ChainUnknownError
+    from dbabrain.common.backup_copy import ChainUnknownError
 
     with pytest.raises(ChainUnknownError, match="named no backup pieces"):
         _transfer_include(_OracleJob(), _OracleClient(preview="RMAN-06026: some targets not found\n"),
@@ -222,7 +222,7 @@ def test_a_preview_that_names_no_pieces_is_refused():
 
 
 def test_a_catalog_answer_with_nothing_under_the_backup_dir_is_refused():
-    from db_ops.common.backup_copy import ChainUnknownError
+    from dbabrain.common.backup_copy import ChainUnknownError
 
     with pytest.raises(ChainUnknownError, match="does not hold the chain"):
         _transfer_include(_OracleJob(), _OracleClient(handles="/somewhere/else/piece.bkp\n"),
@@ -231,7 +231,7 @@ def test_a_catalog_answer_with_nothing_under_the_backup_dir_is_refused():
 
 def test_oracle_without_a_source_container_is_refused():
     """Without a container there is nothing to ask, and guessing is what this must never do."""
-    from db_ops.common.backup_copy import ChainUnknownError
+    from dbabrain.common.backup_copy import ChainUnknownError
 
     with pytest.raises(ChainUnknownError, match="no container"):
         _transfer_include(_OracleJob(), _OracleClient())

@@ -15,7 +15,7 @@ split and the bands, because losing either turns the metric back into a wall of 
 import json
 
 import pytest
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 from conftest import shipped_config
 
 STATS_SQL = resolve_tool_path("assets/metrics/sqlserver/062_sqlserver_statistics_age.sql")

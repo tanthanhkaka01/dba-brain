@@ -3,12 +3,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.backup_restore.backup import (
+from dbabrain.backup_restore.backup import (
     BackupJob,
     load_backup_jobs,
     select_due_backup_jobs,
 )
-from db_ops.lib.time_window import TimeWindow
+from dbabrain.lib.time_window import TimeWindow
 from conftest import shipped_config
 
 
@@ -118,7 +118,7 @@ def test_load_backup_jobs_requires_backup_dir(tmp_path):
 def test_a_config_without_backups_falls_back_to_the_canonical_file(tmp_path, monkeypatch):
     """The scheduled command runs with --config config.json, which carries app settings but no
     backup entries; without the fallback the daemon would silently back nothing up."""
-    import db_ops.backup_restore.backup as backup_module
+    import dbabrain.backup_restore.backup as backup_module
 
     canonical = tmp_path / "restore_config.json"
     canonical.write_text(
@@ -143,13 +143,13 @@ def test_a_config_without_backups_falls_back_to_the_canonical_file(tmp_path, mon
     monkeypatch.setattr(backup_module, "DEFAULT_RESTORE_CONFIG_PATH", canonical)
 
     app_config = tmp_path / "config.json"
-    app_config.write_text(json.dumps({"app_name": "db_ops"}), encoding="utf-8")
+    app_config.write_text(json.dumps({"app_name": "dbabrain"}), encoding="utf-8")
 
     assert [item.backup_id for item in load_backup_jobs(app_config)] == ["FROM_CANONICAL"]
 
 
 def test_an_explicit_backups_list_is_not_replaced_by_the_fallback(tmp_path, monkeypatch):
-    import db_ops.backup_restore.backup as backup_module
+    import dbabrain.backup_restore.backup as backup_module
 
     canonical = tmp_path / "canonical_restore_config.json"
     canonical.write_text(
@@ -166,7 +166,7 @@ def test_an_explicit_backups_list_is_not_replaced_by_the_fallback(tmp_path, monk
 
 def test_an_empty_backups_array_means_none_configured(tmp_path, monkeypatch):
     """An explicit empty list is a decision ("nothing to back up here"), not a missing section."""
-    import db_ops.backup_restore.backup as backup_module
+    import dbabrain.backup_restore.backup as backup_module
 
     monkeypatch.setattr(backup_module, "DEFAULT_RESTORE_CONFIG_PATH", tmp_path / "missing.json")
     path = tmp_path / "c.json"
@@ -241,8 +241,8 @@ def test_time_window_hours_gate_the_job():
 # execution went down to ``common``: reading the secret store is the app's half of the split, and
 # the spec below it carries values only. Same two rules, asserted where they now live.
 def _job_and_target(**over):
-    from db_ops.backup_restore.backup import BackupJob, BackupTarget
-    from db_ops.lib.time_window import TimeWindow
+    from dbabrain.backup_restore.backup import BackupJob, BackupTarget
+    from dbabrain.lib.time_window import TimeWindow
 
     fields = dict(
         backup_id="CLOUD_MSSQL_HA_PRIMARY", job="full", db_type="sqlserver",
@@ -261,8 +261,8 @@ def test_env_secrets_are_resolved_from_the_store_not_the_config():
     is fetched at run time."""
     # The app builds the *request*; parsing it into a spec is `common`'s side of the boundary,
     # which this test may cross because a test is not an app.
-    from db_ops.backup_restore.spec_builder import backup_request_from_job
-    from db_ops.common.backup.spec import parse_backup_spec
+    from dbabrain.backup_restore.spec_builder import backup_request_from_job
+    from dbabrain.common.backup.spec import parse_backup_spec
 
     job, target = _job_and_target(
         env={"BACKUP_LEVEL": "full"},
@@ -280,7 +280,7 @@ def test_env_secrets_are_resolved_from_the_store_not_the_config():
 def test_a_missing_secret_ref_fails_the_job_instead_of_running_without_it():
     """Silently omitting the passphrase would produce an *unencrypted* backup that reports
     success — the failure would only surface when someone needs the encryption."""
-    from db_ops.backup_restore.spec_builder import backup_request_from_job
+    from dbabrain.backup_restore.spec_builder import backup_request_from_job
 
     job, target = _job_and_target(
         env_secrets={"BACKUP_ENCRYPTION_PASSWORD": "TOKEN_203_0_113_188_BACKUP_ENC"})
@@ -301,8 +301,8 @@ def test_the_ssh_password_is_read_from_the_store_even_when_the_job_has_no_env_se
     failed on "password_ref ... is not in the secret store". That took out every ACME_* backup at
     once while the key-auth CLOUD_* ones kept running, because a key needs nothing decrypted.
     """
-    from db_ops.backup_restore import backup as backup_module
-    from db_ops.backup_restore.backup import BackupTarget, execute_backup_job
+    from dbabrain.backup_restore import backup as backup_module
+    from dbabrain.backup_restore.backup import BackupTarget, execute_backup_job
 
     job, _ = _job_and_target(env_secrets={})
     target = BackupTarget(server_id="S", host="192.0.2.249", username="tuser",
@@ -314,7 +314,7 @@ def test_the_ssh_password_is_read_from_the_store_even_when_the_job_has_no_env_se
     shipped = {}
 
     # Stubbed at the CLI boundary since 2026-08-15: the backup itself now runs in
-    # `db_ops.common.cli backup-database`, so patching `common.backup.run_backup` would patch a
+    # `dbabrain.common.cli backup-database`, so patching `common.backup.run_backup` would patch a
     # function in this process that nothing here calls. What is asserted is unchanged — the
     # resolved SSH password has to reach the request the app hands over.
     def fake_cli(command, request):
@@ -337,7 +337,7 @@ def test_the_ssh_password_is_read_from_the_store_even_when_the_job_has_no_env_se
 def test_one_backup_type_word_maps_to_each_engines_own_level():
     """RMAN counts levels, pg_basebackup names them, SQL Server has native terms. Making the
     operator remember which is which is how a "full" backup gets taken as an incremental."""
-    from db_ops.backup_restore.backup import backup_level_for
+    from dbabrain.backup_restore.backup import backup_level_for
 
     assert backup_level_for("oracle", "full") == "0"
     assert backup_level_for("oracle", "diff") == "1"
@@ -351,7 +351,7 @@ def test_one_backup_type_word_maps_to_each_engines_own_level():
 def test_asking_an_engine_for_a_level_it_does_not_have_is_refused():
     """Oracle/PostgreSQL take their log backups through a different script, so `log` here is a
     mistake — passing an unrecognised value into a shell script would fail far from the cause."""
-    from db_ops.backup_restore.backup import backup_level_for
+    from dbabrain.backup_restore.backup import backup_level_for
 
     with pytest.raises(ValueError, match="no 'log' level"):
         backup_level_for("oracle", "log")
@@ -364,7 +364,7 @@ def test_every_engine_script_job_states_its_level_and_its_days():
 
     These entries used to pass **no** level, because the PostgreSQL and Oracle scripts chose one by
     comparing a weekday against 7. That comparison read the container **host's** clock whenever
-    db_ops did not pass ``DB_OPS_WEEKDAY`` — a different day from the one the daemon evaluated the
+    dbabrain did not pass ``DBABRAIN_WEEKDAY`` — a different day from the one the daemon evaluated the
     same job's ``from_hour`` on — and on 2026-09-19 the two disagreed and five incrementals ran on
     the night the weekly full was due.
 
@@ -372,7 +372,7 @@ def test_every_engine_script_job_states_its_level_and_its_days():
     neither would silently take an incremental for ever, which is the failure this holds the config
     to: nothing weekly, and nothing saying so.
     """
-    from db_ops.backup_restore.backup import load_backup_jobs
+    from dbabrain.backup_restore.backup import load_backup_jobs
 
     # The ids are read from the config rather than named — see the note in the sqlserver-levels
     # test above. What identifies these entries is what they are: the `database*` jobs of an engine
@@ -404,7 +404,7 @@ def test_force_skips_the_schedule_but_not_a_run_already_in_flight():
     """Conflating the two started two copies of the same restore against one database, each
     waiting on the other. --force is about the *schedule*."""
     from datetime import datetime, timedelta, timezone
-    from db_ops.backup_restore import schedule
+    from dbabrain.backup_restore import schedule
 
     def row(status, minutes_ago=1):
         started = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
@@ -441,7 +441,7 @@ def _inactive_backup_ids(config_path: str) -> list[str]:
 
 
 def test_an_empty_config_says_so_rather_than_printing_a_bare_header():
-    from db_ops.backup_restore.cli import _format_backup_list
+    from dbabrain.backup_restore.cli import _format_backup_list
 
     assert "No active backup entries" in _format_backup_list([])
 
@@ -449,7 +449,7 @@ def test_an_empty_config_says_so_rather_than_printing_a_bare_header():
 def test_a_config_where_everything_is_off_says_so_instead_of_looking_empty():
     """"No active entries" plus the count is the difference between "nothing is configured"
     and "everything is switched off" - two very different things to be told at 3am."""
-    from db_ops.backup_restore.cli import _format_backup_list
+    from dbabrain.backup_restore.cli import _format_backup_list
 
     class _Off:
         active = False
@@ -462,8 +462,8 @@ def test_a_config_where_everything_is_off_says_so_instead_of_looking_empty():
 
 def _restore_entries(path=shipped_config("restore_config.json")):
     """Both loaders' entries, split active/inactive. The listing must account for all of them."""
-    from db_ops.backup_restore.config import load_restore_configs
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.config import load_restore_configs
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     smb = load_restore_configs(path)
     scripts = load_script_restores(path)
@@ -485,7 +485,7 @@ def test_a_failed_backup_says_why_in_the_message_not_only_in_error_text():
     """
     import inspect
 
-    from db_ops.backup_restore import backup
+    from dbabrain.backup_restore import backup
 
     source = inspect.getsource(backup.run_backup)
 
@@ -497,7 +497,7 @@ def test_the_reason_is_only_added_to_a_failure():
     """A successful backup has nothing to explain, and `error_text` on a `done` row is noise."""
     import inspect
 
-    from db_ops.backup_restore import backup
+    from dbabrain.backup_restore import backup
 
     source = inspect.getsource(backup.run_backup)
 

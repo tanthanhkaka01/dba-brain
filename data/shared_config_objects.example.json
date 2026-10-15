@@ -1,19 +1,19 @@
 {
     "schema_version": 2,
     "notes": [
-        "The shared configuration objects: the blocks that appear inside MANY data/*.json records and are parsed once, in db_ops/lib, rather than by each app. This file is the field-level reference for them - what each field does, whether it is required, what values it accepts, and what its number is measured against.",
+        "The shared configuration objects: the blocks that appear inside MANY data/*.json records and are parsed once, in dbabrain/lib, rather than by each app. This file is the field-level reference for them - what each field does, whether it is required, what values it accepts, and what its number is measured against.",
         "149 entries in three families (0.22.0): the CONFIG a node reads (60 - every file data_files.json calls `config`, and every block between a file's root and its records), the REQUESTS common.cli takes (45, kind 'input') and the ANSWERS it gives (44, kind 'output', with `cli_response` the envelope). Every object has its own id and no two describe the same fields; tests/test_every_json_the_tool_reads_or_writes_is_described.py holds all of it to the code.",
         "Fifty-four entries: six objects (time_window, notify, notify_rule, output, cmd_access, sql_access), one shared FIELD (cleanup_retention) and forty-seven whole RECORDS - app_command (2026-09-21); backup_entry, backup_job and restore_entry (2026-09-22); sql_command, sql_target, db_instance, telegram_support_command, telegram_cli_execute, metric_definition and metric_variant (0.22.0, 2026-09-23); database_credential_group, database_credential, remote_credential_group, remote_credential, telegram_group, telegram_user, report_entry and webhost_app (0.22.0, the same day). 'field_count' and 'required_field_count' are stated per entry so a reader can see the shape before reading it. The four records carry kind 'field' deliberately - see their 'kind_note': that is the kind whose declared names the reader looks for directly ON the record, which is what a whole record is. backup_entry, backup_job and restore_entry are described separately although they live in ONE file, because they share only two field names (active, note) and because the schedule sits in a different place in each: a backup_entry has no time_window at all - every one of its jobs carries its own - while a restore_entry carries one directly. The remaining twenty-eight, the same day: every other file data_files.json calls `config` - restore_source, restore_target, docker_db_connection, the store, the Telegram settings and bot, the backup, capacity, restore-drill and maintenance policies, the emergency levels and operations, the importance scale and overrides, network ranges, the ops-status request, SLA policies and notification, the SQL Server instance policy and its artifact rules, and the SRE lab.",
-        "Every field carries BOTH 'range_text' (for a person) and 'constraint' (for a program): kind, nullable, min, max, enum, special_values. Prose cannot be checked, and the reason this is data rather than more docs is that a program holds the estate to it: 'python -m db_ops.common.cli check-objects' reads every record at every path in 'used_in' and reports three things - a required field missing, a value out of range, and a field the reference does not describe.",
+        "Every field carries BOTH 'range_text' (for a person) and 'constraint' (for a program): kind, nullable, min, max, enum, special_values. Prose cannot be checked, and the reason this is data rather than more docs is that a program holds the estate to it: 'python -m dbabrain.common.cli check-objects' reads every record at every path in 'used_in' and reports three things - a required field missing, a value out of range, and a field the reference does not describe.",
         "'open_enum': true means an unlisted value is REPORTED, not refused, because the estate may legitimately define its own (a Telegram level, a shell). 'forbidden_in_config': true is the opposite - a field that is valid in an ad-hoc request and must never appear in a config file, because configuration names a secret and does not hold one. 'legacy_fields' are older spellings the parser still reads: present in a file they are reported as deprecated rather than unknown.",
         "It describes; it does not decide. No parser, scheduler or validator reads it, and editing it changes nothing an app does. What earns it its place in data/ is that it cannot go stale: tests/test_shared_config_objects_reference.py checks it against the code AND runs check-objects over this estate's own files, so a field added to lib and not here fails the suite.",
-        "EVERY interval in every one of these objects is measured from the previous run's START, never from when it finished. repeat_interval: 300 on a task that runs for 240 seconds starts again about 60 seconds after it ends (45, with the early-start grace). That was not true before 2026-09-19: sql_tasks measured from sql_runs.finished_at and the reports app from the moment its last send completed, so one estate ran three meanings of one field. There is now one entry point, db_ops.lib.time_window.due_from_row, and one place that picks the column, db_ops.lib.time_window.run_anchor.",
+        "EVERY interval in every one of these objects is measured from the previous run's START, never from when it finished. repeat_interval: 300 on a task that runs for 240 seconds starts again about 60 seconds after it ends (45, with the early-start grace). That was not true before 2026-09-19: sql_tasks measured from sql_runs.finished_at and the reports app from the moment its last send completed, so one estate ran three meanings of one field. There is now one entry point, dbabrain.lib.time_window.due_from_row, and one place that picks the column, dbabrain.lib.time_window.run_anchor.",
         "Wall-clock bounds (from_hour, to_day, ...) are read in the node's configured timezone (config.json -> timezone), and elapsed-time arithmetic is always UTC. The two are different questions and the split is deliberate: see docs/configuration.md section 5.",
-        "'why is this not running' is answered by the same rule the schedulers use, without guessing: python -m db_ops.common.cli due-check @data/<request>.json",
-        "THREE COPIES, identical bytes: db_ops/common/catalogue/ (the seed init writes from), data/ (this node's), and data/*.example.json (what the public tree ships). Edit one and copy it over the other two; the suite fails if they differ, because reference that differs per node is not reference.",
+        "'why is this not running' is answered by the same rule the schedulers use, without guessing: python -m dbabrain.common.cli due-check @data/<request>.json",
+        "THREE COPIES, identical bytes: dbabrain/common/catalogue/ (the seed init writes from), data/ (this node's), and data/*.example.json (what the public tree ships). Edit one and copy it over the other two; the suite fails if they differ, because reference that differs per node is not reference.",
         "whole_record (0.22.0): an entry that describes an ENTIRE record carries whole_record true, and check-objects then reports a key the entry does not describe as unknown instead of dropping it as another schema's. Before it, a misspelled key on a sql_target (databse_name) was dropped by the checker and ignored by the loader, and the task ran against the default database while looking configured. telegram_cli_execute is the one record entry WITHOUT it: every action_config is walked and only its own names are checked, because the other action types share the path.",
         "sql-command-add and sql-target-add read their field lists from sql_command and sql_target (0.22.0): a request key that is neither a field nor an option of the command is refused by name, and the record is checked against its entry before it is written. Until then an unknown key was dropped in silence and the answer was ok.",
-        "One name per concept (0.22.0 section 1.0): db_instance enabled -> active, env -> environment, ord -> sort_order, database -> database_name; app_command app_ord -> sort_order; telegram_support_command menu_order -> sort_order. The standard name is the field; the old one is in legacy_fields and reported as deprecated. Every reader accepts both (db_ops.lib.field_names, whose RENAMES table the suite holds these legacy_fields to). The files keep the old names until every node reads both, because a parser that does not know a name drops it without a word - 'active: false' reaching a node that reads 'enabled' would switch the instance ON there."
+        "One name per concept (0.22.0 section 1.0): db_instance enabled -> active, env -> environment, ord -> sort_order, database -> database_name; app_command app_ord -> sort_order; telegram_support_command menu_order -> sort_order. The standard name is the field; the old one is in legacy_fields and reported as deprecated. Every reader accepts both (dbabrain.lib.field_names, whose RENAMES table the suite holds these legacy_fields to). The files keep the old names until every node reads both, because a parser that does not know a name drops it without a word - 'active: false' reaching a node that reads 'enabled' would switch the instance ON there."
     ],
     "shared_config_objects": [
         {
@@ -21,8 +21,8 @@
             "kind": "object",
             "required": false,
             "one_line": "When something may run, how often, and how long it may take.",
-            "parsed_in": "db_ops/lib/time_window.py",
-            "shared_entry_point": "db_ops.lib.time_window.due_from_row",
+            "parsed_in": "dbabrain/lib/time_window.py",
+            "shared_entry_point": "dbabrain.lib.time_window.due_from_row",
             "used_in": [
                 {
                     "file": "app_commands.json",
@@ -309,7 +309,7 @@
                         }
                     },
                     "measured_against": "the day of the week on the node's configured clock (config.json -> timezone)",
-                    "rule": "ISO 1-7, the same numbering isoweekday() and 'date +%u' use, so a config value, DB_OPS_WEEKDAY and a shell script all mean the same thing by 7. 0 is REFUSED rather than dropped: it is the cron spelling of Sunday, and a dropped [0] would become [], which means never. A duplicate is refused too - it is a set, not a weighting. IT GATES DUE-NESS AND DOES NOT GRANT IT: repeat_interval still decides whether, this decides whether today, so a weekly full is weekdays [7] plus an hour window plus an interval WELL UNDER A DAY - with a 6-day interval the due moment walks and the record skips whole weeks. Checked before the five bounds, because a day that is not permitted excludes every hour in it",
+                    "rule": "ISO 1-7, the same numbering isoweekday() and 'date +%u' use, so a config value, DBABRAIN_WEEKDAY and a shell script all mean the same thing by 7. 0 is REFUSED rather than dropped: it is the cron spelling of Sunday, and a dropped [0] would become [], which means never. A duplicate is refused too - it is a set, not a weighting. IT GATES DUE-NESS AND DOES NOT GRANT IT: repeat_interval still decides whether, this decides whether today, so a weekly full is weekdays [7] plus an hour window plus an interval WELL UNDER A DAY - with a 6-day interval the due moment walks and the record skips whole weeks. Checked before the five bounds, because a day that is not permitted excludes every hour in it",
                     "purpose": "Which days of the week the record may run on. The one field that is a SET rather than a from_/to_ pair, because a pair cannot say 'Monday and Thursday'."
                 }
             ]
@@ -319,8 +319,8 @@
             "kind": "object",
             "required": false,
             "one_line": "Who hears that something ran, and who hears that it failed.",
-            "parsed_in": "db_ops/lib/notify.py",
-            "shared_entry_point": "db_ops.lib.notify.parse_notify_config",
+            "parsed_in": "dbabrain/lib/notify.py",
+            "shared_entry_point": "dbabrain.lib.notify.parse_notify_config",
             "used_in": [
                 {
                     "file": "sql_targets.json",
@@ -385,8 +385,8 @@
             "kind": "object",
             "required": false,
             "one_line": "One notification switch: notify or not, at which level, optionally to which chat.",
-            "parsed_in": "db_ops/lib/notify.py",
-            "shared_entry_point": "db_ops.lib.notify.parse_notify_rule",
+            "parsed_in": "dbabrain/lib/notify.py",
+            "shared_entry_point": "dbabrain.lib.notify.parse_notify_rule",
             "used_in": [
                 {
                     "file": "",
@@ -465,8 +465,8 @@
             "kind": "object",
             "required": true,
             "one_line": "What a scheduled SQL task does with its result set: nothing, rows in the chat, or a file.",
-            "parsed_in": "db_ops/lib/task_output.py",
-            "shared_entry_point": "db_ops.lib.task_output.parse_output",
+            "parsed_in": "dbabrain/lib/task_output.py",
+            "shared_entry_point": "dbabrain.lib.task_output.parse_output",
             "used_in": [
                 {
                     "file": "sql_targets.json",
@@ -555,8 +555,8 @@
             "kind": "object",
             "required": false,
             "one_line": "How to reach a HOST's operating system - the block metrics and host_ops read.",
-            "parsed_in": "db_ops/lib/cmd_access.py",
-            "shared_entry_point": "db_ops.lib.cmd_access.resolve_cmd_access",
+            "parsed_in": "dbabrain/lib/cmd_access.py",
+            "shared_entry_point": "dbabrain.lib.cmd_access.resolve_cmd_access",
             "used_in": [
                 {
                     "file": "db_instances.json",
@@ -582,7 +582,7 @@
                     },
                     "measured_against": "not a time value",
                     "rule": "a disabled block needs no credential and is never validated",
-                    "purpose": "Whether db_ops may reach this host's OS at all."
+                    "purpose": "Whether dbabrain may reach this host's OS at all."
                 },
                 {
                     "field": "method",
@@ -601,7 +601,7 @@
                         "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "rule": "local means INSIDE the db_ops container. With a remote host it reports the container's own CPU and disk under that host's name, so remote_exec refuses the combination",
+                    "rule": "local means INSIDE the dbabrain container. With a remote host it reports the container's own CPU and disk under that host's name, so remote_exec refuses the combination",
                     "purpose": "How a command reaches the host."
                 },
                 {
@@ -791,8 +791,8 @@
             "kind": "object",
             "required": false,
             "one_line": "How to reach a DATABASE when a normal driver cannot - the legacy transports.",
-            "parsed_in": "db_ops/lib/sql_access.py",
-            "shared_entry_point": "db_ops.lib.sql_access.normalize_sql_access",
+            "parsed_in": "dbabrain/lib/sql_access.py",
+            "shared_entry_point": "dbabrain.lib.sql_access.normalize_sql_access",
             "used_in": [
                 {
                     "file": "db_instances.json",
@@ -914,8 +914,8 @@
             "kind": "field",
             "required": true,
             "one_line": "How long a directory of backups keeps them, in SECONDS, spelled one way.",
-            "parsed_in": "db_ops/lib/cleanup_retention.py",
-            "shared_entry_point": "db_ops.lib.cleanup_retention.parse",
+            "parsed_in": "dbabrain/lib/cleanup_retention.py",
+            "shared_entry_point": "dbabrain.lib.cleanup_retention.parse",
             "used_in": [
                 {
                     "file": "restore_config.json",
@@ -995,8 +995,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One scheduled process the daemon runs: what it is, where it runs, when, and how many at once.",
-            "parsed_in": "db_ops/jobs/daemon.py",
-            "shared_entry_point": "db_ops.jobs.daemon.load_app_commands",
+            "parsed_in": "dbabrain/jobs/daemon.py",
+            "shared_entry_point": "dbabrain.jobs.daemon.load_app_commands",
             "kind_note": "kind is 'field' and not 'record', because that is what the reader does with it: check_data_dir treats a 'field' entry as names living directly ON the record, which is exactly an app command. A 'record' kind would make it look for a nested block called app_command, find none, and certify clean for ever - so do not invent one.",
             "used_in": [
                 {
@@ -1095,21 +1095,21 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which log file this command's lines go to, so one app's output is one file.",
-                    "rule": "Validated by db_ops.logging_ops.writer.validate_log_scope, which RAISES on an empty value or a path separator - the one field of the fourteen that can stop the daemon loading the file at all"
+                    "rule": "Validated by dbabrain.logging_ops.writer.validate_log_scope, which RAISES on an empty value or a path separator - the one field of the fourteen that can stop the daemon loading the file at all"
                 },
                 {
                     "field": "working_dir",
                     "type": "string",
                     "required": false,
                     "default": "empty (the tool root)",
-                    "range_text": "a path, or the logical alias tools/db_ops",
+                    "range_text": "a path, or the logical alias tools/dbabrain",
                     "constraint": {
                         "kind": "string",
                         "nullable": true
                     },
                     "measured_against": "not a time value",
                     "purpose": "Where command_text is run from.",
-                    "rule": "tools/db_ops is a LOGICAL ALIAS for the tool root, not a filesystem path: the image lays the project out under /app/tools/db_ops and the daemon resolves the alias to wherever the project actually lives (db_ops/jobs/daemon.py). Docs printing it as a path are stale"
+                    "rule": "tools/dbabrain is a LOGICAL ALIAS for the tool root, not a filesystem path: the image lays the project out under /app/tools/dbabrain and the daemon resolves the alias to wherever the project actually lives (dbabrain/jobs/daemon.py). Docs printing it as a path are stale"
                 },
                 {
                     "field": "command_text",
@@ -1155,7 +1155,7 @@
                         ]
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Which node runs this command, matched against DB_OPS_NODE_ROLE at run time.",
+                    "purpose": "Which node runs this command, matched against DBABRAIN_NODE_ROLE at run time.",
                     "rule": "The shipped catalogue says all, so a single-node install runs everything; this estate's own file says worker because the worker is its scheduler. A node whose role matches nothing runs nothing and reports no error"
                 },
                 {
@@ -1229,7 +1229,7 @@
             "kind": "field",
             "required": true,
             "one_line": "One machine's backup registration in restore_config.json -> backup_restore.backups: what to back up and where to put it. It carries NO schedule of its own.",
-            "parsed_in": "db_ops/backup_restore/config.py",
+            "parsed_in": "dbabrain/backup_restore/config.py",
             "shared_entry_point": "load_restore_configs",
             "kind_note": "kind is 'field' for the reason app_command is: check_data_dir reads a 'field' entry as names living directly ON the record, which is what these are. A 'record' kind would look for a nested block called backup_entry, find none, and certify clean for ever.",
             "used_in": [
@@ -1370,7 +1370,7 @@
             "kind": "field",
             "required": true,
             "one_line": "One scheduled piece of work inside a backup_entry's jobs[]: a level, a script, and the schedule that decides when it runs. THE SCHEDULE LIVES HERE, not on the entry.",
-            "parsed_in": "db_ops/backup_restore/config.py",
+            "parsed_in": "dbabrain/backup_restore/config.py",
             "shared_entry_point": "load_restore_configs",
             "kind_note": "kind is 'field': its names live directly on each element of jobs[].",
             "used_in": [
@@ -1469,7 +1469,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which chat hears about this job, per level.",
-                    "rule": "Parsed once in db_ops/lib/notify.py; a per-app copy is a bug"
+                    "rule": "Parsed once in dbabrain/lib/notify.py; a per-app copy is a bug"
                 },
                 {
                     "field": "active",
@@ -1506,7 +1506,7 @@
             "kind": "field",
             "required": true,
             "one_line": "One restore drill in restore_config.json -> backup_restore.restores: which backup to take, which machine to put it on, and when. It carries its schedule DIRECTLY, unlike a backup_entry.",
-            "parsed_in": "db_ops/backup_restore/config.py",
+            "parsed_in": "dbabrain/backup_restore/config.py",
             "shared_entry_point": "load_restore_configs",
             "kind_note": "kind is 'field': its names live directly on the record.",
             "used_in": [
@@ -1665,7 +1665,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which chat hears the drill's verdict.",
-                    "rule": "Parsed once in db_ops/lib/notify.py"
+                    "rule": "Parsed once in dbabrain/lib/notify.py"
                 },
                 {
                     "field": "active",
@@ -1809,8 +1809,8 @@
             "kind": "field",
             "required": true,
             "one_line": "WHAT a scheduled SQL task runs: its script or scripts, the engine, and anything that feeds it rows.",
-            "parsed_in": "db_ops/sql_tasks/runner.py",
-            "shared_entry_point": "db_ops.sql_tasks.runner.load_sql_commands",
+            "parsed_in": "dbabrain/sql_tasks/runner.py",
+            "shared_entry_point": "dbabrain.sql_tasks.runner.load_sql_commands",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown instead of being dropped as another schema's. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -1886,7 +1886,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which engine the script is written for.",
-                    "rule": "The engines a SCHEDULED TASK can run on - db_ops.lib.sql_access.SQL_TASK_DB_TYPES - not the wider set the inventory knows. A postgresql task registered on 2026-09-21 passed every check and failed its first run nine hours later with 'Unsupported db_type'"
+                    "rule": "The engines a SCHEDULED TASK can run on - dbabrain.lib.sql_access.SQL_TASK_DB_TYPES - not the wider set the inventory knows. A postgresql task registered on 2026-09-21 passed every check and failed its first run nine hours later with 'Unsupported db_type'"
                 },
                 {
                     "field": "script_type",
@@ -2068,7 +2068,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The program whose stdout becomes the task's input, and how its rows reach the SQL.",
-                    "rule": "Parsed by db_ops.sql_tasks.python_source. {name} in args must be a declared parameter or a reserved target placeholder ({target_server_id}, {target_database})"
+                    "rule": "Parsed by dbabrain.sql_tasks.python_source. {name} in args must be a declared parameter or a reserved target placeholder ({target_server_id}, {target_database})"
                 },
                 {
                     "field": "note",
@@ -2095,8 +2095,8 @@
             "kind": "field",
             "required": true,
             "one_line": "WHERE and WHEN a SQL task runs: one server, one database, one schedule, one route for its output.",
-            "parsed_in": "db_ops/sql_tasks/runner.py",
-            "shared_entry_point": "db_ops.sql_tasks.runner.load_sql_targets",
+            "parsed_in": "dbabrain/sql_tasks/runner.py",
+            "shared_entry_point": "dbabrain.sql_tasks.runner.load_sql_targets",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown instead of being dropped as another schema's. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -2348,8 +2348,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One machine or database instance in the inventory: how to reach it, what it is, and what runs against it.",
-            "parsed_in": "db_ops/lib/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.lib.data_sources.load_db_instances",
+            "parsed_in": "dbabrain/lib/data_sources/__init__.py",
+            "shared_entry_point": "dbabrain.lib.data_sources.load_db_instances",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown instead of being dropped as another schema's. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -2654,7 +2654,7 @@
                         ]
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Whether this record exists for db_ops at all.",
+                    "purpose": "Whether this record exists for dbabrain at all.",
                     "rule": "false stops metrics, reports and alerts together (lib/target_flags.is_target_enabled). The standard name for a record's switch, as on every other record. db_instances.json still says 'enabled' until every node reads both (0.22.0 section 1.0, stage C); both are read"
                 },
                 {
@@ -2699,7 +2699,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Whether db_ops can connect, as an operator records it.",
+                    "purpose": "Whether dbabrain can connect, as an operator records it.",
                     "rule": "Kept by hand; see status_os"
                 },
                 {
@@ -2781,7 +2781,7 @@
                         "checked_by": "cmd_access's own entry, whose used_in lists db_instances.json:db_instances[]"
                     },
                     "measured_against": "not a time value",
-                    "purpose": "How db_ops reaches the host's shell.",
+                    "purpose": "How dbabrain reaches the host's shell.",
                     "rule": "method local runs INSIDE the worker container and is refused for a remote host"
                 },
                 {
@@ -2911,8 +2911,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One /spbot_ command: who may send it, where, and what it runs.",
-            "parsed_in": "db_ops/telegram/command_processor.py",
-            "shared_entry_point": "db_ops.telegram.command_processor.load_support_commands",
+            "parsed_in": "dbabrain/telegram/command_processor.py",
+            "shared_entry_point": "dbabrain.telegram.command_processor.load_support_commands",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown instead of being dropped as another schema's. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -3170,9 +3170,9 @@
             "object": "telegram_cli_execute",
             "kind": "field",
             "required": true,
-            "one_line": "The action_config of a cli_execute Telegram command: which db_ops command it runs, and what it replies.",
-            "parsed_in": "db_ops/telegram/command_processor.py",
-            "shared_entry_point": "db_ops.telegram.command_processor (cli_execute)",
+            "one_line": "The action_config of a cli_execute Telegram command: which dbabrain command it runs, and what it replies.",
+            "parsed_in": "dbabrain/telegram/command_processor.py",
+            "shared_entry_point": "dbabrain.telegram.command_processor (cli_execute)",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "used_in": [
                 {
@@ -3189,7 +3189,7 @@
                     "type": "array",
                     "required": false,
                     "default": "none - required for cli_execute",
-                    "range_text": "an argv array: {python}, -m, a db_ops module, its arguments",
+                    "range_text": "an argv array: {python}, -m, a dbabrain module, its arguments",
                     "constraint": {
                         "kind": "array",
                         "nullable": true
@@ -3203,14 +3203,14 @@
                     "type": "string",
                     "required": false,
                     "default": "the tool root",
-                    "range_text": "tools/db_ops, the logical alias",
+                    "range_text": "tools/dbabrain, the logical alias",
                     "constraint": {
                         "kind": "string",
                         "nullable": true
                     },
                     "measured_against": "not a time value",
                     "purpose": "Where the command runs.",
-                    "rule": "tools/db_ops is an alias for the tool root, not a path"
+                    "rule": "tools/dbabrain is an alias for the tool root, not a path"
                 },
                 {
                     "field": "start_text",
@@ -3368,7 +3368,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Refuse to start when DB_OPS_SECRET_KEY is not set.",
+                    "purpose": "Refuse to start when DBABRAIN_SECRET_KEY is not set.",
                     "rule": "Refuses the WHOLE command. Leave it off for a command that answers usefully without the key (spbot_self_status)"
                 },
                 {
@@ -3448,8 +3448,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One metric: what it collects, how, when, and how loudly its failures are reported.",
-            "parsed_in": "db_ops/metrics/definitions.py",
-            "shared_entry_point": "db_ops.metrics.definitions.load_metric_definitions",
+            "parsed_in": "dbabrain/metrics/definitions.py",
+            "shared_entry_point": "dbabrain.metrics.definitions.load_metric_definitions",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown instead of being dropped as another schema's. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -3457,7 +3457,7 @@
                 {
                     "file": "metric_definitions.json",
                     "path": "metrics[]",
-                    "note": "the whole record. The shipped catalogue is db_ops/metrics/catalogue/metric_definitions.json"
+                    "note": "the whole record. The shipped catalogue is dbabrain/metrics/catalogue/metric_definitions.json"
                 }
             ],
             "legacy_fields": {
@@ -3781,8 +3781,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One implementation of a metric: for which engine, version range and platform, and in which file.",
-            "parsed_in": "db_ops/metrics/definitions.py",
-            "shared_entry_point": "db_ops.metrics.definitions._parse_variants",
+            "parsed_in": "dbabrain/metrics/definitions.py",
+            "shared_entry_point": "dbabrain.metrics.definitions._parse_variants",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown instead of being dropped as another schema's. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -3949,8 +3949,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Which logins one database instance has: the server it belongs to and its list of credentials.",
-            "parsed_in": "db_ops/lib/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.lib.data_sources.find_database_credential",
+            "parsed_in": "dbabrain/lib/data_sources/__init__.py",
+            "shared_entry_point": "dbabrain.lib.data_sources.find_database_credential",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4066,8 +4066,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One database login: its name, the user, and the REF of its password in the encrypted store.",
-            "parsed_in": "db_ops/lib/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.lib.data_sources.find_database_credential",
+            "parsed_in": "dbabrain/lib/data_sources/__init__.py",
+            "shared_entry_point": "dbabrain.lib.data_sources.find_database_credential",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4164,8 +4164,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Which OS logins one machine has: the server, the address to reach it, and its credentials.",
-            "parsed_in": "db_ops/lib/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.lib.data_sources.load_remote_credentials",
+            "parsed_in": "dbabrain/lib/data_sources/__init__.py",
+            "shared_entry_point": "dbabrain.lib.data_sources.load_remote_credentials",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4241,8 +4241,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One OS login (SSH or WinRM): its name, the user, and the REF of its password.",
-            "parsed_in": "db_ops/common/remote_exec.py",
-            "shared_entry_point": "db_ops.common.remote_exec",
+            "parsed_in": "dbabrain/common/remote_exec.py",
+            "shared_entry_point": "dbabrain.common.remote_exec",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4350,8 +4350,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One Telegram chat: which alert level is routed to it and how much it may command the node.",
-            "parsed_in": "db_ops/telegram/command_processor.py",
-            "shared_entry_point": "db_ops.lib.data_sources.load_telegram_groups",
+            "parsed_in": "dbabrain/telegram/command_processor.py",
+            "shared_entry_point": "dbabrain.lib.data_sources.load_telegram_groups",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4496,8 +4496,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One person on Telegram and the command level they have in a private chat.",
-            "parsed_in": "db_ops/telegram/command_processor.py",
-            "shared_entry_point": "db_ops.lib.data_sources.load_telegram_users",
+            "parsed_in": "dbabrain/telegram/command_processor.py",
+            "shared_entry_point": "dbabrain.lib.data_sources.load_telegram_users",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4649,8 +4649,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One scheduled report: which one, how old a metric may be to count, and when it is produced - the inventory included.",
-            "parsed_in": "db_ops/reports/metrics_reports.py",
-            "shared_entry_point": "db_ops.reports.metrics_reports",
+            "parsed_in": "dbabrain/reports/metrics_reports.py",
+            "shared_entry_point": "dbabrain.reports.metrics_reports",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4757,8 +4757,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One block on the web console: an app's page, its documentation, and the app commands it shows.",
-            "parsed_in": "db_ops/webhost/app.py",
-            "shared_entry_point": "db_ops.webhost.app",
+            "parsed_in": "dbabrain/webhost/app.py",
+            "shared_entry_point": "dbabrain.webhost.app",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported.",
@@ -4866,8 +4866,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Where a SQL Server restore reads its backups FROM: the share and the login to it.",
-            "parsed_in": "db_ops/backup_restore/config.py",
-            "shared_entry_point": "db_ops.backup_restore.config._with_source_target_pair",
+            "parsed_in": "dbabrain/backup_restore/config.py",
+            "shared_entry_point": "dbabrain.backup_restore.config._with_source_target_pair",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5006,8 +5006,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Where a SQL Server restore puts the backup: the machine, its login, the instance, the paths.",
-            "parsed_in": "db_ops/backup_restore/config.py",
-            "shared_entry_point": "db_ops.backup_restore.config._with_source_target_pair",
+            "parsed_in": "dbabrain/backup_restore/config.py",
+            "shared_entry_point": "dbabrain.backup_restore.config._with_source_target_pair",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5323,8 +5323,8 @@
             "kind": "field",
             "required": false,
             "one_line": "Where a SQL Server restore of dbabrain's OWN backups reads the certificate they were encrypted with.",
-            "parsed_in": "db_ops/backup_restore/config.py",
-            "shared_entry_point": "db_ops.backup_restore.config._parse_backup_certificate",
+            "parsed_in": "dbabrain/backup_restore/config.py",
+            "shared_entry_point": "dbabrain.backup_restore.config._parse_backup_certificate",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5342,7 +5342,7 @@
                     "field": "name",
                     "type": "string",
                     "required": false,
-                    "default": "db_ops_backup_cert",
+                    "default": "dbabrain_backup_cert",
                     "range_text": "text",
                     "constraint": {
                         "kind": "string",
@@ -5389,8 +5389,8 @@
             "kind": "field",
             "required": false,
             "one_line": "Whether a restore's staged copy must fit the target's free space before anything is copied (restore_config.json -> backup_restore.restores[].space_check).",
-            "parsed_in": "db_ops/lib/restore_space.py",
-            "shared_entry_point": "db_ops.lib.restore_space.parse_space_check",
+            "parsed_in": "dbabrain/lib/restore_space.py",
+            "shared_entry_point": "dbabrain.lib.restore_space.parse_space_check",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5474,8 +5474,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One database container the SRE provisioner created, and how to reach it.",
-            "parsed_in": "db_ops/lib/docker_db_registry.py",
-            "shared_entry_point": "db_ops.lib.docker_db_registry",
+            "parsed_in": "dbabrain/lib/docker_db_registry.py",
+            "shared_entry_point": "dbabrain.lib.docker_db_registry",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5648,9 +5648,9 @@
             "object": "store_config",
             "kind": "field",
             "required": true,
-            "one_line": "Which database db_ops keeps its own runtime data in.",
-            "parsed_in": "db_ops/lib/config.py",
-            "shared_entry_point": "db_ops.lib.config.parse_store_config",
+            "one_line": "Which database dbabrain keeps its own runtime data in.",
+            "parsed_in": "dbabrain/lib/config.py",
+            "shared_entry_point": "dbabrain.lib.config.parse_store_config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5724,8 +5724,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The SQLite runtime store: one file.",
-            "parsed_in": "db_ops/lib/config.py",
-            "shared_entry_point": "db_ops.lib.config",
+            "parsed_in": "dbabrain/lib/config.py",
+            "shared_entry_point": "dbabrain.lib.config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5743,7 +5743,7 @@
                     "field": "path",
                     "type": "string",
                     "required": false,
-                    "default": "runtime/db_ops.sqlite",
+                    "default": "runtime/dbabrain.sqlite",
                     "range_text": "a file path, relative to the tool root",
                     "constraint": {
                         "kind": "string",
@@ -5789,9 +5789,9 @@
             "object": "store_postgresql",
             "kind": "field",
             "required": true,
-            "one_line": "The PostgreSQL runtime store: where it is and how db_ops logs in.",
-            "parsed_in": "db_ops/lib/config.py",
-            "shared_entry_point": "db_ops.lib.config._parse_postgres_store",
+            "one_line": "The PostgreSQL runtime store: where it is and how dbabrain logs in.",
+            "parsed_in": "dbabrain/lib/config.py",
+            "shared_entry_point": "dbabrain.lib.config._parse_postgres_store",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -5947,7 +5947,7 @@
                     "field": "application_name",
                     "type": "string",
                     "required": false,
-                    "default": "db_ops",
+                    "default": "dbabrain",
                     "range_text": "free text",
                     "constraint": {
                         "kind": "string",
@@ -5955,7 +5955,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What pg_stat_activity shows for db_ops' sessions."
+                    "purpose": "What pg_stat_activity shows for dbabrain' sessions."
                 },
                 {
                     "field": "connection_string",
@@ -5993,9 +5993,9 @@
             "object": "telegram_settings",
             "kind": "field",
             "required": true,
-            "one_line": "How db_ops talks to Telegram: whether it does, which bot, which API, where chats are.",
-            "parsed_in": "db_ops/lib/config.py",
-            "shared_entry_point": "db_ops.lib.config.parse_config",
+            "one_line": "How dbabrain talks to Telegram: whether it does, which bot, which API, where chats are.",
+            "parsed_in": "dbabrain/lib/config.py",
+            "shared_entry_point": "dbabrain.lib.config.parse_config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6022,7 +6022,7 @@
                         "nullable": false
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Whether db_ops sends to Telegram at all.",
+                    "purpose": "Whether dbabrain sends to Telegram at all.",
                     "rule": "A feature switch, so `enabled` - `active` is a record's switch"
                 },
                 {
@@ -6255,9 +6255,9 @@
             "object": "telegram_bot",
             "kind": "field",
             "required": true,
-            "one_line": "Which bot db_ops speaks as: its token by ref, its id and its name.",
-            "parsed_in": "db_ops/lib/config.py",
-            "shared_entry_point": "db_ops.lib.config._load_telegram_bot_config",
+            "one_line": "Which bot dbabrain speaks as: its token by ref, its id and its name.",
+            "parsed_in": "dbabrain/lib/config.py",
+            "shared_entry_point": "dbabrain.lib.config._load_telegram_bot_config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6326,8 +6326,8 @@
             "kind": "field",
             "required": true,
             "one_line": "How old each type of backup may be before it is a finding, by default and per server.",
-            "parsed_in": "db_ops/lib/backup_policy.py",
-            "shared_entry_point": "db_ops.lib.data_sources.load_backup_policy",
+            "parsed_in": "dbabrain/lib/backup_policy.py",
+            "shared_entry_point": "dbabrain.lib.data_sources.load_backup_policy",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6406,8 +6406,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One exception to the backup policy: a server, optionally one database, and its own rules.",
-            "parsed_in": "db_ops/lib/backup_policy.py",
-            "shared_entry_point": "db_ops.lib.backup_policy._type_rule",
+            "parsed_in": "dbabrain/lib/backup_policy.py",
+            "shared_entry_point": "dbabrain.lib.backup_policy._type_rule",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6489,8 +6489,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The rule for one backup type (FULL, DIFF or LOG): required or not, and how old is too old.",
-            "parsed_in": "db_ops/lib/backup_policy.py",
-            "shared_entry_point": "db_ops.lib.backup_policy._type_rule",
+            "parsed_in": "dbabrain/lib/backup_policy.py",
+            "shared_entry_point": "dbabrain.lib.backup_policy._type_rule",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6593,8 +6593,8 @@
             "kind": "field",
             "required": true,
             "one_line": "How close to full a volume may be forecast before it is a finding.",
-            "parsed_in": "db_ops/lib/capacity_forecast.py",
-            "shared_entry_point": "db_ops.lib.capacity_forecast",
+            "parsed_in": "dbabrain/lib/capacity_forecast.py",
+            "shared_entry_point": "dbabrain.lib.capacity_forecast",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6658,8 +6658,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The same thresholds for one volume on one server.",
-            "parsed_in": "db_ops/lib/capacity_forecast.py",
-            "shared_entry_point": "db_ops.lib.capacity_forecast",
+            "parsed_in": "dbabrain/lib/capacity_forecast.py",
+            "shared_entry_point": "dbabrain.lib.capacity_forecast",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6749,8 +6749,8 @@
             "kind": "field",
             "required": true,
             "one_line": "How old a successful restore drill may be and still count as proof.",
-            "parsed_in": "db_ops/db/restore_drill.py",
-            "shared_entry_point": "db_ops.common.restore_drill",
+            "parsed_in": "dbabrain/db/restore_drill.py",
+            "shared_entry_point": "dbabrain.common.restore_drill",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6786,8 +6786,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The same limit for one database.",
-            "parsed_in": "db_ops/db/restore_drill.py",
-            "shared_entry_point": "db_ops.common.restore_drill",
+            "parsed_in": "dbabrain/db/restore_drill.py",
+            "shared_entry_point": "dbabrain.common.restore_drill",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -6839,8 +6839,8 @@
             "kind": "field",
             "required": true,
             "one_line": "How long host maintenance waits for each step, and the preconditions it checks. A per-server block under maintenance_policy.servers takes the same keys.",
-            "parsed_in": "db_ops/common/host_ops.py",
-            "shared_entry_point": "db_ops.common.host_ops",
+            "parsed_in": "dbabrain/common/host_ops.py",
+            "shared_entry_point": "dbabrain.common.host_ops",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7030,8 +7030,8 @@
             "kind": "field",
             "required": true,
             "one_line": "What a confirmation level demands before a break-glass action runs.",
-            "parsed_in": "db_ops/common/confirm.py",
-            "shared_entry_point": "db_ops.common.confirm",
+            "parsed_in": "dbabrain/common/confirm.py",
+            "shared_entry_point": "dbabrain.common.confirm",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7099,8 +7099,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One break-glass action: its confirmation level and what it does to the machine.",
-            "parsed_in": "db_ops/common/confirm.py",
-            "shared_entry_point": "db_ops.common.confirm",
+            "parsed_in": "dbabrain/common/confirm.py",
+            "shared_entry_point": "dbabrain.common.confirm",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7151,8 +7151,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The importance scale metrics are ranked on.",
-            "parsed_in": "db_ops/metrics/importance.py",
-            "shared_entry_point": "db_ops.metrics.importance",
+            "parsed_in": "dbabrain/metrics/importance.py",
+            "shared_entry_point": "dbabrain.metrics.importance",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7216,8 +7216,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Different importances for the metrics of the instances one match selects.",
-            "parsed_in": "db_ops/metrics/importance.py",
-            "shared_entry_point": "db_ops.metrics.importance",
+            "parsed_in": "dbabrain/metrics/importance.py",
+            "shared_entry_point": "dbabrain.metrics.importance",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7281,8 +7281,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One address range and who owns it, so a container network is never put on it.",
-            "parsed_in": "db_ops/lib/network_policy.py",
-            "shared_entry_point": "db_ops.lib.network_policy",
+            "parsed_in": "dbabrain/lib/network_policy.py",
+            "shared_entry_point": "dbabrain.lib.network_policy",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7350,8 +7350,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The request APP-CONTROL passes to ops-status on its schedule.",
-            "parsed_in": "db_ops/db/cli.py",
-            "shared_entry_point": "db_ops.db.cli ops-status",
+            "parsed_in": "dbabrain/db/cli.py",
+            "shared_entry_point": "dbabrain.db.cli ops-status",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7465,8 +7465,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One objective the collected metrics are held to.",
-            "parsed_in": "db_ops/sla/policies.py",
-            "shared_entry_point": "db_ops.sla.policies.parse_sla_policy",
+            "parsed_in": "dbabrain/sla/policies.py",
+            "shared_entry_point": "dbabrain.sla.policies.parse_sla_policy",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7885,8 +7885,8 @@
             "kind": "field",
             "required": true,
             "one_line": "How SLA findings are re-announced.",
-            "parsed_in": "db_ops/sla/cli.py",
-            "shared_entry_point": "db_ops.sla.cli",
+            "parsed_in": "dbabrain/sla/cli.py",
+            "shared_entry_point": "dbabrain.sla.cli",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -7937,8 +7937,8 @@
             "kind": "field",
             "required": true,
             "one_line": "What an instance-metadata export or replay carries, and how each part is handled.",
-            "parsed_in": "db_ops/common/sqlserver_instance.py",
-            "shared_entry_point": "db_ops.lib.data_sources.load_sqlserver_instance_policy",
+            "parsed_in": "dbabrain/common/sqlserver_instance.py",
+            "shared_entry_point": "dbabrain.lib.data_sources.load_sqlserver_instance_policy",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -8049,8 +8049,8 @@
             "kind": "field",
             "required": true,
             "one_line": "One artifact of an instance export: when it is applied and on which versions.",
-            "parsed_in": "db_ops/common/sqlserver_instance.py",
-            "shared_entry_point": "db_ops.common.sqlserver_instance",
+            "parsed_in": "dbabrain/common/sqlserver_instance.py",
+            "shared_entry_point": "dbabrain.common.sqlserver_instance",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -8145,8 +8145,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The lab provisioner's settings file: logging and its sre block.",
-            "parsed_in": "db_ops/sre/config.py",
-            "shared_entry_point": "db_ops.sre.config.load_sre_operational_config",
+            "parsed_in": "dbabrain/sre/config.py",
+            "shared_entry_point": "dbabrain.sre.config.load_sre_operational_config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -8164,7 +8164,7 @@
                     "field": "app_name",
                     "type": "string",
                     "required": false,
-                    "default": "db_ops_sre",
+                    "default": "dbabrain_sre",
                     "range_text": "free text",
                     "constraint": {
                         "kind": "string",
@@ -8228,8 +8228,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Where lab machines are built, with what, and the defaults each engine is installed with.",
-            "parsed_in": "db_ops/sre/config.py",
-            "shared_entry_point": "db_ops.sre.config.load_sre_operational_config",
+            "parsed_in": "dbabrain/sre/config.py",
+            "shared_entry_point": "dbabrain.sre.config.load_sre_operational_config",
             "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
             "whole_record": true,
             "used_in": [
@@ -8240,7 +8240,7 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 6,
+            "field_count": 7,
             "required_field_count": 0,
             "fields": [
                 {
@@ -8328,6 +8328,21 @@
                     "measured_against": "not a time value",
                     "purpose": "What each engine is installed with: ports, cluster names, logins.",
                     "rule": "A password is written one of three ways, and the file should carry the last: `<name>_password` (a literal - tolerated for a throwaway lab), `<name>_password_env` (an environment variable) or `<name>_password_ref` (the encrypted store)"
+                },
+                {
+                    "field": "docker_db",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - stated, or the lab command is refused",
+                    "range_text": "{containers_dir, backup_mount}",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where this node's lab databases live on their host: containers_dir, the folder each instance's compose file and volumes sit under, and backup_mount, the backup folder bind-mounted into a SQL Server lab at the same path. The apps read it and put it in the request; the command that builds or moves a lab reads no configuration and assumes no folder.",
+                    "rule": "State both. There is no default in the code: a lab command that finds no containers_dir - on a flag or here - is refused by name, and so is a SQL Server lab with no backup_mount (an empty string asks for none). A move and a forced re-create find a lab under containers_dir and its name, not by its record, so the folder stated is the folder the node's labs are in. Until 0.29.0 both were constants in the code; upgrade-config writes those two folders into a node that states none."
                 }
             ],
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported."
@@ -8337,9 +8352,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The envelope every common.cli command answers in.",
-            "parsed_in": "db_ops/lib/response.py",
+            "parsed_in": "dbabrain/lib/response.py",
             "produced_in": [
-                "db_ops/lib/response.py"
+                "dbabrain/lib/response.py"
             ],
             "commands": [
                 "*"
@@ -8464,11 +8479,11 @@
             "kind": "output",
             "required": false,
             "one_line": "A gated operation's report: every gate, what blocked it, and the facts it decided from.",
-            "parsed_in": "db_ops/common/evidence.py",
+            "parsed_in": "dbabrain/common/evidence.py",
             "produced_in": [
-                "db_ops/common/evidence.py",
-                "db_ops/common/host_ops.py",
-                "db_ops/common/sqlserver_patch.py"
+                "dbabrain/common/evidence.py",
+                "dbabrain/common/host_ops.py",
+                "dbabrain/common/sqlserver_patch.py"
             ],
             "commands": [
                 "authorize",
@@ -8677,9 +8692,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What the terminal answered, or that there was nobody to ask.",
-            "parsed_in": "db_ops/common/confirm.py",
+            "parsed_in": "dbabrain/common/confirm.py",
             "produced_in": [
-                "db_ops/common/confirm.py"
+                "dbabrain/common/confirm.py"
             ],
             "commands": [
                 "ask"
@@ -8738,9 +8753,9 @@
             "kind": "output",
             "required": false,
             "one_line": "One gate of a gated operation.",
-            "parsed_in": "db_ops/common/evidence.py",
+            "parsed_in": "dbabrain/common/evidence.py",
             "produced_in": [
-                "db_ops/common/evidence.py"
+                "dbabrain/common/evidence.py"
             ],
             "commands": [],
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
@@ -8839,9 +8854,9 @@
             "kind": "output",
             "required": false,
             "one_line": "One file fetched from or sent to a host.",
-            "parsed_in": "db_ops/common/file_transfer.py",
+            "parsed_in": "dbabrain/common/file_transfer.py",
             "produced_in": [
-                "db_ops/common/file_transfer.py"
+                "dbabrain/common/file_transfer.py"
             ],
             "commands": [
                 "fetch-file",
@@ -9004,9 +9019,9 @@
             "kind": "output",
             "required": false,
             "one_line": "An archive packed on a host (or here) from named files.",
-            "parsed_in": "db_ops/common/file_transfer.py",
+            "parsed_in": "dbabrain/common/file_transfer.py",
             "produced_in": [
-                "db_ops/common/file_transfer.py"
+                "dbabrain/common/file_transfer.py"
             ],
             "commands": [
                 "pack-files"
@@ -9162,9 +9177,9 @@
             "kind": "output",
             "required": false,
             "one_line": "One file moved from one host to another through this node.",
-            "parsed_in": "db_ops/common/file_transfer.py",
+            "parsed_in": "dbabrain/common/file_transfer.py",
             "produced_in": [
-                "db_ops/common/file_transfer.py"
+                "dbabrain/common/file_transfer.py"
             ],
             "commands": [
                 "relay-file"
@@ -9325,9 +9340,9 @@
             "kind": "output",
             "required": false,
             "one_line": "A backup folder packed into one archive on its host.",
-            "parsed_in": "db_ops/common/filetransfer.py",
+            "parsed_in": "dbabrain/common/filetransfer.py",
             "produced_in": [
-                "db_ops/common/filetransfer.py"
+                "dbabrain/common/filetransfer.py"
             ],
             "commands": [
                 "pack-backup"
@@ -9430,9 +9445,9 @@
             "kind": "output",
             "required": false,
             "one_line": "One file pulled from or pushed to a host, with its checksum.",
-            "parsed_in": "db_ops/common/filetransfer.py",
+            "parsed_in": "dbabrain/common/filetransfer.py",
             "produced_in": [
-                "db_ops/common/filetransfer.py"
+                "dbabrain/common/filetransfer.py"
             ],
             "commands": [
                 "pull-file",
@@ -9520,9 +9535,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The backup files a directory holds, one row each.",
-            "parsed_in": "db_ops/common/backupfiles/__init__.py",
+            "parsed_in": "dbabrain/common/backupfiles/__init__.py",
             "produced_in": [
-                "db_ops/common/backupfiles/__init__.py"
+                "dbabrain/common/backupfiles/__init__.py"
             ],
             "commands": [
                 "list-backup-files"
@@ -9594,9 +9609,9 @@
             "kind": "output",
             "required": false,
             "one_line": "One backup file.",
-            "parsed_in": "db_ops/common/backupfiles/__init__.py",
+            "parsed_in": "dbabrain/common/backupfiles/__init__.py",
             "produced_in": [
-                "db_ops/common/backupfiles/__init__.py"
+                "dbabrain/common/backupfiles/__init__.py"
             ],
             "commands": [],
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
@@ -9713,10 +9728,10 @@
             "kind": "output",
             "required": false,
             "one_line": "Which backup files a retention rule keeps and which it would delete.",
-            "parsed_in": "db_ops/common/cli_backup_files.py",
+            "parsed_in": "dbabrain/common/cli_backup_files.py",
             "produced_in": [
-                "db_ops/common/cli_backup_files.py",
-                "db_ops/lib/backupfiles_retention.py"
+                "dbabrain/common/cli_backup_files.py",
+                "dbabrain/lib/backupfiles_retention.py"
             ],
             "commands": [
                 "prune-backup-files"
@@ -9912,9 +9927,9 @@
             "kind": "output",
             "required": false,
             "one_line": "Files deleted on a host, one row each, and what it freed.",
-            "parsed_in": "db_ops/common/deletefiles.py",
+            "parsed_in": "dbabrain/common/deletefiles.py",
             "produced_in": [
-                "db_ops/common/deletefiles.py"
+                "dbabrain/common/deletefiles.py"
             ],
             "commands": [
                 "delete-file",
@@ -10028,9 +10043,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The databases on one instance.",
-            "parsed_in": "db_ops/common/db_catalog.py",
+            "parsed_in": "dbabrain/common/db_catalog.py",
             "produced_in": [
-                "db_ops/common/db_catalog.py"
+                "dbabrain/common/db_catalog.py"
             ],
             "commands": [
                 "list-databases"
@@ -10201,9 +10216,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The schemas in one database.",
-            "parsed_in": "db_ops/common/db_catalog.py",
+            "parsed_in": "dbabrain/common/db_catalog.py",
             "produced_in": [
-                "db_ops/common/db_catalog.py"
+                "dbabrain/common/db_catalog.py"
             ],
             "commands": [
                 "list-schemas"
@@ -10346,9 +10361,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The scheduled jobs on one instance.",
-            "parsed_in": "db_ops/common/db_catalog.py",
+            "parsed_in": "dbabrain/common/db_catalog.py",
             "produced_in": [
-                "db_ops/common/db_catalog.py"
+                "dbabrain/common/db_catalog.py"
             ],
             "commands": [
                 "list-jobs"
@@ -10491,9 +10506,9 @@
             "kind": "output",
             "required": false,
             "one_line": "A spreadsheet loaded into a new table.",
-            "parsed_in": "db_ops/common/table_load.py",
+            "parsed_in": "dbabrain/common/table_load.py",
             "produced_in": [
-                "db_ops/common/table_load.py"
+                "dbabrain/common/table_load.py"
             ],
             "commands": [
                 "create-table-from-xlsx"
@@ -10801,9 +10816,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What a config object's fields mean.",
-            "parsed_in": "db_ops/common/cli_config_objects.py",
+            "parsed_in": "dbabrain/common/cli_config_objects.py",
             "produced_in": [
-                "db_ops/common/cli_config_objects.py"
+                "dbabrain/common/cli_config_objects.py"
             ],
             "commands": [
                 "describe-object"
@@ -10876,9 +10891,9 @@
             "kind": "output",
             "required": false,
             "one_line": "Whether a schedule would run now, and why not.",
-            "parsed_in": "db_ops/common/cli_config_objects.py",
+            "parsed_in": "dbabrain/common/cli_config_objects.py",
             "produced_in": [
-                "db_ops/common/cli_config_objects.py"
+                "dbabrain/common/cli_config_objects.py"
             ],
             "commands": [
                 "due-check"
@@ -10951,9 +10966,9 @@
             "kind": "output",
             "required": false,
             "one_line": "This node's data/ held to the reference.",
-            "parsed_in": "db_ops/lib/shared_objects.py",
+            "parsed_in": "dbabrain/lib/shared_objects.py",
             "produced_in": [
-                "db_ops/lib/shared_objects.py"
+                "dbabrain/lib/shared_objects.py"
             ],
             "commands": [
                 "check-objects"
@@ -11091,9 +11106,9 @@
             "kind": "output",
             "required": false,
             "one_line": "Every pointer from one config file into another, and the ones that land nowhere.",
-            "parsed_in": "db_ops/lib/config_references.py",
+            "parsed_in": "dbabrain/lib/config_references.py",
             "produced_in": [
-                "db_ops/lib/config_references.py"
+                "dbabrain/lib/config_references.py"
             ],
             "commands": [
                 "check-references"
@@ -11191,10 +11206,10 @@
             "kind": "output",
             "required": false,
             "one_line": "Config files moved to this version's shapes.",
-            "parsed_in": "db_ops/common/field_migration.py",
+            "parsed_in": "dbabrain/common/field_migration.py",
             "produced_in": [
-                "db_ops/common/field_migration.py",
-                "db_ops/common/config_upgrade.py"
+                "dbabrain/common/field_migration.py",
+                "dbabrain/common/config_upgrade.py"
             ],
             "commands": [
                 "standardize-field-names",
@@ -11349,12 +11364,12 @@
             "kind": "output",
             "required": false,
             "one_line": "One restore step on one engine: what it applied, or would.",
-            "parsed_in": "db_ops/common/restorestep/sqlserver.py",
+            "parsed_in": "dbabrain/common/restorestep/sqlserver.py",
             "produced_in": [
-                "db_ops/common/restorestep/sqlserver.py",
-                "db_ops/common/restorestep/oracle.py",
-                "db_ops/common/restorestep/postgresql.py",
-                "db_ops/common/sqlcmd_run.py"
+                "dbabrain/common/restorestep/sqlserver.py",
+                "dbabrain/common/restorestep/oracle.py",
+                "dbabrain/common/restorestep/postgresql.py",
+                "dbabrain/common/sqlcmd_run.py"
             ],
             "commands": [
                 "restore-full",
@@ -11757,9 +11772,9 @@
             "kind": "output",
             "required": false,
             "one_line": "A backup-encryption certificate imported onto the target.",
-            "parsed_in": "db_ops/common/restorekey.py",
+            "parsed_in": "dbabrain/common/restorekey.py",
             "produced_in": [
-                "db_ops/common/restorekey.py"
+                "dbabrain/common/restorekey.py"
             ],
             "commands": [
                 "restore-key"
@@ -11857,9 +11872,9 @@
             "kind": "output",
             "required": false,
             "one_line": "Server-level metadata replayed after a restore.",
-            "parsed_in": "db_ops/common/restoremetadata.py",
+            "parsed_in": "dbabrain/common/restoremetadata.py",
             "produced_in": [
-                "db_ops/common/restoremetadata.py"
+                "dbabrain/common/restoremetadata.py"
             ],
             "commands": [
                 "restore-metadata"
@@ -11929,9 +11944,9 @@
             "kind": "output",
             "required": false,
             "one_line": "Whether the restored databases open, one row each.",
-            "parsed_in": "db_ops/common/verifyrestore.py",
+            "parsed_in": "dbabrain/common/verifyrestore.py",
             "produced_in": [
-                "db_ops/common/verifyrestore.py"
+                "dbabrain/common/verifyrestore.py"
             ],
             "commands": [
                 "verify-restore"
@@ -12003,10 +12018,10 @@
             "kind": "output",
             "required": false,
             "one_line": "One backup run on a host.",
-            "parsed_in": "db_ops/common/cli_backup.py",
+            "parsed_in": "dbabrain/common/cli_backup.py",
             "produced_in": [
-                "db_ops/common/cli_backup.py",
-                "db_ops/common/backup/__init__.py"
+                "dbabrain/common/cli_backup.py",
+                "dbabrain/common/backup/__init__.py"
             ],
             "commands": [
                 "backup-database"
@@ -12274,10 +12289,10 @@
             "kind": "output",
             "required": false,
             "one_line": "What create-db-docker built, for the caller to register.",
-            "parsed_in": "db_ops/common/docker_db/provisioner.py",
+            "parsed_in": "dbabrain/common/docker_db/provisioner.py",
             "produced_in": [
-                "db_ops/common/docker_db/provisioner.py",
-                "db_ops/common/cli_docker_db.py"
+                "dbabrain/common/docker_db/provisioner.py",
+                "dbabrain/common/cli_docker_db.py"
             ],
             "commands": [
                 "create-db-docker"
@@ -12545,9 +12560,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What move-db-docker moved, for the caller to repoint the registry.",
-            "parsed_in": "db_ops/common/docker_db/mover.py",
+            "parsed_in": "dbabrain/common/docker_db/mover.py",
             "produced_in": [
-                "db_ops/common/docker_db/mover.py"
+                "dbabrain/common/docker_db/mover.py"
             ],
             "commands": [
                 "move-db-docker"
@@ -12757,9 +12772,9 @@
             "kind": "input",
             "required": false,
             "one_line": "One target's metric items, run one after another - the metrics app's execution.",
-            "parsed_in": "db_ops/common/metric_batch.py",
+            "parsed_in": "dbabrain/common/metric_batch.py",
             "parsers": [
-                "db_ops/common/metric_batch.py"
+                "dbabrain/common/metric_batch.py"
             ],
             "commands": [
                 "metric-batch"
@@ -12819,9 +12834,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What each metric item returned - rows, a script's streams, or its error.",
-            "parsed_in": "db_ops/common/metric_batch.py",
+            "parsed_in": "dbabrain/common/metric_batch.py",
             "produced_in": [
-                "db_ops/common/metric_batch.py"
+                "dbabrain/common/metric_batch.py"
             ],
             "commands": [
                 "metric-batch"
@@ -12867,9 +12882,9 @@
             "kind": "output",
             "required": false,
             "one_line": "How many targets were checked, and each one that does not resolve to a login.",
-            "parsed_in": "db_ops/common/cli_check_credentials.py",
+            "parsed_in": "dbabrain/common/cli_check_credentials.py",
             "produced_in": [
-                "db_ops/common/cli_check_credentials.py"
+                "dbabrain/common/cli_check_credentials.py"
             ],
             "commands": [
                 "check-credentials"
@@ -12915,9 +12930,9 @@
             "kind": "output",
             "required": false,
             "one_line": "How one sqlcmd batch ran.",
-            "parsed_in": "db_ops/common/sqlcmd_run.py",
+            "parsed_in": "dbabrain/common/sqlcmd_run.py",
             "produced_in": [
-                "db_ops/common/sqlcmd_run.py"
+                "dbabrain/common/sqlcmd_run.py"
             ],
             "commands": [
                 "run-sqlcmd"
@@ -13018,9 +13033,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Which parts of a backup directory a restore needs.",
-            "parsed_in": "db_ops/common/cli_backup_copy.py",
+            "parsed_in": "dbabrain/common/cli_backup_copy.py",
             "parsers": [
-                "db_ops/common/cli_backup_copy.py"
+                "dbabrain/common/cli_backup_copy.py"
             ],
             "commands": [
                 "backup-chain"
@@ -13122,9 +13137,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The path prefixes a restore's copy is narrowed to.",
-            "parsed_in": "db_ops/common/cli_backup_copy.py",
+            "parsed_in": "dbabrain/common/cli_backup_copy.py",
             "produced_in": [
-                "db_ops/common/cli_backup_copy.py"
+                "dbabrain/common/cli_backup_copy.py"
             ],
             "commands": [
                 "backup-chain"
@@ -13169,9 +13184,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A backup directory to copy from one host to another.",
-            "parsed_in": "db_ops/common/cli_backup_copy.py",
+            "parsed_in": "dbabrain/common/cli_backup_copy.py",
             "parsers": [
-                "db_ops/common/cli_backup_copy.py"
+                "dbabrain/common/cli_backup_copy.py"
             ],
             "commands": [
                 "copy-backup-dir"
@@ -13179,7 +13194,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 10,
+            "field_count": 11,
             "required_field_count": 4,
             "fields": [
                 {
@@ -13327,6 +13342,21 @@
                     "measured_against": "not a time value",
                     "purpose": "The room the files still to copy must find on the target before the first one moves: free >= bytes x factor. A restore entry's own space_check, handed on by the app; the same object, the same defaults.",
                     "rule": "Absent means ON, as on a restore entry. A shortfall, or a target whose free space cannot be read (unless on_unknown is proceed), fails the command with nothing copied"
+                },
+                {
+                    "field": "staging_marker",
+                    "type": "string",
+                    "required": false,
+                    "default": ".dbabrain-staging",
+                    "range_text": "one file name beginning with a dot",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The name of the file that marks target_dir as this tool's staging folder: only a marked folder is mirrored, and an unmarked one that shares no file with the source is refused. A restore entry's own staging_marker, handed on by the app.",
+                    "rule": "Absent for a folder this version marks. State the name the folder already carries: an entry that staged before 0.29.0 states .dbops-staging (upgrade-config writes it in), because retention leaves the marker alone in an emptied folder and the copy knows the folder by nothing else."
                 }
             ]
         },
@@ -13335,10 +13365,10 @@
             "kind": "output",
             "required": false,
             "one_line": "What one host-to-host copy moved.",
-            "parsed_in": "db_ops/common/backup_copy.py",
+            "parsed_in": "dbabrain/common/backup_copy.py",
             "produced_in": [
-                "db_ops/common/backup_copy.py",
-                "db_ops/common/cli_backup_copy.py"
+                "dbabrain/common/backup_copy.py",
+                "dbabrain/common/cli_backup_copy.py"
             ],
             "commands": [
                 "copy-backup-dir"
@@ -13472,9 +13502,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A restore's staging folder to clear past its retention.",
-            "parsed_in": "db_ops/common/cli_backup_copy.py",
+            "parsed_in": "dbabrain/common/cli_backup_copy.py",
             "parsers": [
-                "db_ops/common/cli_backup_copy.py"
+                "dbabrain/common/cli_backup_copy.py"
             ],
             "commands": [
                 "prune-staged-backups"
@@ -13482,7 +13512,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 3,
+            "field_count": 4,
             "required_field_count": 2,
             "fields": [
                 {
@@ -13526,6 +13556,21 @@
                     },
                     "measured_against": "seconds",
                     "purpose": "Seconds a staged file is kept; 0 keeps everything."
+                },
+                {
+                    "field": "staging_marker",
+                    "type": "string",
+                    "required": false,
+                    "default": ".dbabrain-staging",
+                    "range_text": "one file name beginning with a dot",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The name of the file that marks target_dir as this tool's staging folder: only a marked folder is pruned, and the marker itself is never pruned. The same name the copy was given.",
+                    "rule": "Absent for a folder this version marks. State the name the folder already carries: an entry that staged before 0.29.0 states .dbops-staging (upgrade-config writes it in), because retention leaves the marker alone in an emptied folder and the copy knows the folder by nothing else."
                 }
             ]
         },
@@ -13534,9 +13579,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What one staging cleanup removed.",
-            "parsed_in": "db_ops/common/backup_copy.py",
+            "parsed_in": "dbabrain/common/backup_copy.py",
             "produced_in": [
-                "db_ops/common/backup_copy.py"
+                "dbabrain/common/backup_copy.py"
             ],
             "commands": [
                 "prune-staged-backups"
@@ -13610,12 +13655,12 @@
             "kind": "output",
             "required": false,
             "one_line": "A record written by a registrar, and what to run next.",
-            "parsed_in": "db_ops/common/instance_admin.py",
+            "parsed_in": "dbabrain/common/instance_admin.py",
             "produced_in": [
-                "db_ops/common/instance_admin.py",
-                "db_ops/common/remote_credential_admin.py",
-                "db_ops/common/sql_task_admin.py",
-                "db_ops/common/config_admin.py"
+                "dbabrain/common/instance_admin.py",
+                "dbabrain/common/remote_credential_admin.py",
+                "dbabrain/common/sql_task_admin.py",
+                "dbabrain/common/config_admin.py"
             ],
             "commands": [
                 "instance-add",
@@ -14006,10 +14051,10 @@
             "kind": "output",
             "required": false,
             "one_line": "A config record changed in place, field by field.",
-            "parsed_in": "db_ops/common/app_command_admin.py",
+            "parsed_in": "dbabrain/common/app_command_admin.py",
             "produced_in": [
-                "db_ops/common/app_command_admin.py",
-                "db_ops/common/config_admin.py"
+                "dbabrain/common/app_command_admin.py",
+                "dbabrain/common/config_admin.py"
             ],
             "commands": [
                 "app-command-set",
@@ -14220,9 +14265,9 @@
             "kind": "output",
             "required": false,
             "one_line": "One secret written into the encrypted store.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "produced_in": [
-                "db_ops/common/cli.py"
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "secret-set"
@@ -14295,9 +14340,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What a statement returned, and what it ran against.",
-            "parsed_in": "db_ops/common/sql_run.py",
+            "parsed_in": "dbabrain/common/sql_run.py",
             "produced_in": [
-                "db_ops/common/sql_run.py"
+                "dbabrain/common/sql_run.py"
             ],
             "commands": [
                 "run-sql"
@@ -14533,10 +14578,10 @@
             "kind": "output",
             "required": false,
             "one_line": "What one shell command printed on a host.",
-            "parsed_in": "db_ops/common/cli_host.py",
+            "parsed_in": "dbabrain/common/cli_host.py",
             "produced_in": [
-                "db_ops/common/cli_host.py",
-                "db_ops/common/remote_exec.py"
+                "dbabrain/common/cli_host.py",
+                "dbabrain/common/remote_exec.py"
             ],
             "commands": [
                 "run-cmd"
@@ -14728,9 +14773,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The sessions holding transactions open on one instance.",
-            "parsed_in": "db_ops/common/session_trace.py",
+            "parsed_in": "dbabrain/common/session_trace.py",
             "produced_in": [
-                "db_ops/common/session_trace.py"
+                "dbabrain/common/session_trace.py"
             ],
             "commands": [
                 "trace-session"
@@ -14831,9 +14876,9 @@
             "kind": "output",
             "required": false,
             "one_line": "Whether an instance, its databases or its schemas answer.",
-            "parsed_in": "db_ops/common/dbstatus.py",
+            "parsed_in": "dbabrain/common/dbstatus.py",
             "produced_in": [
-                "db_ops/common/dbstatus.py"
+                "dbabrain/common/dbstatus.py"
             ],
             "commands": [
                 "db-status"
@@ -14961,9 +15006,9 @@
             "kind": "output",
             "required": false,
             "one_line": "Which management ports a host answers on, and what that says it is.",
-            "parsed_in": "db_ops/common/host_probe.py",
+            "parsed_in": "dbabrain/common/host_probe.py",
             "produced_in": [
-                "db_ops/common/host_probe.py"
+                "dbabrain/common/host_probe.py"
             ],
             "commands": [
                 "probe-host"
@@ -15090,9 +15135,9 @@
             "kind": "output",
             "required": false,
             "one_line": "Every target this node can address.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "produced_in": [
-                "db_ops/common/cli.py"
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "list-targets"
@@ -15123,10 +15168,10 @@
             "kind": "output",
             "required": false,
             "one_line": "The estate's inventory, summarised.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "produced_in": [
-                "db_ops/common/cli.py",
-                "db_ops/lib/inventory_render.py"
+                "dbabrain/common/cli.py",
+                "dbabrain/lib/inventory_render.py"
             ],
             "commands": [
                 "inventory-summary"
@@ -15172,10 +15217,10 @@
             "kind": "output",
             "required": false,
             "one_line": "What this node is and what it runs.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "produced_in": [
-                "db_ops/common/cli.py",
-                "db_ops/common/self_status.py"
+                "dbabrain/common/cli.py",
+                "dbabrain/common/self_status.py"
             ],
             "commands": [
                 "self-status"
@@ -15467,7 +15512,7 @@
                     "purpose": "Since boot."
                 },
                 {
-                    "field": "db_ops_uptime",
+                    "field": "dbabrain_uptime",
                     "type": "object",
                     "required": false,
                     "default": "absent when it does not apply",
@@ -15501,10 +15546,10 @@
             "kind": "output",
             "required": false,
             "one_line": "Secret refs proved by using them.",
-            "parsed_in": "db_ops/common/secret_check.py",
+            "parsed_in": "dbabrain/common/secret_check.py",
             "produced_in": [
-                "db_ops/common/secret_check.py",
-                "db_ops/common/password_rotation.py"
+                "dbabrain/common/secret_check.py",
+                "dbabrain/common/password_rotation.py"
             ],
             "commands": [
                 "check-secret",
@@ -15576,11 +15621,11 @@
             "kind": "output",
             "required": false,
             "one_line": "Where estate identifiers or secret literals appear in a tree.",
-            "parsed_in": "db_ops/common/identifier_scan.py",
+            "parsed_in": "dbabrain/common/identifier_scan.py",
             "produced_in": [
-                "db_ops/common/identifier_scan.py",
-                "db_ops/common/cli.py",
-                "db_ops/common/secret_literals.py"
+                "dbabrain/common/identifier_scan.py",
+                "dbabrain/common/cli.py",
+                "dbabrain/common/secret_literals.py"
             ],
             "commands": [
                 "check-identifiers",
@@ -15841,9 +15886,9 @@
             "kind": "output",
             "required": false,
             "one_line": "A config file copied into an example, with the estate taken out.",
-            "parsed_in": "db_ops/common/example_lift.py",
+            "parsed_in": "dbabrain/common/example_lift.py",
             "produced_in": [
-                "db_ops/common/example_lift.py"
+                "dbabrain/common/example_lift.py"
             ],
             "commands": [
                 "lift-example"
@@ -15984,9 +16029,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The published pages rebuilt with every estate name replaced.",
-            "parsed_in": "db_ops/common/showcase.py",
+            "parsed_in": "dbabrain/common/showcase.py",
             "produced_in": [
-                "db_ops/common/showcase.py"
+                "dbabrain/common/showcase.py"
             ],
             "commands": [
                 "build-showcase"
@@ -16164,9 +16209,9 @@
             "kind": "output",
             "required": false,
             "one_line": "A schema copied from one database into another, or the plan to.",
-            "parsed_in": "db_ops/common/schema_copy.py",
+            "parsed_in": "dbabrain/common/schema_copy.py",
             "produced_in": [
-                "db_ops/common/schema_copy.py"
+                "dbabrain/common/schema_copy.py"
             ],
             "commands": [
                 "copy-schema"
@@ -16282,9 +16327,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A confirmation asked for on its own, for a caller that does the work itself.",
-            "parsed_in": "db_ops/common/confirm.py",
+            "parsed_in": "dbabrain/common/confirm.py",
             "parsers": [
-                "db_ops/common/confirm.py"
+                "dbabrain/common/confirm.py"
             ],
             "commands": [
                 "authorize"
@@ -16416,7 +16461,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
         },
@@ -16425,9 +16470,9 @@
             "kind": "input",
             "required": false,
             "one_line": "One question for the controlling terminal, and the answers it takes.",
-            "parsed_in": "db_ops/common/confirm.py",
+            "parsed_in": "dbabrain/common/confirm.py",
             "parsers": [
-                "db_ops/common/confirm.py"
+                "dbabrain/common/confirm.py"
             ],
             "commands": [
                 "ask"
@@ -16514,10 +16559,10 @@
             "kind": "input",
             "required": false,
             "one_line": "A gated action on a host: facts, a service, a restart.",
-            "parsed_in": "db_ops/common/host_ops.py",
+            "parsed_in": "dbabrain/common/host_ops.py",
             "parsers": [
-                "db_ops/common/host_ops.py",
-                "db_ops/common/confirm.py"
+                "dbabrain/common/host_ops.py",
+                "dbabrain/common/confirm.py"
             ],
             "commands": [
                 "host-facts",
@@ -16758,7 +16803,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The maintenance policy that times this host operation: the node's maintenance_policy.json defaults with this server's own values over them. {} means the built-in defaults. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "The maintenance policy that times this host operation: the node's maintenance_policy.json defaults with this server's own values over them. {} means the built-in defaults. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "rules",
@@ -16772,7 +16817,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
         },
@@ -16781,11 +16826,11 @@
             "kind": "input",
             "required": false,
             "one_line": "A break-glass SQL Server action: shrink a log, kill a session, start or disable a job.",
-            "parsed_in": "db_ops/common/sqlserver_emergency.py",
+            "parsed_in": "dbabrain/common/sqlserver_emergency.py",
             "parsers": [
-                "db_ops/common/sqlserver_emergency.py",
-                "db_ops/common/job_control.py",
-                "db_ops/common/confirm.py"
+                "dbabrain/common/sqlserver_emergency.py",
+                "dbabrain/common/job_control.py",
+                "dbabrain/common/confirm.py"
             ],
             "commands": [
                 "shrink-log",
@@ -17019,7 +17064,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 },
                 {
                     "field": "rules",
@@ -17033,7 +17078,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
         },
@@ -17042,12 +17087,12 @@
             "kind": "input",
             "required": false,
             "one_line": "A cumulative update checked, applied or verified on one instance.",
-            "parsed_in": "db_ops/common/sqlserver_patch.py",
+            "parsed_in": "dbabrain/common/sqlserver_patch.py",
             "parsers": [
-                "db_ops/common/sqlserver_patch.py",
-                "db_ops/common/confirm.py",
-                "db_ops/common/sql_run.py",
-                "db_ops/common/host_ops.py"
+                "dbabrain/common/sqlserver_patch.py",
+                "dbabrain/common/confirm.py",
+                "dbabrain/common/sql_run.py",
+                "dbabrain/common/host_ops.py"
             ],
             "commands": [
                 "sqlserver-precheck",
@@ -17305,7 +17350,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 },
                 {
                     "field": "access",
@@ -17319,7 +17364,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The host login, complete: an inline cmd_access - method (ssh|winrm), host, port, username, auth_type, key_file or password - with the machine's platform and runtime facts. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "The host login, complete: an inline cmd_access - method (ssh|winrm), host, port, username, auth_type, key_file or password - with the machine's platform and runtime facts. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "policy",
@@ -17333,7 +17378,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The maintenance policy that times this host operation: the node's maintenance_policy.json defaults with this server's own values over them. {} means the built-in defaults. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "The maintenance policy that times this host operation: the node's maintenance_policy.json defaults with this server's own values over them. {} means the built-in defaults. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "rules",
@@ -17347,7 +17392,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
         },
@@ -17356,11 +17401,11 @@
             "kind": "input",
             "required": false,
             "one_line": "An instance's server-level metadata exported, replayed or verified.",
-            "parsed_in": "db_ops/common/sqlserver_instance.py",
+            "parsed_in": "dbabrain/common/sqlserver_instance.py",
             "parsers": [
-                "db_ops/common/sqlserver_instance.py",
-                "db_ops/common/confirm.py",
-                "db_ops/common/sql_run.py"
+                "dbabrain/common/sqlserver_instance.py",
+                "dbabrain/common/confirm.py",
+                "dbabrain/common/sql_run.py"
             ],
             "commands": [
                 "sqlserver-export-instance",
@@ -17591,7 +17636,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 },
                 {
                     "field": "policy",
@@ -17605,7 +17650,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The content of sqlserver_instance_policy.json - which server settings are portable between instances. Required: an export or a replay with no policy is refused. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "The content of sqlserver_instance_policy.json - which server settings are portable between instances. Required: an export or a replay with no policy is refused. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "secrets",
@@ -17619,7 +17664,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "{ref: value} for exactly the secret refs the bundle's manifest lists (secret_refs). A ref missing here is reported and the replay fails closed. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "{ref: value} for exactly the secret refs the bundle's manifest lists (secret_refs). A ref missing here is reported and the replay fails closed. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "rules",
@@ -17633,7 +17678,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
             ]
         },
@@ -17642,10 +17687,10 @@
             "kind": "input",
             "required": false,
             "one_line": "A file fetched, sent, packed or relayed over the host's own access.",
-            "parsed_in": "db_ops/common/file_transfer.py",
+            "parsed_in": "dbabrain/common/file_transfer.py",
             "parsers": [
-                "db_ops/common/file_transfer.py",
-                "db_ops/common/cli_host.py"
+                "dbabrain/common/file_transfer.py",
+                "dbabrain/common/cli_host.py"
             ],
             "commands": [
                 "fetch-file",
@@ -17699,7 +17744,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The host login, complete: an inline cmd_access - method (ssh|winrm), host, port, username, auth_type, key_file or password - with the machine's platform and runtime facts. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "The host login, complete: an inline cmd_access - method (ssh|winrm), host, port, username, auth_type, key_file or password - with the machine's platform and runtime facts. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "remote_path",
@@ -17871,9 +17916,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A backup folder packed, or one file pulled or pushed, with checksums.",
-            "parsed_in": "db_ops/common/filetransfer.py",
+            "parsed_in": "dbabrain/common/filetransfer.py",
             "parsers": [
-                "db_ops/common/filetransfer.py"
+                "dbabrain/common/filetransfer.py"
             ],
             "commands": [
                 "pack-backup",
@@ -18018,13 +18063,13 @@
             "kind": "input",
             "required": false,
             "one_line": "Which backup files a directory holds, or which a retention rule would remove.",
-            "parsed_in": "db_ops/common/cli_backup_files.py",
+            "parsed_in": "dbabrain/common/cli_backup_files.py",
             "parsers": [
-                "db_ops/common/cli_backup_files.py",
-                "db_ops/common/backupfiles/__init__.py",
-                "db_ops/common/backupfiles/oracle.py",
-                "db_ops/common/backupfiles/postgresql.py",
-                "db_ops/common/backupfiles/sqlserver.py"
+                "dbabrain/common/cli_backup_files.py",
+                "dbabrain/common/backupfiles/__init__.py",
+                "dbabrain/common/backupfiles/oracle.py",
+                "dbabrain/common/backupfiles/postgresql.py",
+                "dbabrain/common/backupfiles/sqlserver.py"
             ],
             "commands": [
                 "list-backup-files",
@@ -18237,9 +18282,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Files deleted on a host, never outside a named folder.",
-            "parsed_in": "db_ops/common/deletefiles.py",
+            "parsed_in": "dbabrain/common/deletefiles.py",
             "parsers": [
-                "db_ops/common/deletefiles.py"
+                "dbabrain/common/deletefiles.py"
             ],
             "commands": [
                 "delete-file",
@@ -18339,10 +18384,10 @@
             "kind": "input",
             "required": false,
             "one_line": "One instance's databases, schemas or jobs listed.",
-            "parsed_in": "db_ops/common/db_catalog.py",
+            "parsed_in": "dbabrain/common/db_catalog.py",
             "parsers": [
-                "db_ops/common/db_catalog.py",
-                "db_ops/common/cli_catalog.py"
+                "dbabrain/common/db_catalog.py",
+                "dbabrain/common/cli_catalog.py"
             ],
             "commands": [
                 "list-databases",
@@ -18493,7 +18538,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -18502,9 +18547,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A spreadsheet or CSV loaded into a new table.",
-            "parsed_in": "db_ops/common/table_load.py",
+            "parsed_in": "dbabrain/common/table_load.py",
             "parsers": [
-                "db_ops/common/table_load.py"
+                "dbabrain/common/table_load.py"
             ],
             "commands": [
                 "create-table-from-xlsx"
@@ -18726,7 +18771,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -18735,9 +18780,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Which object, or which field of it, to describe.",
-            "parsed_in": "db_ops/common/cli_config_objects.py",
+            "parsed_in": "dbabrain/common/cli_config_objects.py",
             "parsers": [
-                "db_ops/common/cli_config_objects.py"
+                "dbabrain/common/cli_config_objects.py"
             ],
             "commands": [
                 "describe-object"
@@ -18785,10 +18830,10 @@
             "kind": "input",
             "required": false,
             "one_line": "A schedule and its last run, asked whether it is due.",
-            "parsed_in": "db_ops/common/cli_config_objects.py",
+            "parsed_in": "dbabrain/common/cli_config_objects.py",
             "parsers": [
-                "db_ops/common/cli_config_objects.py",
-                "db_ops/lib/time_window.py"
+                "dbabrain/common/cli_config_objects.py",
+                "dbabrain/lib/time_window.py"
             ],
             "commands": [
                 "due-check"
@@ -18932,10 +18977,10 @@
             "kind": "input",
             "required": false,
             "one_line": "Which data/ folder to check - against the reference, or for logins that resolve.",
-            "parsed_in": "db_ops/common/cli_config_objects.py",
+            "parsed_in": "dbabrain/common/cli_config_objects.py",
             "parsers": [
-                "db_ops/common/cli_config_objects.py",
-                "db_ops/common/cli_check_credentials.py"
+                "dbabrain/common/cli_config_objects.py",
+                "dbabrain/common/cli_check_credentials.py"
             ],
             "commands": [
                 "check-objects",
@@ -18983,10 +19028,10 @@
             "kind": "input",
             "required": false,
             "one_line": "Which folder to move to this version's shapes, and whether to write.",
-            "parsed_in": "db_ops/common/field_migration.py",
+            "parsed_in": "dbabrain/common/field_migration.py",
             "parsers": [
-                "db_ops/common/field_migration.py",
-                "db_ops/common/config_upgrade.py"
+                "dbabrain/common/field_migration.py",
+                "dbabrain/common/config_upgrade.py"
             ],
             "commands": [
                 "standardize-field-names",
@@ -19059,13 +19104,13 @@
             "kind": "input",
             "required": false,
             "one_line": "One restore step on one engine.",
-            "parsed_in": "db_ops/common/restorestep/__init__.py",
+            "parsed_in": "dbabrain/common/restorestep/__init__.py",
             "parsers": [
-                "db_ops/common/restorestep/__init__.py",
-                "db_ops/common/restorestep/sqlserver.py",
-                "db_ops/common/restorestep/oracle.py",
-                "db_ops/common/restorestep/postgresql.py",
-                "db_ops/common/cli_restorestep.py"
+                "dbabrain/common/restorestep/__init__.py",
+                "dbabrain/common/restorestep/sqlserver.py",
+                "dbabrain/common/restorestep/oracle.py",
+                "dbabrain/common/restorestep/postgresql.py",
+                "dbabrain/common/cli_restorestep.py"
             ],
             "commands": [
                 "restore-full",
@@ -19446,10 +19491,10 @@
             "kind": "input",
             "required": false,
             "one_line": "A host a restore step reaches, given inline.",
-            "parsed_in": "db_ops/common/cli_restorestep.py",
+            "parsed_in": "dbabrain/common/cli_restorestep.py",
             "parsers": [
-                "db_ops/common/cli_restorestep.py",
-                "db_ops/common/cli_backup.py"
+                "dbabrain/common/cli_restorestep.py",
+                "dbabrain/common/cli_backup.py"
             ],
             "commands": [],
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
@@ -19576,9 +19621,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A backup-encryption certificate to import.",
-            "parsed_in": "db_ops/common/restorekey.py",
+            "parsed_in": "dbabrain/common/restorekey.py",
             "parsers": [
-                "db_ops/common/restorekey.py"
+                "dbabrain/common/restorekey.py"
             ],
             "commands": [
                 "restore-key"
@@ -19693,9 +19738,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Server-level metadata files to replay after a restore.",
-            "parsed_in": "db_ops/common/restoremetadata.py",
+            "parsed_in": "dbabrain/common/restoremetadata.py",
             "parsers": [
-                "db_ops/common/restoremetadata.py"
+                "dbabrain/common/restoremetadata.py"
             ],
             "commands": [
                 "restore-metadata"
@@ -19767,9 +19812,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Which restored databases to ask about, and where.",
-            "parsed_in": "db_ops/common/verifyrestore.py",
+            "parsed_in": "dbabrain/common/verifyrestore.py",
             "parsers": [
-                "db_ops/common/verifyrestore.py"
+                "dbabrain/common/verifyrestore.py"
             ],
             "commands": [
                 "verify-restore"
@@ -19915,10 +19960,10 @@
             "kind": "input",
             "required": false,
             "one_line": "One backup run on a host.",
-            "parsed_in": "db_ops/common/backup/spec.py",
+            "parsed_in": "dbabrain/common/backup/spec.py",
             "parsers": [
-                "db_ops/common/backup/spec.py",
-                "db_ops/common/cli_backup.py"
+                "dbabrain/common/backup/spec.py",
+                "dbabrain/common/cli_backup.py"
             ],
             "commands": [
                 "backup-database"
@@ -20075,9 +20120,9 @@
             "kind": "input",
             "required": false,
             "one_line": "One lab database Docker instance to build.",
-            "parsed_in": "db_ops/common/cli_docker_db.py",
+            "parsed_in": "dbabrain/common/cli_docker_db.py",
             "parsers": [
-                "db_ops/common/cli_docker_db.py"
+                "dbabrain/common/cli_docker_db.py"
             ],
             "commands": [
                 "create-db-docker"
@@ -20086,7 +20131,7 @@
             "used_in": [],
             "legacy_fields": {},
             "field_count": 18,
-            "required_field_count": 3,
+            "required_field_count": 4,
             "fields": [
                 {
                     "field": "name",
@@ -20213,7 +20258,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Host folder bind-mounted at the same path. Omitted = the engine default, empty = none."
+                    "purpose": "Host folder bind-mounted at the same path; empty = none. Omitted means nothing stated: no mount for an engine that needs none, and refused by name for one that mounts its backup folder (SQL Server) - the node's own is sre.docker_db.backup_mount."
                 },
                 {
                     "field": "network_subnet",
@@ -20232,8 +20277,8 @@
                 {
                     "field": "containers_dir",
                     "type": "string",
-                    "required": false,
-                    "default": "none - optional",
+                    "required": true,
+                    "default": "none - it is stated, or the request is refused",
                     "range_text": "text",
                     "constraint": {
                         "kind": "string",
@@ -20241,7 +20286,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Where the instance folder is written on its host."
+                    "purpose": "Where the instance folder is written on its host. Stated by the caller - the node's own is sre.docker_db.containers_dir - because the command reads no configuration and assumes no folder; a request without it is refused by name."
                 },
                 {
                     "field": "worker_host",
@@ -20345,9 +20390,9 @@
             "kind": "input",
             "required": false,
             "one_line": "One lab database Docker instance to move, data included.",
-            "parsed_in": "db_ops/common/cli_docker_db.py",
+            "parsed_in": "dbabrain/common/cli_docker_db.py",
             "parsers": [
-                "db_ops/common/cli_docker_db.py"
+                "dbabrain/common/cli_docker_db.py"
             ],
             "commands": [
                 "move-db-docker"
@@ -20356,7 +20401,7 @@
             "used_in": [],
             "legacy_fields": {},
             "field_count": 14,
-            "required_field_count": 4,
+            "required_field_count": 5,
             "fields": [
                 {
                     "field": "name",
@@ -20417,8 +20462,8 @@
                 {
                     "field": "containers_dir",
                     "type": "string",
-                    "required": false,
-                    "default": "none - optional",
+                    "required": true,
+                    "default": "none - it is stated, or the request is refused",
                     "range_text": "text",
                     "constraint": {
                         "kind": "string",
@@ -20426,7 +20471,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Instance folders on the source."
+                    "purpose": "Instance folders on the source: the lab is found under this folder and its name. Stated by the caller - the node's own is sre.docker_db.containers_dir; a request without it is refused by name."
                 },
                 {
                     "field": "dest_containers_dir",
@@ -20555,10 +20600,10 @@
             "kind": "input",
             "required": false,
             "one_line": "One sqlcmd batch, and where to run it.",
-            "parsed_in": "db_ops/common/sqlcmd_run.py",
+            "parsed_in": "dbabrain/common/sqlcmd_run.py",
             "parsers": [
-                "db_ops/common/sqlcmd_run.py",
-                "db_ops/common/cli_sqlcmd.py"
+                "dbabrain/common/sqlcmd_run.py",
+                "dbabrain/common/cli_sqlcmd.py"
             ],
             "commands": [
                 "run-sqlcmd"
@@ -20731,10 +20776,10 @@
             "kind": "input",
             "required": false,
             "one_line": "A Windows share and the login to it - what to list, fetch, delete, or store the login for.",
-            "parsed_in": "db_ops/common/smb.py",
+            "parsed_in": "dbabrain/common/smb.py",
             "parsers": [
-                "db_ops/common/smb.py",
-                "db_ops/common/cli_smb.py"
+                "dbabrain/common/smb.py",
+                "dbabrain/common/cli_smb.py"
             ],
             "commands": [
                 "smb-list",
@@ -20948,9 +20993,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The files under one folder of a share.",
-            "parsed_in": "db_ops/common/smb.py",
+            "parsed_in": "dbabrain/common/smb.py",
             "produced_in": [
-                "db_ops/common/smb.py"
+                "dbabrain/common/smb.py"
             ],
             "commands": [
                 "smb-list"
@@ -21051,9 +21096,9 @@
             "kind": "output",
             "required": false,
             "one_line": "One file fetched from a share.",
-            "parsed_in": "db_ops/common/smb.py",
+            "parsed_in": "dbabrain/common/smb.py",
             "produced_in": [
-                "db_ops/common/smb.py"
+                "dbabrain/common/smb.py"
             ],
             "commands": [
                 "smb-get"
@@ -21155,9 +21200,9 @@
             "kind": "output",
             "required": false,
             "one_line": "Named files deleted on a share.",
-            "parsed_in": "db_ops/common/smb.py",
+            "parsed_in": "dbabrain/common/smb.py",
             "produced_in": [
-                "db_ops/common/smb.py"
+                "dbabrain/common/smb.py"
             ],
             "commands": [
                 "smb-delete"
@@ -21258,9 +21303,9 @@
             "kind": "output",
             "required": false,
             "one_line": "A share login stored for Windows.",
-            "parsed_in": "db_ops/common/smb.py",
+            "parsed_in": "dbabrain/common/smb.py",
             "produced_in": [
-                "db_ops/common/smb.py"
+                "dbabrain/common/smb.py"
             ],
             "commands": [
                 "smb-credential"
@@ -21319,11 +21364,11 @@
             "kind": "input",
             "required": false,
             "one_line": "An instance to register, with its login.",
-            "parsed_in": "db_ops/common/instance_admin.py",
+            "parsed_in": "dbabrain/common/instance_admin.py",
             "parsers": [
-                "db_ops/common/instance_admin.py",
-                "db_ops/lib/field_names.py",
-                "db_ops/common/cli.py"
+                "dbabrain/common/instance_admin.py",
+                "dbabrain/lib/field_names.py",
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "instance-add"
@@ -21538,9 +21583,9 @@
             "kind": "input",
             "required": false,
             "one_line": "An OS login to register, and the cmd_access that names it.",
-            "parsed_in": "db_ops/common/remote_credential_admin.py",
+            "parsed_in": "dbabrain/common/remote_credential_admin.py",
             "parsers": [
-                "db_ops/common/remote_credential_admin.py"
+                "dbabrain/common/remote_credential_admin.py"
             ],
             "commands": [
                 "remote-credential-add"
@@ -21823,10 +21868,10 @@
             "kind": "input",
             "required": false,
             "one_line": "A SQL task's WHAT: its name and its script.",
-            "parsed_in": "db_ops/common/sql_task_admin.py",
+            "parsed_in": "dbabrain/common/sql_task_admin.py",
             "parsers": [
-                "db_ops/common/sql_task_admin.py",
-                "db_ops/lib/field_names.py"
+                "dbabrain/common/sql_task_admin.py",
+                "dbabrain/lib/field_names.py"
             ],
             "commands": [
                 "sql-command-add"
@@ -22105,9 +22150,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A SQL task's WHERE and WHEN.",
-            "parsed_in": "db_ops/common/sql_task_admin.py",
+            "parsed_in": "dbabrain/common/sql_task_admin.py",
             "parsers": [
-                "db_ops/common/sql_task_admin.py"
+                "dbabrain/common/sql_task_admin.py"
             ],
             "commands": [
                 "sql-target-add"
@@ -22456,9 +22501,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A single-script SQL task and its target in one call (the older add-sql).",
-            "parsed_in": "db_ops/common/config_admin.py",
+            "parsed_in": "dbabrain/common/config_admin.py",
             "parsers": [
-                "db_ops/common/config_admin.py"
+                "dbabrain/common/config_admin.py"
             ],
             "commands": [
                 "add-sql"
@@ -22852,9 +22897,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A metric, a collector type or all of them switched on or off for one instance.",
-            "parsed_in": "db_ops/common/config_admin.py",
+            "parsed_in": "dbabrain/common/config_admin.py",
             "parsers": [
-                "db_ops/common/config_admin.py"
+                "dbabrain/common/config_admin.py"
             ],
             "commands": [
                 "metric-toggle"
@@ -22928,9 +22973,9 @@
             "kind": "input",
             "required": false,
             "one_line": "How one metric's statuses are remapped for one instance.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "parsers": [
-                "db_ops/common/cli.py"
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "metric-severity"
@@ -23032,11 +23077,11 @@
             "kind": "input",
             "required": false,
             "one_line": "An app command's schedule or state, changed field by field.",
-            "parsed_in": "db_ops/common/app_command_admin.py",
+            "parsed_in": "dbabrain/common/app_command_admin.py",
             "parsers": [
-                "db_ops/common/app_command_admin.py",
-                "db_ops/common/cli.py",
-                "db_ops/common/catalogue/shared_config_objects.json"
+                "dbabrain/common/app_command_admin.py",
+                "dbabrain/common/cli.py",
+                "dbabrain/common/catalogue/shared_config_objects.json"
             ],
             "commands": [
                 "app-command-set"
@@ -23195,9 +23240,9 @@
             "kind": "input",
             "required": false,
             "one_line": "One secret to encrypt into the store. Stdin only: never on a command line.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "parsers": [
-                "db_ops/common/cli.py"
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "secret-set"
@@ -23269,10 +23314,10 @@
             "kind": "input",
             "required": false,
             "one_line": "A statement to run on one target, and how.",
-            "parsed_in": "db_ops/common/sql_run.py",
+            "parsed_in": "dbabrain/common/sql_run.py",
             "parsers": [
-                "db_ops/common/sql_run.py",
-                "db_ops/common/cli_sql.py"
+                "dbabrain/common/sql_run.py",
+                "dbabrain/common/cli_sql.py"
             ],
             "commands": [
                 "run-sql"
@@ -23368,7 +23413,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "{ref: value} for exactly the secret refs the connection's sql_access names (an 8i bridge's signing secret) - never the whole store. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); no store is opened."
+                    "purpose": "{ref: value} for exactly the secret refs the connection's sql_access names (an 8i bridge's signing secret) - never the whole store. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); no store is opened."
                 },
                 {
                     "field": "connection",
@@ -23382,7 +23427,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 },
                 {
                     "field": "profile",
@@ -23630,11 +23675,11 @@
             "kind": "input",
             "required": false,
             "one_line": "One shell command on a host.",
-            "parsed_in": "db_ops/common/cli_host.py",
+            "parsed_in": "dbabrain/common/cli_host.py",
             "parsers": [
-                "db_ops/common/cli_host.py",
-                "db_ops/common/host_ops.py",
-                "db_ops/common/confirm.py"
+                "dbabrain/common/cli_host.py",
+                "dbabrain/common/host_ops.py",
+                "dbabrain/common/confirm.py"
             ],
             "commands": [
                 "run-cmd"
@@ -23671,7 +23716,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The host login, complete: an inline cmd_access - method (ssh|winrm), host, port, username, auth_type, key_file or password - with the machine's platform and runtime facts. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "The host login, complete: an inline cmd_access - method (ssh|winrm), host, port, username, auth_type, key_file or password - with the machine's platform and runtime facts. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "platform",
@@ -23831,10 +23876,10 @@
             "kind": "input",
             "required": false,
             "one_line": "Which sessions to trace on one instance.",
-            "parsed_in": "db_ops/common/session_trace.py",
+            "parsed_in": "dbabrain/common/session_trace.py",
             "parsers": [
-                "db_ops/common/session_trace.py",
-                "db_ops/common/cli_sql.py"
+                "dbabrain/common/session_trace.py",
+                "dbabrain/common/cli_sql.py"
             ],
             "commands": [
                 "trace-session"
@@ -23940,7 +23985,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -23949,11 +23994,11 @@
             "kind": "input",
             "required": false,
             "one_line": "How deep to check an instance.",
-            "parsed_in": "db_ops/common/dbstatus.py",
+            "parsed_in": "dbabrain/common/dbstatus.py",
             "parsers": [
-                "db_ops/common/dbstatus.py",
-                "db_ops/common/cli_sql.py",
-                "db_ops/common/sql_run.py"
+                "dbabrain/common/dbstatus.py",
+                "dbabrain/common/cli_sql.py",
+                "dbabrain/common/sql_run.py"
             ],
             "commands": [
                 "db-status"
@@ -24034,7 +24079,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
+                    "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
             ]
         },
@@ -24043,10 +24088,10 @@
             "kind": "input",
             "required": false,
             "one_line": "A host to probe for its management ports.",
-            "parsed_in": "db_ops/common/host_probe.py",
+            "parsed_in": "dbabrain/common/host_probe.py",
             "parsers": [
-                "db_ops/common/host_probe.py",
-                "db_ops/common/cli_host.py"
+                "dbabrain/common/host_probe.py",
+                "dbabrain/common/cli_host.py"
             ],
             "commands": [
                 "probe-host"
@@ -24083,7 +24128,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The address to probe - required. The app that holds a server_id fills it, with the OS, from its own data/ (db_ops.lib.data_sources.request_fill)."
+                    "purpose": "The address to probe - required. The app that holds a server_id fills it, with the OS, from its own data/ (dbabrain.lib.data_sources.request_fill)."
                 },
                 {
                     "field": "ports",
@@ -24119,9 +24164,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A listing that takes nothing but its format.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "parsers": [
-                "db_ops/common/cli.py"
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "list-targets"
@@ -24153,9 +24198,9 @@
             "kind": "input",
             "required": false,
             "one_line": "What this installation is - and, stated by the caller, when each app last ran.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "parsers": [
-                "db_ops/common/cli.py"
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "self-status"
@@ -24215,9 +24260,9 @@
             "kind": "input",
             "required": false,
             "one_line": "The inventory to summarise.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "parsers": [
-                "db_ops/common/cli.py"
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "inventory-summary"
@@ -24305,9 +24350,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Which secret refs to prove by using them.",
-            "parsed_in": "db_ops/common/secret_check.py",
+            "parsed_in": "dbabrain/common/secret_check.py",
             "parsers": [
-                "db_ops/common/secret_check.py"
+                "dbabrain/common/secret_check.py"
             ],
             "commands": [
                 "check-secret"
@@ -24381,10 +24426,10 @@
             "kind": "input",
             "required": false,
             "one_line": "Which secret refs to rotate, and how.",
-            "parsed_in": "db_ops/common/password_rotation.py",
+            "parsed_in": "dbabrain/common/password_rotation.py",
             "parsers": [
-                "db_ops/common/password_rotation.py",
-                "db_ops/common/cli.py"
+                "dbabrain/common/password_rotation.py",
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "rotate-password"
@@ -24527,9 +24572,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A tree to scan for this estate's identifiers.",
-            "parsed_in": "db_ops/common/identifier_scan.py",
+            "parsed_in": "dbabrain/common/identifier_scan.py",
             "parsers": [
-                "db_ops/common/identifier_scan.py"
+                "dbabrain/common/identifier_scan.py"
             ],
             "commands": [
                 "check-identifiers"
@@ -24640,9 +24685,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A tree to scan for secret values.",
-            "parsed_in": "db_ops/common/secret_literals.py",
+            "parsed_in": "dbabrain/common/secret_literals.py",
             "parsers": [
-                "db_ops/common/secret_literals.py"
+                "dbabrain/common/secret_literals.py"
             ],
             "commands": [
                 "check-secret-literals"
@@ -24701,9 +24746,9 @@
             "kind": "input",
             "required": false,
             "one_line": "A config file to copy into an example.",
-            "parsed_in": "db_ops/common/cli.py",
+            "parsed_in": "dbabrain/common/cli.py",
             "parsers": [
-                "db_ops/common/cli.py"
+                "dbabrain/common/cli.py"
             ],
             "commands": [
                 "lift-example"
@@ -24777,9 +24822,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Where the published pages are, and where the showcase goes.",
-            "parsed_in": "db_ops/common/showcase.py",
+            "parsed_in": "dbabrain/common/showcase.py",
             "parsers": [
-                "db_ops/common/showcase.py"
+                "dbabrain/common/showcase.py"
             ],
             "commands": [
                 "build-showcase"
@@ -24906,10 +24951,10 @@
             "kind": "input",
             "required": false,
             "one_line": "A schema to copy from one database into another.",
-            "parsed_in": "db_ops/common/schema_copy.py",
+            "parsed_in": "dbabrain/common/schema_copy.py",
             "parsers": [
-                "db_ops/common/schema_copy.py",
-                "db_ops/common/cli_schema.py"
+                "dbabrain/common/schema_copy.py",
+                "dbabrain/common/cli_schema.py"
             ],
             "commands": [
                 "copy-schema"
@@ -24935,7 +24980,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Where the schema is read from: {connection, database_name, schema} - connection is the complete login (db_type, host, port, username, password). The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "Where the schema is read from: {connection, database_name, schema} - connection is the complete login (db_type, host, port, username, password). The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "destination",
@@ -24949,7 +24994,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Where it is written: {connection, database_name, schema} - connection is the complete login. The app that calls fills it from its own data/ (db_ops.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                    "purpose": "Where it is written: {connection, database_name, schema} - connection is the complete login. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 },
                 {
                     "field": "mode",
@@ -25323,8 +25368,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The web console's own settings: where it is mounted, its sessions, its lockout, its levels.",
-            "parsed_in": "db_ops/webhost/app.py",
-            "shared_entry_point": "db_ops.webhost.app",
+            "parsed_in": "dbabrain/webhost/app.py",
+            "shared_entry_point": "dbabrain.webhost.app",
             "kind_note": "kind is 'field': its names live directly on the record.",
             "whole_record": true,
             "used_in": [
@@ -25342,7 +25387,7 @@
                     "field": "mount",
                     "type": "string",
                     "required": false,
-                    "default": "db_ops",
+                    "default": "dbabrain",
                     "range_text": "a URL path segment",
                     "constraint": {
                         "kind": "string",
@@ -25356,7 +25401,7 @@
                     "field": "cookie_name",
                     "type": "string",
                     "required": false,
-                    "default": "db_ops_session",
+                    "default": "dbabrain_session",
                     "range_text": "a cookie name",
                     "constraint": {
                         "kind": "string",
@@ -25521,8 +25566,8 @@
             "kind": "field",
             "required": true,
             "one_line": "A login to a monitoring tool (Grafana and the like), kept by ref.",
-            "parsed_in": "db_ops/lib/data_sources/__init__.py",
-            "shared_entry_point": "db_ops.lib.data_sources.__init__",
+            "parsed_in": "dbabrain/lib/data_sources/__init__.py",
+            "shared_entry_point": "dbabrain.lib.data_sources.__init__",
             "kind_note": "kind is 'field': its names live directly on the record.",
             "whole_record": true,
             "used_in": [
@@ -25656,8 +25701,8 @@
             "kind": "field",
             "required": true,
             "one_line": "How a collection pass walks the estate.",
-            "parsed_in": "db_ops/metrics/definitions.py",
-            "shared_entry_point": "db_ops.metrics.definitions",
+            "parsed_in": "dbabrain/metrics/definitions.py",
+            "shared_entry_point": "dbabrain.metrics.definitions",
             "kind_note": "kind is 'field': its names live directly on the record.",
             "whole_record": true,
             "used_in": [
@@ -25707,8 +25752,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Where the published reports live, and which ones are produced.",
-            "parsed_in": "db_ops/reports/metrics_reports.py",
-            "shared_entry_point": "db_ops.reports.metrics_reports",
+            "parsed_in": "dbabrain/reports/metrics_reports.py",
+            "shared_entry_point": "dbabrain.reports.metrics_reports",
             "kind_note": "kind is 'field': its names live directly on the record.",
             "whole_record": true,
             "used_in": [
@@ -25775,8 +25820,8 @@
             "kind": "field",
             "required": true,
             "one_line": "The backup and restore file's own block: the entries, and the copy defaults they share.",
-            "parsed_in": "db_ops/backup_restore/config.py",
-            "shared_entry_point": "db_ops.backup_restore.config",
+            "parsed_in": "dbabrain/backup_restore/config.py",
+            "shared_entry_point": "dbabrain.backup_restore.config",
             "kind_note": "kind is 'field': its names live directly on the record.",
             "whole_record": true,
             "used_in": [
@@ -25872,8 +25917,8 @@
             "kind": "field",
             "required": true,
             "one_line": "Host maintenance: the defaults, what each one means, and per-server exceptions.",
-            "parsed_in": "db_ops/common/host_ops.py",
-            "shared_entry_point": "db_ops.common.host_ops",
+            "parsed_in": "dbabrain/common/host_ops.py",
+            "shared_entry_point": "dbabrain.common.host_ops",
             "kind_note": "kind is 'field': its names live directly on the record.",
             "whole_record": true,
             "used_in": [
@@ -25936,7 +25981,7 @@
             "kind": "field",
             "required": true,
             "one_line": "One entry of this reference: what it describes, where that lives, and its fields.",
-            "parsed_in": "db_ops/lib/shared_objects.py",
+            "parsed_in": "dbabrain/lib/shared_objects.py",
             "kind_note": "kind 'field', like every whole-record entry: the record is walked as the entry's own fields. The reference describes itself so check-objects holds it to the same rules it holds every other file to (the operator, 2026-09-24).",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. That is the point of describing the reference in itself: a misspelt key in it is otherwise read by nothing and passes silently.",
@@ -26238,7 +26283,7 @@
             "kind": "field",
             "required": true,
             "one_line": "One field of a reference entry: its name, type, default and the constraint enforced.",
-            "parsed_in": "db_ops/lib/shared_objects.py",
+            "parsed_in": "dbabrain/lib/shared_objects.py",
             "kind_note": "kind 'field', like every whole-record entry: the record is walked as the entry's own fields. The reference describes itself so check-objects holds it to the same rules it holds every other file to (the operator, 2026-09-24).",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. That is the point of describing the reference in itself: a misspelt key in it is otherwise read by nothing and passes silently.",
@@ -26378,7 +26423,7 @@
             "kind": "field",
             "required": true,
             "one_line": "One place a reference entry's records live: a data/ file and a path in it.",
-            "parsed_in": "db_ops/lib/shared_objects.py",
+            "parsed_in": "dbabrain/lib/shared_objects.py",
             "kind_note": "kind 'field', like every whole-record entry: the record is walked as the entry's own fields. The reference describes itself so check-objects holds it to the same rules it holds every other file to (the operator, 2026-09-24).",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. That is the point of describing the reference in itself: a misspelt key in it is otherwise read by nothing and passes silently.",
@@ -26445,7 +26490,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "For a file that ships as a packaged default instead of an example: the copy inside the package that init writes it from, relative to db_ops/. Must match scaffold.PACKAGED_DEFAULTS."
+                    "purpose": "For a file that ships as a packaged default instead of an example: the copy inside the package that init writes it from, relative to dbabrain/. Must match scaffold.PACKAGED_DEFAULTS."
                 }
             ]
         },
@@ -26454,7 +26499,7 @@
             "kind": "field",
             "required": true,
             "one_line": "What check_value enforces on one field's value.",
-            "parsed_in": "db_ops/lib/shared_objects.py",
+            "parsed_in": "dbabrain/lib/shared_objects.py",
             "kind_note": "kind 'field', like every whole-record entry: the record is walked as the entry's own fields. The reference describes itself so check-objects holds it to the same rules it holds every other file to (the operator, 2026-09-24).",
             "whole_record": true,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. That is the point of describing the reference in itself: a misspelt key in it is otherwise read by nothing and passes silently.",
@@ -26824,9 +26869,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Create a tool root: the directory, the app name, and whether to overwrite.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "parsers": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "init"
@@ -26899,9 +26944,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What init wrote, what it kept, and what to do next.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "produced_in": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "init"
@@ -27001,9 +27046,9 @@
             "kind": "input",
             "required": false,
             "one_line": "The operating guide, printed or written as AGENTS.md.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "parsers": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "guide"
@@ -27062,9 +27107,9 @@
             "kind": "output",
             "required": false,
             "one_line": "The guide's text, or what writing it did.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "produced_in": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "guide"
@@ -27138,9 +27183,9 @@
             "kind": "input",
             "required": false,
             "one_line": "The plaintext secret source and the encrypted store to write; never the passphrase.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "parsers": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "encrypt-secret"
@@ -27200,9 +27245,9 @@
             "kind": "output",
             "required": false,
             "one_line": "How many secrets were encrypted, and where.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "produced_in": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "encrypt-secret"
@@ -27262,9 +27307,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Which tool root to carry, into which bundle file, with or without secrets and assets.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "parsers": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "export-data"
@@ -27363,9 +27408,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What the bundle carries, and what it could not.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "produced_in": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "export-data"
@@ -27450,9 +27495,9 @@
             "kind": "input",
             "required": false,
             "one_line": "Which bundle to apply to which tool root, as a plan or for real.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "parsers": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "import-data"
@@ -27564,9 +27609,9 @@
             "kind": "output",
             "required": false,
             "one_line": "What the import wrote, or would write.",
-            "parsed_in": "db_ops/common/cli_tool_root.py",
+            "parsed_in": "dbabrain/common/cli_tool_root.py",
             "produced_in": [
-                "db_ops/common/cli_tool_root.py"
+                "dbabrain/common/cli_tool_root.py"
             ],
             "commands": [
                 "import-data"
@@ -27694,7 +27739,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The encrypted store was written; set DB_OPS_SECRET_KEY next."
+                    "purpose": "The encrypted store was written; set DBABRAIN_SECRET_KEY next."
                 },
                 {
                     "field": "node_role_needed",

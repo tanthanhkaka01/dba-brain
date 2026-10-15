@@ -26,8 +26,8 @@ import json
 
 import pytest
 
-from db_ops.telegram import use_bot as use_bot_module
-from db_ops.telegram.use_bot import UseBotError, use_bot
+from dbabrain.telegram import use_bot as use_bot_module
+from dbabrain.telegram.use_bot import UseBotError, use_bot
 
 REF = "TOKEN_TELEGRAM_TEST_BOT"
 IDENTITY = {"ok": True, "telegram_bot_id": "7000000002", "telegram_bot_username": "a_test_bot",
@@ -37,9 +37,9 @@ IDENTITY = {"ok": True, "telegram_bot_id": "7000000002", "telegram_bot_username"
 @pytest.fixture
 def node(tmp_path, monkeypatch):
     """A data folder holding one bot token, with Telegram's answer stubbed."""
-    monkeypatch.setattr("db_ops.lib.secret_text.load_secret_text",
+    monkeypatch.setattr("dbabrain.lib.secret_text.load_secret_text",
                         lambda root, **kw: {REF: "123:abc", "OTHER_REF": "456:def"})
-    monkeypatch.setattr("db_ops.telegram.api.bot_info", lambda **kw: dict(IDENTITY))
+    monkeypatch.setattr("dbabrain.telegram.api.bot_info", lambda **kw: dict(IDENTITY))
     return tmp_path
 
 
@@ -94,7 +94,7 @@ def test_a_ref_the_store_does_not_hold_is_refused_and_names_what_is_there(node):
 
 
 def test_a_token_telegram_rejects_is_refused(node, monkeypatch):
-    monkeypatch.setattr("db_ops.telegram.api.bot_info",
+    monkeypatch.setattr("dbabrain.telegram.api.bot_info",
                         lambda **kw: {"ok": False, "telegram_bot_id": ""})
 
     with pytest.raises(UseBotError, match="did not accept"):
@@ -139,7 +139,7 @@ def test_init_no_longer_pins_the_token_ref_but_does_name_the_bot_file():
     """`init` wrote `telegram_bot_token_ref` as the placeholder "TELEGRAM_BOT_TOKEN", and a value
     there overrides the bot file - so a fresh node could not change its bot by editing the file
     its own notes point at. The master does not set that key, which is why the master works."""
-    from db_ops.common import scaffold
+    from dbabrain.common import scaffold
 
     settings = scaffold.TELEGRAM_CONFIG
 
@@ -154,7 +154,7 @@ def test_the_identity_only_comes_from_the_file_that_supplied_the_token():
     reports one bot and authenticates as the other."""
     from pathlib import Path
 
-    from db_ops.lib.config import parse_config
+    from dbabrain.lib.config import parse_config
 
     root = Path(__file__).resolve().parents[1]
     parsed = parse_config({"telegram": {"telegram_bot_token_ref": "PINNED_ELSEWHERE",

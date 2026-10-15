@@ -13,14 +13,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.telegram import command_processor
+from dbabrain.telegram import command_processor
 
 
 @pytest.fixture
 def downloads(monkeypatch):
     seen: list[object] = []
-    import db_ops.lib.config as config_module
-    from db_ops.telegram import api
+    import dbabrain.lib.config as config_module
+    from dbabrain.telegram import api
 
     monkeypatch.setattr(config_module, "load_config", lambda _path: SimpleNamespace(
         telegram=SimpleNamespace(resolved_bot_token="t", api_url="https://api.telegram.org")))

@@ -25,8 +25,8 @@ from pathlib import Path
 import pytest
 
 from conftest import shipped_data_dir
-from db_ops.db import config_sync
-from db_ops.lib import record_form as rf
+from dbabrain.db import config_sync
+from dbabrain.lib import record_form as rf
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

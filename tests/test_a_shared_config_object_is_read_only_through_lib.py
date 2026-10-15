@@ -20,7 +20,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-DB_OPS = Path(__file__).resolve().parents[1] / "db_ops"
+DBABRAIN = Path(__file__).resolve().parents[1] / "dbabrain"
 
 #: The fields only `lib.time_window` interprets.
 TIME_WINDOW_FIELDS = frozenset({
@@ -53,8 +53,8 @@ def _reads(path: Path) -> list[str]:
 
 def _measured() -> dict[str, list[str]]:
     found = {}
-    for path in sorted(DB_OPS.rglob("*.py")):
-        relative = path.relative_to(DB_OPS)
+    for path in sorted(DBABRAIN.rglob("*.py")):
+        relative = path.relative_to(DBABRAIN)
         if "__pycache__" in relative.parts or relative.parts[0] == "lib":
             continue
         reads = _reads(path)

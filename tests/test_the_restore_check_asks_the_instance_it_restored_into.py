@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.backup_restore.cli import _verify_request
-from db_ops.backup_restore.config import DatabaseRestoreMapping
-from db_ops.lib import sql_instance
+from dbabrain.backup_restore.cli import _verify_request
+from dbabrain.backup_restore.config import DatabaseRestoreMapping
+from dbabrain.lib import sql_instance
 
 
 def Mapping(name):  # noqa: N802 - reads as the class it stands for, and now IS that class
@@ -118,7 +118,7 @@ def test_oracle_is_told_which_instance_to_look_at(monkeypatch):
     instance is right by accident; a host with two is not, and the check would answer for an
     instance nobody restored while labelling the row with the one they did. The restore step has
     always been given the SID — this one had not."""
-    from db_ops.common import verifyrestore
+    from dbabrain.common import verifyrestore
 
     seen = {}
 
@@ -135,7 +135,7 @@ def test_oracle_is_told_which_instance_to_look_at(monkeypatch):
 
 def test_oracle_without_a_sid_behaves_exactly_as_before(monkeypatch):
     """A caller that cannot name one must not be given a guess."""
-    from db_ops.common import verifyrestore
+    from dbabrain.common import verifyrestore
 
     seen = {}
     monkeypatch.setattr(verifyrestore, "run",
@@ -150,7 +150,7 @@ def test_oracle_without_a_sid_behaves_exactly_as_before(monkeypatch):
 def test_postgres_is_told_which_cluster_when_the_job_names_one(monkeypatch):
     """psql with no -p takes the default cluster: right inside a container, wrong on a host with
     two."""
-    from db_ops.common import verifyrestore
+    from dbabrain.common import verifyrestore
 
     seen = {}
     monkeypatch.setattr(verifyrestore, "run",
@@ -162,7 +162,7 @@ def test_postgres_is_told_which_cluster_when_the_job_names_one(monkeypatch):
 
 
 def test_postgres_without_a_port_is_unchanged(monkeypatch):
-    from db_ops.common import verifyrestore
+    from dbabrain.common import verifyrestore
 
     seen = {}
     monkeypatch.setattr(verifyrestore, "run",
@@ -178,7 +178,7 @@ def test_the_restore_plan_hands_the_check_what_it_hands_the_restore():
     does not exist. This is how the SQL Server port came to be 1433 for two releases."""
     import inspect
 
-    from db_ops.backup_restore import restore_by_id
+    from dbabrain.backup_restore import restore_by_id
 
     oracle = inspect.getsource(restore_by_id._plan_oracle)
     postgres = inspect.getsource(restore_by_id._plan_postgresql)

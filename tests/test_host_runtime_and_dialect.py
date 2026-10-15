@@ -11,9 +11,9 @@ permissions problem.
 
 import pytest
 
-from db_ops.common import host_ops
-from db_ops.common.host_ops import HostTarget, os_drift, wrap_for_runtime
-from db_ops.lib.target_profile import SOURCE_CONFIG, SOURCE_REQUEST, TargetProfile
+from dbabrain.common import host_ops
+from dbabrain.common.host_ops import HostTarget, os_drift, wrap_for_runtime
+from dbabrain.lib.target_profile import SOURCE_CONFIG, SOURCE_REQUEST, TargetProfile
 
 
 def _target(*, platform="linux", runtime="", runtime_source=SOURCE_REQUEST, **runtime_target):

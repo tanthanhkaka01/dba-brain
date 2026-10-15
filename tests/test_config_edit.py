@@ -1,6 +1,6 @@
 """An edit made in the console must reach the file the apps actually read — and be refusable.
 
-The store is a mirror, not the thing db_ops runs from: the apps still read ``data/*.json``. So the
+The store is a mirror, not the thing dbabrain runs from: the apps still read ``data/*.json``. So the
 property that matters most here is not that a row changed, it is that **the file changed too**. An
 edit that stopped at the store would be one the operator watched succeed and that nothing acted
 on, which is worse than an edit that failed.
@@ -27,8 +27,8 @@ import pytest
 
 from conftest import write_catalogued_data
 
-from db_ops.db import config_edit, config_sync
-from db_ops.db.config_store import DOCUMENT_COLLECTION, DOCUMENT_KEY, ConfigStore
+from dbabrain.db import config_edit, config_sync
+from dbabrain.db.config_store import DOCUMENT_COLLECTION, DOCUMENT_KEY, ConfigStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,7 +72,7 @@ def data_copy(tmp_path: Path, _template) -> Path:
 
 @pytest.fixture()
 def store(tmp_path: Path, _template) -> ConfigStore:
-    store_path = tmp_path / "db_ops.sqlite"
+    store_path = tmp_path / "dbabrain.sqlite"
     shutil.copy(_template[0], store_path)
     return ConfigStore(store_path)
 

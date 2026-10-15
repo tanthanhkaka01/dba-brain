@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from db_ops.backup_restore import backup as backup_module
-from db_ops.transport.common_cli import CommonCliError
+from dbabrain.backup_restore import backup as backup_module
+from dbabrain.transport.common_cli import CommonCliError
 from tests.test_an_async_run_never_repeats_a_job_another_run_finished import _backup_job, _Store
 
 from conftest import patch_sql_runner
@@ -22,7 +22,7 @@ from conftest import patch_sql_runner
 def test_a_backup_whose_common_cli_child_crashed_is_an_error_and_the_next_job_runs(monkeypatch):
     first, second = _backup_job("CRASHES"), _backup_job("NEXT")
     executed: list[str] = []
-    monkeypatch.setattr(backup_module, "DbOpsStore", _Store)
+    monkeypatch.setattr(backup_module, "DbaBrainStore", _Store)
     monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: None)
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
@@ -51,7 +51,7 @@ def test_a_backup_whose_common_cli_child_crashed_is_an_error_and_the_next_job_ru
 def test_a_task_whose_sql_file_is_missing_is_recorded_as_failed(tmp_path, monkeypatch):
     from test_sql_task_claims import RecordingSqlRunStore, inventory_and_credentials, sql_command, sql_target
 
-    from db_ops.sql_tasks import runner
+    from dbabrain.sql_tasks import runner
 
     patch_sql_runner(monkeypatch, "log_event", lambda *args, **kwargs: None)
     patch_sql_runner(monkeypatch, "enqueue_sql_task_message", lambda **kwargs: None)
@@ -73,7 +73,7 @@ def test_a_task_whose_sql_file_is_missing_is_recorded_as_failed(tmp_path, monkey
 def test_one_task_that_raises_does_not_stop_the_scan(tmp_path, monkeypatch):
     from test_sql_task_claims import sql_command, sql_target
 
-    from db_ops.sql_tasks import runner
+    from dbabrain.sql_tasks import runner
 
     first, second = (sql_command(sql_id=1, sql_code="ONE"), sql_target(sql_id=1)), \
         (sql_command(sql_id=2, sql_code="TWO"), sql_target(sql_id=2))
@@ -109,9 +109,9 @@ def test_one_task_that_raises_does_not_stop_the_scan(tmp_path, monkeypatch):
 # F7.1 - scheduled reports
 # --------------------------------------------------------------------------- #
 def test_one_report_that_raises_does_not_stop_the_reports_after_it(tmp_path, monkeypatch):
-    from db_ops.reports import metrics_reports
+    from dbabrain.reports import metrics_reports
 
-    monkeypatch.setattr(metrics_reports, "DbOpsStore", lambda _p: object())
+    monkeypatch.setattr(metrics_reports, "DbaBrainStore", lambda _p: object())
     monkeypatch.setattr(metrics_reports, "load_report_configs",
                         lambda *_a, **_k: [{"report_code": "BROKEN"}, {"report_code": "NEXT"}])
     evaluated = []

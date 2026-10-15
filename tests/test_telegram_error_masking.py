@@ -14,7 +14,7 @@ is suppressed as before.
 
 import pytest
 
-from db_ops.telegram.command_processor import (
+from dbabrain.telegram.command_processor import (
     mask_sensitive_text,
     safe_error_summary,
     secret_values,
@@ -94,7 +94,7 @@ def test_anything_still_reading_as_a_live_credential_is_suppressed_outright():
     """The last net, behind the masking: if a label is still followed by something that is
     not the mask, say nothing. It should rarely fire — it exists so that weakening the
     masking above fails closed rather than open."""
-    from db_ops.telegram import command_processor as cp
+    from dbabrain.telegram import command_processor as cp
 
     assert cp._UNMASKED_CREDENTIAL_RE.search("password: hunter2")
     assert not cp._UNMASKED_CREDENTIAL_RE.search("password=***")

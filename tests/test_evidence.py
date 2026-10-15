@@ -1,4 +1,4 @@
-"""The gate/evidence model: db_ops.common.evidence.
+"""The gate/evidence model: dbabrain.common.evidence.
 
 An operation that touches a production host is judged afterwards by what it recorded. These
 tests pin the two distinctions that decide whether the record is worth anything: a *blocking*
@@ -10,7 +10,7 @@ which teaches every later reader to ignore the exit code.
 
 import json
 
-from db_ops.common.evidence import FAIL, OK, WARN, GateReport
+from dbabrain.common.evidence import FAIL, OK, WARN, GateReport
 
 
 def test_a_run_with_only_warnings_still_passes():

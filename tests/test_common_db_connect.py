@@ -1,7 +1,7 @@
 """Reaching a database, on whichever engine the target names.
 
 The engine-specific connect code used to live inside the metrics app, so `common.sql_run` — the
-engine behind `/spbot_sql_to_xlsx` and `python -m db_ops.common.cli run-sql` — knew only SQL
+engine behind `/spbot_sql_to_xlsx` and `python -m dbabrain.common.cli run-sql` — knew only SQL
 Server and answered "run this SELECT on that PostgreSQL box" with
 *"only sqlserver is supported"*. Two implementations of one thing, disagreeing on which engines
 exist. These tests pin the shared one: every engine reachable, sensible per-engine defaults, the
@@ -16,8 +16,8 @@ import types
 
 import pytest
 
-from db_ops.lib.target_profile import TargetProfile
-from db_ops.common import db_connect, sql_run
+from dbabrain.lib.target_profile import TargetProfile
+from dbabrain.common import db_connect, sql_run
 
 
 class _Cursor:
@@ -47,7 +47,7 @@ class _Conn:
 # --------------------------------------------------------------------------- #
 # Engine coverage
 # --------------------------------------------------------------------------- #
-def test_every_engine_db_ops_monitors_can_be_reached():
+def test_every_engine_dbabrain_monitors_can_be_reached():
     """If an engine appears in db_instances.json it must be connectable here — this tuple is
     what sql_run checks a target against before refusing it."""
     assert set(db_connect.SUPPORTED_DB_TYPES) == {"sqlserver", "postgresql", "mysql", "oracle"}
@@ -248,8 +248,8 @@ def test_sqlserver_metrics_connect_to_the_instance_not_the_service_label():
     *service* label from the inventory ("APPDB-DEV", "SALESDB-PROD"), not a database that exists, so
     every SQL Server target failed at once with `Cannot open database "APPDB-DEV" requested by
     the login`. Collection connects to the instance; metric SQL does its own USE."""
-    from db_ops.metrics.executor import _metric_database
-    from db_ops.metrics.models import MetricTarget
+    from dbabrain.metrics.executor import _metric_database
+    from dbabrain.metrics.models import MetricTarget
 
     target = MetricTarget(
         target_id="t", server_id="s", ip="10.0.0.1", db_type="sqlserver",
@@ -261,8 +261,8 @@ def test_sqlserver_metrics_connect_to_the_instance_not_the_service_label():
 
 def test_the_other_engines_still_take_the_database_the_inventory_names():
     """They have no instance-level catalog to sit in, so the opposite rule applies."""
-    from db_ops.metrics.executor import _metric_database
-    from db_ops.metrics.models import MetricTarget
+    from dbabrain.metrics.executor import _metric_database
+    from dbabrain.metrics.models import MetricTarget
 
     def _t(db_type, db_name, info=None):
         return MetricTarget(target_id="t", server_id="s", ip="10.0.0.1", db_type=db_type,
@@ -280,7 +280,7 @@ def test_the_other_engines_still_take_the_database_the_inventory_names():
 # --------------------------------------------------------------------------- #
 def _stated(instance, *, database=""):
     """What run-sql resolves for an inventory record, filled the way every app fills it (R09)."""
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     connection = request_fill.connection_from(instance, {"credential_name": "c", "username": "u"}, "pw")
     return sql_run.resolve_stated_connection({"connection": connection}, database=database)

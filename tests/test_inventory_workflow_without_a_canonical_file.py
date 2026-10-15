@@ -23,7 +23,7 @@ import json
 
 import pytest
 
-from db_ops.reports import inventory_summary
+from dbabrain.reports import inventory_summary
 
 
 @pytest.fixture
@@ -117,7 +117,7 @@ def test_an_existing_inventory_is_never_reseeded_but_a_registered_server_is_adop
 
     So registering an instance now puts it on the report, and the deliberate-removal case keeps a
     route that is better than deletion: switch it off in the register (`enabled: false`), where
-    every other part of db_ops already reads the decision. `seeded_from_db_instances` stays 0 —
+    every other part of dbabrain already reads the decision. `seeded_from_db_instances` stays 0 —
     adoption is not re-seeding, it adds what is missing and touches nothing else.
     """
     overlay([])
@@ -187,7 +187,7 @@ def test_a_dry_run_stops_before_needing_the_canonical_file(tmp_path, monkeypatch
 
 def test_the_help_describes_the_default_the_code_actually_uses():
     """The help and the code disagreed until 2026-09-10, and only the code was right."""
-    from db_ops.reports import cli
+    from dbabrain.reports import cli
 
     parser_source = open(cli.__file__, encoding="utf-8").read()
     marker = parser_source[parser_source.index('"--inventory"'):][:700]

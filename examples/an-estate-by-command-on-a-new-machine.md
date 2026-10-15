@@ -50,7 +50,7 @@ and restores name a `server_id`, so they come after the inventory. Checks go las
 `"` when it passes an argument to a native program:
 
 ```powershell
-db-ops common upgrade-config '{"dry_run": false}'    # exit 1: "request is not valid JSON"
+dbabrain common upgrade-config '{"dry_run": false}'    # exit 1: "request is not valid JSON"
 ```
 
 That failure is silent inside a block whose last command succeeds. This one works on every shell,
@@ -59,7 +59,7 @@ and it also keeps a secret off the command line:
 ```powershell
 @'
 {"dry_run": false}
-'@ | db-ops common upgrade-config -
+'@ | dbabrain common upgrade-config -
 ```
 
 `'{}'` is not affected, because it has no inner quotes. PowerShell 7 does not strip them at all.
@@ -74,7 +74,7 @@ New-Item -ItemType Directory -Force C:\dbabrain | Out-Null
 Set-Location C:\dbabrain
 py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install "dbabrain[postgres,mssql,ssh,winrm,oracle]"
-.venv\Scripts\python.exe -m db_ops.cli --version
+.venv\Scripts\python.exe -m dbabrain.cli --version
 ```
 
 Install every extra the estate needs now. Adding one later is harmless, but a missing `winrm`
@@ -88,28 +88,28 @@ connections.
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
-db-ops init
-db-ops daemon --config config.json --once
+dbabrain init
+dbabrain daemon --config config.json --once
 ```
 
 **Measured:** 7 jobs `done`, and `APP-WEBHOST` `skip_service`, since `--once` never starts a service.
-Then the daemon ran for two minutes, and `GET http://127.0.0.1:8080/db_ops/login` answered **200**.
+Then the daemon ran for two minutes, and `GET http://127.0.0.1:8080/dbabrain/login` answered **200**.
 
 Stopping that daemon with `Stop-Process -Force` leaves its runs `running`. The next start closes
 them and logs one `ERROR app.daemon.startup.stale_running_recovered` per app. That is the recovery
 working, not a fault, but it means "`errors.log` holds only its header" cannot hold after a forced
 stop. Stop the daemon with its whole process tree (`taskkill /PID <pid> /T /F`). **Match only this
-root's `db_ops` processes, never "every process whose command line names the folder".** In this
+root's `dbabrain` processes, never "every process whose command line names the folder".** In this
 run, the broad match also killed the agent that was running the plan, because it was working in
 the same folder.
 
 ## 3. Key, role, clock
 
 ```powershell
-$env:DB_OPS_SECRET_KEY = "<your passphrase>"     # this shell only
-$env:DB_OPS_NODE_ROLE  = "worker"
-db-ops db --config config.json timezone --set Europe/Berlin
-db-ops db --config config.json timezone
+$env:DBABRAIN_SECRET_KEY = "<your passphrase>"     # this shell only
+$env:DBABRAIN_NODE_ROLE  = "worker"
+dbabrain db --config config.json timezone --set Europe/Berlin
+dbabrain db --config config.json timezone
 ```
 
 **Proves:** the node reads its schedules against the zone you meant. Log lines written before this
@@ -122,8 +122,8 @@ of order.
 PostgreSQL store only once the old node is stopped for good.
 
 ```powershell
-db-ops db --config config.json init
-db-ops db --config config.json check
+dbabrain db --config config.json init
+dbabrain db --config config.json check
 ```
 
 **Measured:** 30 tables, `schema_version` 5.
@@ -133,7 +133,7 @@ db-ops db --config config.json check
 ```powershell
 @'
 {"ref": "SQL01_MONITOR", "value": "<password>", "overwrite": true}
-'@ | db-ops common secret-set -
+'@ | dbabrain common secret-set -
 ```
 
 Use one call per secret. `overwrite: true` makes the plan re-runnable. A second pass over a block
@@ -150,7 +150,7 @@ that half-ran does not stop on the ones already stored.
   account-lockout policy, that is how a check locks out an account.
 
 ```powershell
-db-ops common check-secret '{}'
+dbabrain common check-secret '{}'
 ```
 
 **Measured:** 105 selected, all decrypt. After step 7, 27 logged in and 20 failed authentication.
@@ -161,13 +161,13 @@ The failures were real problems in the estate, which is what this check is for.
 ```powershell
 @'
 {"ref": "TELEGRAM_BOT_TOKEN", "value": "<bot token>", "overwrite": true}
-'@ | db-ops common secret-set -
-db-ops telegram --config config.json use-bot --ref TELEGRAM_BOT_TOKEN
-db-ops telegram --config config.json group-add --group-id "-1001234567890" --level critical --title "Alerts - critical" --allow-command 10
-db-ops telegram --config config.json group-add --group-id "-1001234567891" --level backup   --title "Backups"           --allow-command 10
-db-ops telegram --config config.json user-level --user you --level 100 --pending
-db-ops telegram --config config.json bot-info
-db-ops telegram --config config.json groups
+'@ | dbabrain common secret-set -
+dbabrain telegram --config config.json use-bot --ref TELEGRAM_BOT_TOKEN
+dbabrain telegram --config config.json group-add --group-id "-1001234567890" --level critical --title "Alerts - critical" --allow-command 10
+dbabrain telegram --config config.json group-add --group-id "-1001234567891" --level backup   --title "Backups"           --allow-command 10
+dbabrain telegram --config config.json user-level --user you --level 100 --pending
+dbabrain telegram --config config.json bot-info
+dbabrain telegram --config config.json groups
 ```
 
 `group-add` registers a chat that has never posted. Groups made for alerts are silent, so the bot
@@ -199,9 +199,9 @@ into the inventory: `metrics` and its overrides, `cmd_access`, `sql_access`, `no
   "role": "monitor",
   "replace": true
 }
-'@ | db-ops common instance-add -
+'@ | dbabrain common instance-add -
 
-db-ops common list-targets
+dbabrain common list-targets
 ```
 
 - **A server with more than one database login takes one call per login, and the default login
@@ -222,9 +222,9 @@ db-ops common list-targets
   "credential_name": "remote_192_0_2_10_admin",
   "auth_type": "password", "role": "REMOTE", "replace": true
 }
-'@ | db-ops common remote-credential-add -
+'@ | dbabrain common remote-credential-add -
 
-db-ops check-credentials '{}'
+dbabrain check-credentials '{}'
 ```
 
 This request has no `method`, because the instance already carries its `cmd_access` from step 7.
@@ -253,7 +253,7 @@ SELECT COUNT(*) AS n FROM dbo.audit_log;
  "db_type": "sqlserver", "script_type": "single",
  "script_path": "assets/tasks/sqlserver/nightly/001_audit_rows.sql",
  "active": true, "replace": true}
-'@ | db-ops common sql-command-add -
+'@ | dbabrain common sql-command-add -
 
 @'
 {"sql_id": 1, "server_id": "ACME-192-0-2-10-SQL01", "database_name": "Orders",
@@ -262,9 +262,9 @@ SELECT COUNT(*) AS n FROM dbo.audit_log;
             "alert_on_error": {"enabled": true,  "telegram_chat": "sql"}},
  "output": {"format": "none", "telegram_chat": "sql"},
  "active": true, "replace": true}
-'@ | db-ops common sql-target-add -
+'@ | dbabrain common sql-target-add -
 
-db-ops sql-tasks --config config.json --dry-run
+dbabrain sql-tasks --config config.json --dry-run
 ```
 
 **The dry run checks the schedule, not the task's own inputs.** A task whose input is a program
@@ -303,7 +303,7 @@ level:
   ],
   "active": true, "replace": true
 }
-'@ | db-ops backup-restore --config config.json backup-add -
+'@ | dbabrain backup-restore --config config.json backup-add -
 ```
 
 Then one `restore-add` per drill. This one restores the entry above onto a second lab machine:
@@ -325,10 +325,10 @@ Then one `restore-add` per drill. This one restores the entry above onto a secon
              "alert_on_error": {"enabled": true, "telegram_chat": "restore"}},
   "replace": true
 }
-'@ | db-ops backup-restore --config config.json restore-add -
+'@ | dbabrain backup-restore --config config.json restore-add -
 
-db-ops backup-restore --config config.json list-backups
-db-ops backup-restore --config config.json list-restores
+dbabrain backup-restore --config config.json list-backups
+dbabrain backup-restore --config config.json list-restores
 ```
 
 - **A restore that copies from a Windows share needs an SMB session from this machine to that
@@ -348,7 +348,7 @@ Only change what differs from the shipped schedule, one call per app command:
 @'
 {"app_code": "APP-SQL_TASKS", "max_parallel": 10,
  "time_window": {"repeat_interval": 1, "retry_interval": 60, "timeout": 1800}}
-'@ | db-ops common app-command-set -
+'@ | dbabrain common app-command-set -
 ```
 
 **Measured:** `self-status` then showed SQL tasks async ×10 every 1 s, reports every 2 min, and
@@ -357,8 +357,8 @@ backup/restore async ×4 every 30 s.
 ## 12. The console and the address the pages are published on
 
 ```powershell
-db-ops reports --config config.json use-base-url --this-node
-db-ops webhost --config config.json user-add --username you --level 100 --password-stdin
+dbabrain reports --config config.json use-base-url --this-node
+dbabrain webhost --config config.json user-add --username you --level 100 --password-stdin
 ```
 
 `user-add --remember` also keeps the console password in the secret store, where
@@ -368,15 +368,15 @@ password should exist only as a hash.
 ## 13. Check everything before the clock
 
 ```powershell
-db-ops common upgrade-config '{}'
+dbabrain common upgrade-config '{}'
 @'
 {"dry_run": false}
-'@ | db-ops common upgrade-config -
-db-ops common check-objects '{}'
-db-ops db --config config.json sync-config '{}'
-db-ops check-credentials '{}'
-db-ops common check-references '{}'
-db-ops common self-status '{}'
+'@ | dbabrain common upgrade-config -
+dbabrain common check-objects '{}'
+dbabrain db --config config.json sync-config '{}'
+dbabrain check-credentials '{}'
+dbabrain common check-references '{}'
+dbabrain common self-status '{}'
 ```
 
 **Measured:** `upgrade-config` made 0 changes. `check-objects` checked 4,897 objects and found 0
@@ -390,9 +390,9 @@ violation.
 
 ```powershell
 Test-NetConnection <old node> -Port 8080          # must be closed
-$env:DB_OPS_NODE_ROLE = "worker"
+$env:DBABRAIN_NODE_ROLE = "worker"
 $p = Start-Process -FilePath .venv\Scripts\python.exe `
-       -ArgumentList '-m','db_ops.cli','daemon','--config','config.json' `
+       -ArgumentList '-m','dbabrain.cli','daemon','--config','config.json' `
        -WorkingDirectory C:\dbabrain -PassThru -WindowStyle Hidden
 $p.Id | Set-Content daemon.pid
 ```
@@ -409,11 +409,11 @@ hourly report, and that report's only run so far was in step 2, on an empty inve
 once by hand:
 
 ```powershell
-db-ops reports --config config.json inventory-workflow --days 7 --beauty 1
+dbabrain reports --config config.json inventory-workflow --days 7 --beauty 1
 ```
 
 **Measured at +15 min:** `ops-status` read *8 app command(s): none failing, none overdue*.
-`/db_ops/login`, `/report_dba/` and `/report_dba/sla.html` answered 200, and the two built pages
+`/dbabrain/login`, `/report_dba/` and `/report_dba/sla.html` answered 200, and the two built pages
 answered 200 after the command above. `errors.log` held only the stale-run recoveries from step 2
 and one SQL task missing its external program (step 9).
 
@@ -460,7 +460,7 @@ to see every run.
 | `'{"key": "value"}'` on PowerShell 5.1 | the quotes are stripped and the command fails silently. Use a here-string on stdin |
 | `check-secret` | logs in to every mapped target. Run it once, not in a loop |
 | `encrypt-secret` after `secret-set` | replaces the store from a template that holds none of your secrets |
-| A cleanup that matches the root folder | also stops whatever else is working in that folder. Match `db_ops` processes |
+| A cleanup that matches the root folder | also stops whatever else is working in that folder. Match `dbabrain` processes |
 | `--dry-run` says a task is due | it did not check the programs the task calls |
 | A restore from a Windows share | needs an SMB session from the new machine |
 | Pages 404 after the move | built hourly. Run `inventory-workflow` once |

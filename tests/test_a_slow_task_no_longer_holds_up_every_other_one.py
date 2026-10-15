@@ -25,15 +25,15 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.db.job_runs import JobRun
-from db_ops.db.store import RunAlreadyClaimed
-from db_ops.lib import run_claim, run_mode
+from dbabrain.db import DbaBrainStore
+from dbabrain.db.job_runs import JobRun
+from dbabrain.db.store import RunAlreadyClaimed
+from dbabrain.lib import run_claim, run_mode
 
 
 @pytest.fixture()
 def store(tmp_path):
-    built = DbOpsStore(tmp_path / "db_ops.sqlite")
+    built = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     built.initialize()
     return built
 
@@ -130,10 +130,10 @@ def test_a_sync_app_command_still_claims_its_own_id(store):
 def test_the_upgrade_closes_duplicate_running_rows_rather_than_failing_on_them():
     """An existing store has rows left by every node that was ever killed mid-run. A unique index
     built over that data fails at whoever next runs `init`, which is the wrong person."""
-    from db_ops.db import store as store_module
+    from dbabrain.db import store as store_module
 
     path = Path(tempfile.mkdtemp()) / "old.sqlite"
-    old = DbOpsStore(path)
+    old = DbaBrainStore(path)
     old.initialize()
     # Put the store back into the shape it had before the claim: no index, and two running rows
     # for one key — which is what every node killed mid-run left behind.
@@ -200,10 +200,10 @@ def test_the_two_commands_that_queued_are_the_two_that_ship_async():
     """The estate's own config, so the fix is actually applied and not merely available."""
     import json
 
-    from db_ops.lib.paths import TOOL_ROOT
+    from dbabrain.lib.paths import TOOL_ROOT
 
     shipped = json.loads(
-        (TOOL_ROOT / "db_ops/jobs/catalogue/app_commands.json").read_bytes().decode("utf-8-sig"))
+        (TOOL_ROOT / "dbabrain/jobs/catalogue/app_commands.json").read_bytes().decode("utf-8-sig"))
     modes = {c["app_command_id"]: run_mode.parse(c) for c in shipped["app_commands"]}
 
     assert modes["APP-SQL_TASKS"].is_async
@@ -308,7 +308,7 @@ def test_the_periodic_sweep_is_still_patient_with_a_row_it_cannot_check():
 # The daemon's half of the field
 # --------------------------------------------------------------------------- #
 def test_the_daemon_counts_its_own_processes_per_command():
-    from db_ops.jobs import daemon
+    from dbabrain.jobs import daemon
 
     class Fake:
         def __init__(self, app_command_id):
@@ -327,7 +327,7 @@ def test_the_daemon_counts_its_own_processes_per_command():
 
 def test_two_runs_of_one_command_can_be_held_at_once():
     """A dict keyed by app_command_id cannot hold two, which is why the slot key exists."""
-    from db_ops.jobs import daemon
+    from dbabrain.jobs import daemon
 
     assert daemon.running_slot_key("APP-SQL_TASKS", 1) != daemon.running_slot_key("APP-SQL_TASKS", 2)
 
@@ -345,8 +345,8 @@ def test_an_async_command_is_due_again_while_its_own_run_is_still_going():
     whether it might start another."""
     from datetime import datetime, timezone
 
-    from db_ops.jobs import daemon
-    from db_ops.lib import time_window as tw
+    from dbabrain.jobs import daemon
+    from dbabrain.lib import time_window as tw
 
     started = datetime(2026, 9, 19, 13, 31, 37, tzinfo=timezone.utc)
     row = {"started_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "status": "running",
@@ -371,8 +371,8 @@ def test_the_interval_still_applies_to_an_async_command():
     due every hour does not become due every second by being async."""
     from datetime import datetime, timezone
 
-    from db_ops.jobs import daemon
-    from db_ops.lib import time_window as tw
+    from dbabrain.jobs import daemon
+    from dbabrain.lib import time_window as tw
 
     started = datetime(2026, 9, 19, 13, 0, 0, tzinfo=timezone.utc)
     row = {"started_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "status": "running",
@@ -393,7 +393,7 @@ def test_the_shared_rule_still_blocks_on_a_running_row_by_default():
     """Every other caller - sql_tasks, backup_restore, metrics - must be untouched by this."""
     from datetime import datetime, timezone
 
-    from db_ops.lib import time_window as tw
+    from dbabrain.lib import time_window as tw
 
     row = {"started_at": "2026-09-19T13:00:00Z", "status": "running", "finished_at": None}
     verdict = tw.due_from_row(time_window=tw.TimeWindow(repeat_interval=10, timeout=1800), row=row,

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_ops.lib.paths import BUILTIN_ASSET_ROOTS, PACKAGE_DIR, asset_candidates, asset_dir
+from dbabrain.lib.paths import BUILTIN_ASSET_ROOTS, PACKAGE_DIR, asset_candidates, asset_dir
 
 
 def test_the_operator_is_asked_before_the_package() -> None:
@@ -55,12 +55,12 @@ def test_each_shipped_tree_lives_with_the_component_that_owns_it() -> None:
     assert BUILTIN_ASSET_ROOTS["host"] == PACKAGE_DIR / "sre" / "host_config"
 
     assert not (PACKAGE_DIR / "assets").exists(), (
-        "db_ops/assets is back. It is the name collision this layout exists to remove."
+        "dbabrain/assets is back. It is the name collision this layout exists to remove."
     )
 
 
 def test_the_operator_copy_wins_when_both_exist(tmp_path: Path, monkeypatch) -> None:
-    from db_ops.lib import paths
+    from dbabrain.lib import paths
 
     operator = tmp_path / "estate" / "assets" / "tasks"
     operator.mkdir(parents=True)
@@ -73,7 +73,7 @@ def test_the_operator_copy_wins_when_both_exist(tmp_path: Path, monkeypatch) -> 
 
 def test_the_built_in_is_used_when_the_operator_has_none(tmp_path: Path, monkeypatch) -> None:
     """The case every `pip install` is in on its first run: shipped SQL, no estate folder yet."""
-    from db_ops.lib import paths
+    from dbabrain.lib import paths
 
     builtin = tmp_path / "package" / "collectors"
     builtin.mkdir(parents=True)
@@ -84,7 +84,7 @@ def test_the_built_in_is_used_when_the_operator_has_none(tmp_path: Path, monkeyp
 
 def test_neither_existing_reports_the_operator_path(tmp_path: Path, monkeypatch) -> None:
     """So the error names a directory the reader can create, not one inside the installation."""
-    from db_ops.lib import paths
+    from dbabrain.lib import paths
 
     monkeypatch.setitem(paths.BUILTIN_ASSET_ROOTS, "metrics", tmp_path / "package" / "collectors")
     missing = paths.asset_dir("metrics", tool_root=tmp_path / "estate")
@@ -100,7 +100,7 @@ def test_one_operator_file_does_not_hide_the_rest(tmp_path: Path, monkeypatch) -
     collector refuse to start with "variant file not found" for every shipped metric. Resolution is
     per file now, and this is the case that proves it.
     """
-    from db_ops.lib import paths
+    from dbabrain.lib import paths
 
     builtin = tmp_path / "package" / "collectors"
     (builtin / "postgresql").mkdir(parents=True)
@@ -127,7 +127,7 @@ def test_every_asset_reader_goes_through_the_lookup() -> None:
     """
     import re
 
-    package = Path(__file__).resolve().parents[1] / "db_ops"
+    package = Path(__file__).resolve().parents[1] / "dbabrain"
     offenders = [
         f"{path.relative_to(package).as_posix()}:{number}"
         for path in package.rglob("*.py")
@@ -137,6 +137,6 @@ def test_every_asset_reader_goes_through_the_lookup() -> None:
     ]
 
     assert not offenders, (
-        "These spell out an assets path instead of asking db_ops.lib.paths.asset_dir /"
+        "These spell out an assets path instead of asking dbabrain.lib.paths.asset_dir /"
         f" asset_candidates, so they see only the operator's copy: {offenders}"
     )

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.lib.time_window import (
+from dbabrain.lib.time_window import (
     MANUAL_ONLY,
     RUN_ONCE,
     is_time_window_open,
@@ -202,7 +202,7 @@ def test_intervals_and_timeout_allow_zero(field):
 def test_time_window_hour_wraps_across_midnight():
     """A night window 22:00->06:00 spans midnight: open late night / early morning, closed
     during the day. Regression guard for the wrap-around support."""
-    from db_ops.lib.time_window import TimeWindow
+    from dbabrain.lib.time_window import TimeWindow
 
     tw = parse_time_window_config(
         {"time_window": {"from_hour": 22, "to_hour": 6}}, context="test.night"
@@ -217,7 +217,7 @@ def test_time_window_hour_wraps_across_midnight():
 def test_time_window_closed_reason_names_the_failing_dimension():
     """time_window_closed_reason is the shared skip-reason text: "" when open, and the
     first closed dimension otherwise — including on wrapping ranges."""
-    from db_ops.lib.time_window import TimeWindow, time_window_closed_reason
+    from dbabrain.lib.time_window import TimeWindow, time_window_closed_reason
 
     plain = TimeWindow(from_hour=10, to_hour=11)
     assert time_window_closed_reason(plain, datetime(2026, 7, 17, 10, 30)) == ""
@@ -236,7 +236,7 @@ def test_time_window_closed_reason_names_the_failing_dimension():
 def test_time_window_wrap_applies_to_every_dimension():
     """from > to wraps on month, day, and minute exactly like the hour example
     (22->06): open when value >= from OR value <= to."""
-    from db_ops.lib.time_window import TimeWindow
+    from dbabrain.lib.time_window import TimeWindow
 
     nov_to_feb = TimeWindow(from_month=11, to_month=2)
     for month in (11, 12, 1, 2):
@@ -264,9 +264,9 @@ def test_metric_not_collected_outside_its_schedule_window():
     Checked through _metric_window_open, not _metric_due: the window is a statement about when
     the metric may touch the database at all, and keeping it inside the due check made it
     collateral damage of --force. See tests/test_metric_windows.py."""
-    from db_ops.lib.time_window import TimeWindow
-    from db_ops.metrics.collector import _metric_window_open
-    from db_ops.metrics.models import MetricDefinition, MetricTarget
+    from dbabrain.lib.time_window import TimeWindow
+    from dbabrain.metrics.collector import _metric_window_open
+    from dbabrain.metrics.models import MetricDefinition, MetricTarget
 
     class _Store:
 

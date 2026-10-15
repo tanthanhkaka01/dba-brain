@@ -21,7 +21,7 @@ import json
 
 import pytest
 
-from db_ops.lib import pseudonym
+from dbabrain.lib import pseudonym
 
 
 def test_the_same_real_name_always_yields_the_same_fake_one():
@@ -129,7 +129,7 @@ def test_a_replacement_containing_a_backslash_cannot_corrupt_the_rewrite():
 
 def test_nothing_writes_a_reverse_mapping_anywhere():
     # A table that turns the showcase back into the estate would be the estate.
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     source = (showcase.__file__)
     text = open(source, encoding="utf-8").read()
@@ -138,14 +138,14 @@ def test_nothing_writes_a_reverse_mapping_anywhere():
 
 
 def test_the_engine_s_own_names_are_left_alone():
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     for name in ("dbo", "master", "tempdb", "public"):
         assert name in showcase.KEEP
 
 
 def test_a_showcase_of_an_empty_reports_folder_is_refused(tmp_path):
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     (tmp_path / "reports").mkdir()
     with pytest.raises(showcase.ShowcaseError) as excinfo:
@@ -155,14 +155,14 @@ def test_a_showcase_of_an_empty_reports_folder_is_refused(tmp_path):
 
 
 def test_a_missing_reports_folder_is_refused_rather_than_reported_clean(tmp_path):
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     with pytest.raises(showcase.ShowcaseError):
         showcase.build({"source": str(tmp_path / "nope"), "output": str(tmp_path / "out")})
 
 
 def test_an_existing_output_is_not_overwritten_without_being_asked(tmp_path):
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     source = tmp_path / "reports"
     source.mkdir()
@@ -193,7 +193,7 @@ def test_an_ordinary_word_that_happens_to_be_configured_is_left_alone(tmp_path, 
     keeps it out of the number a gate acts on — so the showcase draws it in the same place rather
     than inventing a second opinion.
     """
-    from db_ops.common import identifier_scan, showcase
+    from dbabrain.common import identifier_scan, showcase
 
     monkeypatch.setattr(identifier_scan, "collect_identifiers",
                         lambda _=None: {"inventory": "database", "10.1.2.3": "address"})
@@ -208,7 +208,7 @@ def test_an_ordinary_word_that_happens_to_be_configured_is_left_alone(tmp_path, 
 def test_a_store_derived_name_is_mapped_even_when_it_is_an_ordinary_word(tmp_path, monkeypatch):
     # The asymmetry is deliberate: a table called `Shift` is an ordinary word and is still this
     # customer's schema. It arrives with an explicit kind because a collector wrote `table=`.
-    from db_ops.common import identifier_scan, showcase
+    from dbabrain.common import identifier_scan, showcase
 
     monkeypatch.setattr(identifier_scan, "collect_identifiers",
                         lambda _=None: {"10.1.2.3": "address"})
@@ -225,7 +225,7 @@ def test_a_store_derived_name_the_page_s_stylesheet_uses_is_the_product_s_word(t
     came out unstyled (2026-10-03). A word the page's own stylesheet selects is the product's, so it
     is left - and named among the ordinary words, so the call can be checked.
     """
-    from db_ops.common import identifier_scan, showcase
+    from dbabrain.common import identifier_scan, showcase
 
     monkeypatch.setattr(identifier_scan, "collect_identifiers",
                         lambda _=None: {"10.1.2.3": "address"})
@@ -247,7 +247,7 @@ def test_a_plain_word_the_page_code_prints_is_left_as_the_product_s_prose(tmp_pa
     product's, so a customer table called `Item` is shown as `Item` - and a name built from several
     words, or one named by hand, is still replaced.
     """
-    from db_ops.common import identifier_scan, showcase
+    from dbabrain.common import identifier_scan, showcase
 
     assert {"item", "machine"} <= showcase.page_code_words()
     monkeypatch.setattr(identifier_scan, "collect_identifiers",
@@ -266,7 +266,7 @@ def test_a_plain_word_the_page_code_prints_is_left_as_the_product_s_prose(tmp_pa
 
 
 def test_an_estate_that_names_no_identifiers_is_refused_rather_than_certified_clean(tmp_path, monkeypatch):
-    from db_ops.common import identifier_scan, showcase
+    from dbabrain.common import identifier_scan, showcase
 
     monkeypatch.setattr(identifier_scan, "collect_identifiers", lambda _=None: {})
     with pytest.raises(showcase.ShowcaseError) as excinfo:
@@ -274,16 +274,16 @@ def test_an_estate_that_names_no_identifiers_is_refused_rather_than_certified_cl
     assert "unchanged" in str(excinfo.value)
 
 
-def test_object_names_are_read_from_the_shape_db_ops_itself_wrote(tmp_path):
-    r"""`db\schema.table.index` and `table=`/`index=` are db_ops's own shapes, written by db_ops.
+def test_object_names_are_read_from_the_shape_dbabrain_itself_wrote(tmp_path):
+    r"""`db\schema.table.index` and `table=`/`index=` are dbabrain's own shapes, written by dbabrain.
 
     Reading them back is parsing, not guessing — the distinction the whole module rests on. It is
     also the only route available: `common` may not import `db`, so the store is out of reach and
     the page has to state what it is about.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
-    # The schema here used to be `schedule`, which is now in `PRODUCT_WORDS` - db_ops prints that
+    # The schema here used to be `schedule`, which is now in `PRODUCT_WORDS` - dbabrain prints that
     # word itself, and a term in that list is deliberately never harvested. The shape is what this
     # test is about, so the fixture uses a name that is not also the product's.
     terms = showcase.object_terms(
@@ -296,7 +296,7 @@ def test_object_names_are_read_from_the_shape_db_ops_itself_wrote(tmp_path):
 
 
 def test_the_engine_s_own_schema_is_not_harvested_from_a_page():
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     assert "dbo" not in showcase.object_terms(r"SALESDB\dbo.Orders.IX_Orders_Date")
 
@@ -307,7 +307,7 @@ def test_one_vocabulary_covers_every_day_in_the_window(tmp_path, monkeypatch):
     Otherwise the same object is two different fake names across the window, and the showcase
     stops being a record of one estate — which is the only reason to publish real pages at all.
     """
-    from db_ops.common import identifier_scan, showcase
+    from dbabrain.common import identifier_scan, showcase
 
     monkeypatch.setattr(identifier_scan, "collect_identifiers",
                         lambda _=None: {"10.1.2.3": "address"})
@@ -327,7 +327,7 @@ def test_one_vocabulary_covers_every_day_in_the_window(tmp_path, monkeypatch):
 
 
 def test_a_page_that_still_names_the_estate_is_deleted_rather_than_left_to_be_found(tmp_path, monkeypatch):
-    from db_ops.common import identifier_scan, showcase
+    from dbabrain.common import identifier_scan, showcase
 
     monkeypatch.setattr(identifier_scan, "collect_identifiers",
                         lambda _=None: {"10.1.2.3": "address"})
@@ -397,7 +397,7 @@ def test_an_object_written_dotted_in_a_table_cell_is_learnt_like_any_other():
     # The index pages render an item as `<td>DB.schema.table.index</td>`, not in the `db\schema`
     # shape the store writes. Until 2026-09-12 only the second was read, so a scrubbed index page
     # kept every schema, table and index name the customer had invented.
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     terms = showcase.object_terms("<td>METER_Prod.sales.FLXSupplier.IX_FLXSupplier_Type</td>")
     assert terms["FLXSupplier"] == "table"
@@ -413,7 +413,7 @@ def test_a_javascript_property_chain_is_not_an_object_name():
     rewriting the product's own vocabulary, which is the 2026-09-10 failure arriving by a second
     route. So the item has to *be* an element's whole content, as a rendered item is.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     assert showcase.object_terms("<script>chart.data.datasets.length</script>") == {}
     # And four numbers are a version, not four objects.
@@ -445,7 +445,7 @@ def test_the_code_that_renders_a_page_is_not_rewritten_with_the_estate():
     The scrub had rewritten the product rather than the estate, and no scanner can see that - the
     output was clean by every check there is.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     mapping = pseudonym.Mapping({"Color": "table", "ACME2-10-1-2-3": "server_id"})
     document = ('<style>a{color:#0645ad}</style>'
@@ -471,7 +471,7 @@ def test_the_markup_of_a_page_is_not_rewritten_with_the_estate():
     with no charset (every emoji and `·` read as cp1252 off a server that does not send one), no
     viewport, and unstyled health cards. Certified clean, because a tag is no identifier.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     mapping = pseudonym.Mapping({"meta": "table", "Area": "table", "ACME2-10-1-2-3": "server_id"})
     document = ('<head><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
@@ -493,7 +493,7 @@ def test_a_data_file_keeps_the_name_its_page_asks_for(tmp_path):
     # `server-metrics.html` fetches `server-metrics_<slug>.json`, one per server. Stamping that
     # name would be a 404, and not copying the file at all - which is what happened first - leaves
     # every chart on the page empty while the scrub reports success.
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     page = tmp_path / "server-metrics_acme-10-1-2-3.json"
     page.write_text("{}", encoding="utf-8")
@@ -512,7 +512,7 @@ def test_a_regular_expression_in_the_page_script_does_not_invert_the_scan():
     `build-showcase` reported success, because a regex alternation over the quote characters had
     lost its place 3 KB earlier.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     mapping = pseudonym.Mapping({"ACME3-10-1-2-3": "server_id"})
     document = ('<script>\n'
@@ -527,7 +527,7 @@ def test_a_regular_expression_in_the_page_script_does_not_invert_the_scan():
 
 
 def test_an_apostrophe_in_a_comment_does_not_invert_the_scan():
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     mapping = pseudonym.Mapping({"ACME4-10-1-2-3": "server_id"})
     document = ('<script>/* the node\'s own address */\n'
@@ -544,7 +544,7 @@ def test_a_property_name_is_part_of_the_program_and_is_left_alone():
     every key of that name had become a fake one. A string literal is data; a string literal
     followed by `:` is code.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     mapping = pseudonym.Mapping({"file": "table", "ACME6-10-1-2-3": "server_id"})
 
@@ -568,7 +568,7 @@ def test_the_words_the_product_prints_are_not_renamed_as_customer_objects():
     customer object with one of these names ships unscrubbed, which is the line `identifier_scan`
     already draws at `review` confidence.
     """
-    from db_ops.common import identifier_scan, showcase
+    from dbabrain.common import identifier_scan, showcase
 
     # Stated, not read off whichever tree this runs in: on an operator's checkout `data/` names a
     # real estate and in the distribution it names nothing at all, and `build_mapping` refuses an
@@ -593,7 +593,7 @@ def test_a_template_literal_hole_is_code_and_survives():
     and the reader saw `Loading…` for ever while the inventory's detail panel never opened. A
     template literal is text with holes in it, and the holes are program.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     mapping = pseudonym.Mapping({"message": "table", "ACME7-10-1-2-3": "server_id"})
     body = "const s = `Could not load ${esc(err.message)} on ACME7-10-1-2-3`;"
@@ -606,7 +606,7 @@ def test_a_template_literal_hole_is_code_and_survives():
 
 def test_a_string_inside_a_template_hole_is_still_scrubbed():
     # The hole is scanned as code, so what is quoted inside it is data again.
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     mapping = pseudonym.Mapping({"ACME8-10-1-2-3": "server_id"})
     body = 'const s = `host: ${label("ACME8-10-1-2-3")}`;'
@@ -630,7 +630,7 @@ def test_a_page_named_in_json_is_relinked_like_an_href() -> None:
     own name, which happened to be the stable one. A showcase that certifies clean and cannot be
     browsed is the same class of defect as the first one, which shipped HTML with no data.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     targets = {
         "sla.html": "20260911T1801Z_sla.html",
@@ -653,7 +653,7 @@ def test_a_page_named_in_json_is_relinked_like_an_href() -> None:
 def test_relinking_leaves_a_name_nothing_captured_alone() -> None:
     """A page that links somewhere the capture does not hold must keep saying so, not be pointed
     at the nearest thing with a similar name."""
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     page = '{"index_usage_file":"index-usage_NOT-CAPTURED.html"}'
 
@@ -668,7 +668,7 @@ def test_force_clears_the_output_rather_than_writing_over_it(tmp_path) -> None:
     per-server links were exactly the 404s this release fixes. `force` overwrote file by file, so
     anything the new window did not happen to re-create survived.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     source = tmp_path / "reports"
     source.mkdir()
@@ -710,7 +710,7 @@ def test_a_client_address_in_a_collector_message_is_harvested_as_an_address():
     real address, and the certifier refuses any address it cannot account for - so the scrub has
     to learn it from the message the same way it learns the login and the host.
     """
-    from db_ops.common import showcase
+    from dbabrain.common import showcase
 
     terms = showcase.object_terms(
         "Session holding locks. spid=112, login=svc_app, host=APPSRV01, "

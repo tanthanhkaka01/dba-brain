@@ -4,7 +4,7 @@
 Runs the full provisioning → verify → teardown sequence for each database group
 using a separate test config with isolated IPs and VM directory (D:/VMs_test).
 
-Usage (from tools/db_ops/):
+Usage (from tools/dbabrain/):
     python tests/sre_e2e_runner.py
     python tests/sre_e2e_runner.py --groups mysql postgresql
     python tests/sre_e2e_runner.py --groups oracle_rac --no-cleanup
@@ -31,9 +31,9 @@ from typing import Callable
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
 _HERE = Path(__file__).resolve()
-_REPO_ROOT = _HERE.parents[1]          # tools/db_ops/
+_REPO_ROOT = _HERE.parents[1]          # tools/dbabrain/
 _DEFAULT_CONFIG = _REPO_ROOT / "data" / "sre_test_config.json"
-_CLI_MODULE = "db_ops.sre.cli"
+_CLI_MODULE = "dbabrain.sre.cli"
 
 # ── Timeouts ───────────────────────────────────────────────────────────────────
 

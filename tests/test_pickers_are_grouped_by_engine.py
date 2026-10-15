@@ -9,8 +9,8 @@ so finding "the Oracle servers" meant reading every button. Both now group by th
 
 from __future__ import annotations
 
-from db_ops.reports import index_report as ir
-from db_ops.reports import server_report
+from dbabrain.reports import index_report as ir
+from dbabrain.reports import server_report
 
 
 def _entry(server_id, engine=""):

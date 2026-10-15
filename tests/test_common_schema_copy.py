@@ -2,12 +2,12 @@
 
 Three layers, and the split between them is what makes this file possible at all:
 
-* :mod:`db_ops.lib.name_filter` and :mod:`db_ops.lib.mssql_ddl` are pure — names and dicts in,
+* :mod:`dbabrain.lib.name_filter` and :mod:`dbabrain.lib.mssql_ddl` are pure — names and dicts in,
   names and SQL text out — so the shapes that broke real deployments (a partitioned index, a
   computed column, a clustered columnstore, a filtered unique index) are asserted directly.
-* :mod:`db_ops.common.schema_catalog` and the phase planners take a **cursor**, so a fake one
+* :mod:`dbabrain.common.schema_catalog` and the phase planners take a **cursor**, so a fake one
   that answers catalogue queries from a dict is enough to plan a whole copy.
-* Only :func:`db_ops.common.schema_copy.copy_schema` opens a connection, and it is not called
+* Only :func:`dbabrain.common.schema_copy.copy_schema` opens a connection, and it is not called
   here.
 
 What is being defended, in order of what it has already cost:
@@ -28,8 +28,8 @@ import datetime
 
 import pytest
 
-from db_ops.common import schema_catalog, schema_copy
-from db_ops.lib import mssql_ddl, name_filter
+from dbabrain.common import schema_catalog, schema_copy
+from dbabrain.lib import mssql_ddl, name_filter
 
 
 #: The login a caller states - common.cli reads no configuration (rules R09), so every request here
@@ -236,7 +236,7 @@ def test_copying_a_schema_onto_itself_is_refused() -> None:
 
 def test_the_lock_resource_is_the_destination_schema_not_the_process() -> None:
     parsed = schema_copy.SchemaCopyRequest.from_json(_minimal())
-    assert parsed.resource_name() == "db_ops:schema_copy:B.sched"
+    assert parsed.resource_name() == "dbabrain:schema_copy:B.sched"
 
 
 # ------------------------------------------------------------------- planning, with a fake cursor

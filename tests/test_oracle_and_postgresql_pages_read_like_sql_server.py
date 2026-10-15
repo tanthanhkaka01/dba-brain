@@ -17,8 +17,8 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from db_ops.db import DbOpsStore
-from db_ops.reports import server_report
+from dbabrain.db import DbaBrainStore
+from dbabrain.reports import server_report
 
 
 def _catalog(tmp_path):
@@ -47,7 +47,7 @@ def _stamp(minutes_ago: int) -> str:
 
 def test_a_postgresql_backup_result_reaches_the_backup_area(tmp_path):
     sqlite_path = tmp_path / "store.sqlite"
-    DbOpsStore(sqlite_path).initialize()
+    DbaBrainStore(sqlite_path).initialize()
     finish = (datetime.now() - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
     with sqlite3.connect(sqlite_path) as conn:
         conn.execute(

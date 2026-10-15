@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from db_ops.reports import metrics_reports as mr
+from dbabrain.reports import metrics_reports as mr
 
 
 class _Row(dict):
@@ -113,7 +113,7 @@ def test_only_the_huge_metric_loses_its_detail_in_a_chart_series():
 
 
 def test_the_server_chart_series_keeps_fragmentation_but_drops_index_detail():
-    from db_ops.reports.server_report import _drop_collect_only
+    from dbabrain.reports.server_report import _drop_collect_only
 
     rows = [
         {"metric_code": "MAINTENANCE_INDEX_USAGE", "metric_unit": "user_updates"},   # detail

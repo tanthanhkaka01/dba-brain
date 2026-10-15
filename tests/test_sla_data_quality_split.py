@@ -16,7 +16,7 @@ server" into "this server is healthy".
 
 from __future__ import annotations
 
-from db_ops.sla import compliance
+from dbabrain.sla import compliance
 
 
 class _Row(dict):
@@ -110,7 +110,7 @@ def _policy():
     reporting INSUFFICIENT_DATA and the assertions broke for a reason that had nothing to do with
     the data-quality split they exist to pin.
     """
-    from db_ops.sla.models import SlaPolicy
+    from dbabrain.sla.models import SlaPolicy
 
     return SlaPolicy(
         policy_id="TEST_RATIO",

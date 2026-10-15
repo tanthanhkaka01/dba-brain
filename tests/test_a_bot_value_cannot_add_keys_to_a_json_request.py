@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from db_ops.telegram.command_processor import render_template
+from dbabrain.telegram.command_processor import render_template
 
 TEMPLATE = '{"sql_id": {sql_id}, "limit": {limit}, "target": "{server_id}", "confirm": false}'
 

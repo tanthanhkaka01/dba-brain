@@ -1,5 +1,5 @@
 # Keep the build context small and free of host/runtime artifacts.
-# Only requirements.txt, db_ops/, and docker/entrypoint.sh are COPYed by the Dockerfile.
+# Only requirements.txt, dbabrain/, and docker/entrypoint.sh are COPYed by the Dockerfile.
 **/__pycache__/
 *.py[cod]
 .pytest_cache/
@@ -18,14 +18,14 @@ config.json
 config.*.json
 data/
 # The OPERATOR's assets only — task SQL and bot commands, bind-mounted at runtime rather than
-# baked in. The shipped half lives with the component that owns it (db_ops/metrics/collectors,
-# db_ops/common/{backup,restore}_scripts, db_ops/sre/host_config) and ships
+# baked in. The shipped half lives with the component that owns it (dbabrain/metrics/collectors,
+# dbabrain/common/{backup,restore}_scripts, dbabrain/sre/host_config) and ships
 # inside the image with the package, so the leading slash matters: it anchors this to the root.
 /assets/
 # Local build artifacts. `python -m build` leaves `build/` and `*.egg-info/` beside the source,
 # and the Dockerfile now COPYs `pyproject.toml` and installs the package — so without this the
-# image ships a **second copy** of `db_ops` under `build/lib/`, stale from whenever the last local
-# build ran. Found by listing the image: `build` and `dbabrain.egg-info` sat next to `db_ops`.
+# image ships a **second copy** of `dbabrain` under `build/lib/`, stale from whenever the last local
+# build ran. Found by listing the image: `build` and `dbabrain.egg-info` sat next to `dbabrain`.
 build/
 dist/
 *.egg-info/

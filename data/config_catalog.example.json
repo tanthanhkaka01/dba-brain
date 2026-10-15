@@ -6,7 +6,7 @@
     "'collections' names the arrays inside the file that hold one record each, together with the field(s) that identify a record. Everything else in the file - scalars, notes, nested policy objects - is stored as a single document item, so the file can be rebuilt from the store without losing a key.",
     "'key_fields' must identify a record uniquely within its collection. The sync refuses a file whose keys collide rather than silently letting one record overwrite another.",
     "'label_field' is display only: it gives the console a human name for a row whose key is a number.",
-    "'app_code' is the package name under db_ops/, so the console can group configuration by the component that reads it.",
+    "'app_code' is the package name under dbabrain/, so the console can group configuration by the component that reads it.",
     "Deliberately absent: the encrypted secret store (it never leaves the data folder), every *.example.json, and generated output. Every file listed here must be read by some code - configuration the console can edit and nothing acts on is worse than configuration it cannot edit."
   ],
   "config_sources": [
@@ -141,7 +141,7 @@
       "file": "bot_telegram.json",
       "app_code": "telegram",
       "display_name": "Telegram bot identity",
-      "description": "Which bot db_ops speaks as (token by ref, never in clear).",
+      "description": "Which bot dbabrain speaks as (token by ref, never in clear).",
       "collections": []
     },
     {
@@ -301,7 +301,7 @@
       "file": "store_config.json",
       "app_code": "db",
       "display_name": "Runtime store declaration",
-      "description": "Which database db_ops itself stores its runtime data in.",
+      "description": "Which database dbabrain itself stores its runtime data in.",
       "collections": []
     },
     {

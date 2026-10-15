@@ -22,7 +22,7 @@ import json
 
 import pytest
 
-from db_ops.telegram import command_processor
+from dbabrain.telegram import command_processor
 from conftest import shipped_config
 
 
@@ -31,7 +31,7 @@ def _the_request_is_sent_as_the_app_finished_it(monkeypatch):
     """The app finishes a `common.cli` request from its node's data/ before it sends it (rules
     R09). These tests are about what it does with the answer, so the fill hands the request back
     unchanged; `request_fill` has tests of its own."""
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     monkeypatch.setattr(request_fill, "fill_request", lambda command, request, **_kwargs: dict(request))
 
@@ -68,9 +68,9 @@ def test_the_four_prompted_answers_become_the_json_request(monkeypatch):
                 "rows_inserted": 42, "column_type": "NVARCHAR(4000)"}
 
     # Stubbed at the CLI boundary since 2026-08-15: the load runs in
-    # `db_ops.common.cli create-table-from-xlsx`, so patching the in-process function would patch
+    # `dbabrain.common.cli create-table-from-xlsx`, so patching the in-process function would patch
     # something this path no longer calls. The request it receives is asserted unchanged.
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: fake_create(request))
 
     result = command_processor.execute_create_table_from_xlsx_command(
@@ -99,7 +99,7 @@ def test_the_reply_actually_renders_every_field_it_promises(monkeypatch):
     even true. Asserting the handler's keys is not enough; the template and the renderer have
     to agree, so this drives the real renderer with the real shipped template.
     """
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: {
         "server_id": "ACME-192-0-2-248", "db_type": "sqlserver", "database_name": "Globex_Prod",
         "schema": "guest", "table_name": "temp_e24623de",
@@ -132,7 +132,7 @@ def test_the_reply_actually_renders_every_field_it_promises(monkeypatch):
 def test_the_handler_returns_unprefixed_keys_because_the_renderer_adds_the_prefix(monkeypatch):
     """The mechanism behind the test above, stated directly: `render_reply_text` exposes each
     scalar as `{result_<key>}`. A handler that prefixes its own keys double-prefixes them."""
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: {
         "server_id": "s", "database_name": "d", "schema": "sc", "table_name": "t",
         "qualified_name": "[sc].[t]", "column_count": 1, "rows_inserted": 0,
@@ -148,7 +148,7 @@ def test_the_handler_returns_unprefixed_keys_because_the_renderer_adds_the_prefi
 def test_the_generated_table_name_comes_back_because_nothing_else_names_it(monkeypatch):
     """The operator did not choose it, so the reply is the only place they can find it. A blank
     table_name in the request is what asks for one."""
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
     monkeypatch.setattr(common_cli, "run", lambda command, request: {
         "server_id": "ACME-1", "database_name": "d", "schema": "s", "table_name": "temp_deadbeef",
         "qualified_name": "[s].[temp_deadbeef]", "column_count": 1, "rows_inserted": 0,
@@ -162,7 +162,7 @@ def test_the_generated_table_name_comes_back_because_nothing_else_names_it(monke
 
 def test_a_fifth_word_names_the_table_instead_of_generating_one(monkeypatch):
     seen = {}
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
     monkeypatch.setattr(common_cli, "run",
                         lambda command, request: seen.update(request) or {
                             "server_id": "ACME-1", "database_name": "d", "schema": "s",
@@ -188,7 +188,7 @@ def test_a_load_failure_is_reported_to_the_user_not_raised_as_a_crash(monkeypatc
     # The CLI reports the failure as `success: false`; the client turns that into
     # CommonCliError, and the handler must still turn *that* into a message the operator reads
     # rather than a traceback.
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
 
     def boom(command, request):
         raise common_cli.CommonCliError("[dbo].[t] already exists on ACME-1.")
@@ -220,7 +220,7 @@ def test_the_shipped_command_does_not_let_a_telegram_user_drop_a_table():
 def test_a_deployment_may_still_pin_the_options_in_its_own_config(monkeypatch):
     """The config is the one place that decides; the handler does not hardcode the policy."""
     seen = {}
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
     monkeypatch.setattr(common_cli, "run",
                         lambda command, request: seen.update(request) or {
                             "server_id": "ACME-1", "database_name": "d", "schema": "s",
@@ -257,7 +257,7 @@ def test_the_shipped_command_asks_for_the_file_as_base64():
 
 def test_a_binary_attachment_is_carried_as_base64_not_decoded_as_text(monkeypatch, tmp_path):
     """A zip's first bytes are `PK\\x03\\x04`; `utf-8-sig` on the whole thing is not the file."""
-    from db_ops.telegram import api
+    from dbabrain.telegram import api
 
     payload = b"PK\x03\x04\x14\x00\x00\x00\x08\x00\xff\xfe binary \x00 bytes"
     monkeypatch.setattr(api, "get_file_bytes", lambda **kwargs: payload)
@@ -267,7 +267,7 @@ def test_a_binary_attachment_is_carried_as_base64_not_decoded_as_text(monkeypatc
             resolved_bot_token = "t"
             api_url = "https://example.invalid"
 
-    monkeypatch.setattr("db_ops.lib.config.load_config", lambda path: _Config)
+    monkeypatch.setattr("dbabrain.lib.config.load_config", lambda path: _Config)
 
     encoded = command_processor._download_document_base64(
         {"file_id": "AAA"}, config_path=tmp_path / "config.json")
@@ -277,7 +277,7 @@ def test_a_binary_attachment_is_carried_as_base64_not_decoded_as_text(monkeypatc
 
 def test_an_empty_attachment_is_refused_rather_than_loaded_as_an_empty_table(monkeypatch,
                                                                             tmp_path):
-    from db_ops.telegram import api
+    from dbabrain.telegram import api
     monkeypatch.setattr(api, "get_file_bytes", lambda **kwargs: b"")
 
     class _Config:
@@ -285,7 +285,7 @@ def test_an_empty_attachment_is_refused_rather_than_loaded_as_an_empty_table(mon
             resolved_bot_token = "t"
             api_url = "https://example.invalid"
 
-    monkeypatch.setattr("db_ops.lib.config.load_config", lambda path: _Config)
+    monkeypatch.setattr("dbabrain.lib.config.load_config", lambda path: _Config)
 
     with pytest.raises(RuntimeError, match="empty"):
         command_processor._download_document_base64(
@@ -294,7 +294,7 @@ def test_an_empty_attachment_is_refused_rather_than_loaded_as_an_empty_table(mon
 
 def _stub_download(monkeypatch, body: bytes, *, reported_size: int | None = None):
     """Answer `getFile` and the file fetch without a network, returning `body`."""
-    from db_ops.telegram import api
+    from dbabrain.telegram import api
 
     monkeypatch.setattr(api, "call_telegram_api", lambda **kwargs: {
         "ok": True,
@@ -320,7 +320,7 @@ def test_a_multi_megabyte_attachment_is_downloaded_whole(monkeypatch):
     for: an operator's 5 MB leave list came back as 'Telegram file too large: 5001134 > 1000000'
     — a number that corresponded to nothing anyone had chosen. The only ceiling left is
     Telegram's own, which no setting on this side can lift."""
-    from db_ops.telegram import api
+    from dbabrain.telegram import api
 
     body = b"PK\x03\x04" + b"x" * (5 * 1024 * 1024)
     _stub_download(monkeypatch, body)
@@ -331,7 +331,7 @@ def test_a_multi_megabyte_attachment_is_downloaded_whole(monkeypatch):
 def test_a_caller_that_wants_its_own_bound_still_gets_one(monkeypatch):
     """`max_bytes` is not gone, only defaulted off: a caller with a reason to cap can still say
     so, and it is checked against the reported size before anything is fetched."""
-    from db_ops.telegram import api
+    from dbabrain.telegram import api
 
     _stub_download(monkeypatch, b"x" * 4096)
 
@@ -341,9 +341,9 @@ def test_a_caller_that_wants_its_own_bound_still_gets_one(monkeypatch):
 
 def test_telegrams_own_refusal_explains_whose_limit_it_is(monkeypatch):
     """Telegram answers 'Bad Request: file is too big' above 20 MB, whatever the sender saw when
-    they attached the file. Passed through verbatim it reads as a db_ops limit the operator
+    they attached the file. Passed through verbatim it reads as a dbabrain limit the operator
     should ask us to raise, and there is nothing to raise."""
-    from db_ops.telegram import api
+    from dbabrain.telegram import api
 
     def refuse(**kwargs):
         raise RuntimeError("Telegram HTTP 400: {\"description\":\"Bad Request: file is too big\"}")

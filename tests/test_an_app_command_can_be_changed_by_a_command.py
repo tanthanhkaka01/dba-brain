@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import app_command_admin
+from dbabrain.common import app_command_admin
 
 
 @pytest.fixture()
@@ -32,14 +32,14 @@ def estate(tmp_path):
         "app_commands": [
             {"app_command_id": "1", "app_ord": 1, "app_code": "APP-BACKUP-RESTORE",
              "app_name": "backup_restore", "display_name": "Backup / Restore",
-             "log_scope": "backup", "working_dir": "tools/db_ops",
-             "command_text": "python -m db_ops.backup_restore.cli backup",
+             "log_scope": "backup", "working_dir": "tools/dbabrain",
+             "command_text": "python -m dbabrain.backup_restore.cli backup",
              "active": True, "node_role": "worker", "run_mode": "async", "max_parallel": 4,
              "time_window": {"repeat_interval": 300, "retry_interval": 300, "timeout": 7200},
              "note": "as shipped"},
             {"app_command_id": "2", "app_ord": 2, "app_code": "APP-METRICS",
              "app_name": "metrics", "display_name": "Metrics", "log_scope": "metrics",
-             "working_dir": "tools/db_ops", "command_text": "python -m db_ops.metrics.cli collect",
+             "working_dir": "tools/dbabrain", "command_text": "python -m dbabrain.metrics.cli collect",
              "active": True, "node_role": "all", "run_mode": "sync", "max_parallel": 1,
              "time_window": {"repeat_interval": 120, "retry_interval": 60, "timeout": 1800},
              "note": ""},
@@ -53,7 +53,7 @@ def estate(tmp_path):
     # four public-tree-only failures that made v0.20.0's CI red.
     import shutil
 
-    from db_ops.lib import shared_objects
+    from dbabrain.lib import shared_objects
     shutil.copy(Path(shared_objects.__file__).resolve().parents[1]
                 / "common" / "catalogue" / "shared_config_objects.json",
                 data / "shared_config_objects.json")
@@ -141,7 +141,7 @@ def test_weekdays_survives_a_later_interval_edit(estate):
 # right rather than a gap: it is the SELECTOR. A request naming a different app_code does not rename
 # this record, it addresses that one - which is why renaming is impossible here rather than refused.
 @pytest.mark.parametrize("field,value", [
-    ("command_text", "python -m db_ops.metrics.cli collect"),
+    ("command_text", "python -m dbabrain.metrics.cli collect"),
     ("log_scope", "other"),
     ("app_command_id", "99"),
     ("working_dir", "/tmp"),

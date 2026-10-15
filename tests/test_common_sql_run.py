@@ -7,8 +7,8 @@ import struct
 
 import pytest
 
-from db_ops.common import cli, sql_execution, sql_run
-from db_ops.lib.target_profile import TargetProfile
+from dbabrain.common import cli, sql_execution, sql_run
+from dbabrain.lib.target_profile import TargetProfile
 
 
 # --------------------------------------------------------------------------- #
@@ -18,7 +18,7 @@ from db_ops.lib.target_profile import TargetProfile
 
 
 #: The login a caller states - run-sql reads no configuration since 0.24.0 (rules R09), so every
-#: request below carries one, as the apps' do (db_ops.lib.data_sources.request_fill).
+#: request below carries one, as the apps' do (dbabrain.lib.data_sources.request_fill).
 _STATED = {"connection": {"db_type": "sqlserver", "host": "10.0.0.1", "port": 1433,
                           "username": "dba_user", "password": "p1", "server_id": "ACME-x"}}
 
@@ -203,7 +203,7 @@ def _patch(monkeypatch, conn, **resolved):
 
     def fake_resolve(spec, *, database="", sql_access=None, driver="", oracle_client_mode="",
                      profile=None):  # noqa: ARG001
-        from db_ops.lib.target_profile import TargetProfile
+        from dbabrain.lib.target_profile import TargetProfile
 
         stated = TargetProfile()
         return {
@@ -379,7 +379,7 @@ def test_run_sql_cli_without_arguments_shows_usage():
 
 
 def test_run_sql_cli_key_flag_sets_the_secret_env(monkeypatch):
-    from db_ops.lib.secret_text import SECRET_KEY_ENV_VAR
+    from dbabrain.lib.secret_text import SECRET_KEY_ENV_VAR
 
     # setenv (not delenv) so monkeypatch owns the variable and unsets it again at teardown —
     # the CLI writes it into os.environ for real, and it must not leak into other tests.
@@ -429,7 +429,7 @@ def test_autocommit_connects_without_a_transaction_and_never_rolls_back(monkeypa
     through run-sql reported a failure the collector itself would never have hit — which is how
     the 2008 R2 linked-server rewrite first looked broken when it was fine.
 
-    db_ops.metrics.executor connects with autocommit=True for that reason; this is the same
+    dbabrain.metrics.executor connects with autocommit=True for that reason; this is the same
     switch, so run-sql can reproduce a metric exactly.
     """
     conn = FakeConn(FakeCursor([([("x",)], [[1]], -1)]))
@@ -711,7 +711,7 @@ class BatchConn:
 
 
 def _metric_rows(monkeypatch, cursor, *, max_rows=0):
-    from db_ops.common import metric_batch
+    from dbabrain.common import metric_batch
 
     conn = BatchConn(cursor)
     monkeypatch.setattr(metric_batch, "_connect", lambda *_a, **_k: conn)

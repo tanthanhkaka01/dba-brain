@@ -1,6 +1,6 @@
 """The console and the published reports are two mounts on one listener, with nothing joining them.
 
-A user signed into `/db_ops/` could not reach the fleet inventory, the SLA page or a server's
+A user signed into `/dbabrain/` could not reach the fleet inventory, the SLA page or a server's
 metrics: they are served by the same process, one path segment away, and the console never named
 them. The only way to open one was to be told the URL by somebody who already knew it.
 
@@ -12,8 +12,8 @@ after the estate moved (2026-09-10).
 
 from __future__ import annotations
 
-from db_ops.webhost import pages
-from db_ops.webhost.app import WebApp, WebSettings
+from dbabrain.webhost import pages
+from dbabrain.webhost.app import WebApp, WebSettings
 
 
 def _console(**kwargs) -> WebApp:
@@ -26,7 +26,7 @@ def test_a_console_that_has_not_been_told_where_the_reports_are_shows_no_report_
     console = _console()
     assert console.reports_prefix == ""
     assert console.report_links == []
-    assert "Reports" not in pages._sidebar("/db_ops", [], "", console.report_links)
+    assert "Reports" not in pages._sidebar("/dbabrain", [], "", console.report_links)
 
 
 def test_the_server_tells_the_console_which_mount_it_is_really_serving():
@@ -39,7 +39,7 @@ def test_a_non_default_mount_is_carried_through_rather_than_assumed():
     console = _console()
     console.reports_mount = "dba_pages"
     assert "/dba_pages/database-inventory.html" in pages._sidebar(
-        "/db_ops", [], "", console.report_links)
+        "/dbabrain", [], "", console.report_links)
 
 
 def _all_links(prefix="/report_dba"):
@@ -47,7 +47,7 @@ def _all_links(prefix="/report_dba"):
 
 
 def test_the_sidebar_names_every_stable_page():
-    markup = pages._sidebar("/db_ops", [], "", _all_links())
+    markup = pages._sidebar("/dbabrain", [], "", _all_links())
     assert "Reports" in markup
     for label, page in pages.REPORT_PAGES:
         assert label in markup
@@ -56,7 +56,7 @@ def test_the_sidebar_names_every_stable_page():
 
 def test_the_links_are_root_relative_so_they_follow_whatever_host_served_the_console():
     # No scheme and no host anywhere in them - that is what stops this going stale on a move.
-    markup = pages._sidebar("/db_ops", [], "", _all_links())
+    markup = pages._sidebar("/dbabrain", [], "", _all_links())
     assert "http://" not in markup and "https://" not in markup
 
 
@@ -67,7 +67,7 @@ def test_the_per_server_pages_are_not_listed_because_a_real_server_id_must_not_s
 
 def test_the_dashboard_carries_the_report_links_too():
     markup = pages.overview_page(
-        prefix="/db_ops", report_links=_all_links(),
+        prefix="/dbabrain", report_links=_all_links(),
         session={"username": "someone", "user_level": 50, "expires_at": "2026-12-01"},
         blocks=[], can_edit=False, can_run=False, generated_at="2026-09-10 10:00 +07")
     assert 'href="/report_dba/sla.html"' in markup

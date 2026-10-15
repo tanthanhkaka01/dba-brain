@@ -35,12 +35,12 @@ these, and the guards hold the same lists (`APPS` and `SHARED_LAYERS` in
 - An **app** does one job and has its own `cli.py`. It imports `lib` (and `db`, `logging_ops`),
   reaches `common.cli` and `db.cli` only through `transport`, and never imports or runs another app.
 - A **shared layer** is what the apps stand on. It never imports an app.
-- **Not a component:** the root package `db_ops` - the `db-ops` / `dbabrain` entry point, which only
+- **Not a component:** the root package `dbabrain` - the `dbabrain` entry point, which only
   dispatches (R41).
 
 | Kind | ORD | Component | Package | Note |
 | --- | :---: | --- | --- | --- |
-| **app** | 03 | App command daemon | `jobs` | Run as `db-ops daemon`. The scheduler; runs the command lines `app_commands.json` configures (R42's named exception) |
+| **app** | 03 | App command daemon | `jobs` | Run as `dbabrain daemon`. The scheduler; runs the command lines `app_commands.json` configures (R42's named exception) |
 | **app** | 04 | Metrics engine | `metrics` | |
 | **app** | 05 | SQL task runner | `sql_tasks` | |
 | **app** | 06 | Reports | `reports` | |
@@ -71,7 +71,7 @@ R38-R45 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R03 | [An app never imports `common` - `control` and `db` included](#r03) | absolute | - |
 | R04 | [`common` imports nothing but `common` and `lib`](#r04) | absolute | - |
 | R05 | [`common` never launches a CLI or a Python module](#r05) | absolute | - |
-| R06 | [`lib` imports nothing from `db_ops` outside `lib`](#r06) | absolute | - |
+| R06 | [`lib` imports nothing from `dbabrain` outside `lib`](#r06) | absolute | - |
 | R07 | [`lib` never starts a process](#r07) | absolute | - |
 | R08 | [The four row shapes in `db` import nothing](#r08) | absolute | - |
 | R09 | [A `common.cli` command works from its request alone](#r09) | absolute | - |
@@ -136,6 +136,7 @@ R38-R45 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R35 | [`AGENTS.md` and the guides name only real commands, never a secret on a command line](#r35) | absolute | - |
 | R36 | [Everything written in the tree is English](#r36) | absolute | - |
 | R37 | [Comments say why; tests read as prose](#r37) | review | - |
+| R51 | [The code carries one name, `dbabrain`; a value that lives outside it keeps its own](#r51) | absolute | - |
 
 ---
 
@@ -143,7 +144,7 @@ R38-R45 keep their numbers and stand with the other layer rules; R43 is R11's si
 
 The components are listed, with their kind, in [The components](#the-components) above.
 
-**R03, R04, R09 and R16 are non-negotiable by the operator's word (2026-09-25):** `common` is the API, reached only as `python -m db_ops.common.cli <command> '<json>'`; a command works from its request alone; `common` imports nothing but `lib`. All four are absolute since 0.25.0.
+**R03, R04, R09 and R16 are non-negotiable by the operator's word (2026-09-25):** `common` is the API, reached only as `python -m dbabrain.common.cli <command> '<json>'`; a command works from its request alone; `common` imports nothing but `lib`. All four are absolute since 0.25.0.
 
 R38-R45 were added after the list was numbered and keep their numbers; they are layer rules and stand here with the others.
 
@@ -180,18 +181,18 @@ A shared layer (`common`, `lib`, `db`, `logging_ops`, `transport`) never imports
 - **`control` is an app like the others** (the operator, 2026-09-26): *control does not import `common` either - it runs `common.cli`*. It used to be left out of the guard as the deploy tool; it is not exempt.
 - The last seven, gone on 2026-09-26: the export's identifier scan runs `common.cli check-identifiers` (a refusal answers `refused`, so the export still says SKIPPED for it and stops for anything else); the config gate's prompt runs `common.cli ask`; and the SSH clients - `control`'s session to the worker and `backup_restore`'s to a Linux restore target - are a `lib.remote_host.RemoteHost`, whose every call is `run-cmd`, `push-file` or `pull-file`. Preflight's WinRM share is a `run-cmd` too.
 - **`db` is covered too** (the operator, 2026-09-28). Its last four imports went the same day: the three modules its commands answer from - `restore_drill`, `sql_run_history`, `telegram_command_history`, which import only `lib` and serve only `db.cli` - moved into `db`, and the request reader's answer to a bad request into `lib.json_io.read_json_request_answered`, which `common.cli` uses too.
-- Done in 0.24.0: `data_sources` moved to `lib` (eight apps imported it), `metrics`' four execution modules went behind `common.cli metric-batch`, `sre`'s last two went to `lib`; the root `db_ops/cli.py` imports only `lib` (R41).
+- Done in 0.24.0: `data_sources` moved to `lib` (eight apps imported it), `metrics`' four execution modules went behind `common.cli metric-batch`, `sre`'s last two went to `lib`; the root `dbabrain/cli.py` imports only `lib` (R41).
 
 ### R04
 
-**`common` imports nothing but `common` and `lib`** - no app, no `db`, no `db_ops.config`, no root package.
+**`common` imports nothing but `common` and `lib`** - no app, no `db`, no `dbabrain.config`, no root package.
 
 **Guard:**
 
 - `tests/test_import_boundaries.py::test_common_imports_only_common_and_lib`
 - `tests/test_import_boundaries.py::test_the_shared_layers_do_not_import_each_other_both_ways`
 
-**Mark:** absolute. Absolute since 0.24.0: `common/cli.py` imported `db_ops.config` and the root package's `__version__`; both are `lib`'s now (`lib/config.py`, `lib/version.py`).
+**Mark:** absolute. Absolute since 0.24.0: `common/cli.py` imported `dbabrain.config` and the root package's `__version__`; both are `lib`'s now (`lib/config.py`, `lib/version.py`).
 
 ### R05
 
@@ -199,20 +200,20 @@ A shared layer (`common`, `lib`, `db`, `logging_ops`, `transport`) never imports
 
 **Guard:**
 
-- `tests/test_import_boundaries.py::test_common_never_launches_a_db_ops_cli`
+- `tests/test_import_boundaries.py::test_common_never_launches_a_dbabrain_cli`
 - `tests/test_import_boundaries.py::test_common_launches_no_python_module_by_any_spelling`
 
 **Mark:** absolute.
 
 ### R06
 
-`lib` imports nothing from `db_ops` outside `lib`.
+`lib` imports nothing from `dbabrain` outside `lib`.
 
 **Guard:**
 
-- `tests/test_lib_is_pure.py::test_a_lib_module_imports_nothing_from_db_ops`
+- `tests/test_lib_is_pure.py::test_a_lib_module_imports_nothing_from_dbabrain`
 
-**Mark:** absolute. Absolute since 0.24.0: `notify.py` and `telegram_route.py` read `db_ops.config` until the parser moved into `lib/config.py`.
+**Mark:** absolute. Absolute since 0.24.0: `notify.py` and `telegram_route.py` read `dbabrain.config` until the parser moved into `lib/config.py`.
 
 ### R07
 
@@ -301,7 +302,7 @@ Where a thing goes: a value or a rule -> `lib`; an operation -> a `common.cli` c
 
 `common.cli` and `db.cli` are started only through `transport` - never by an app, `lib` or `db` directly.
 
-**The root dispatcher is not a client** (2026-09-28): `db-ops init` runs `common.cli`'s `main` in the process a person started, because the dispatcher does no work of its own and a second process would buy nothing. It may import a component's entry point by name and nothing else (R41).
+**The root dispatcher is not a client** (2026-09-28): `dbabrain init` runs `common.cli`'s `main` in the process a person started, because the dispatcher does no work of its own and a second process would buy nothing. It may import a component's entry point by name and nothing else (R41).
 
 **Guard:**
 
@@ -333,7 +334,7 @@ Inside `transport`, one function starts a process: `transport/process.py::execut
 
 ### R41
 
-**The root package holds nothing of its own.** `db_ops/cli.py` - the `db-ops` / `dbabrain` command - only dispatches: `db-ops <component> ...` to that component's CLI, and the words in its `ALIASES` table (`init`, `guide`, `encrypt-secret`, `export-data`, `import-data`) to the `common.cli` command of the same name. A command it answers itself belongs to `common` (an operation) or `lib` (a rule).
+**The root package holds nothing of its own.** `dbabrain/cli.py` - the `dbabrain` command - only dispatches: `dbabrain <component> ...` to that component's CLI, and the words in its `ALIASES` table (`init`, `guide`, `encrypt-secret`, `export-data`, `import-data`) to the `common.cli` command of the same name. A command it answers itself belongs to `common` (an operation) or `lib` (a rule).
 
 **Guard:**
 
@@ -344,7 +345,7 @@ Inside `transport`, one function starts a process: `transport/process.py::execut
 - `tests/test_the_root_package_only_dispatches.py::test_the_dispatcher_imports_by_name_only_a_components_entry_point`
 - `tests/test_the_root_package_only_dispatches.py::test_every_table_entry_is_a_components_entry_point`
 
-**Mark:** absolute. The dispatcher imports a component's entry point **by name, at dispatch** - `importlib.import_module` on what `APPS` lists and nothing else; a static-import guard could not see that, so the second guard reads the calls. **The `db_ops.config` module is gone** (2026-09-28): an alias that replaced itself with `db_ops.lib.config` in `sys.modules`, kept for 33 importers, which moved to `db_ops.lib.config` the same day; the root holds `__init__.py` and `cli.py` and nothing else. Absolute since 0.24.0 otherwise. Moved out of the root: the five tool-root commands to `common/cli_tool_root.py`, `check-credentials` to `common/cli_check_credentials.py` (its loaders to `lib.data_sources`), `scaffold.py` and `agents_guide.md` to `common`, `levels.py` to `lib`.
+**Mark:** absolute. The dispatcher imports a component's entry point **by name, at dispatch** - `importlib.import_module` on what `APPS` lists and nothing else; a static-import guard could not see that, so the second guard reads the calls. **The `dbabrain.config` module is gone** (2026-09-28): an alias that replaced itself with `dbabrain.lib.config` in `sys.modules`, kept for 33 importers, which moved to `dbabrain.lib.config` the same day; the root holds `__init__.py` and `cli.py` and nothing else. Absolute since 0.24.0 otherwise. Moved out of the root: the five tool-root commands to `common/cli_tool_root.py`, `check-credentials` to `common/cli_check_credentials.py` (its loaders to `lib.data_sources`), `scaffold.py` and `agents_guide.md` to `common`, `levels.py` to `lib`.
 
 ### R42
 
@@ -464,7 +465,7 @@ Every `common` and `db` command answers in one envelope - `success`, `operation`
 
 ### R48
 
-**Every error carries its kind; nothing raises a bare `RuntimeError`.** An exception class derives from a base in `lib.errors` - `RequestError`, `ConfigError`, `NotConfigured`, `Refused`, `Unreachable`, `OperationFailed`, or `DbOpsError` with its `kind` - while keeping the built-in it was (`RuntimeError`, `ValueError`, `OSError`), so no existing `except` changes; a raise site raises the kind it is (`InvalidConfig` / `InvalidRequest` where a `RuntimeError` was raised). The kind is what `common.cli` answers as `error_kind` (R15) and what `lib.common_cli.CommonCliError.kind` hands the app.
+**Every error carries its kind; nothing raises a bare `RuntimeError`.** An exception class derives from a base in `lib.errors` - `RequestError`, `ConfigError`, `NotConfigured`, `Refused`, `Unreachable`, `OperationFailed`, or `DbaBrainError` with its `kind` - while keeping the built-in it was (`RuntimeError`, `ValueError`, `OSError`), so no existing `except` changes; a raise site raises the kind it is (`InvalidConfig` / `InvalidRequest` where a `RuntimeError` was raised). The kind is what `common.cli` answers as `error_kind` (R15) and what `lib.common_cli.CommonCliError.kind` hands the app.
 
 **Guard:**
 
@@ -478,7 +479,7 @@ Every `common` and `db` command answers in one envelope - `success`, `operation`
 
 ### R49
 
-**A `common.cli` request is held to its reference before the command reads it** - refused since 0.27.0 (see the mark). The reader (`common/cli_request.py::_read_json_request`, called through `cli.main`) checks the request against its command's `input_` entry in the **packaged** reference (`lib.request_check`, never a node's `data/` copy - R09): a value of the wrong kind or out of its range, and a required field left out, are refused with the field named and `error_kind` `request` (R15, R48). An unknown key, a deprecated spelling, an unlisted value of an open list and a blank optional field are not refused - a blank optional string is how code says "not given"; unknown keys and deprecated spellings are measured, one JSON line each, into the file `DB_OPS_REQUEST_CHECK_LOG` names.
+**A `common.cli` request is held to its reference before the command reads it** - refused since 0.27.0 (see the mark). The reader (`common/cli_request.py::_read_json_request`, called through `cli.main`) checks the request against its command's `input_` entry in the **packaged** reference (`lib.request_check`, never a node's `data/` copy - R09): a value of the wrong kind or out of its range, and a required field left out, are refused with the field named and `error_kind` `request` (R15, R48). An unknown key, a deprecated spelling, an unlisted value of an open list and a blank optional field are not refused - a blank optional string is how code says "not given"; unknown keys and deprecated spellings are measured, one JSON line each, into the file `DBABRAIN_REQUEST_CHECK_LOG` names.
 
 **Guard:**
 
@@ -487,7 +488,7 @@ Every `common` and `db` command answers in one envelope - `success`, `operation`
 - `tests/test_a_request_is_checked_against_the_reference.py::test_an_unknown_key_is_measured_and_not_refused`
 - `tests/test_a_request_is_checked_against_the_reference.py::test_the_reference_is_the_packaged_copy_never_a_node_s_data`
 
-**Mark:** absolute since 0.27.0 (`lib.request_check.REFUSING` on, the operator's word of 2026-10-05; the 0.26.0 soak node's 24 hours of real requests held no `value` or `missing` finding). It shipped refusing on 2026-10-03 and the first node to run it refused every SQL task within a minute: the reference called `run-sql`'s `capture` a boolean, the runner sends `"all"` - the reference was wrong, and the suite could not see it, since most app tests fake the transport. So every finding was measured into `DB_OPS_REQUEST_CHECK_LOG` until a node's log of real requests held no `value` or `missing` finding. Unknown keys and deprecated spellings are still measured, not refused - refusing them follows when their log is empty too. The measuring mode is kept and tested with the switch off.
+**Mark:** absolute since 0.27.0 (`lib.request_check.REFUSING` on, the operator's word of 2026-10-05; the 0.26.0 soak node's 24 hours of real requests held no `value` or `missing` finding). It shipped refusing on 2026-10-03 and the first node to run it refused every SQL task within a minute: the reference called `run-sql`'s `capture` a boolean, the runner sends `"all"` - the reference was wrong, and the suite could not see it, since most app tests fake the transport. So every finding was measured into `DBABRAIN_REQUEST_CHECK_LOG` until a node's log of real requests held no `value` or `missing` finding. Unknown keys and deprecated spellings are still measured, not refused - refusing them follows when their log is empty too. The measuring mode is kept and tested with the switch off.
 
 ## 3. Configuration and data
 
@@ -505,7 +506,7 @@ Every configuration file, and every record a person edits, is described in the r
 
 ### R18
 
-The reference's three copies (`db_ops/common/catalogue/`, `data/` and `data/*.example.json`) are the same document.
+The reference's three copies (`dbabrain/common/catalogue/`, `data/` and `data/*.example.json`) are the same document.
 
 **Guard:**
 
@@ -565,7 +566,7 @@ Every runtime-store table has its keys - primary, foreign, unique. A configurati
 
 **Mark:** absolute (code) - for what the code creates and deletes. The guard's first run (0.24.0) found `job_runs_history` and `metric_results_archive` keyless; a store made since declares both, keyed by the id each row kept (`log_id`, `result_id`).
 
-- **Left on a store made before 0.24.0:** both archives stay keyless until `python -m db_ops.db.cli archive-keys --apply` runs on it. `CREATE TABLE IF NOT EXISTS` changes nothing that exists, and no app does it on starting: a long-running store's archive is millions of rows, adding the key reads every one, and one duplicated id would fail it. The command reports first - rows, missing ids, duplicate ids - and keys only a table it found clean. See [`01_runtime_store.md`](./01_runtime_store.md).
+- **Left on a store made before 0.24.0:** both archives stay keyless until `python -m dbabrain.db.cli archive-keys --apply` runs on it. `CREATE TABLE IF NOT EXISTS` changes nothing that exists, and no app does it on starting: a long-running store's archive is millions of rows, adding the key reads every one, and one duplicated id would fail it. The command reports first - rows, missing ids, duplicate ids - and keys only a table it found clean. See [`01_runtime_store.md`](./01_runtime_store.md).
 
 ### R23
 
@@ -756,6 +757,51 @@ Comments say why, not what; tests read as prose, a docstring saying why the beha
 
 **Mark:** review.
 
+### R51
+
+**The code carries one name: `dbabrain`** - the package, every module path, the command, every
+environment variable (`DBABRAIN_*`), the classes, the image, the container layout, the console's
+default mount, the log and file names, the docs and the tests. Since 0.29.0 the earlier name is not
+read anywhere, as a fallback or otherwise; a node's configuration that still says it is moved by
+`upgrade-config` (`package-rename`, `lib.package_rename`), which is the one place the code writes it.
+The earlier name had six spellings and the guard looks for each: the package, the hyphenated
+command, the environment prefix, the class prefix, the display name written as two words (as it was
+capitalised - in lower case the two words are a command of this version), and the one-word
+nickname in either case.
+
+**A value that lives outside the code keeps its own name**, whatever its letters: the store's
+database, schema and the rows that carry its schema version, a folder on a host, the certificate
+on the SQL Servers, the store's container and the network it sits on, the format marker inside the
+secret store, an RMAN tag already in a catalogue, a backup folder, a login, a share. The line is
+the operator's (2026-10-12): *what belongs to configuration, and the name of a backup, a restore
+or a SQL task, is not changed; what belongs to the code is.* Where a name is in no configuration
+file and names no record, the test is whether something reads it after the run that wrote it: a
+partial file's suffix and a restore's staging folder are read by the run that wrote them and
+nothing else, so they are the code's and were renamed. Renaming a value breaks a running node and
+changes nothing a reader of the code sees. Each is named, with where it lives, in the guard.
+
+**A default is configuration nobody wrote down.** Where the code's own default named something
+that is read after the run that wrote it - the certificate a backup is encrypted with, the file
+that marks a restore's staging folder - the default takes the new name only after `upgrade-config`
+(step `earlier-defaults`, `lib.earlier_defaults`) has written the earlier one into every record
+that had been leaving it to the default. The record then states its own value, which is
+configuration and stays; the code states the new one, for a record made from now on. Where the
+default was a place on a host - the two folders a lab database lives in - the code keeps none at
+all: the node states them (`sre_config.json`, `sre.docker_db`), `upgrade-config` writes the two
+earlier constants into a node that states none, and a lab command that finds none stated is
+refused by name (the no-fallback rule, R50).
+
+**Guard:**
+
+- `tests/test_the_tree_carries_one_name.py::test_the_old_name_appears_only_where_a_value_lives_outside_the_code`
+- `tests/test_the_tree_carries_one_name.py::test_every_kept_value_says_where_it_lives`
+- `tests/test_upgrade_config_renames_the_package.py::test_the_rewrite_moves_the_code_and_leaves_the_store_alone`
+- `tests/test_upgrade_config_states_the_default_a_record_ran_on.py::test_a_sqlserver_backup_job_that_names_no_certificate_is_told_the_one_it_ran_on`
+- `tests/test_upgrade_config_states_the_default_a_record_ran_on.py::test_no_default_of_the_package_is_the_earlier_name_again`
+
+**Mark:** absolute since 0.29.0 - the operator, 2026-10-12: *cut it completely, nothing kept; the
+database and schema the store uses stay - that is configuration, not code.*
+
 ---
 
 ## Where the rules are kept, and what is not here
@@ -769,7 +815,7 @@ Comments say why, not what; tests read as prose, a docstring saying why the beha
 - **Open** (recorded 2026-09-25, brought up to date 2026-09-28): nothing - every rule is absolute or
   review. Closed in 0.25.0: R03 covers `db` (the operator, 2026-09-28); R16's answer side, every
   command answered by a run (`ANSWER_NOT_YET_SEEN` 60 -> 0); R20, every `time_window` read through
-  `lib` (24 -> 0); R39 covers `db` and `logging_ops`; R41's `db_ops.config` alias deleted (33
+  `lib` (24 -> 0); R39 covers `db` and `logging_ops`; R41's `dbabrain.config` alias deleted (33
   importers -> 0); R45 and R46 added.
 - **Retired 2026-09-28:** the maintainers' standing conformance report, which numbered 15
   architecture rules of its own. Every one is here: its 1-15 are R01, R02, R04, R06, R08, R11 (both

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.db import backfill
+from dbabrain.db import backfill
 
 
 class _FakePostgres:
@@ -40,7 +40,7 @@ class _FakePostgres:
         def __init__(self, schema: str) -> None:
             self.schema = schema
 
-    def __init__(self, schema: str = "db_ops") -> None:
+    def __init__(self, schema: str = "dbabrain") -> None:
         self.target = _FakePostgres._Target(schema)
 
 
@@ -77,7 +77,7 @@ def test_carrying_a_schema_into_itself_is_refused() -> None:
     rows to the table it just read them from.
     """
     with pytest.raises(backfill.BackfillError, match="same schema"):
-        backfill._resolve_source(None, "db_ops", _FakePostgres(schema="db_ops"))
+        backfill._resolve_source(None, "dbabrain", _FakePostgres(schema="dbabrain"))
 
 
 def test_a_schema_source_needs_a_postgresql_destination() -> None:

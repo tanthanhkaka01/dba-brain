@@ -18,8 +18,8 @@ import json
 
 import pytest
 
-from db_ops.common import identifier_scan
-from db_ops.common.identifier_scan import CERTAIN, LIKELY, REVIEW
+from dbabrain.common import identifier_scan
+from dbabrain.common.identifier_scan import CERTAIN, LIKELY, REVIEW
 
 
 # --------------------------------------------------------------------------- #
@@ -113,7 +113,7 @@ def test_a_word_shaped_term_does_not_match_inside_an_identifier(tmp_path) -> Non
 
     A database called `Inventory` must not make every line of `inventory_report.py` a finding.
     """
-    text = "from db_ops.reports import inventory_report\ninventory_rows = build_inventory()\n"
+    text = "from dbabrain.reports import inventory_report\ninventory_rows = build_inventory()\n"
     outcome = _scan(tmp_path, text, ["Inventory"])
 
     assert outcome["hits"] == 0
@@ -326,7 +326,7 @@ def test_a_bare_decimal_is_a_number_and_a_shorthand_touching_a_name_is_a_machine
     the scrub cannot help: rewriting `0.2` inside `"sharePct": 0.2` corrupts the very page it is
     publishing. So the shorthand must **touch a letter or an underscore** on one side.
     """
-    from db_ops.common import identifier_scan
+    from dbabrain.common import identifier_scan
 
     numbers = tmp_path / "measurements.html"
     numbers.write_text('{"sharePct": 0.2, "logGB": 0.01}\nmemory_percent=0.2, x=1\n'
@@ -351,7 +351,7 @@ def test_the_requests_allow_list_reaches_the_address_backstop(tmp_path):
     every other tier and not for this one, which left a caller that refuses on unrecognised
     addresses - `showcase.certify` does - with no way past a page it could not rewrite either.
     """
-    from db_ops.common import identifier_scan
+    from dbabrain.common import identifier_scan
 
     page = tmp_path / "page.html"
     page.write_text('{"msg": "AXService.exe; version: 2.53.1.0; stamp"}\n'

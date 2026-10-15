@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from db_ops.lib import data_sources
-from db_ops.lib.data_sources import CredentialNotFound, find_database_credential
+from dbabrain.lib import data_sources
+from dbabrain.lib.data_sources import CredentialNotFound, find_database_credential
 
 
 GROUPS = [
@@ -76,7 +76,7 @@ def test_wrong_db_type_does_not_match():
 def test_metrics_target_without_a_credential_is_reported_not_guessed():
     """metrics keeps per-target degradation: the target still loads, with credential=None, so
     the collector reports that one target instead of aborting the whole run."""
-    from db_ops.metrics import targets
+    from dbabrain.metrics import targets
 
     assert targets._find_credential(
         GROUPS, server_id="ACME-1", db_type="sqlserver", service_name="", instance_name="",
@@ -91,8 +91,8 @@ def test_metrics_target_without_a_credential_is_reported_not_guessed():
 def test_sql_tasks_target_uses_the_same_rule():
     import dataclasses
 
-    from db_ops.lib.time_window import parse_time_window_config
-    from db_ops.sql_tasks.runner import SqlTarget, find_database_credential as task_credential
+    from dbabrain.lib.time_window import parse_time_window_config
+    from dbabrain.sql_tasks.runner import SqlTarget, find_database_credential as task_credential
 
     target = SqlTarget(
         sql_id=1, target_no=1, server_id="ACME-1", db_type="sqlserver", service_name="SALESDB-PROD",
@@ -123,8 +123,8 @@ def _write_config(data_dir, *, default_credential_name="dba"):
 
 def test_check_credentials_cli_passes_on_a_complete_config(tmp_path, capsys):
     # Back in `common` since 0.24.0 (rules R41): its two resolvers are lib's, so the shared layer
-    # can ask them. `db-ops check-credentials` is an alias of the common command.
-    from db_ops import cli
+    # can ask them. `dbabrain check-credentials` is an alias of the common command.
+    from dbabrain import cli
 
     _write_config(tmp_path)
     assert cli.main(["check-credentials", json.dumps({"data_dir": str(tmp_path)})]) == 0
@@ -136,7 +136,7 @@ def test_check_credentials_cli_passes_on_a_complete_config(tmp_path, capsys):
 def test_check_credentials_cli_fails_when_a_target_names_no_login(tmp_path, capsys):
     """The guard for the rule: dropping default_credential_name used to keep working (metrics
     picked the DBA entry). Now it must be caught before a deploy, not at 3 a.m."""
-    from db_ops import cli
+    from dbabrain import cli
 
     _write_config(tmp_path, default_credential_name="")
     assert cli.main(["check-credentials", json.dumps({"data_dir": str(tmp_path)})]) == 1
@@ -152,7 +152,7 @@ def test_check_credentials_cli_fails_when_a_target_names_no_login(tmp_path, caps
 
 def test_the_text_rendering_is_still_available_for_a_pasted_runbook_line(tmp_path, capsys):
     """`format: txt` keeps the old shape — problems on stderr, one summary line on stdout."""
-    from db_ops import cli
+    from dbabrain import cli
 
     _write_config(tmp_path, default_credential_name="")
     assert cli.main(["check-credentials",
@@ -163,7 +163,7 @@ def test_the_text_rendering_is_still_available_for_a_pasted_runbook_line(tmp_pat
 
 
 def test_telegram_command_credential_uses_the_same_rule(monkeypatch):
-    from db_ops.telegram import sql_commands
+    from dbabrain.telegram import sql_commands
 
     monkeypatch.setattr(data_sources, "load_credentials", lambda db_type, data_dir=None: GROUPS)
     config = {"server_id": "ACME-1", "db_type": "sqlserver", "service_name": "SALESDB-PROD",

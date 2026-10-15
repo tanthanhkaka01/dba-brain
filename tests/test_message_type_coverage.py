@@ -15,8 +15,8 @@ import pathlib
 
 import pytest
 
-from db_ops.db.telegram_queue import message_type_for
-from db_ops.telegram.severity import normalize_message_type
+from dbabrain.db.telegram_queue import message_type_for
+from dbabrain.telegram.severity import normalize_message_type
 
 QUEUE_FUNCTIONS = {"queue_telegram_message", "queue_command_reply"}
 HINT_KEYWORDS = {"status", "phase", "level", "message_type"}
@@ -36,7 +36,7 @@ def _string_literals(node):
 
 
 def _call_sites():
-    for path in sorted(pathlib.Path("db_ops").rglob("*.py")):
+    for path in sorted(pathlib.Path("dbabrain").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -67,7 +67,7 @@ def test_every_literal_hint_resolves_to_a_message_type():
             unmapped.append(f"{where}  {keyword}={literal!r}")
     assert not unmapped, (
         "these producer values store NULL and fall back to guessing from the header; "
-        "add them to db_ops.db.telegram_queue._PHASE_TYPES/_LEVEL_TYPES:\n  "
+        "add them to dbabrain.db.telegram_queue._PHASE_TYPES/_LEVEL_TYPES:\n  "
         + "\n  ".join(unmapped)
     )
 

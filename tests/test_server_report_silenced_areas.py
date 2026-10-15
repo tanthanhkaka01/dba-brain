@@ -20,8 +20,8 @@ colour the config asked for and says the missing half out loud: this value grade
 is silent by decision rather than by measurement.
 """
 
-from db_ops.lib.health_model import downgraded_from
-from db_ops.reports.server_report import build_areas, metric_label
+from dbabrain.lib.health_model import downgraded_from
+from dbabrain.reports.server_report import build_areas, metric_label
 
 NOW = 1_800_000_000
 REMAP = "Policy: severity remapped CRITICAL->LOGGING by metric_overrides."

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import response, shared_objects
+from dbabrain.lib import response, shared_objects
 
 REPO = Path(__file__).resolve().parents[1]
 DATA = REPO / "data"
@@ -71,7 +71,7 @@ def test_no_two_objects_describe_exactly_the_same_fields():
 # --------------------------------------------------------------------------- #
 def _config_files() -> list[str]:
     for candidate in (DATA / "data_files.json", DATA / "data_files.example.json",
-                      REPO / "db_ops" / "control" / "catalogue" / "data_files.json"):
+                      REPO / "dbabrain" / "control" / "catalogue" / "data_files.json"):
         if candidate.is_file():
             listing = json.loads(candidate.read_text(encoding="utf-8-sig"))["data_files"]
             return sorted(str(f["file"]) for f in listing if f.get("kind") == "config")

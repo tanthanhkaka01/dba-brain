@@ -17,11 +17,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from db_ops.common import app_command_admin, field_migration
-from db_ops.lib import data_sources
-from db_ops.lib import field_names, shared_objects
-from db_ops.lib.target_flags import is_metrics_enabled, is_target_enabled
-from db_ops.telegram.command_processor import menu_order_of
+from dbabrain.common import app_command_admin, field_migration
+from dbabrain.lib import data_sources
+from dbabrain.lib import field_names, shared_objects
+from dbabrain.lib.target_flags import is_metrics_enabled, is_target_enabled
+from dbabrain.telegram.command_processor import menu_order_of
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 
@@ -108,8 +108,8 @@ def test_renaming_the_old_spelling_to_the_same_value_is_still_written(tmp_path):
 def test_the_shipped_files_speak_only_the_standard_names():
     """The examples and the package catalogue are what every new node starts from."""
     root = Path(__file__).resolve().parents[1]
-    for folder in ("db_ops/jobs/catalogue", "db_ops/telegram/catalogue", "db_ops/webhost/catalogue",
-                   "db_ops/backup_restore/catalogue", "examples/postgres-quickstart/data",
+    for folder in ("dbabrain/jobs/catalogue", "dbabrain/telegram/catalogue", "dbabrain/webhost/catalogue",
+                   "dbabrain/backup_restore/catalogue", "examples/postgres-quickstart/data",
                    "examples/sqlserver-quickstart/data"):
         if not (root / folder).is_dir():
             continue  # a withheld package is absent from the exported tree
@@ -187,7 +187,7 @@ def test_a_nested_block_with_the_same_key_name_is_left_alone(tmp_path):
 
 
 def test_a_restore_entry_reads_its_mappings_under_either_name():
-    from db_ops.backup_restore.config import _parse_database_mappings
+    from dbabrain.backup_restore.config import _parse_database_mappings
 
     mapping = [{"source_database": "APP", "target_database": "APP_DRILL"}]
     for name in ("database_mappings", "databases"):
@@ -199,7 +199,7 @@ def test_a_restore_entry_reads_its_mappings_under_either_name():
 
 def test_a_restore_names_its_machines_on_the_entry_and_the_old_ids_are_still_read():
     """`server_id` / `target_server_id` on the entry win; `source.id` / `target.id` are legacy."""
-    from db_ops.backup_restore.config import parse_restore_config as parse
+    from dbabrain.backup_restore.config import parse_restore_config as parse
 
     base = {"restore_id": "R", "source": {"backup_share": "//s/b"},
             "target": {"vm_import_unc": "//t/i", "credential_target": "192.0.2.9"},
@@ -217,7 +217,7 @@ def test_a_restore_names_its_machines_on_the_entry_and_the_old_ids_are_still_rea
 
 
 def test_a_restore_naming_a_machine_no_inventory_has_is_dangling(tmp_path):
-    from db_ops.lib import config_references
+    from dbabrain.lib import config_references
 
     (tmp_path / "db_instances.json").write_text(json.dumps(
         {"db_instances": [{"server_id": "SRC-1"}]}), encoding="utf-8")
@@ -230,7 +230,7 @@ def test_a_restore_naming_a_machine_no_inventory_has_is_dangling(tmp_path):
 
 def test_a_switched_off_instance_is_read_as_off_under_either_spelling(tmp_path):
     """The reference rules say `active`; a file not yet migrated says `enabled`."""
-    from db_ops.lib import config_references
+    from dbabrain.lib import config_references
 
     (tmp_path / "db_instances.json").write_text(json.dumps({"db_instances": [
         {"server_id": "A", "enabled": False, "default_credential_name": "GONE"},
@@ -243,7 +243,7 @@ def test_a_switched_off_instance_is_read_as_off_under_either_spelling(tmp_path):
 def test_a_telegram_record_is_switched_on_under_either_spelling_and_absent_means_on():
     """The permission check read a record with no `status` as active and the level routing read it
     as inactive, so one hand-written group could run commands and never be sent an alert."""
-    from db_ops.lib.target_flags import is_record_active
+    from dbabrain.lib.target_flags import is_record_active
 
     assert is_record_active({"active": True}) and is_record_active({"status": "active"})
     assert not is_record_active({"active": False}) and not is_record_active({"status": "left"})
@@ -251,7 +251,7 @@ def test_a_telegram_record_is_switched_on_under_either_spelling_and_absent_means
 
 
 def test_a_group_with_no_status_is_routed_to_as_well_as_obeyed(tmp_path):
-    from db_ops.db import cli as db_cli
+    from dbabrain.db import cli as db_cli
 
     (tmp_path / "telegram_groups.json").write_text(json.dumps({"telegram_groups": [
         {"group_id": "-100", "notify_level": "backup"},
@@ -261,7 +261,7 @@ def test_a_group_with_no_status_is_routed_to_as_well_as_obeyed(tmp_path):
 
 
 def test_a_remote_login_is_written_with_note_not_notes(tmp_path):
-    from db_ops.common import remote_credential_admin
+    from dbabrain.common import remote_credential_admin
 
     (tmp_path / "db_instances.json").write_text(json.dumps({"db_instances": [
         {"server_id": "ACME-HOST", "db_type": "host", "ip": "192.0.2.5"}]}), encoding="utf-8")
@@ -276,7 +276,7 @@ def test_a_remote_login_is_written_with_note_not_notes(tmp_path):
 def test_a_restore_reads_its_secret_refs_under_either_name_and_the_new_one_wins():
     """`password_env` meant an environment variable in ssh_auth and a store ref here; the ref is
     `password_ref` now, and an entry written before still restores."""
-    from db_ops.backup_restore.config import parse_restore_config as parse
+    from dbabrain.backup_restore.config import parse_restore_config as parse
 
     base = {"restore_id": "R", "vm_import_local": "C:/i", "vm_log_unc": "//t/l",
             "vm_log_local": "C:/l", "restore_data_dir_on_vm": "/d", "cleanup_retention": 86400}
@@ -298,7 +298,7 @@ def test_a_restore_reads_its_secret_refs_under_either_name_and_the_new_one_wins(
 
 
 def test_an_sla_policy_reads_its_title_and_synonyms_under_the_standard_names_first():
-    from db_ops.sla.policies import parse_sla_policy
+    from dbabrain.sla.policies import parse_sla_policy
 
     old = parse_sla_policy({"policy_id": "P", "db_types": ["sqlserver"], "metric_codes": ["M"],
                             "name": "Old title", "slo_target": 98, "operator": "<=",
@@ -314,17 +314,17 @@ def test_an_sla_policy_reads_its_title_and_synonyms_under_the_standard_names_fir
 
 
 def test_the_store_reads_its_database_under_either_name():
-    from db_ops.lib.config import _parse_postgres_store
+    from dbabrain.lib.config import _parse_postgres_store
 
     for spelling in ("database_name", "database"):
-        store = _parse_postgres_store({"host": "h", spelling: "db_ops"}, store_dir=Path("."))
-        assert store.database == "db_ops"
+        store = _parse_postgres_store({"host": "h", spelling: "dbabrain"}, store_dir=Path("."))
+        assert store.database == "dbabrain"
 
 
 def test_a_docker_connection_is_registered_under_the_standard_names():
     import inspect
 
-    from db_ops.lib import docker_db_registry as register_config
+    from dbabrain.lib import docker_db_registry as register_config
 
     source = inspect.getsource(register_config)
     assert '"db_type": spec.engine' in source and '"password_ref": spec.password_env' in source

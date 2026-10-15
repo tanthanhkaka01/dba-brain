@@ -1,12 +1,12 @@
 # 13. Common (shared operations)
 
-`db_ops/common/` is where the toolkit **does** things: reach a host, run SQL against one database,
+`dbabrain/common/` is where the toolkit **does** things: reach a host, run SQL against one database,
 move a file, rotate a credential, patch an instance, ask before something irreversible. It holds
 no app of its own — it is the layer every app acts *through*, which is why no app has to import
 another and why one operation has one implementation instead of five that have drifted.
 
 > **Apps do not import this layer. They run it as a CLI.**
-> `python -m db_ops.common.cli <command> '<json>'`
+> `python -m dbabrain.common.cli <command> '<json>'`
 
 That is the rule, not a convention, and it is guarded by
 `tests/test_app_common_imports.py`. An operation can be a process, and putting it across a process
@@ -27,7 +27,7 @@ windows, severity classification, notify routing, formatting or any other pure r
 
 ## What `common` is for
 
-**Most of `db_ops/common/` is a library: built and shipped on its own, it runs anywhere with
+**Most of `dbabrain/common/` is a library: built and shipped on its own, it runs anywhere with
 nothing beside it — no `data/`, no `config.json`, no repo layout.** That is the goal everything
 below serves, and it is true of 81 of the 90 modules. The other 9 are the resolver tier described
 below; they are the exception, they are listed by name, and a new module is not one of them by
@@ -40,7 +40,7 @@ then calls `common` — passing a **JSON object** that already contains every an
 ```
 app (front end)                    common (library)
   reads restore_config.json
-  resolves the host from            python -m db_ops.common.cli restore-full -
+  resolves the host from            python -m dbabrain.common.cli restore-full -
   db_instances.json          ──►      { "db_type": "sqlserver", "database_name": "...",
   decrypts the password                 "backup_path": "...", "with_recovery": false,
                                         "target": { "host": "...", "port": 1433,
@@ -77,7 +77,7 @@ always present even when empty, always on stdout, whether the work succeeded or 
 | `data` | The result proper. Shape is per command, documented at that command. |
 | `metrics` | Numbers about the run: durations, counts, bytes. Charted; kept out of `data`. |
 
-Build it with `db_ops/lib/response.py` (`ok()` / `fail()` / `emit()`) rather than by hand,
+Build it with `dbabrain/lib/response.py` (`ok()` / `fail()` / `emit()`) rather than by hand,
 so no command invents a sixth key or omits `data` when it has none — an absent key and an empty one
 are the same fact, and making them look different is how callers grow branches nobody tests.
 
@@ -118,7 +118,7 @@ readers (`run`, which raises, and `run_allowing_failure`, which does not) and no
 
 **One command's exit code is not a summary of its response, and must stay that way.** `run-cmd`
 passes through the *remote* command's exit code, because `run-cmd … ; echo $?` is asking what the
-command did — `2` from a remote `grep` means "no match", not "db_ops failed". The answer is still
+command did — `2` from a remote `grep` means "no match", not "dbabrain failed". The answer is still
 one envelope, `success` still mirrors it, and the number is in `data.exit_code` and
 `metrics.exit_code` as well. `format: raw` and `format: txt` still bypass the envelope entirely,
 which is the contract working: the rendering is chosen *inside the request*.
@@ -161,7 +161,7 @@ claim and one nobody made.
 The same correction reached `oracle_bridge.resolve_secret()`. Its environment fallback read one
 hardcoded variable name derived from a real host; it now reads a variable named by the config's
 own `sql_access.secret_ref`, which is the convention the rest of the tree already documents in
-`remote_exec`: *refs double as env var names across db_ops*. Besides removing the address, that
+`remote_exec`: *refs double as env var names across dbabrain*. Besides removing the address, that
 is what lets a second bridge on a second host have its own secret at all.
 
 Secrets never appear in any key — redact before building the response, not after.
@@ -209,7 +209,7 @@ tier - are the measured debt of those rules, to be removed, and no new one may b
 
 **The app finishes the request (0.24.0).** Until 0.24.0, 22 commands took a bare `server_id` and
 looked the rest up here. Now none does: the app that calls reads its own `data/` through
-`db_ops.lib.data_sources.request_fill` and states what the command needs -
+`dbabrain.lib.data_sources.request_fill` and states what the command needs -
 
 | Field | What it is | Commands |
 | --- | --- | --- |
@@ -221,10 +221,10 @@ looked the rest up here. Now none does: the app that calls reads its own `data/`
 | `secrets` | the refs a replayed bundle lists, or an 8i bridge's `sql_access` names, with their values | `sqlserver-replay-instance`, `run-sql` |
 
 A request without the field it needs is refused with a message naming it - never a lookup. The
-finished request carries a password, so it goes on stdin (`db_ops.transport` does, and the bot
+finished request carries a password, so it goes on stdin (`dbabrain.transport` does, and the bot
 hands it to a detached command's stdin). `rules` absent means the ladder the package ships -
 `common` never reads the node's `data/emergency_operations.json`; both sides read a ladder through
-`db_ops.lib.confirmation_ladder`, so it means the same thing whoever read it.
+`dbabrain.lib.confirmation_ladder`, so it means the same thing whoever read it.
 A ladder `path` named to `confirm.load_operation` that does not exist is refused (0.26.0, owner
 decision G3.6) - it fell back to the shipped ladder without a word; the node's own absent ladder is
 still the shipped one, read app-side, which is how an install not yet initialised is priced. The last four doors
@@ -240,22 +240,22 @@ sibling of, and `cli_check_credentials.py` the request and the answer - from the
 credential, a Telegram `sql_execute` command's credential - and all three are `lib.data_sources`'
 now (`collection_targets`, `find_database_credential`, `find_command_credential`), so the shared
 layer can ask them without importing an app. A checker of the configuration, so it reads it (R09),
-and on an empty one it checks nothing and says so. `db-ops check-credentials` is an alias. The
+and on an empty one it checks nothing and says so. `dbabrain check-credentials` is an alias. The
 request is `input_config_check` (`data_dir`, `format`), shared with `check-objects` and
 `check-references`; the answer `output_check_credentials`. A bare folder, the form the root took, is
 refused with the request it became.
 
 ### The tool root's own commands - `init`, `guide`, `encrypt-secret`, `export-data`, `import-data` (0.24.0)
 
-They were the root entry point's until 0.24.0 (`db_ops/cli.py`, outside every layer rule - R41). Each
+They were the root entry point's until 0.24.0 (`dbabrain/cli.py`, outside every layer rule - R41). Each
 is an operation whose subject is the configuration itself, so each is a `common.cli` command now
 (`common/cli_tool_root.py`, with `common/scaffold.py` and the guide `common/agents_guide.md`): one
-JSON object in, the envelope out (`format: "txt"` for the lines a person reads). `db-ops init` and
+JSON object in, the envelope out (`format: "txt"` for the lines a person reads). `dbabrain init` and
 the others still work as typed - the entry point forwards them - and `init` / `guide` with no request
-answer in text, so a first run reads what it always read. An option is a key: `db-ops init '{"force":
-true}'`, `db-ops import-data '{"bundle": "x-bundle.json", "plan_only": true}'`; the old flags are
+answer in text, so a first run reads what it always read. An option is a key: `dbabrain init '{"force":
+true}'`, `dbabrain import-data '{"bundle": "x-bundle.json", "plan_only": true}'`; the old flags are
 refused by name, with the key each became. `encrypt-secret` never takes the passphrase in the request
-(R14): `DB_OPS_SECRET_KEY`, or `--key` / `--key-base64` after the JSON. Input and output are
+(R14): `DBABRAIN_SECRET_KEY`, or `--key` / `--key-base64` after the JSON. Input and output are
 `input_init` ... `output_import_data` in the reference.
 
 ### The rule for `common.cli`, and how far it is held (0.23.0)
@@ -268,8 +268,8 @@ baseline where it is not:
 | Half of the rule | Held by | Exceptions |
 | --- | --- | --- |
 | imports no app | `test_a_shared_layer_never_imports_an_app` | none |
-| imports only `lib` (and `common`) | `test_common_imports_only_common_and_lib` | `cli.py`: `db_ops.config` and the root package's `__version__` - `COMMON_OUTSIDE_IMPORTS`, which may only shrink |
-| launches no CLI | `test_common_never_launches_a_db_ops_cli` (a literal `db_ops.x.cli`) and `test_common_launches_no_python_module_by_any_spelling` (`sys.executable`, a bare `-m`, `-m db_ops.…` in a string, a module name built into an f-string, `lib.common_cli`, `runpy`) | usage text naming a command for a reader |
+| imports only `lib` (and `common`) | `test_common_imports_only_common_and_lib` | `cli.py`: `dbabrain.config` and the root package's `__version__` - `COMMON_OUTSIDE_IMPORTS`, which may only shrink |
+| launches no CLI | `test_common_never_launches_a_dbabrain_cli` (a literal `dbabrain.x.cli`) and `test_common_launches_no_python_module_by_any_spelling` (`sys.executable`, a bare `-m`, `-m dbabrain.…` in a string, a module name built into an f-string, `lib.common_cli`, `runpy`) | usage text naming a command for a reader |
 | reads no config | **by name, without exception**, for every module behind backup, restore and `create-db-docker`/`move-db-docker` (`CONFIG_FREE_BY_NAME`): no config, store or data-folder read - directly or through a `lib` module that reads - and no import of the resolver tier. The transports (`ssh`, `remote_exec`) read nothing since 0.24.0, so they are held like any other module | the 9 resolver-tier modules left, of 18 frozen as `RESOLVER_TIER_AT_0_23_0` - every one a command whose job is the configuration (R09) |
 
 All of them live in `tests/test_import_boundaries.py` and `tests/test_common_layers.py`, and each
@@ -347,7 +347,7 @@ talking to. Each answers the question the only way it can be answered correctly 
 | PostgreSQL | the directory layout | `base/<stamp>_FULL` / `_INCR` is what the backup job wrote **on purpose** |
 
 Where the database runs is stated, not guessed — `host.runtime` is `windows`, `linux`, `docker` or
-`k8s`, and `db_ops/common/hostcmd.py` builds the command line for it (`docker exec … sh -lc`,
+`k8s`, and `dbabrain/common/hostcmd.py` builds the command line for it (`docker exec … sh -lc`,
 `kubectl exec -n … --`, `powershell -NoProfile`). A `container` field alone would leave "run on the
 host" and "the caller forgot" looking identical, which must not happen when the command being
 wrapped is a restore.
@@ -438,7 +438,7 @@ caller that set it believes it is getting the export.
 
 #### Windows SQL Server
 
-`db_ops/common/backup_scripts/sqlserver/mssql_backup_database.ps1` is the Windows half of the bash script: same
+`dbabrain/common/backup_scripts/sqlserver/mssql_backup_database.ps1` is the Windows half of the bash script: same
 levels, same `<DB>\FULL\<DB>_FULL_<stamp>.bak` layout, same encryption certificate export, same
 retention rule, same `RESULT=ok`. `tests/test_mssql_backup_scripts.py` pins the two to one
 contract, because the restore side reads a set without being told which script wrote it — the
@@ -619,6 +619,15 @@ computing a Linux target's parent turned `/b/one.bkp` into `` — a directory o
 Measured on 2026-08-07, pack on 203.0.113.188 → pull to the worker → push to 203.0.113.121:
 one sha256 (`7ed6a8d8…`) across all three.
 
+### A remote path is stated whole (0.29.0)
+
+`fetch-file`, `send-file` and both ends of `relay-file` refuse a remote path that is not absolute
+for its host - `/...` on Linux, a drive or a share on Windows - before a session is opened. A
+relative path is resolved by the SSH server against the login's home, so it always names *some*
+place and the copy succeeds: on 2026-10-09 Git Bash rewrote `/opt/...` into
+`C:/Program Files/Git/opt/...`, and `send-file` created that tree under the login's home and
+answered `COPIED`. The refusal says when a path carries that shell's mark.
+
 ### `relay-file` — one file, from one host straight to another
 
 `fetch-file` then `send-file` already moves a file between two hosts, and that is exactly why
@@ -630,7 +639,7 @@ operator to work out which of the two copies is the bad one.
 `relay-file` opens both sessions, hashes the source **before** the stream (a file still being
 written would otherwise hash one set of bytes and send another, and the network would get the
 blame), pipes `cat` into `cat >` in 256 KB chunks, hashes the destination, and only then renames
-the `.dbops_partial` onto the real name. A mismatch discards the copy — it does not retry, for
+the `.dbabrain_partial` onto the real name. A mismatch discards the copy — it does not retry, for
 the same reason `pack-backup` does not. The stream itself is `ssh_relay.py`, which takes two open
 sessions and nothing else, so `move-db-docker` streams through the same code with the sessions it
 already holds instead of launching this command.
@@ -704,7 +713,7 @@ run and what the answer means; this runs it - `via` `local`, `ssh` (a Linux host
 Windows host) - with every value in the request, on **stdin only** because it carries a SQL password
 and a host password. **It builds the command and `remote_exec` runs it** (0.25.0, R44): the same
 Linux PATH, `-C -b` and timeouts as the app's own command; over WinRM a script that prints sqlcmd's
-exit code last (`DB_OPS_SQLCMD_EXIT=`), because pypsrp reports only whether the error stream was
+exit code last (`DBABRAIN_SQLCMD_EXIT=`), because pypsrp reports only whether the error stream was
 written. No host password means the node's own Windows identity, as before.
 Every stdout line is echoed to stderr as it arrives, including the ones a quick batch leaves for
 the final drain; a run past `timeout_seconds` comes back `timed_out: true` with what was read,
@@ -724,7 +733,8 @@ and the SMB restore and the script restore's shell send the same one: the thumbp
 the `.cer` file, read by the instance itself (`OPENROWSET(BULK ...)`); a certificate already there is
 left alone (its private key added if it had none); a requested name that belongs to a different
 certificate becomes `<name>_<first 8 hex digits>`. **Nothing is ever dropped** - until 0.24.1 this
-dropped any certificate of the requested name, and `db_ops_backup_cert` is the default everywhere,
+dropped any certificate of the requested name, and one default name served every server
+(`db_ops_backup_cert` then, `dbabrain_backup_cert` since 0.29.0 - `lib.sqlserver_certificate`),
 so on a target dbabrain also backs up it replaced the target's own. The answer names the certificate
 that holds the thumbprint now; `imported` false means it was already there. `target` connects over
 a driver; `sqlcmd` (as `restore-full` takes it) runs it where the SQL Server is.
@@ -774,7 +784,7 @@ common cli metadata ...".) The app now resolves the two logins and calls, in ord
 
 All three new ones are **stdin only**: their requests carry SSH passwords. A login is `host`, `port`,
 `username` and a resolved `password` or an absolute `key_file` - never a ref. The work is
-`db_ops/common/backup_copy.py`, which was `backup_restore/transfer.py` until 0.23.0. The fields are
+`dbabrain/common/backup_copy.py`, which was `backup_restore/transfer.py` until 0.23.0. The fields are
 `input_`/`output_backup_chain`, `_copy_backup_dir` and `_prune_staged_backups`.
 
 ### A fallback in *how* is reported, and can be pinned (0.26.0, owner decision G4)
@@ -793,7 +803,7 @@ never a reason to try the other.
 | a command over WinRM: `pypsrp`, else a local PowerShell driving `Invoke-Command` | `run-cmd` -> `backend` (`pypsrp` / `powershell`), over WinRM only | the install: `pypsrp` is used whenever the `[winrm]` extra is there. The second cannot authenticate to a WORKGROUP host and says so (`_name_the_missing_backend`) |
 | `docker`, then `sudo docker` | **not reported yet** - the host's own shell decides, at the moment of use (`lib.shell.docker_cli`), and no answer reads it back | `"sudo": false` on the host block: plain `docker` only |
 
-The copy's words - `auto`, `tar`, `sftp` - are `db_ops/lib/restore/copy_mode.py`, shared by the
+The copy's words - `auto`, `tar`, `sftp` - are `dbabrain/lib/restore/copy_mode.py`, shared by the
 restore entry and the command. Until this, the per-file copy was a line on stderr: across two
 internet hops it is 10 KB/s (measured), and a drill that took eight hours answered like any other.
 
@@ -804,7 +814,7 @@ environment a script gets, the password and the argv of a local script; this run
 order, and answers for each - and `metrics` grades the answers (the JSON-rows contract, severity,
 overrides, the stored row). It was `metrics/executor.py` and the transports of
 `metrics/collector.py`, importing four `common` modules under a measured exemption (rules R03);
-now it is `db_ops/common/metric_batch.py`.
+now it is `dbabrain/common/metric_batch.py`.
 
 **One process per target, not per metric.** A pass runs ~390 executions (peak ~1,370); a process
 each would spend 43-138 s starting interpreters, longer than the interval between passes. So a
@@ -845,21 +855,21 @@ into this module's error type.
 | Module | Responsibility | Key public API |
 | --- | --- | --- |
 | `cli.py` and what it was split into (2026-10-03, Q11) | `cli.py` is the entry point: `main` (every failure answered in the envelope, with its kind), `_dispatch` (every command name, in one place - two guards read it there), and the commands that read or write configuration (the registrars, `secret-set`, `rotate-password`, `check-secret`, `check-identifiers`, `check-secret-literals`, `metric-severity`, `list-targets`, `inventory-summary`, `self-status`, and `lift-example` beside `secret-set`). What reads nothing but its request moved out: `cli_usage.py` (the help text), `cli_request.py` (the request reader), `cli_sql.py` (`run-sql`, `trace-session`, `db-status`), `cli_host.py` (`run-cmd`, the four file transfers, `probe-host`), and `cli_gate.py` (the gated operations, `authorize`, `ask`). Those five are named config-free in `tests/test_common_layers.py`; `cli.py` re-exports every name they hold. `main` names the command it answers (`cli_request.COMMAND`), and the reader holds every request to that command's reference entry before the command sees it - a wrong value or a missing required field is refused with `error_kind` `request`, the field named (rules R49, `lib/request_check.py`; on since 0.27.0 - measured only before). | `main`, `_dispatch`, `_read_json_request` |
-| `shell.py` | Resolve the PowerShell executable at runtime so the same code runs on Windows and inside the Linux container. Prefers cross-platform `pwsh`, then `powershell.exe`. | `powershell_executable()`, `is_powershell_executable(name)`; env override `DB_OPS_POWERSHELL` |
-| `secret_text.py` | Encrypt/decrypt the secret file at rest. PBKDF2-HMAC-SHA256 → 32-byte key, sealed with Fernet (AES-128-CBC + HMAC), random per-file salt. The passphrase is supplied at runtime; never stored. | `encrypt_secret_text`, `decrypt_secret_text`, `resolve_key`, `resolve_cli_key`, `decode_key_base64`, `set_key_env`; env `DB_OPS_SECRET_KEY` |
+| `shell.py` | Resolve the PowerShell executable at runtime so the same code runs on Windows and inside the Linux container. Prefers cross-platform `pwsh`, then `powershell.exe`. | `powershell_executable()`, `is_powershell_executable(name)`; env override `DBABRAIN_POWERSHELL` |
+| `secret_text.py` | Encrypt/decrypt the secret file at rest. PBKDF2-HMAC-SHA256 → 32-byte key, sealed with Fernet (AES-128-CBC + HMAC), random per-file salt. The passphrase is supplied at runtime; never stored. | `encrypt_secret_text`, `decrypt_secret_text`, `resolve_key`, `resolve_cli_key`, `decode_key_base64`, `set_key_env`; env `DBABRAIN_SECRET_KEY` |
 | `sql_execution.py` | SQL Server connection helpers: driver selection (ODBC 18/17/…), TLS-error fallback, the pymssql cursor adapter, output converters for types pyodbc cannot decode (`datetimeoffset`), batch splitting, JSON-safe row coercion, and credential/secret loading. It executes nothing since 0.25.0: its batch reader, `execute_cursor_batches`, was the metrics' second reader beside `sql_run.execute_capture` and is gone (rules R11). | `connect_sqlserver`, `build_sqlserver_conn_str`, `choose_sqlserver_driver`, `sqlserver_driver_candidates`, `register_output_converters`, `decode_timestampoffset`, `split_sql_batches`, `make_json_safe`, `resolve_password`, `load_credentials_file`, `load_secret_text`; `MAX_RESULT_ROWS`, `SQL_SS_TIMESTAMPOFFSET` |
 | `sql_run.py` | **Single source of truth** for *running SQL against one database target*, on **any** engine (sqlserver / postgresql / mysql / oracle): take the login the request states (`connection`, required since 0.24.0 - nothing is looked up), connect (via `db_connect`; **SQL Server always lands in `master`** unless the request names a database — scripts `USE` themselves), run the batches, capture the first result set with a row cap, and roll back unless `commit` is asked for. **Input is a JSON object** — the same shape a config file, a Telegram command, or the CLI passes through untranslated. See [the section below](#running-sql-on-one-database-sql_run). | `run_sql`, `SqlRunRequest.from_json`, `json_safe_result`, `resolve_sqlserver_target`, `connect_target`, `execute_capture_first`, `query_rows` / `query_value` (the one way a module holding a connection reads rows, rules R11); `SqlRunError`; `DEFAULT_MAX_ROWS`, `DEFAULT_TIMEOUT_SECONDS`, `QUERY_ROWS_CEILING` |
 | `data_sources.py` | **Single entry point** for loading connection inputs from `data/` (`users.json` = `database_credentials` + `remote_credentials` + `monitor_users`, plus `db_instances.json` and the encrypted secret file), **and for choosing which credential a target runs as** — required, never inferred (see [Credentials](#which-login-a-target-runs-as-credentials)). Apps import loaders here instead of reaching to the repo root. | `load_secret_text`, `load_credentials(db_type)`, `load_all_credentials`, `load_remote_credentials`, `load_db_instances`, `group_credentials_by_type`, `find_database_credential`; `CredentialNotFound`; path helpers `users_path` / `db_instances_path` / `secret_text_path` |
-| `db_connect.py` | **Single source of truth** for *opening a connection to one database*, on every engine db_ops supports (sqlserver / postgresql / mysql / oracle) — what `remote_exec` is for reaching a VM. Owns driver import (lazy, per engine), default port and database per engine, and the in-server statement timeout each engine spells differently (`statement_timeout` / `call_timeout` / `read_timeout` / `command_timeout`). This code used to live inside the metrics app, so `sql_run` could not reuse it and supported SQL Server only — which is why `/spbot_sql_to_xlsx` refused a PostgreSQL target. Running the SQL is separate and already shared (`sql_run.execute_capture`). | `connect_engine`, `normalize_db_type`, `default_database`, `parameter_style`; `DbConnectError`; `SUPPORTED_DB_TYPES` |
+| `db_connect.py` | **Single source of truth** for *opening a connection to one database*, on every engine dbabrain supports (sqlserver / postgresql / mysql / oracle) — what `remote_exec` is for reaching a VM. Owns driver import (lazy, per engine), default port and database per engine, and the in-server statement timeout each engine spells differently (`statement_timeout` / `call_timeout` / `read_timeout` / `command_timeout`). This code used to live inside the metrics app, so `sql_run` could not reuse it and supported SQL Server only — which is why `/spbot_sql_to_xlsx` refused a PostgreSQL target. Running the SQL is separate and already shared (`sql_run.execute_capture`). | `connect_engine`, `normalize_db_type`, `default_database`, `parameter_style`; `DbConnectError`; `SUPPORTED_DB_TYPES` |
 | `ssh.py` | **Single source of truth** for the SSH *connection*: opening a paramiko client (key or password, no silent agent/interactive fallback unless asked). Connect failures are classified where the paramiko exception type is still available, so callers never pattern-match a message to tell "wrong password" from "host unreachable". Auth **resolution** left on 2026-08-15 — `resolve_ssh_key` (a bare name resolves inside **`data/ssh_keys/`**) and `resolve_ssh_password` (value > env var > encrypted-secret ref) are `data_sources.ssh_auth`, and the four exception names are `lib.ssh_errors`, because four app modules were importing this transport for a key path or one word. All of it is re-exported here. | `open_ssh_client`; re-exported: `resolve_ssh_password`, `resolve_ssh_key`, `ssh_keys_dir`, `SSH_KEYS_DIRNAME`, `SshError` + `SshAuthError` / `SshConnectError` / `SshTimeoutError` |
 | `remote_exec.py` | **The one executor** (rules R44, 0.25.0): *everything run on a host* - a command, a script, a stream piped between two hosts, a file over SFTP - over `ssh` (paramiko), `winrm` (pypsrp, or a local `Invoke-Command` wrapper) or `local` (subprocess). A script is placed as a file and run with stdin closed; output can be handed on line by line. **Input is a JSON object** — the same `cmd_access` shape stored in `db_instances.json`, optionally plus a `remote_credentials` entry — so config travels into the API untranslated; output is a `RemoteResult` that is JSON-shaped too. Also owns the `Invoke-Command` *builder* for callers that compose a remote script and run it through their own runner. See [the section below](#reaching-a-vm-remote_exec). | `open_session`, `run_command`, `run_script`, `SshSession.open_stream` / `.sftp`, `RemoteAccess.from_json`, `RemoteResult`, `shell_prelude`, `script_file_command`, `windows_path`, `build_invoke_command_script` / `build_invoke_command_argv`, `resolve_secret_value`; `RemoteExecError` and its subclasses `RemoteAuthError` / `RemoteConnectError` / `RemoteTimeoutError` (and its `RemoteCommandTimeoutError`) |
-| `time_window.py` | **Single source of truth** for the scheduling convention shared by the daemon, sql_tasks, metrics, and reports: allowed time windows, `repeat_interval`, retry/recover, and the `RUN_ONCE` (0) / `MANUAL_ONLY` (-1) semantics. Bounds are hours in the configured `timezone` — callers pass `db_ops.lib.timezone.display_now()`, never the host clock — run-once still runs the first time, manual never runs unless forced. `from_* > to_*` is a **wrapping range** on every dimension (month/day/hour/minute): `from_hour=22, to_hour=6` = 22:00 through 06:00 the next morning; `from_day=25, to_day=5` = 25th through the 5th of the next month. No app may parse, evaluate, or explain a time window with its own comparisons — always these functions. | `parse_time_window_config`, `is_time_window_open`, `time_window_closed_reason` (human-readable skip reason), `repeat_due`, `job_due`; constants `RUN_ONCE = 0`, `MANUAL_ONLY = -1`, `ERROR_STATUSES` |
+| `time_window.py` | **Single source of truth** for the scheduling convention shared by the daemon, sql_tasks, metrics, and reports: allowed time windows, `repeat_interval`, retry/recover, and the `RUN_ONCE` (0) / `MANUAL_ONLY` (-1) semantics. Bounds are hours in the configured `timezone` — callers pass `dbabrain.lib.timezone.display_now()`, never the host clock — run-once still runs the first time, manual never runs unless forced. `from_* > to_*` is a **wrapping range** on every dimension (month/day/hour/minute): `from_hour=22, to_hour=6` = 22:00 through 06:00 the next morning; `from_day=25, to_day=5` = 25th through the 5th of the next month. No app may parse, evaluate, or explain a time window with its own comparisons — always these functions. | `parse_time_window_config`, `is_time_window_open`, `time_window_closed_reason` (human-readable skip reason), `repeat_due`, `job_due`; constants `RUN_ONCE = 0`, `MANUAL_ONLY = -1`, `ERROR_STATUSES` |
 | `listing.py` | **Single source of truth** for what a `/spbot_list_*` reply shows: the entries an operator can act on. A disabled entry is dropped (it cannot be run, and offering it invites someone to type an id that will be refused), and the listing then says **how many** it dropped — hiding without accounting is indistinguishable from losing. Five commands implement this rule (backups, restores, server targets, sql_tasks, metrics); before this module they spelled "off" four different ways and two of them showed disabled entries as if they were runnable. | `active_only(items, key=...) -> (kept, hidden)`, `hidden_note(hidden, noun=...)`, `is_active(item)` |
 | `policy_engine.py` | Report/severity policy: normalize a metric row's status, apply per-metric and per-instance severity overrides, and render policy events. Drives how reports and alerts classify a row. | `apply_report_policy`, `render_policy_event`, `normalize_status`, `row_status`; `STATUS_ORDER` (SUPPRESS<OK/LOGGING<NO_DATA<WARNING/ERROR<CRITICAL) |
 | `event_policy.py` | Normalize error messages into stable **error types** and **signatures**, and derive a report `event_code` from `(collector_type, category, error_type, metric_code)` for dedup/notification. | `normalize_error_type`, `normalize_error_signature`, `report_event_code`; pattern sets `CONNECT_FAILED_PATTERNS`, `AUTH_FAILED_PATTERNS`, `PERMISSION_DENIED_PATTERNS` |
 | `target_flags.py` | Read per-target feature toggles uniformly (dict or object), with sensible defaults, so every app agrees on whether a target has metrics/reports/alerts enabled. | `is_target_enabled`, `is_metrics_enabled`, `is_reports_enabled`, `is_alerts_enabled` |
 | `json_io.py` | **The one JSON reader.** `load_json_file` (BOM-tolerant `utf-8-sig`, root must be an object) and `looks_like_json_request` (does this CLI argument carry a JSON request?). Three byte-identical copies of the loader existed across `sql_execution`, `jobs/daemon` and `metrics/definitions` until 2026-08-06; `sql_execution` re-exports it so existing imports still work. | `load_json_file`, `looks_like_json_request` |
-| `telegram_severity.py` | The severity-emoji vocabulary and the tagging applied once at the Telegram send layer. Lives here, not in the Telegram app, because `telegram_queue` validates every queued `message_type` against it and `common/cli` echoes the resolved type — the shared layer may not import an app. `db_ops/telegram/severity.py` remains a re-export shim. | `decorate_message`, `classify_message`, `normalize_message_type`; `MESSAGE_TYPES`, `SEVERITY_EMOJI`, `STATUS_EMOJI_CHARS`, `PLAIN` |
+| `telegram_severity.py` | The severity-emoji vocabulary and the tagging applied once at the Telegram send layer. Lives here, not in the Telegram app, because `telegram_queue` validates every queued `message_type` against it and `common/cli` echoes the resolved type — the shared layer may not import an app. `dbabrain/telegram/severity.py` remains a re-export shim. | `decorate_message`, `classify_message`, `normalize_message_type`; `MESSAGE_TYPES`, `SEVERITY_EMOJI`, `STATUS_EMOJI_CHARS`, `PLAIN` |
 | `telegram_queue.py` | **Single source of truth** for putting one outgoing message into `telegram_send_messages`. Validates the `message_type` against the severity vocabulary and derives it from level/phase/status when a caller does not state one, so every producer queues the same row shape. | `queue_telegram_message`, `message_type_for` |
 | `backup_policy.py` | Reads `data/backup_policy.json`: per-server backup expectations (which backup types, how often, how stale is too stale) that the backup metrics and the restore-drill status both judge against. | policy loading and per-server lookup |
 | `capacity_forecast.py` | Growth//headroom projection from stored metric history — when a disk or a database is expected to run out, rather than only whether it is full now. | forecast helpers |
@@ -869,19 +879,19 @@ into this module's error type.
 | `state_transition.py` | Detecting that a status *changed* (OK -> CRITICAL and back), so alerting can fire on transitions rather than on every repeated observation. | transition detection |
 | `report_archive.py` | Retention/archival of generated reports under `runtime/reports`, so the folder does not grow without bound. | archive/prune helpers |
 | `metric_targets_config.py` | Resolve/enumerate config-defined metric targets from the data folder, honoring the `target_flags` toggles; used by the metrics and reports apps. | `resolve_config_metric_target`, `load_config_metric_targets` |
-| `metric_store.py` | The metric store (`metric_runs` / `metric_results` / archive), on SQLite or PostgreSQL via `db/backend.py`. **Moved here from `metrics/storage.py`** because three other apps read it — `jobs.status`, `reports.inventory_health`, `reports.server_report` — which made it the codebase's only standing exception to "apps depend on `common`, never on each other". Shared API living inside an app is what forces such an exception, so the store moved and the exception went away. `db_ops/metrics/storage.py` remains as a re-export shim. The row shape it persists moved with it, to `common/metric_results.py` (in `db_ops/db/` until that package was folded in on 2026-08-15), since `common` may not import an app. | `MetricStore`, `cutoff_text`, `ensure_sqlite_column`; `METRIC_SCHEMA_VERSION`, `SCHEMA_SQL` |
+| `metric_store.py` | The metric store (`metric_runs` / `metric_results` / archive), on SQLite or PostgreSQL via `db/backend.py`. **Moved here from `metrics/storage.py`** because three other apps read it — `jobs.status`, `reports.inventory_health`, `reports.server_report` — which made it the codebase's only standing exception to "apps depend on `common`, never on each other". Shared API living inside an app is what forces such an exception, so the store moved and the exception went away. `dbabrain/metrics/storage.py` remains as a re-export shim. The row shape it persists moved with it, to `common/metric_results.py` (in `dbabrain/db/` until that package was folded in on 2026-08-15), since `common` may not import an app. | `MetricStore`, `cutoff_text`, `ensure_sqlite_column`; `METRIC_SCHEMA_VERSION`, `SCHEMA_SQL` |
 | `sla_store.py` | The SLA store (`sla_runs` / `sla_results`). **Moved here from `sla/storage.py`** on 2026-08-11 for the reason above, plus a concrete one: `db/cli.py` composes the runtime store's schema from the four classes that own its tables, so two of them living in apps forced the `db` layer to import *up*. Its persisted shapes moved to `common/sla_results.py`; `SlaPolicy` stayed in the app, because a policy is config the app parses, not a row this writes. | `SlaStore`; `SLA_SCHEMA_VERSION`, `SCHEMA_SQL` |
 
 ### The four shape modules — a tier of their own inside `common`
 
 `job_runs.py`, `metric_results.py`, `metric_definitions.py` and `sla_results.py` are the row
 shapes and predicates that a store and its writer both have to agree on. They were the package
-`db_ops/db/` until **2026-08-15**, folded in because a whole package for 238 lines of
+`dbabrain/db/` until **2026-08-15**, folded in because a whole package for 238 lines of
 frozen dataclasses was one layer more than the tree needed.
 
 **What did not change in the fold, and must not:** each of these four imports **nothing but
-stdlib** — no `db_ops` module at all. That is why `db/store.py` can name `JobRun` without dragging
-the shared library in behind it (`import db_ops.db.store` still reaches 7 modules, none of them
+stdlib** — no `dbabrain` module at all. That is why `db/store.py` can name `JobRun` without dragging
+the shared library in behind it (`import dbabrain.db.store` still reaches 7 modules, none of them
 library code). `common` imports `db` in three places; if a shape ever imported a helper, the store
 would start depending on that helper and the two lowest layers would become mutually entangled
 for real. A shared data shape goes in `common` as a dependency-free module of its own — never
@@ -896,9 +906,9 @@ with an import in it.
 | `backup_restore_history.py` | The backup/restore history store (`backup_restore_history`). **Moved here from `backup_restore/history.py`** on 2026-08-11, same move and same reason. | `BackupRestoreHistory`; `HISTORY_SCHEMA_VERSION` |
 | `inventory_render.py` | Merging a health overlay into the canonical inventory and rendering the dated summary — shared by the master-side `control` app and the worker-side `reports` app, which each held a copy (265 identical lines) until 2.33.00. The copies had already drifted; the reports version was a strict superset (reads the newer `backup_evidence` block, takes disks from `merged_drives`, surfaces curated `findings`) and is the one kept, so the master-side output gained those sections rather than losing any. What stays app-side is what genuinely differs: `control` SSHes to the worker and SFTPs the overlay back, `reports` runs store-local. | `build_inventory_summary`, `merged_drives`, `merged_sql_resources`; `DEFAULT_INVENTORY`, `HEALTH_BLOCKS`, `DBTYPE_LABEL`, `DISK_WARN_PCT`, `DISK_CRIT_PCT` |
 | `secret_check.py` | **Single source of truth** for *proving a secret still logs in somewhere* — the read-only sibling of `password_rotation`, sharing its target resolution so an audit and a rotation can never disagree about where a secret lives. Resolves a ref by walking **every** config that can name it (`db_instances` database login or `cmd_access`, `docker_db_connections` — which carries the published non-default port — `restore_config`, `users.json` `remote_credentials`) and never reads a host from the ref's own name (0.26.0). When `cmd_access` does not state a method the protocol is **probed** (SSH 22, then WinRM 5985/5986) rather than assumed. Distinguishes the four things that all used to read "unreachable": `UNREACHABLE` (nothing answers), `NO_MANAGEMENT_PORT` (host is up on RDP but has no scriptable way in), `AUTH_FAILED` (the credential is wrong), `NOT_A_LOGIN` (key material or a service token). **Input is a JSON object**; `{}` checks the whole store. | `check`, `check_ref`, `resolve_check_target`, `oracle_service_for_host`; `SecretCheckError`; `NOT_A_LOGIN`, `HTTP_LOGINS`, `SSH_PORT`, `WINRM_PORTS` |
-| `password_rotation.py` | **Single source of truth** for *changing a database login's password* — on the server **and** in the secret store, as one operation. A rotation done as two steps drifts: an `ALTER LOGIN` nobody records leaves db_ops authenticating with a dead password; a store edit nobody applies leaves a password the server never accepted. Fixed order per target: connect with the current password (a target whose current password already fails is **skipped**, never guessed at), issue the engine's change statement, **re-authenticate on a new connection** (the session that issued the change stays valid, so checking on it proves nothing), then store. A failed verify is rolled back inline with the value the process still holds. Every target gets its **own** generated password. **Input is a JSON object**, like `sql_run` and `remote_exec`. See [the section below](#rotating-a-login-password-password_rotation). | `rotate`, `rotate_ref`, `persist_rotated`, `strip_secrets`, `generate_password`, `build_change_statement`, `select_refs`, `resolve_ref_target`, `target_from_ref_name`; `PasswordRotationError`; `SUPPORTED_ENGINES`, `DEFAULT_PASSWORD_LENGTH = 28`, `MIN_PASSWORD_LENGTH = 12` |
+| `password_rotation.py` | **Single source of truth** for *changing a database login's password* — on the server **and** in the secret store, as one operation. A rotation done as two steps drifts: an `ALTER LOGIN` nobody records leaves dbabrain authenticating with a dead password; a store edit nobody applies leaves a password the server never accepted. Fixed order per target: connect with the current password (a target whose current password already fails is **skipped**, never guessed at), issue the engine's change statement, **re-authenticate on a new connection** (the session that issued the change stays valid, so checking on it proves nothing), then store. A failed verify is rolled back inline with the value the process still holds. Every target gets its **own** generated password. **Input is a JSON object**, like `sql_run` and `remote_exec`. See [the section below](#rotating-a-login-password-password_rotation). | `rotate`, `rotate_ref`, `persist_rotated`, `strip_secrets`, `generate_password`, `build_change_statement`, `select_refs`, `resolve_ref_target`, `target_from_ref_name`; `PasswordRotationError`; `SUPPORTED_ENGINES`, `DEFAULT_PASSWORD_LENGTH = 28`, `MIN_PASSWORD_LENGTH = 12` |
 | `evidence.py` | The **gate model** every runbook-style operation reports through, and its JSON evidence file. One named check, a verdict (`OK` / `WARN` / `FAIL`), a sentence an operator can act on, and two independent flags: `blocking` (a failure stops the run) and `override` (a blocking failure an operator may accept deliberately). Gates are echoed as they run — a 30-minute restart that speaks only at the end is indistinguishable from a hung one — and written to `runtime/evidence/<operation>/<run_id>.json`, one file per run, never overwriting an older one. | `GateReport` (`add`, `note`, `say`, `blockers`, `passed`, `status`, `to_dict`, `write`), `Gate`, `new_run_id`; `OK`, `WARN`, `FAIL`, `SKIP`, `DEFAULT_EVIDENCE_ROOT` |
-| `confirm.py` | **The one place db_ops asks a human before doing something it cannot undo.** Every dangerous operation — restart, service stop, cumulative update, and whatever is added next — calls `require_confirmation`, so the control behaves identically everywhere. Two locks that answer different questions: `"confirm": true` is *intent* (this payload means to change a machine), typing `yes` at the prompt is *presence* (a human is reading **this** target now). The prompt names the target and the consequence — "are you sure?" with no content trains people to answer without reading. With no terminal the run is refused unless the request declares `"assume_yes": true`. See [the section below](#asking-before-something-irreversible-confirm). | `require_confirmation`, `banner`, `is_interactive`, `open_terminal`, `read_answer`; `CONFIRM_WORD = "yes"`, `ANSWER_DEADLINE_SECONDS = 120` |
+| `confirm.py` | **The one place dbabrain asks a human before doing something it cannot undo.** Every dangerous operation — restart, service stop, cumulative update, and whatever is added next — calls `require_confirmation`, so the control behaves identically everywhere. Two locks that answer different questions: `"confirm": true` is *intent* (this payload means to change a machine), typing `yes` at the prompt is *presence* (a human is reading **this** target now). The prompt names the target and the consequence — "are you sure?" with no content trains people to answer without reading. With no terminal the run is refused unless the request declares `"assume_yes": true`. See [the section below](#asking-before-something-irreversible-confirm). | `require_confirmation`, `banner`, `is_interactive`, `open_terminal`, `read_answer`; `CONFIRM_WORD = "yes"`, `ANSWER_DEADLINE_SECONDS = 120` |
 | `sqlserver_instance.py` | **Single source of truth** for *what a SQL Server backup leaves behind*. Oracle and PostgreSQL are backed up physically — RMAN `DUPLICATE` rebuilds from the datafiles and users live inside the database; `pg_basebackup` copies the cluster and roles live in `pg_authid` — so a restore answers as the source did. SQL Server is backed up per user database (`WHERE database_id > 4`), so `master`/`msdb`/`model` and everything in them are absent after a restore: logins, server roles and permissions, credentials, linked servers, endpoints, `sp_configure`, Database Mail and the whole of SQL Agent. This exports them as deterministic, guarded SQL and replays them onto a newly installed instance, including a newer major version. **Input is a JSON object.** See [the section below](#sql-server-instance-metadata-sqlserver_instance). | `export_instance`, `replay_instance`, `verify_instance`; `load_policy` (a translation over `data_sources.load_sqlserver_instance_policy`), `read_bundle`, `resolve_secrets`, `major_version`; `SqlServerInstanceError`. The bundle's *shape* — `PRE_DATABASE`, `POST_DATABASE`, `SERVER_DIR`, `MANIFEST_NAME`, `artifacts_in_order` — is `lib.instance_bundle` since 2026-08-15: `backup_restore` reads all five while validating config, before there is anything to connect to |
 | `host_ops.py` | **Single source of truth** for *operating on a host* — read its state, control its services, restart it and prove it came back — on **Windows and Linux alike**. `remote_exec` reaches a machine; this is what maintenance actually asks for on top. `cmd_access` resolution used to live here too and is `lib.cmd_access` since 2026-08-15 — pure functions over a config block that `metrics` reads while loading its target list; the names are re-exported here because operating on a host is where callers look for them. **Input is a JSON object**; output is a `GateReport` dict. See [the section below](#operating-on-a-host-host_ops). | `host_facts`, `service_control`, `restart_host` (the JSON entry points); `resolve_host`, `open_host_session`, `read_facts`, `service_states`, `wait_for_services`, `wait_for_port`, `is_service_up`, `check_maintenance_window`, `load_maintenance_policy`, `parse_json_output`; re-exported from `lib.cmd_access`: `resolve_cmd_access`, `resolve_cmd_credential`, `resolve_platform`, `SUPPORTED_CMD_ACCESS_METHODS`, `SUPPORTED_PLATFORMS`; `HostTarget`, `HostOpsError`; `DEFAULT_POLICY` |
 | `db_catalog.py` | **Single source of truth** for *what is in a server*: its databases and their state, and the schemas inside one database. Both were being answered ad hoc — four spellings of `SELECT name FROM sys.databases` across four engines — and the Telegram spreadsheet upload needs all of them just to prompt. Each engine answers in **its own vocabulary** rather than a flattened common one: SQL Server's `state_desc` and recovery model, PostgreSQL's owner/encoding/`datallowconn`, Oracle's **containers** (a CDB reports root + seed + every PDB with its `open_mode`; `kind` says which is which). Oracle has two shapes and the caller must not care: `v$containers` is 12c+, so a non-CDB falls back to `v$database` — and that query is itself tried richest-first, because `database_role` is 9i+ and an 8.1.7 host answers ORA-00904 for it. Oracle's upper-cased column names are folded so `row["name"]` reads the same on every engine. System objects are hidden unless asked for. **Input is a JSON object**; resolution and connection are `sql_run`'s, not this module's. **`databases(cursor, engine)`** is the same listing for a module of `common` that already holds a connection (0.25.0, rules R11): the instance export, the patch gate, the restore check and the PostgreSQL metric fan-out each had their own `sys.databases` / `pg_database` query, and filter these rows now (`is_system`, `state`, `has_access` - SQL Server's `HAS_DBACCESS` - `allow_connections`). SQL Server, PostgreSQL, MySQL; not Oracle, whose containers need `list_databases`' fallbacks. | `list_databases`, `list_schemas`, `databases`; `DbCatalogError` |
@@ -911,8 +921,8 @@ with an import in it.
 | `backup_copy.py` | A restore's **staging copy** between two hosts (0.23.0, from `backup_restore.transfer`): which parts of a backup directory the restore needs (`chain_include` - PostgreSQL by name, Oracle by asking RMAN, everything for SQL Server and for a point in time), the copy as one `tar` stream that skips what is there and removes what the source dropped (`sync_backup_dir`), the room the files to copy must find first (`check_room`, the entry's `space_check`), the engine's read access (`open_for_the_engine`), and the staging cleanup past retention (`prune_target_dir`). SSH clients arrive open, from values the caller resolved; the CLI face is `cli_backup_copy` (`backup-chain`, `copy-backup-dir`, `prune-staged-backups`). | `chain_include`, `sync_backup_dir`, `check_room`, `open_for_the_engine`, `prune_target_dir`; `TransferResult`, `CopySpaceError` |
 | `file_transfer.py` | **Single source of truth** for *moving one named file* between this host and a remote one, and for *packing a set into one archive* so it can be moved as one. The apps that move files do it inside a larger job — `backup_copy` (`copy-backup-dir`) syncs a whole backup directory between two remote hosts, `backup_restore.copy_backup` pulls a window of backups off an SMB share — and neither answers "put **this** file **there**", so that kept being typed by hand as `ssh`/`scp`/`docker cp`. Every transfer is size-verified and a short copy deletes what it wrote; overwriting must be asked for and lands atomically; a same-size destination is skipped; mtime is preserved (the restore log-chain filter reads it). `pack_files` builds the archive **on the host that already holds the files** and returns its `sha256` — size catches a truncated copy, not a corrupted one. **Not** for staging a backup set: per-file SFTP across two internet hops measured 10 KB/s, which is why `backup_copy` streams a directory as one `tar`. **Input is a JSON object.** | `fetch_file`, `send_file`, `pack_files`; `FileTransferError`; `STATUS_COPIED` / `STATUS_REPLACED` / `STATUS_SKIPPED_EXISTS`, `PARTIAL_SUFFIX` |
 | `sqlserver_patch.py` | The SQL-Server-specific half of a cumulative update: the "is this instance safe to patch" gate set, the unattended `setup.exe /Action=Patch` contract with its exit-code rules (**3010 = applied, restart required — never re-run**), and the build verification that reads `SERVERPROPERTY` first and registry **`PatchLevel`** (not `Version`) as corroboration. Everything platform-generic underneath is `host_ops`. See [the section below](#patching-a-sql-server-instance-sqlserver_patch). | `precheck`, `apply_cu`, `verify_build` (the JSON entry points); `patch_arguments`, `patch_exit_verdict`, `sqlserver_service_names`, `sqlserver_registry_key`, `setup_log_root`, `version_tuple`; `SqlServerPatchError`; `EXIT_SUCCESS_RESTART_REQUIRED = 3010` |
-| `ops_status.py` | **Is db_ops itself running** — the one question no other app here asks. Everything in db_ops watches databases; nothing watched db_ops, and on 2026-08-12 a NameError in the SQL task scanner made every scheduled scan exit 1 once a minute for a day while the daemon stayed up, the container stayed up and the metric reports kept arriving. Not one scheduled SQL task ran, and a person found it by noticing an absence. Reads `job_runs` and `app_commands.json` and answers two things the estate's own monitoring cannot: **overdue** (an app that stopped being *scheduled* writes no failure row at all, so "no errors" is not health) and **failed since the last alert went out** (the alert's own queue row is the watermark, so an app broken since Tuesday does not message the group every minute for three days — the standing failures ride the periodic summary instead, the same split `sla_policies.json` makes with `reminder_after_seconds`). That question is asked **over an interval, never sampled at an instant**: the first version compared the two newest `job_runs` rows at the moment it happened to run and in seven weeks never sent one alert, because APP-CONTROL runs once a minute while APP-TELEGRAM runs every four seconds — a failure that came and went between two checks was invisible (2026-08-14). Both ends of a **restart** are excused, the daemon's shutdown rows and the stale-`running` rows it closes on startup, or every deploy would raise an incident. The summary's working-hours window is **local** and constrains only the summary; the failure alert ignores the clock, because an app that breaks at 03:00 is news at 03:00. Its state is the queue row it already writes (`source_type=ops_status`), so there is no state table to drift. CLI face: `db.cli ops-status` (the module is `db/ops_status.py` now), scheduled as `APP-CONTROL`. It answers `success: true` when the check **ran**, whatever it found - `false` for a failing app would make *db_ops found a problem* and *db_ops could not look* the same answer; what it found is in `data`. `mode: report` sends nothing; there is no `dry_run`, and the default `auto` sends. | `build_ops_status`, `format_summary`, `format_failure_alert`, `summary_is_due`, `last_summary_sent_at`, `last_failure_alert_at`, `load_app_commands`; `FAILED_STATUSES`, `NON_FAULT_MARKERS`, `SOURCE_TYPE`, `SUMMARY_NOTE`, `FAILURE_NOTE` |
-| `oracle_bridge.py` | **Single source of truth** for *reaching a legacy Oracle (8i / 8.1.7)*, which no driver db_ops can install speaks to — `oracledb` thin needs 12.1+, an 11.2 client refuses 8.1.7. The one combination that works (Oracle Client 10.2 + `cx_Oracle` 5.1.2 + Python 2.7 32-bit) lives apart as a self-contained tool — installed beside the project rather than shipped inside the package — that takes one JSON request on stdin; this module is everything that decides *what the tool is asked to do*. Two transports, per target via `sql_access.method`: **`subprocess`** runs the tool here (nothing to keep running, request never leaves the host — the request goes on **stdin**, never in argv, because an argument is readable in the process table) and **`api`** POSTs to the HTTP bridge that runs it on another host, sending `connect + mode + minute + nonce` as a short-lived (~90s) HMAC-signed token instead of the password. **The connect string is assembled per run** from the target's `users.json` credential + the encrypted store — never stored (`connect_ref` still overrides; the two that existed were deleted for duplicating a password). `schema_prelude` issues `ALTER SESSION SET CURRENT_SCHEMA` so an application's unqualified script runs under a DBA login instead of ORA-00942. | `run_query`, `run_bridge_query`, `normalize_sql_access`, `is_legacy`, `build_connect_string`, `resolve_connect`, `resolve_secret`, `connect_mode`, `schema_prelude`, `prepare_sql`, `subprocess_argv`, `encrypt_token`; `LegacyOracleError`; `SUPPORTED_SQL_ACCESS_METHODS`, `DEFAULT_TTL_SECONDS = 90`, `DEFAULT_TOOL_DIR` |
+| `ops_status.py` | **Is dbabrain itself running** — the one question no other app here asks. Everything in dbabrain watches databases; nothing watched dbabrain, and on 2026-08-12 a NameError in the SQL task scanner made every scheduled scan exit 1 once a minute for a day while the daemon stayed up, the container stayed up and the metric reports kept arriving. Not one scheduled SQL task ran, and a person found it by noticing an absence. Reads `job_runs` and `app_commands.json` and answers two things the estate's own monitoring cannot: **overdue** (an app that stopped being *scheduled* writes no failure row at all, so "no errors" is not health) and **failed since the last alert went out** (the alert's own queue row is the watermark, so an app broken since Tuesday does not message the group every minute for three days — the standing failures ride the periodic summary instead, the same split `sla_policies.json` makes with `reminder_after_seconds`). That question is asked **over an interval, never sampled at an instant**: the first version compared the two newest `job_runs` rows at the moment it happened to run and in seven weeks never sent one alert, because APP-CONTROL runs once a minute while APP-TELEGRAM runs every four seconds — a failure that came and went between two checks was invisible (2026-08-14). Both ends of a **restart** are excused, the daemon's shutdown rows and the stale-`running` rows it closes on startup, or every deploy would raise an incident. The summary's working-hours window is **local** and constrains only the summary; the failure alert ignores the clock, because an app that breaks at 03:00 is news at 03:00. Its state is the queue row it already writes (`source_type=ops_status`), so there is no state table to drift. CLI face: `db.cli ops-status` (the module is `db/ops_status.py` now), scheduled as `APP-CONTROL`. It answers `success: true` when the check **ran**, whatever it found - `false` for a failing app would make *dbabrain found a problem* and *dbabrain could not look* the same answer; what it found is in `data`. `mode: report` sends nothing; there is no `dry_run`, and the default `auto` sends. | `build_ops_status`, `format_summary`, `format_failure_alert`, `summary_is_due`, `last_summary_sent_at`, `last_failure_alert_at`, `load_app_commands`; `FAILED_STATUSES`, `NON_FAULT_MARKERS`, `SOURCE_TYPE`, `SUMMARY_NOTE`, `FAILURE_NOTE` |
+| `oracle_bridge.py` | **Single source of truth** for *reaching a legacy Oracle (8i / 8.1.7)*, which no driver dbabrain can install speaks to — `oracledb` thin needs 12.1+, an 11.2 client refuses 8.1.7. The one combination that works (Oracle Client 10.2 + `cx_Oracle` 5.1.2 + Python 2.7 32-bit) lives apart as a self-contained tool — installed beside the project rather than shipped inside the package — that takes one JSON request on stdin; this module is everything that decides *what the tool is asked to do*. Two transports, per target via `sql_access.method`: **`subprocess`** runs the tool here (nothing to keep running, request never leaves the host — the request goes on **stdin**, never in argv, because an argument is readable in the process table) and **`api`** POSTs to the HTTP bridge that runs it on another host, sending `connect + mode + minute + nonce` as a short-lived (~90s) HMAC-signed token instead of the password. **The connect string is assembled per run** from the target's `users.json` credential + the encrypted store — never stored (`connect_ref` still overrides; the two that existed were deleted for duplicating a password). `schema_prelude` issues `ALTER SESSION SET CURRENT_SCHEMA` so an application's unqualified script runs under a DBA login instead of ORA-00942. | `run_query`, `run_bridge_query`, `normalize_sql_access`, `is_legacy`, `build_connect_string`, `resolve_connect`, `resolve_secret`, `connect_mode`, `schema_prelude`, `prepare_sql`, `subprocess_argv`, `encrypt_token`; `LegacyOracleError`; `SUPPORTED_SQL_ACCESS_METHODS`, `DEFAULT_TTL_SECONDS = 90`, `DEFAULT_TOOL_DIR` |
 
 `event_policy`, the `PolicyEvent` output of `policy_engine`, and the metric-target
 loaders together form the report/alert classification path; see
@@ -975,7 +985,7 @@ password fields; the access object wins on any key both define.
 ### Using it
 
 ```python
-from db_ops.common import remote_exec
+from dbabrain.common import remote_exec
 
 # one command, connection opened and closed for you
 result = remote_exec.run_command(access, "systemctl is-active docker", secrets=secrets)
@@ -988,7 +998,7 @@ with remote_exec.open_session(access, credential=credential, secrets=secrets) as
     session.write_text("/opt/db_ops/containers/pg_01/.env", env_text)   # SFTP, ssh only
 
 # ship a whole script (text or a local file) and run it there
-remote_exec.run_script(access, Path("db_ops/metrics/collectors/os/windows/005_os_service_status.ps1"), env={"OS_SERVICE_NAMES": "W32Time"})
+remote_exec.run_script(access, Path("dbabrain/metrics/collectors/os/windows/005_os_service_status.ps1"), env={"OS_SERVICE_NAMES": "W32Time"})
 
 # a long command's output, line by line as it arrives (local, ssh; winrm when it ends)
 with remote_exec.open_session(access) as session:
@@ -1112,7 +1122,7 @@ to a command of its own is a second prompt written app-side, which is the thing 
 to prevent.
 
 ```bash
-python -m db_ops.common.cli authorize @data/request.json
+python -m dbabrain.common.cli authorize @data/request.json
 ```
 
 ```json
@@ -1129,7 +1139,7 @@ not: which targets, which task, whether it is inactive. Exit 0 means authorized,
 report is the JSON on stdout; the caller then performs the work itself.
 
 One detail the caller does not see: the prompt is written to the controlling terminal rather than
-to stderr, because `db_ops.transport.common_cli` captures both streams. A question written into a
+to stderr, because `dbabrain.transport.common_cli` captures both streams. A question written into a
 captured pipe is invisible until after the answer was due, which is indistinguishable from a hang.
 
 ### `ask` — one question, for a caller that cannot ask it (0.24.0)
@@ -1204,13 +1214,13 @@ One contract for every operation that changes a host, so there is nothing per-co
 
 ```bash
 # what state is this host in (read-only)
-python -m db_ops.common.cli host-facts \
+python -m dbabrain.common.cli host-facts \
   '{"target": "ACME-192-0-2-250", "services": ["MSSQL$APPDB"],
     "access": {"method": "winrm", "host": "192.0.2.250", "port": 5985, "platform": "windows",
                "username": "svc_dbops", "auth_type": "password", "password_ref": "HOST_250_ADMIN"}}'
 
 # restart it and wait for its services — Windows or Ubuntu, same request
-python -m db_ops.common.cli host-restart \
+python -m dbabrain.common.cli host-restart \
   '{"target": "ACME-192-0-2-250", "services": ["MSSQL$APPDB", "SQLAgent$APPDB"], "access": {...},
     "reason": "clear PendingFileRenameOperations before CU26", "confirm": true}'
 ```
@@ -1417,7 +1427,7 @@ Rules worth knowing:
 ### Using it
 
 ```python
-from db_ops.common import sql_run
+from dbabrain.common import sql_run
 
 result = sql_run.run_sql({"connection": connection, "target": "ACME-192-0-2-115",
                           "database_name": "SALESDB",
@@ -1426,7 +1436,7 @@ result["columns"], result["rows"], result["row_count"], result["truncated"]
 ```
 
 ```bash
-python -m db_ops.common.cli run-sql @request.json     # or - to read the object from stdin
+python -m dbabrain.common.cli run-sql @request.json     # or - to read the object from stdin
 # request.json: {"connection": {...}, "target": "ACME-192-0-2-115", "sql_text": "SELECT 1 AS x"}
 ```
 
@@ -1436,15 +1446,15 @@ and exits 1, so a shell caller reads both outcomes from the same JSON.
 **Reproducing a metric: pass `"autocommit": true`.** By default the batch runs in a transaction
 and is always rolled back. Metric SQL catches per-database errors inside a cursor, and inside a
 transaction one caught error dooms the whole thing — error 3930, *"the current transaction cannot
-be committed"* — so every later statement fails. `db_ops.metrics.executor` connects with
+be committed"* — so every later statement fails. `dbabrain.metrics.executor` connects with
 `autocommit=True` for exactly that reason. Without the flag, running a metric's `.sql` here
 reports a failure the collector would never have hit, which sends the reader after the wrong bug.
 Nothing is rolled back in this mode, so use it for read-only SQL:
 
 ```bash
-python -m db_ops.common.cli run-sql @request.json
+python -m dbabrain.common.cli run-sql @request.json
 # {"connection": {...}, "target": "ACME-192-0-2-245", "autocommit": true, "timeout_seconds": 240,
-#  "sql_file": "db_ops/metrics/collectors/sqlserver/legacy_2008r2/069_sqlserver_linked_server_status.sql"}
+#  "sql_file": "dbabrain/metrics/collectors/sqlserver/legacy_2008r2/069_sqlserver_linked_server_status.sql"}
 ```
 
 ### Which tool runs it, and who chose it
@@ -1485,7 +1495,7 @@ shipped. What is refused is what is *known* to be impossible — Oracle below 12
 both ways out named in the message:
 
 ```bash
-python -m db_ops.common.cli run-sql '{"target": "ACME-192-0-2-136", "major_version": 8,
+python -m dbabrain.common.cli run-sql '{"target": "ACME-192-0-2-136", "major_version": 8,
   "connection": {"db_type": "oracle", "host": "192.0.2.136", "port": 1521, "service_name": "LEGACY",
                  "username": "dbops", "password_ref": "ORA_136_DBOPS"},
   "sql_text": "select * from v$version"}'
@@ -1526,7 +1536,7 @@ answered; a **`connection` block** replaced it and no inventory file was opened
 ([`lib/connection_spec.py`](./14_lib.md)). Now the block is required, and `target` is only a label:
 
 ```bash
-python -m db_ops.common.cli run-sql '{"connection": {"db_type": "sqlserver", "host": "192.0.2.5",
+python -m dbabrain.common.cli run-sql '{"connection": {"db_type": "sqlserver", "host": "192.0.2.5",
   "username": "monitor", "password_ref": "MSSQL_…", "major_version": 16, "label": "lab-mssql"},
   "sql_text": "SELECT 1"}'
 ```
@@ -1581,7 +1591,7 @@ NT 6.2 and answers **Windows Server 2016 10.0.14393**.
 ### `probe-host` — what a machine listens on, and what that rules out
 
 ```bash
-python -m db_ops.common.cli probe-host '{"host": "192.0.2.236", "target": "ACME-192-0-2-236",
+python -m dbabrain.common.cli probe-host '{"host": "192.0.2.236", "target": "ACME-192-0-2-236",
   "os": "Windows Server 2003"}'
 # interactive_only - answers on RDP 3389 and no management port, and none is possible:
 # Windows Server 2003 ships no WinRM and cannot run the OpenSSH server.
@@ -1603,7 +1613,7 @@ a task that already has one.
 
 ```bash
 # WHAT runs. The script may already exist, or arrive as text and be written here.
-python -m db_ops.common.cli sql-command-add '{"display_name": "Drain the queue",
+python -m dbabrain.common.cli sql-command-add '{"display_name": "Drain the queue",
   "db_type": "sqlserver", "input_type": "python",
   "script_path": "assets/tasks/sqlserver/030_summary.sql",
   "input": {"script": "assets/tasks/python/drain.py",
@@ -1611,7 +1621,7 @@ python -m db_ops.common.cli sql-command-add '{"display_name": "Drain the queue",
   "parameters": [{"name": "payload", "type": "nvarchar(max)"}]}'
 
 # WHERE it runs. One call per server; three calls is a task on Testing, UAT and production.
-python -m db_ops.common.cli sql-target-add '{"sql_id": 30, "server_id": "ACME-192-0-2-111",
+python -m dbabrain.common.cli sql-target-add '{"sql_id": 30, "server_id": "ACME-192-0-2-111",
   "database_name": "PAYROLL_Test", "time_window": {"repeat_interval": 60, "timeout": 600},
   "logging_on_run": false}'
 ```
@@ -1633,11 +1643,11 @@ host-only record registered with `instance-add` was a target nothing could log i
 
 ```bash
 # the credential and the cmd_access block that points at it, in one call
-python -m db_ops.common.cli remote-credential-add '{"server_id": "ACME-192-0-2-50",
+python -m dbabrain.common.cli remote-credential-add '{"server_id": "ACME-192-0-2-50",
   "username": "ACME\\svc_monitor", "password": "...", "method": "winrm", "platform": "windows"}'
 
 # an existing secret instead of a new one, and no block yet
-python -m db_ops.common.cli remote-credential-add '{"server_id": "ACME-192-0-2-50",
+python -m dbabrain.common.cli remote-credential-add '{"server_id": "ACME-192-0-2-50",
   "username": "admin", "password_ref": "REMOTE_192_0_2_50_ADMIN"}'
 ```
 
@@ -1651,7 +1661,7 @@ Three refusals, and they are the reason this is a command rather than a document
 
 | Refused | Because |
 | --- | --- |
-| `method: "local"` on a remote host | It runs inside the db_ops container and reports the **container's** CPU, disk and uptime under that host's name. A wrong answer, not a failure — `remote_exec.assert_local_host` catches it later, at collection time |
+| `method: "local"` on a remote host | It runs inside the dbabrain container and reports the **container's** CPU, disk and uptime under that host's name. A wrong answer, not a failure — `remote_exec.assert_local_host` catches it later, at collection time |
 | a password on `method: "ssh"` with no explicit `auth_type` | `auth_type` **defaults to `key`**, and a key-auth block resolves to *no credential at all* (deliberately — the node's own key is the login). The password would be encrypted, stored, and never read |
 | `platform` written inside `cmd_access` | It belongs on the record. `resolve_cmd_access` copies it into the resolved block, so one inside the raw block is either redundant or a second, disagreeing answer |
 
@@ -1667,7 +1677,7 @@ target runs as when nothing names another). Until 0.26.0 `instance-add` wrote ex
 a third call to move it back. Ten such logins on this estate were copied between nodes by hand.
 
 ```bash
-python -m db_ops.common.cli instance-add @dba_login.json --key-base64 ...
+python -m dbabrain.common.cli instance-add @dba_login.json --key-base64 ...
 # {"server_id": "ACME-192-0-2-50", "db_type": "sqlserver", "ip": "192.0.2.50",
 #  "username": "dba", "password": "...", "credential_name": "MSSQL_ACME_192_0_2_50_DBA",
 #  "role": "dba", "keep_default": true}
@@ -1701,7 +1711,7 @@ Telegram command and `sql_run` raise.
 Verify the config satisfies this before a deploy:
 
 ```bash
-python -m db_ops.common.cli check-credentials   # exit 1 lists every target with no login
+python -m dbabrain.common.cli check-credentials   # exit 1 lists every target with no login
 ```
 
 It checks a legacy-Oracle target too, and by what that target actually needs: the credential its
@@ -1731,7 +1741,7 @@ answer and went (rules R43, the operator's choice); `upgrade-config` points an o
 `db.cli`, which takes the same JSON request.
 
 ```bash
-python -m db_ops.db.cli --config config.json timezone --format txt
+python -m dbabrain.db.cli --config config.json timezone --format txt
 ```
 
 ```
@@ -1749,7 +1759,7 @@ with no readable config at all, which it says.
 **Putting the answer on the record** is the same command with `--record`:
 
 ```bash
-python -m db_ops.db.cli --config config.json timezone --record --list
+python -m dbabrain.db.cli --config config.json timezone --record --list
 ```
 
 That upserts one row in `runtime_nodes` and lists the cluster. It is the only way to see whether a
@@ -1760,7 +1770,7 @@ start-up, and swallows any failure doing so: turning "could not note the timezon
 did not start" would be worse than the gap in the record.
 
 The *rule* underneath both — parse a declaration, resolve it, render an instant — is pure and lives
-in `db_ops/lib/timezone.py`, imported by every app.
+in `dbabrain/lib/timezone.py`, imported by every app.
 
 ---
 
@@ -1773,9 +1783,9 @@ the `/spbot_*` commands, and each answered it its own way — which is how three
 notions of "online" and disagree about the same server on the same afternoon.
 
 ```bash
-python -m db_ops.common.cli db-status '{"target": "ACME-192-0-2-248", "connection": {...}}'
-python -m db_ops.common.cli db-status '{"target": "ACME-192-0-2-248", "depth": "database", "connection": {...}}'
-python -m db_ops.common.cli db-status '@request.json'
+python -m dbabrain.common.cli db-status '{"target": "ACME-192-0-2-248", "connection": {...}}'
+python -m dbabrain.common.cli db-status '{"target": "ACME-192-0-2-248", "depth": "database", "connection": {...}}'
+python -m dbabrain.common.cli db-status '@request.json'
 ```
 
 `connection` is the SQL login `run-sql` takes (0.24.0 - nothing is looked up): `db_type`, `host`,
@@ -1864,15 +1874,15 @@ Reaching nothing is the point: it still answers when the store is unreachable, w
 times somebody most wants to know what version they are talking to.
 
 ```bash
-python -m db_ops.common.cli self-status '{}'              # JSON envelope
-python -m db_ops.common.cli self-status '{"format":"txt"}' # the chat listing
-python -m db_ops.common.cli self-status @req.json          # {"format":"txt","last_runs":{...}} - stated
+python -m dbabrain.common.cli self-status '{}'              # JSON envelope
+python -m dbabrain.common.cli self-status '{"format":"txt"}' # the chat listing
+python -m dbabrain.common.cli self-status @req.json          # {"format":"txt","last_runs":{...}} - stated
 ```
 
 **What this node schedules (0.22.0).** The listing ends with one line per app command from
 `data/app_commands.json`, inactive ones and other roles' included, so the list says what exists:
 on/off or `<role> only`, `run_mode` with its `max_parallel`, the interval, the hour window and the
-weekdays. Whether a command runs here is decided by `db_ops.lib.node_role.runs_on` — the same rule
+weekdays. Whether a command runs here is decided by `dbabrain.lib.node_role.runs_on` — the same rule
 the daemon uses, so the report cannot disagree with the scheduler. Asked for on 2026-09-23, when two
 schedulers ran disjoint sets on two schemas and nothing a phone could reach said which was which.
 
@@ -1888,9 +1898,9 @@ prints `(last run unknown: <why>)`; a request that states nothing prints *not st
 
 Three things it takes care to get right rather than merely report:
 
-- **The product, before the version.** The published `dbabrain` wheel and a private `db_ops` build
-  are the same toolkit under two distribution names and two numbering schemes (`0.5.0` against
-  `2.87.01`). A version with no product beside it cannot be decoded, and on 2026-09-03 both were
+- **The product, before the version.** The published `dbabrain` wheel and a private build of this
+  tree are the same toolkit under two numbering schemes (`0.5.0` against `2.87.01`); since 0.29.0
+  both are named `dbabrain`, and the version is what tells them apart (`PUBLIC_VERSION`). A version with no product beside it cannot be decoded, and on 2026-09-03 both were
   running the same estate within an hour. A tree that was never pip-installed says that instead of
   claiming a name.
 - **Memory as *this process* experiences it.** Inside a container `/proc/meminfo` is the host's
@@ -1917,7 +1927,7 @@ standard library cannot answer on a platform is reported as unavailable rather t
 
 **Read this before writing a helper in an app.** If a function below covers what you need,
 use it; an app-private reimplementation of anything in this table is a defect, not a style
-preference (see *Design rules*). Names are the public API of `db_ops.common.<module>`.
+preference (see *Design rules*). Names are the public API of `dbabrain.common.<module>`.
 
 | Module | Public API |
 | --- | --- |
@@ -1968,13 +1978,13 @@ The shared **JSON config objects** these parsers read (`time_window`, `notify`, 
 - **No cross-app imports.** Apps depend on `common`, never on each other. New shared
   logic goes here, not into one app that another app then imports.
   - The **add-SQL config-write engine** lives here for exactly this reason:
-    `db_ops/common/config_admin.py` performs the atomic JSON/file writes that register a new SQL
+    `dbabrain/common/config_admin.py` performs the atomic JSON/file writes that register a new SQL
     task (`.sql` file + `sql_commands.json` + `sql_targets.json`). It is shared logic — reached
     by an operator at a shell **and** by the Telegram `add_sql_task` action, both through
-    `python -m db_ops.common.cli add-sql` — so it sits in `common`, not in `sql_tasks` where
+    `python -m dbabrain.common.cli add-sql` — so it sits in `common`, not in `sql_tasks` where
     Telegram would have to import it. It connects to no database and imports no execution path.
     Two things changed on 2026-08-15 and both are the rule tightening rather than moving: the
-    `db_ops.sql_tasks.config_admin` shim that offered a second name for the command was
+    `dbabrain.sql_tasks.config_admin` shim that offered a second name for the command was
     **deleted**, and Telegram stopped importing the engine — an app calls the CLI. That last step
     required `add-sql` and `metric-toggle` to start answering in the **response envelope**; they
     had printed a bare dict on success and `ERROR:` on stderr with exit 2 on failure, which a
@@ -1989,7 +1999,7 @@ The shared **JSON config objects** these parsers read (`time_window`, `notify`, 
 - **A one-off you had to write is a command you were missing.** If answering a question or
   performing an operation needed a script — auditing every secret, rotating a password, probing
   what a host actually listens on — that work belongs in a `common` module with a
-  `db_ops.common.cli` face, in the same pass. A throwaway script answers the question once and
+  `dbabrain.common.cli` face, in the same pass. A throwaway script answers the question once and
   takes its target resolution, its edge cases and its ordering rules to the grave; the next person
   writes it again, slightly differently, and the two disagree about where a secret lives. Both
   `password_rotation` and `secret_check` exist because they were written as scratch scripts first,
@@ -2001,7 +2011,7 @@ The shared **JSON config objects** these parsers read (`time_window`, `notify`, 
   untranslated, and adding a field never breaks an existing caller. All 22 commands follow it, and
   `tests/test_common_cli_json_contract.py` holds them to it — a new command that invents its own
   flag vocabulary fails there rather than shipping. Parsing is shared: `_read_json_request` in
-  `db_ops/common/cli.py` is the only reader, so every command accepts the same three input forms
+  `dbabrain/common/cli.py` is the only reader, so every command accepts the same three input forms
   and reports a bad payload identically. Three commands (`add-sql`, `metric-toggle`, `list-targets`)
   predate the rule and still accept their original flag/word form as compatibility;
   `_optional_json_request` tells the two apart. `check-credentials` did too while the root package
@@ -2023,14 +2033,14 @@ configuration to learn what to look for, then reads files. A gate that can *do* 
 nobody lets run unattended.
 
 ```bash
-python -m db_ops.common.cli check-identifiers '{}'                       # the shipping surface
-python -m db_ops.common.cli check-identifiers '{"paths": ["db_ops/sre"]}'
-python -m db_ops.common.cli check-identifiers '{"extra_terms": ["CLOUD"]}'
+python -m dbabrain.common.cli check-identifiers '{}'                       # the shipping surface
+python -m dbabrain.common.cli check-identifiers '{"paths": ["dbabrain/sre"]}'
+python -m dbabrain.common.cli check-identifiers '{"extra_terms": ["CLOUD"]}'
 ```
 
 Finding something is the **answer**, not a failure: the command exits 0 and the count is in
 `data.hits`. It exits non-zero only when it could not run — the same distinction `check-secret`
-makes between "the estate is like this" and "db_ops could not look". A **refusal** - no identifiers
+makes between "the estate is like this" and "dbabrain could not look". A **refusal** - no identifiers
 to search for, or no file to read, either of which would report every tree clean - answers
 `data.refused: true`, so a caller can tell "could not look" from "broke" without reading the
 message: the export says SKIPPED for the first and stops for the second.
@@ -2090,7 +2100,7 @@ person's id sat in a shipped test, reported and never counted. From 0.23.0 a ter
 files is at least `likely`.
 
 **The default surface includes `tests/`**, `CHANGELOG.md` and `.github/`: all three ship, in the
-public repository and (the tests) in every sdist. Until 0.23.0 the default read `db_ops`, `docs`,
+public repository and (the tests) in every sdist. Until 0.23.0 the default read `dbabrain`, `docs`,
 `examples` and the root files only, and the export's own scan was the one place tests were read.
 
 ### Its sibling: `check-secret-literals`
@@ -2102,7 +2112,7 @@ base64 `--key-base64` takes: the store cannot hold its own key, so a search of i
 looked for it, and a test docstring quoting a failure message had carried it.
 
 ```bash
-python -m db_ops.common.cli check-secret-literals '{}'      # needs the key; 0 hit(s) is the pass
+python -m dbabrain.common.cli check-secret-literals '{}'      # needs the key; 0 hit(s) is the pass
 ```
 
 ### What is never reported, and why each one is there
@@ -2137,8 +2147,8 @@ one it would report as success.
 ## Refreshing an example from your own file (`example_lift`)
 
 ```bash
-python -m db_ops.common.cli lift-example '{"source": "data/metric_definitions.json"}'
-python -m db_ops.common.cli lift-example '{"source": "data/sla_policies.json", "write": false}'
+python -m dbabrain.common.cli lift-example '{"source": "data/metric_definitions.json"}'
+python -m dbabrain.common.cli lift-example '{"source": "data/sla_policies.json", "write": false}'
 ```
 
 Every file under `data/` has a `*.example.json` beside it, and **the examples ship** — they are
@@ -2196,7 +2206,7 @@ store is decrypted, the ref added, and the whole of it re-encrypted with the sam
 (`lib.secret_text.set_secret_text`, which `instance-add` already used for database passwords).
 
 ```powershell
-'{"ref": "TELEGRAM_BOT_TOKEN", "value": "<token>"}' | python -m db_ops.common.cli secret-set -
+'{"ref": "TELEGRAM_BOT_TOKEN", "value": "<token>"}' | python -m dbabrain.common.cli secret-set -
 ```
 
 - **Stdin only — the one exception to the JSON-request contract.** Still one JSON object, but
@@ -2273,9 +2283,9 @@ a good one gets rotated for nothing.
 ### Using it
 
 ```bash
-python -m db_ops.common.cli check-secret '{}' --key-base64 "<b64>"          # the whole store
-python -m db_ops.common.cli check-secret '{"match": "DBA_USER"}'            # one family
-python -m db_ops.common.cli check-secret '{"refs": ["MSSQL_192_0_2_248_DBA_USER"]}'
+python -m dbabrain.common.cli check-secret '{}' --key-base64 "<b64>"          # the whole store
+python -m dbabrain.common.cli check-secret '{"match": "DBA_USER"}'            # one family
+python -m dbabrain.common.cli check-secret '{"refs": ["MSSQL_192_0_2_248_DBA_USER"]}'
 ```
 
 One attempt per secret, no retries, so a wrong stored password never walks an account into a
@@ -2326,7 +2336,7 @@ which is why the rollback is not optional and not deferred.
 **Which store it reads** (0.26.0, owner decision G3.1): `--config X` reads `X`'s own `data/`, and an
 `X` that cannot be read is refused - nothing done. It used to fall back to the default data dir, so
 `--config D:/other/config.json` rotated the passwords of whatever root the process stood in. With no
-`--config`, the node's own data dir (`DB_OPS_HOME` / `DB_OPS_DATA_DIR`). The same holds for
+`--config`, the node's own data dir (`DBABRAIN_HOME` / `DBABRAIN_DATA_DIR`). The same holds for
 `check-secret`, `check-secret-literals` and `check-identifiers`.
 
 Statuses: `SUCCESS` · `READY` (dry run) · `SKIPPED` (not attempted, with the reason) ·
@@ -2350,10 +2360,10 @@ the next time anyone deploys.
 
 ```bash
 # always dry-run first: proves reachability and that the stored password still works
-python -m db_ops.common.cli rotate-password '{"match": "DBA_USER_DBA", "dry_run": true}' --key-base64 "<b64>"
+python -m dbabrain.common.cli rotate-password '{"match": "DBA_USER_DBA", "dry_run": true}' --key-base64 "<b64>"
 
 # then rotate
-python -m db_ops.common.cli rotate-password '{"match": "DBA_USER_DBA"}' --key-base64 "<b64>"
+python -m dbabrain.common.cli rotate-password '{"match": "DBA_USER_DBA"}' --key-base64 "<b64>"
 
 ```
 
@@ -2365,7 +2375,7 @@ by union, which would restore the pre-rotation values.
 ## Publishing real pages safely (`showcase`)
 
 `build-showcase` copies the published HTML reports into a folder with every identifier this estate
-owns replaced by a stable fake one. The reports are the best documentation db_ops has - real fleets,
+owns replaced by a stable fake one. The reports are the best documentation dbabrain has - real fleets,
 real fragmentation, real verdicts, over real days - and none of it could be shown to anyone, because
 every page names the operator.
 
@@ -2374,7 +2384,7 @@ Three properties, in the order they matter:
 1. **The terms are not guessed.** Addresses, `server_id`s, credentials and people come from
    `identifier_scan.collect_identifiers`, which reads the operator's own inventory and knows all
    three spellings of an address. Database, schema, table and index names are read off the pages
-   in **db_ops's own shapes** — the `db\schema.table.index` metric item and the `db=`/`schema=`/
+   in **dbabrain's own shapes** — the `db\schema.table.index` metric item and the `db=`/`schema=`/
    `table=`/`index=` fields a collector writes — because no configuration file names them and they
    are the more revealing half: a table called `EmployeeTimeKeepingResult` says more about a
    customer than an IP does. Read from the page rather than the store because **`common` may not
@@ -2395,13 +2405,13 @@ Three properties, in the order they matter:
    addresses the collectors found on the wire that no configuration ever named. Any finding removes
    the folder and fails the command: a partially scrubbed page is the one that gets published.
 
-The replacement is stable and shaped (`db_ops.lib.pseudonym`), which is what makes the output worth
+The replacement is stable and shaped (`dbabrain.lib.pseudonym`), which is what makes the output worth
 having: one machine is the same fake machine on every page and on every day, so a reader can follow
 it from the inventory to its metrics page to its index report. Nothing reversible is written - no
 mapping file, no key. A table that turned the showcase back into the estate would *be* the estate.
 
 ```bash
-python -m db_ops.common.cli build-showcase @data/showcase.json
+python -m dbabrain.common.cli build-showcase @data/showcase.json
 ```
 
 Run it **on the node that serves the pages**, after the daily archive has built up the window you
@@ -2515,7 +2525,7 @@ rewritten across the fleet report, and the first to run threw — so the reader 
 ever and the inventory's detail panel never opened. A template literal is text with holes in it;
 the holes are program, and a string inside a hole is data again.
 
-`PRODUCT_WORDS` closes the last of it from the other side: the words db_ops itself prints into a
+`PRODUCT_WORDS` closes the last of it from the other side: the words dbabrain itself prints into a
 page (`report`, `inventory`, `usage`, `status`, `history`…) are kept, whatever an estate calls its
 own objects. Without it a schema called `reports` retitled the landing page to
 `DB Ops · QuotaStaging`. The cost is stated where the list is: a customer object with one of those
@@ -2544,10 +2554,10 @@ needs the substring pass.
 
 Reproduce SQL Server schema `X` from one instance on another. Raised from a real deployment
 where the whole thing was done by hand
-outside db_ops, and every requirement below is something that cost time on that run.
+outside dbabrain, and every requirement below is something that cost time on that run.
 
 ```bash
-python -m db_ops.common.cli copy-schema '{
+python -m dbabrain.common.cli copy-schema '{
   "source":      {"target": "SRC-SERVER-ID", "connection": {...},
                   "database_name": "APPDB_TEST", "schema": "schedule"},
   "destination": {"target": "DST-SERVER-ID", "connection": {...},
@@ -2604,7 +2614,7 @@ rest.
 
 ## CLI
 
-The shared layer has its own entrypoint, like every app: `python -m db_ops.common.cli`.
+The shared layer has its own entrypoint, like every app: `python -m dbabrain.common.cli`.
 It is a thin facade — logic stays in the common modules it fronts.
 
 **The shared config objects, answerable from outside Python** (`cli_config_objects.py`, 2026-09-19).
@@ -2616,10 +2626,10 @@ Three questions that had no answer a program could ask for:
 | `due-check` | would this `time_window` run now, and if not why not | nothing — it evaluates the request |
 | `check-objects` | does this node's own `data/*.json` obey the reference | that file, and every file it names |
 | `check-references` | which pointer between two config files lands nowhere | `data/config_references.json`, and every file it names |
-| `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the field renames, a restore's machine ids, a Telegram record's switch, the inventory into the reports, a command line that moved to another CLI, and the console apps this version lists and the node's `webhost_config.json` does not (added, never changed - 2026-10-03, after a node filled by bundle was found without the `transport` app) - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
+| `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the package's 0.29.0 name in every module path, path into the package, `tools/` alias and environment-variable name the node's files carry (`lib.package_rename`; the store's schema, host folders, ids and secret refs are left as they are), the field renames, a restore's machine ids, the name of the backup certificate written into every SQL Server backup job and restore that had been leaving it to the default 0.29.0 renamed the name of the file that marks a staging folder written into every restore entry that already stages on a target, and the two folders lab databases live in written into `sre_config.json` where it states none (`lib.earlier_defaults`; a default is configuration nobody wrote down, so the record is told what it has been running on before the code's default changes), a Telegram record's switch, the inventory into the reports, a command line that moved to another CLI, and the console apps this version lists and the node's `webhost_config.json` does not (added, never changed - 2026-10-03, after a node filled by bundle was found without the `transport` app) - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
 | `standardize-field-names` | moves `data/*.json` to the standard field names (stage C of one name per concept), and `config_catalog.json`'s `label_field` / `key_fields` with them - a catalogue still naming `sql_name` labelled every SQL task empty on the worker and made each sync rewrite 30 unchanged records (0.27.0); a plan unless `dry_run: false` | the reference's `used_in`, and every file it names with its `.example.json` |
 
-`due-check` calls `db_ops.lib.time_window.explain_due` — **the same function the schedulers call** —
+`due-check` calls `dbabrain.lib.time_window.explain_due` — **the same function the schedulers call** —
 so its explanation cannot disagree with the behaviour. It is not how the daemon checks due-ness: the
 daemon sweeps once a second and metrics evaluate a verdict per target per metric, so the rule is
 imported there. A subprocess per verdict would cost more than the work it schedules, which is the
@@ -2638,7 +2648,7 @@ FULL it found), a restore into a container with no `sqlcmd_path`, a certificate 
 reported them as notices (phase 1); **since 0.27.0 they are violations, and the record is refused
 where it is used** (phase 2) - see R50 for each place. `instance-add` and `remote-credential-add`
 write no such active record: they refuse it before anything is written. The rules are
-`db_ops.lib.stated_facts`.
+`dbabrain.lib.stated_facts`.
 
 **What the reference describes: 153 entries in four families.** The CONFIG a node reads (60 - every
 `data/` file the catalogue calls `config`, and every block between a file's root and its records),
@@ -2715,7 +2725,7 @@ on every record that carries both.
 **Since 0.26.0 no password is read from the environment** (owner decision G3.5): `password_env` is
 the old spelling of `password_ref` everywhere - a key in the secret store - and a ref resolves only
 from the secrets the caller hands over (an app's own store, through `lib.data_sources`). The
-environment answered for whatever a request named: `password_env: DB_OPS_SECRET_KEY`, or a
+environment answered for whatever a request named: `password_env: DBABRAIN_SECRET_KEY`, or a
 `run-sql` `connection.password_ref` of the same name, sent the node's passphrase as a login
 password to the host the request chose. `run-sql` now refuses a `password_ref` it is not given a
 `password` for; the apps send the password.
@@ -2736,10 +2746,10 @@ walked over every `action_config`, and the other action types share that path.
 **The store travels in the request, like every other value.** `common` performs work and reads
 nothing; that already held for a target database (`run-sql` carries host, login and password) but
 not for the *runtime store*, where a caller could only say "config.json" and let this side go and
-read it. `db_ops/db/declaration.py` closes that:
+read it. `dbabrain/db/declaration.py` closes that:
 
 ```bash
-python -m db_ops.db.cli queue-telegram-message - <<'EOF'
+python -m dbabrain.db.cli queue-telegram-message - <<'EOF'
 {"store": {"backend": "postgresql",
            "postgresql": {"host": "...", "port": 5433, "database_name": "db_ops", "schema": "db_ops",
                           "username": "postgres", "password": "<resolved by the caller>"}},
@@ -2762,66 +2772,66 @@ object; a subprocess cannot, and that gap is what blocked moving message queuein
 until the store could describe itself.
 
 ```bash
-python -m db_ops.common.cli add-sql '<json>'        # config_admin: register + enable a SQL task
-python -m db_ops.common.cli metric-toggle '<json>'  # config_admin: enable/disable metrics per server_id
-python -m db_ops.common.cli metric-severity '<json>' # config_admin: remap a metric's statuses per server_id
-python -m db_ops.common.cli trace-session '<json>'  # session_trace: who holds an open transaction
-python -m db_ops.common.cli list-targets            # target_resolve: the /spbot_list_server_id listing
-python -m db_ops.telegram.cli groups              # the whole level -> chat_id map
-python -m db_ops.telegram.cli route <level>       # {enabled, alert, chat_id} for a notify level
-python -m db_ops.common.cli run-sql '<json>'        # sql_run: run SQL on one database target
-python -m db_ops.common.cli run-cmd '<json>'        # host_ops: one shell command on a configured host
-python -m db_ops.common.cli probe-host '<json>'     # host_probe: what a host listens on, and what that allows
-python -m db_ops.common.cli check-credentials   # data_sources: every target resolves a login
-python -m db_ops.db.cli queue-telegram-message '<json>'  # telegram_queue: queue one outgoing message
-python -m db_ops.db.cli restore-drill-status '<json>'    # db.restore_drill: was a restore actually proven
-python -m db_ops.db.cli sql-run-history '<json>'         # db.sql_run_history: what the SQL tasks did
-python -m db_ops.db.cli telegram-command-history '<json>' # db.telegram_command_history: your own commands
-python -m db_ops.common.cli fetch-file '<json>'     # file_transfer: copy one file from a host to here
-python -m db_ops.common.cli send-file '<json>'      # file_transfer: copy one file from here to a host
-python -m db_ops.common.cli pack-files '<json>'     # file_transfer: pack files into one archive + sha256
-python -m db_ops.common.cli relay-file '<json>'     # file_transfer: copy one file host->host, hash-verified
-<request> | python -m db_ops.common.cli create-db-docker -  # docker_db: build a lab database instance
-<request> | python -m db_ops.common.cli move-db-docker -    # docker_db: move one, data included
-<request> | python -m db_ops.common.cli run-sqlcmd -        # sqlcmd_run: one batch, local / ssh / winrm
-<request> | python -m db_ops.common.cli smb-list -          # smb: the files under a folder of a Windows share
-<request> | python -m db_ops.common.cli smb-get -           # smb: one file from a share to here
-<request> | python -m db_ops.common.cli smb-delete -        # smb: exactly the files named, on a share
-<request> | python -m db_ops.common.cli smb-credential -    # smb: store a share login for Windows (cmdkey)
-<request> | python -m db_ops.common.cli backup-chain -      # backup_copy: which files a restore needs
-<request> | python -m db_ops.common.cli copy-backup-dir -   # backup_copy: host to host, one tar stream, mirrored
-<request> | python -m db_ops.common.cli prune-staged-backups -  # backup_copy: a restore's staging past retention
-python -m db_ops.common.cli rotate-password '<json>'  # password_rotation: change a login's password
-python -m db_ops.common.cli check-secret '<json>'     # secret_check: prove each secret still logs in
-<request> | python -m db_ops.common.cli secret-set -  # lib.secret_text: one secret into the encrypted store
-python -m db_ops.common.cli inventory-summary '<json>'  # inventory_render: merge overlay + render summary
-python -m db_ops.common.cli host-facts '<json>'       # host_ops: one host's state (read-only)
-python -m db_ops.common.cli host-service '<json>'     # host_ops: start/stop/restart services + wait
-python -m db_ops.common.cli host-restart '<json>'     # host_ops: restart a host and prove it came back
-python -m db_ops.common.cli sqlserver-precheck '<json>'      # sqlserver_patch: safe to patch? (read-only)
-python -m db_ops.common.cli sqlserver-apply-cu '<json>'      # sqlserver_patch: apply a staged CU
-python -m db_ops.common.cli sqlserver-verify-build '<json>'  # sqlserver_patch: did it reach the build
-python -m db_ops.common.cli sqlserver-export-instance '<json>'  # sqlserver_instance: server metadata -> SQL
-python -m db_ops.common.cli sqlserver-replay-instance '<json>'  # sqlserver_instance: apply a bundle to a target
-python -m db_ops.common.cli sqlserver-verify-instance '<json>'  # sqlserver_instance: orphaned users + counts
-python -m db_ops.common.cli backup-database '<json>'    # backup: run ONE backup, script + host + env
-python -m db_ops.common.cli list-backup-files '<json>'  # backupfiles: an engine's backups as full/diff/log
-python -m db_ops.common.cli prune-backup-files '<json>' # retention: which are obsolete (default 14 days)
-python -m db_ops.common.cli delete-file '<json>'        # deletefiles: remove ONE file by full path
-python -m db_ops.common.cli delete-files '<json>'       # deletefiles: remove each named file, one connection
+python -m dbabrain.common.cli add-sql '<json>'        # config_admin: register + enable a SQL task
+python -m dbabrain.common.cli metric-toggle '<json>'  # config_admin: enable/disable metrics per server_id
+python -m dbabrain.common.cli metric-severity '<json>' # config_admin: remap a metric's statuses per server_id
+python -m dbabrain.common.cli trace-session '<json>'  # session_trace: who holds an open transaction
+python -m dbabrain.common.cli list-targets            # target_resolve: the /spbot_list_server_id listing
+python -m dbabrain.telegram.cli groups              # the whole level -> chat_id map
+python -m dbabrain.telegram.cli route <level>       # {enabled, alert, chat_id} for a notify level
+python -m dbabrain.common.cli run-sql '<json>'        # sql_run: run SQL on one database target
+python -m dbabrain.common.cli run-cmd '<json>'        # host_ops: one shell command on a configured host
+python -m dbabrain.common.cli probe-host '<json>'     # host_probe: what a host listens on, and what that allows
+python -m dbabrain.common.cli check-credentials   # data_sources: every target resolves a login
+python -m dbabrain.db.cli queue-telegram-message '<json>'  # telegram_queue: queue one outgoing message
+python -m dbabrain.db.cli restore-drill-status '<json>'    # db.restore_drill: was a restore actually proven
+python -m dbabrain.db.cli sql-run-history '<json>'         # db.sql_run_history: what the SQL tasks did
+python -m dbabrain.db.cli telegram-command-history '<json>' # db.telegram_command_history: your own commands
+python -m dbabrain.common.cli fetch-file '<json>'     # file_transfer: copy one file from a host to here
+python -m dbabrain.common.cli send-file '<json>'      # file_transfer: copy one file from here to a host
+python -m dbabrain.common.cli pack-files '<json>'     # file_transfer: pack files into one archive + sha256
+python -m dbabrain.common.cli relay-file '<json>'     # file_transfer: copy one file host->host, hash-verified
+<request> | python -m dbabrain.common.cli create-db-docker -  # docker_db: build a lab database instance
+<request> | python -m dbabrain.common.cli move-db-docker -    # docker_db: move one, data included
+<request> | python -m dbabrain.common.cli run-sqlcmd -        # sqlcmd_run: one batch, local / ssh / winrm
+<request> | python -m dbabrain.common.cli smb-list -          # smb: the files under a folder of a Windows share
+<request> | python -m dbabrain.common.cli smb-get -           # smb: one file from a share to here
+<request> | python -m dbabrain.common.cli smb-delete -        # smb: exactly the files named, on a share
+<request> | python -m dbabrain.common.cli smb-credential -    # smb: store a share login for Windows (cmdkey)
+<request> | python -m dbabrain.common.cli backup-chain -      # backup_copy: which files a restore needs
+<request> | python -m dbabrain.common.cli copy-backup-dir -   # backup_copy: host to host, one tar stream, mirrored
+<request> | python -m dbabrain.common.cli prune-staged-backups -  # backup_copy: a restore's staging past retention
+python -m dbabrain.common.cli rotate-password '<json>'  # password_rotation: change a login's password
+python -m dbabrain.common.cli check-secret '<json>'     # secret_check: prove each secret still logs in
+<request> | python -m dbabrain.common.cli secret-set -  # lib.secret_text: one secret into the encrypted store
+python -m dbabrain.common.cli inventory-summary '<json>'  # inventory_render: merge overlay + render summary
+python -m dbabrain.common.cli host-facts '<json>'       # host_ops: one host's state (read-only)
+python -m dbabrain.common.cli host-service '<json>'     # host_ops: start/stop/restart services + wait
+python -m dbabrain.common.cli host-restart '<json>'     # host_ops: restart a host and prove it came back
+python -m dbabrain.common.cli sqlserver-precheck '<json>'      # sqlserver_patch: safe to patch? (read-only)
+python -m dbabrain.common.cli sqlserver-apply-cu '<json>'      # sqlserver_patch: apply a staged CU
+python -m dbabrain.common.cli sqlserver-verify-build '<json>'  # sqlserver_patch: did it reach the build
+python -m dbabrain.common.cli sqlserver-export-instance '<json>'  # sqlserver_instance: server metadata -> SQL
+python -m dbabrain.common.cli sqlserver-replay-instance '<json>'  # sqlserver_instance: apply a bundle to a target
+python -m dbabrain.common.cli sqlserver-verify-instance '<json>'  # sqlserver_instance: orphaned users + counts
+python -m dbabrain.common.cli backup-database '<json>'    # backup: run ONE backup, script + host + env
+python -m dbabrain.common.cli list-backup-files '<json>'  # backupfiles: an engine's backups as full/diff/log
+python -m dbabrain.common.cli prune-backup-files '<json>' # retention: which are obsolete (default 14 days)
+python -m dbabrain.common.cli delete-file '<json>'        # deletefiles: remove ONE file by full path
+python -m dbabrain.common.cli delete-files '<json>'       # deletefiles: remove each named file, one connection
 ```
 
 Listing and deleting are one workflow — list, decide, delete the paths you were given:
 
 ```bash
-python -m db_ops.common.cli list-backup-files '{"db_type": "oracle", "path": "/opt/oracle/backup/dbops",
+python -m dbabrain.common.cli list-backup-files '{"db_type": "oracle", "path": "/opt/oracle/backup/dbops",
   "kinds": ["log"], "before": "2026-08-01 00:00:00", "host": {...}}'
 # or let prune decide, and delete in the same step:
-python -m db_ops.common.cli prune-backup-files '{"db_type": "oracle", "path": "/opt/oracle/backup/dbops",
+python -m dbabrain.common.cli prune-backup-files '{"db_type": "oracle", "path": "/opt/oracle/backup/dbops",
   "cleanup_retention": 691200, "delete": true, "dry_run": true, "host": {...}}'
 
 # then, with the paths that came back:
-python -m db_ops.common.cli delete-files '{"paths": ["/opt/oracle/backup/dbops/x.bkp"],
+python -m dbabrain.common.cli delete-files '{"paths": ["/opt/oracle/backup/dbops/x.bkp"],
   "must_be_under": "/opt/oracle/backup", "dry_run": true, "host": {...}}'
 ```
 
@@ -2834,12 +2844,12 @@ unless a blocking gate failed.
 Two different clocks are in play; do not mix them up.
 
 **The display clock is `timezone` in `config.json`** — an IANA name (`Asia/Ho_Chi_Minh`) or a fixed
-offset (`+07:00`), mandatory, defaulting to `UTC`. `DB_OPS_TIMEZONE` overrides it per node. It is
-resolved once by `db_ops.lib.config.parse_config` and read through `db_ops/lib/timezone.py`; no app
-parses it. `python -m db_ops.db.cli timezone --format txt` says what a node resolved.
+offset (`+07:00`), mandatory, defaulting to `UTC`. `DBABRAIN_TIMEZONE` overrides it per node. It is
+resolved once by `dbabrain.lib.config.parse_config` and read through `dbabrain/lib/timezone.py`; no app
+parses it. `python -m dbabrain.db.cli timezone --format txt` says what a node resolved.
 
 - **`time_window` bounds (`from_*`/`to_*`) are hours in the configured timezone**
-  (`db_ops.lib.timezone.display_now()`), on every node, whatever clock the host keeps. So
+  (`dbabrain.lib.timezone.display_now()`), on every node, whatever clock the host keeps. So
   `from_hour: 1` means 01:00 in that zone on the master and in the container alike.
 
   This was the node's *local* time until 2026-09-07 — `datetime.now().astimezone()`, which is
@@ -2850,7 +2860,7 @@ parses it. `python -m db_ops.db.cli timezone --format txt` says what a node reso
 
 - **Store timestamps are written in UTC (+00) on either backend, and this setting does not touch
   them.** Every `created_at` / run-time column is `YYYY-MM-DDTHH:MM:SSZ` — Python goes through
-  `utc_now_text()` (`datetime.now(timezone.utc)`) in `db_ops/db/store.py`, and the schema defaults
+  `utc_now_text()` (`datetime.now(timezone.utc)`) in `dbabrain/db/store.py`, and the schema defaults
   use `strftime('%Y-%m-%dT%H:%M:%SZ','now')`, which is also UTC.
 
   That is what makes one configurable display clock safe. Every range query in the tool
@@ -2859,7 +2869,7 @@ parses it. `python -m db_ops.db.cli timezone --format txt` says what a node reso
   in the wrong window, seven hours wide. `tests/test_runtime_nodes_timezone.py` holds the line.
 
 - **Everything a person reads carries its offset**, in one format, from
-  `db_ops.lib.timezone.format_display()`:
+  `dbabrain.lib.timezone.format_display()`:
 
   ```
   Snapshot 2026-09-07 07:32:56 +07
@@ -2880,7 +2890,7 @@ parses it. `python -m db_ops.db.cli timezone --format txt` says what a node reso
 
 Merged in from the former `13_common.md` on 2026-08-15. It was a separate numbered
 doc for something that is not a component: these objects have no app of their own, their parsers
-all live in `db_ops/common/`, and every one of them is listed in the API index above. A contract
+all live in `dbabrain/common/`, and every one of them is listed in the API index above. A contract
 documented away from the module that enforces it is the drift this file exists to prevent.
 
 Some JSON objects appear in **several config files, for several apps**, and mean the same thing
@@ -2895,8 +2905,8 @@ machine. This is the one place those shapes are specified.
 > only form of that answer a program can use:
 >
 > ```bash
-> python -m db_ops.common.cli describe-object '{"object": "time_window", "field": "timeout"}'
-> python -m db_ops.common.cli check-objects '{}'      # does THIS node's config obey it
+> python -m dbabrain.common.cli describe-object '{"object": "time_window", "field": "timeout"}'
+> python -m dbabrain.common.cli check-objects '{}'      # does THIS node's config obey it
 > ```
 >
 > **This page argued the opposite until that date**, and the argument was sound at the time: a spec
@@ -2913,14 +2923,14 @@ function that reads it. If the two ever disagree, the parser is right and this f
 every one of these objects is validated at load time, so a config that contradicts the spec fails
 loudly rather than behaving oddly.
 
-Adding a new shared object: put the shape and its parser in `db_ops/lib/`, list the parser in the
+Adding a new shared object: put the shape and its parser in `dbabrain/lib/`, list the parser in the
 API index above, add a subsection here, **and describe its fields in
 `data/shared_config_objects.json`** — the guard test fails until all three agree. An object used by
 exactly one app is not shared and belongs in none of them.
 
 ### `time_window` — when a unit of work runs
 
-**Parser:** `db_ops.lib.time_window.parse_time_window_config(entry, context=...)` →
+**Parser:** `dbabrain.lib.time_window.parse_time_window_config(entry, context=...)` →
 `ParsedTimeWindow`. **Used by:** the app daemon, sql_tasks, metrics, reports, backup_restore.
 
 **Evaluated by one function, not five:** `due_from_row(time_window, row, now, local_now)` → a
@@ -2947,8 +2957,8 @@ after it finishes. `sql_tasks` read `finished_at` and the reports app its last s
   means 22:00 through 06:00 the next morning; `from_day: 25, to_day: 5` means the 25th
   through the 5th of the next month.
 - **Every bound is evaluated in the timezone DBA Brain is running under** — `timezone` in
-  `config.json`, resolved once by `db_ops.lib.config.parse_config` and read through
-  `db_ops.lib.timezone.display_now()`. `from_hour: 1` means 01:00 **in that zone**, on every
+  `config.json`, resolved once by `dbabrain.lib.config.parse_config` and read through
+  `dbabrain.lib.timezone.display_now()`. `from_hour: 1` means 01:00 **in that zone**, on every
   node, whatever clock the host or the container keeps. There is no per-entry timezone and no
   per-app one: one declaration decides every window in every file, so two schedules can never
   mean two different 01:00s.
@@ -2983,9 +2993,9 @@ Deprecated aliases still read: `interval_seconds` → `repeat_interval`, `timeou
 
 ### `notify` — who gets told, and where
 
-**Parser:** `db_ops.lib.notify.parse_notify_config(entry, context=..., defaults=...,
+**Parser:** `dbabrain.lib.notify.parse_notify_config(entry, context=..., defaults=...,
 inherit=...)` → `NotifyConfig`. **Resolution:**
-`db_ops.lib.notify_route.notify_chat_id(level, notify)`. **Used by:** backup_restore
+`dbabrain.lib.notify_route.notify_chat_id(level, notify)`. **Used by:** backup_restore
 (entries and sub-jobs), sql_tasks (SQL targets).
 
 ```jsonc
@@ -3018,9 +3028,9 @@ Rules that hold everywhere:
   it — it can **never** switch on a level the node switched off, or a per-entry block would be
   a way to leak messages out of a deliberately muted node.
 - **Levels are data.** A Telegram group carrying `notify_level: "sla"` defines the level
-  `sla`; no code change is needed to route to a new group. `python -m db_ops.telegram.cli
+  `sla`; no code change is needed to route to a new group. `python -m dbabrain.telegram.cli
   groups` prints the whole resolved map — the Telegram app is the single reader of these
-  settings, and every app asks it through `db_ops.lib.notify_route`.
+  settings, and every app asks it through `dbabrain.lib.notify_route`.
 - **Silence is an alerting choice, not a logging one.** The file log and the `job_runs` row
   are always written. A silenced job is still fully recorded and still appears in reports.
 - **`"notify": {}` means "the caller's defaults"** — an app that notifies by default keeps
@@ -3052,9 +3062,9 @@ beside it, running every 15 minutes, would drown the group:
 
 ### Remote access (`cmd_access`) — how to reach a machine
 
-**Parser:** `db_ops.lib.cmd_access` — `resolve_platform`, `resolve_cmd_access`,
+**Parser:** `dbabrain.lib.cmd_access` — `resolve_platform`, `resolve_cmd_access`,
 `resolve_cmd_credential` read the block as *config*, and
-`db_ops.common.remote_exec.RemoteAccess.from_json(access, credential=..., secrets=...)` turns the
+`dbabrain.common.remote_exec.RemoteAccess.from_json(access, credential=..., secrets=...)` turns the
 resolved block into a session. **Used by:** metrics (cmd/docker collectors), host_ops, sre,
 backup_restore, control.
 
@@ -3092,7 +3102,7 @@ Full behaviour — sessions, script shipping, error classification — is in
 
 ### `sql_access` — how to run SQL against a target
 
-**Parser:** `db_ops.common.oracle_bridge.normalize_sql_access` (promoted from
+**Parser:** `dbabrain.common.oracle_bridge.normalize_sql_access` (promoted from
 `metrics.targets._resolve_sql_access` when `sql_run` became the second reader).
 
 ```jsonc
@@ -3109,7 +3119,7 @@ Full behaviour — sessions, script shipping, error classification — is in
 ```
 
 `direct` connects to the database. `api` and `subprocess` both run the SQL through the legacy
-Oracle tool instead — the only way to reach an Oracle 8i host, since no driver db_ops can install
+Oracle tool instead — the only way to reach an Oracle 8i host, since no driver dbabrain can install
 speaks 8.1.7. **The tool is not part of the package**: `tool_dir` and `python_exe` say where you
 installed it, and both default to the layout this project happened to use. They differ only in *where the tool runs*: `subprocess`
 starts it on this machine, `api` POSTs to a host that has it. Read by `metrics` (SQL-family
@@ -3168,7 +3178,7 @@ way, neither looked here.
 
 ---
 
-*Part of the db_ops component documentation set (`docs/NN_*`). This library underpins
+*Part of the dbabrain component documentation set (`docs/NN_*`). This library underpins
 ORD 01–12; changes here can affect every app, so run the shared-behavior tests
 (`tests/`) after modifying it.*
 ## SQL Server instance metadata (`sqlserver_instance`)
@@ -3199,16 +3209,16 @@ diffed, reviewed, and applied to a **newer** build, which is the actual requirem
 
 ```bash
 # Read the instance, write server/*.sql + manifest.json. Read-only.
-python -m db_ops.common.cli sqlserver-export-instance \
+python -m dbabrain.common.cli sqlserver-export-instance \
   '{"target": "ACME-192-0-2-115", "connection": {...}, "output_dir": "runtime/instance_bundles/2-115"}'
 
 # Apply a bundle to a target, in dependency order, with version/edition gates.
-python -m db_ops.common.cli sqlserver-replay-instance \
+python -m dbabrain.common.cli sqlserver-replay-instance \
   '{"target": "NEW-HOST", "connection": {...}, "bundle_dir": "runtime/instance_bundles/2-115",
     "phase": "pre-database", "dry_run": true}'
 
 # Compare a target against a bundle. Read-only.
-python -m db_ops.common.cli sqlserver-verify-instance \
+python -m dbabrain.common.cli sqlserver-verify-instance \
   '{"target": "NEW-HOST", "connection": {...}, "bundle_dir": "runtime/instance_bundles/2-115"}'
 ```
 
@@ -3273,8 +3283,8 @@ Worth stating because the failure mode would be silent and expensive:
 
 - **`sa` is never exported.** `data/sqlserver_instance_policy.json` lists it in
   `logins.skip_names` (with `distributor_admin`), and `skip_name_prefixes` drops `##`,
-  `NT AUTHORITY\`, `NT SERVICE\` and `BUILTIN\`. Replaying onto a db_ops-provisioned container
-  therefore cannot disturb the `sa` password db_ops itself issued and stores.
+  `NT AUTHORITY\`, `NT SERVICE\` and `BUILTIN\`. Replaying onto a dbabrain-provisioned container
+  therefore cannot disturb the `sa` password dbabrain itself issued and stores.
 - **A login that already exists keeps its own password.** Every `CREATE LOGIN` is wrapped in
   `IF NOT EXISTS`, and the generator emits no `ALTER LOGIN ... WITH PASSWORD` at all. The replay
   *adds* logins; it does not reconcile them.
@@ -3402,7 +3412,7 @@ so every user in a restored database is orphaned. These logins resolve.
 The trial also created a Database Master Key, a certificate, a symmetric key and an Always
 Encrypted CMK/CEK pair. **None of them are in the bundle, and none should be** — they are
 database-scoped, so they belong to the user-database backup. But three of them do not survive a
-restore onto a different instance either, and nothing in db_ops said so. The export now writes
+restore onto a different instance either, and nothing in dbabrain said so. The export now writes
 `server/crypto_prerequisites.txt` and raises a non-blocking gate:
 
 - A **Database Master Key** is encrypted by the instance's Service Master Key as well as by its
@@ -3488,11 +3498,11 @@ leave a restored database nobody can log into while the restore reports success.
 
 ### Where the bundle lives
 
-`runtime/instance_bundles/<source server_id>/server/`, **on the machine db_ops runs on** — the
+`runtime/instance_bundles/<source server_id>/server/`, **on the machine dbabrain runs on** — the
 worker, in production. Not `<backup_dir>/server`, which is what an earlier round of these notes
 promised: `backup_dir` is a path *inside the database container on the remote host*
 (`/var/opt/mssql/backup/dbops` on 203.0.113.188), reachable only over SSH by the backup script.
-The export is not a shell step — it is a TDS connection made from the db_ops node, writing with a
+The export is not a shell step — it is a TDS connection made from the dbabrain node, writing with a
 local `Path.write_text` — so aiming it at the container path would have quietly created that
 directory on the worker instead, next to nothing.
 
@@ -3569,11 +3579,11 @@ what the entries know:
 instance — the same rule the container branch already followed.
 
 **A bundle still has to exist.** It is written by the *backup* entry for that source instance, so a
-restore whose source db_ops does not back up has nothing to replay: `ACME_TO_MSSQL2025_DOCKER`
+restore whose source dbabrain does not back up has nothing to replay: `ACME_TO_MSSQL2025_DOCKER`
 restores from 192.0.2.250, whose backups are written by the customer's own SQL Agent onto an SMB
-share, and no db_ops backup entry covers it. Its block is therefore present and `enabled: false` —
+share, and no dbabrain backup entry covers it. Its block is therefore present and `enabled: false` —
 turning it on would warn once per run and change nothing else. Closing that needs a bundle source
-first: a db_ops backup entry for the instance, or an export taken from the live source at restore
+first: a dbabrain backup entry for the instance, or an export taken from the live source at restore
 time.
 
 
@@ -3586,7 +3596,7 @@ estate, a soak node and the shipped catalogue came to hold three different sched
 invisible from every other.
 
 ```bash
-python -m db_ops.common.cli app-command-set '{"app_code": "APP-BACKUP-RESTORE",
+python -m dbabrain.common.cli app-command-set '{"app_code": "APP-BACKUP-RESTORE",
                                               "time_window": {"repeat_interval": 30}}'
 ```
 

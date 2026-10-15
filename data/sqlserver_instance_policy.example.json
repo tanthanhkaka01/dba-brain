@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "notes": [
-    "Policy for db_ops.common.sqlserver_instance - exporting one SQL Server instance's server-level",
+    "Policy for dbabrain.common.sqlserver_instance - exporting one SQL Server instance's server-level",
     "metadata (logins, roles, permissions, Agent, linked servers, ...) as reviewable SQL and replaying",
     "it onto a freshly installed instance. It does NOT back up or restore master/msdb/model.",
     "Everything here is a decision about WHAT is portable between two instances, which is why it is",

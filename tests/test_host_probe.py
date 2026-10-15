@@ -2,7 +2,7 @@
 
 Three throwaway socket loops had answered this question by 2026-08-19, each with its own port list
 and its own reading of the result — the exact failure mode `CLAUDE.md` names when it says a task
-needing a scratch script belongs in `db_ops.common.cli` instead.
+needing a scratch script belongs in `dbabrain.common.cli` instead.
 
 The part worth testing is not the socket. It is the **verdict**, because the three outcomes lead to
 three different follow-ups and two of them are routinely confused: a host answering only on RDP is
@@ -13,8 +13,8 @@ pair is the case that forced the distinction — both are up, both refuse 5985, 
 
 import pytest
 
-from db_ops.common import host_probe
-from db_ops.lib.target_profile import TargetProfile
+from dbabrain.common import host_probe
+from dbabrain.lib.target_profile import TargetProfile
 
 
 def _probe(monkeypatch, open_ports, states=None, request=None):
@@ -121,7 +121,7 @@ def test_the_module_reads_no_file():
         for name in ([a.name for a in node.names] + ([node.module or ""] if isinstance(node, ast.ImportFrom) else []))
     }
     assert "data_sources" not in imported
-    assert not any(name.startswith("db_ops.lib.data_sources") for name in imported)
+    assert not any(name.startswith("dbabrain.lib.data_sources") for name in imported)
 
 
 def test_probe_port_tells_a_refusal_from_a_timeout():
@@ -141,7 +141,7 @@ def test_the_default_sweep_covers_both_management_transports_and_rdp():
 
 
 def test_a_windows_2003_profile_is_the_one_case_with_no_transport_at_all():
-    from db_ops.lib.target_profile import windows_management_transport_available
+    from dbabrain.lib.target_profile import windows_management_transport_available
 
     assert windows_management_transport_available(
         TargetProfile(platform="windows", os_major=5, os_minor=2)) is False

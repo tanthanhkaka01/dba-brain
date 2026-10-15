@@ -6,7 +6,7 @@ store backend refuses does not cost that row, it costs every row behind it. The 
 place to be forgiving about content, because the alternative is losing a monitoring cycle.
 """
 
-from db_ops.db.metric_store import MetricResult, MetricStore
+from dbabrain.db.metric_store import MetricResult, MetricStore
 
 
 def test_a_nul_byte_in_a_message_does_not_kill_the_whole_run(tmp_path):

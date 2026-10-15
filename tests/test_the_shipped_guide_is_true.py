@@ -1,20 +1,20 @@
 """`AGENTS.md` is the only documentation a fresh install has. It has to be true.
 
-After `pip install dbabrain` and `db-ops init`, the tool root contains configuration, empty
+After `pip install dbabrain` and `dbabrain init`, the tool root contains configuration, empty
 directories, and one document. There is no `docs/` in the wheel and no README in the root, so this
 file *is* the interface for whoever — or whatever — has to work out how to use the toolkit.
 
 Measured on 2026-09-08, at v0.11.0, four things in it were wrong:
 
 * it ended by saying backup/restore validation, SLA checks, scheduled SQL, reports, provisioning
-  and the web console were "not in this release" — all six were in `db-ops --help`;
+  and the web console were "not in this release" — all six were in `dbabrain --help`;
 * it used two different names for one command — `encrypt-secret` in the main flow and
   `encrypt-secret-text` in the Telegram section. Both work (the second is a dispatched alias), so
   this one was a readability defect rather than a dead end, which is worth stating precisely: the
   first reading of it was that the alias did not exist, and that was wrong;
 * it never mentioned `timezone`, required since 0.10.0, whose absence silently moves every
   hour-bounded schedule to UTC;
-* it never mentioned the daemon or `DB_OPS_NODE_ROLE=worker` — so a reader who followed it exactly
+* it never mentioned the daemon or `DBABRAIN_NODE_ROLE=worker` — so a reader who followed it exactly
   got one manual collection and no running estate.
 
 None of that fails a test, breaks a build, or shows up in a log. Documentation that is merely
@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import scaffold
+from dbabrain.common import scaffold
 
 
 @pytest.fixture(scope="module")
@@ -45,9 +45,9 @@ def test_every_command_the_guide_tells_you_to_run_exists(guide: str) -> None:
     the test exists to catch, one level up — and the first version of this test did exactly that,
     guessed two attribute names that do not exist, and reported four real commands as missing.
     """
-    from db_ops import cli as top_level
+    from dbabrain import cli as top_level
 
-    # `db_ops.cli.APPS` is the app dispatch table; the top-level verbs are the ones the dispatcher
+    # `dbabrain.cli.APPS` is the app dispatch table; the top-level verbs are the ones the dispatcher
     # matches on argv[0] directly, read from the source so an added command cannot be forgotten.
     source = Path(top_level.__file__).read_text(encoding="utf-8")
     top_level_names = set(re.findall(r'argv\[0\] == "([a-z][a-z0-9-]+)"', source))
@@ -60,12 +60,12 @@ def test_every_command_the_guide_tells_you_to_run_exists(guide: str) -> None:
     # 0.24.0: `init`, `guide`, `encrypt-secret`, `export-data`, `import-data` are aliases the
     # dispatcher forwards to `common.cli` (rules R41), read from its table like the apps are.
     known = set(top_level.APPS) | set(top_level.ALIASES) | top_level_names
-    assert known, "cannot enumerate commands from db_ops.cli — the dispatcher shape changed"
+    assert known, "cannot enumerate commands from dbabrain.cli — the dispatcher shape changed"
 
-    documented = set(re.findall(r"db-ops ([a-z][a-z0-9-]+)", guide))
+    documented = set(re.findall(r"dbabrain ([a-z][a-z0-9-]+)", guide))
     unknown = sorted(name for name in documented if name not in known)
     assert not unknown, (
-        f"AGENTS.md tells the reader to run {unknown}, which db-ops does not have. It is the only "
+        f"AGENTS.md tells the reader to run {unknown}, which dbabrain does not have. It is the only "
         f"documentation a fresh install ships, so a wrong command name here is a dead end.")
 
 
@@ -75,7 +75,7 @@ def test_the_guide_does_not_claim_shipped_capabilities_are_missing(guide: str) -
     Left alone, that sentence tells every new reader the product is a metrics collector. It is the
     most expensive kind of stale: not wrong about a detail, wrong about the scope.
     """
-    from db_ops import cli as top_level
+    from dbabrain import cli as top_level
 
     # Read from the dispatch table, so this cannot go on passing after an app is renamed.
     available = set(top_level.APPS)
@@ -89,7 +89,7 @@ def test_the_guide_does_not_claim_shipped_capabilities_are_missing(guide: str) -
     flat = " ".join(guide.lower().split())
     for phrase in ("are **not** in this release", "not in this release; they arrive later"):
         assert phrase not in flat, (
-            f"AGENTS.md still says capabilities are missing, but {present} are in db-ops --help.")
+            f"AGENTS.md still says capabilities are missing, but {present} are in dbabrain --help.")
 
 
 def test_the_guide_names_the_setting_that_silently_changes_every_schedule(guide: str) -> None:
@@ -99,13 +99,13 @@ def test_the_guide_names_the_setting_that_silently_changes_every_schedule(guide:
     in the output says so. That is precisely the kind of thing a first-run guide is for.
     """
     assert "timezone" in guide, "AGENTS.md never mentions the timezone field"
-    assert "DB_OPS_NODE_ROLE" in guide or "node_role" in guide, (
+    assert "DBABRAIN_NODE_ROLE" in guide or "node_role" in guide, (
         "AGENTS.md never mentions the node role, which decides whether the daemon runs anything")
 
 
 def test_the_guide_gets_the_reader_to_a_running_estate_not_one_manual_command(guide: str) -> None:
     """Collecting once by hand is not the product. The daemon is."""
-    assert "db-ops daemon" in guide, (
+    assert "dbabrain daemon" in guide, (
         "AGENTS.md never shows how to run the scheduler, so a reader who follows it exactly ends "
         "with one collection and nothing scheduled.")
 
@@ -123,9 +123,9 @@ def test_the_guide_says_where_the_rest_of_the_documentation_is(guide: str) -> No
 def test_the_package_name_is_a_command(monkeypatch) -> None:
     """You install `dbabrain`; typing `dbabrain` must do something.
 
-    Measured on a clean install: the only console script was `db-ops`, so the first thing a reader
-    typed after `pip install dbabrain` answered "command not found" - in a directory holding
-    `.venv` and nothing else, with no README to correct them.
+    Measured on a clean install: the only console script had another name, so the first thing a
+    reader typed after `pip install dbabrain` answered "command not found" - in a directory holding
+    `.venv` and nothing else, with no README to correct them. Since 0.29.0 it is the only command.
     """
     import tomllib
 
@@ -134,8 +134,7 @@ def test_the_package_name_is_a_command(monkeypatch) -> None:
     scripts = pyproject["project"]["scripts"]
 
     assert "dbabrain" in scripts, "the distribution is named dbabrain but installs no such command"
-    assert "db-ops" in scripts, "db-ops must stay: it is in every runbook and dated record"
-    assert scripts["dbabrain"] == scripts["db-ops"], "both names must reach the same dispatcher"
+    assert scripts == {"dbabrain": "dbabrain.cli:main"}, "one command, and it is the dispatcher"
 
 
 def test_with_no_tool_root_the_banner_says_what_to_type(tmp_path, monkeypatch, capsys) -> None:
@@ -143,7 +142,7 @@ def test_with_no_tool_root_the_banner_says_what_to_type(tmp_path, monkeypatch, c
 
     None of those apps can run before a tool root exists, so leading with them is twelve dead ends.
     """
-    from db_ops import cli
+    from dbabrain import cli
 
     monkeypatch.chdir(tmp_path)
     assert cli.main([]) == 0
@@ -154,28 +153,28 @@ def test_with_no_tool_root_the_banner_says_what_to_type(tmp_path, monkeypatch, c
     assert "dbabrain guide" in out
     assert "github.com/tanthanhkaka01/dba-brain" in out
     # The app list is the wrong answer here and must not be what leads.
-    assert "usage: db-ops <app>" not in out
+    assert "usage: dbabrain <app>" not in out
 
 
 def test_inside_a_tool_root_the_full_listing_comes_back(tmp_path, monkeypatch, capsys) -> None:
     """The first-run banner is for the first run only. Somebody standing in a configured root is
     asking the other question, and must not be told there is nothing here."""
-    from db_ops import cli
-    from db_ops.common import scaffold
+    from dbabrain import cli
+    from dbabrain.common import scaffold
 
     scaffold.initialise(tmp_path, app_name="dbabrain")
     monkeypatch.chdir(tmp_path)
     assert cli.main([]) == 0
     out = capsys.readouterr().out
 
-    assert "usage: db-ops <app>" in out
+    assert "usage: dbabrain <app>" in out
     assert "no tool root in this directory" not in out
 
 
 def test_the_guide_is_readable_before_anything_is_created(tmp_path, monkeypatch, capsys) -> None:
     """`guide` exists because until `init` runs there is no file to read, and deciding whether to
     run `init` is exactly when a reader wants to know what they are getting."""
-    from db_ops import cli
+    from dbabrain import cli
 
     monkeypatch.chdir(tmp_path)
     assert cli.main(["guide"]) == 0

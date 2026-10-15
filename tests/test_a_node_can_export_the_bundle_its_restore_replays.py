@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from db_ops.backup_restore import cli
+from dbabrain.backup_restore import cli
 
 
 def _job(backup_id="SRC_FULL", *, enabled=True):
@@ -28,7 +28,7 @@ def _run(monkeypatch, capsys, jobs, exported=None):
         seen.update(server_id=server_id, bundle_dir=str(bundle_dir))
         return exported
 
-    monkeypatch.setattr("db_ops.backup_restore.server_metadata.export_for_backup", export)
+    monkeypatch.setattr("dbabrain.backup_restore.server_metadata.export_for_backup", export)
     code = cli._export_instance_bundle("config.json", "SRC_FULL")
     return code, json.loads(capsys.readouterr().out), seen
 

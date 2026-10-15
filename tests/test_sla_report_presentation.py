@@ -13,8 +13,8 @@ incident because the page never showed the present tense beside the window.
 
 from __future__ import annotations
 
-from db_ops.sla.models import SlaPolicyResult, SlaValidationSummary
-from db_ops.sla.publish import publish_html, render_html
+from dbabrain.sla.models import SlaPolicyResult, SlaValidationSummary
+from dbabrain.sla.publish import publish_html, render_html
 
 
 def _result(policy_id="P", target_id="srv/sqlserver/svc", status="FAILED", *,

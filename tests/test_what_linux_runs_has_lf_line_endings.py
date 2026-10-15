@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-LINUX_RUNS = sorted(p for pattern in ("*.sh", "*.j2") for p in (ROOT / "db_ops").rglob(pattern))
+LINUX_RUNS = sorted(p for pattern in ("*.sh", "*.j2") for p in (ROOT / "dbabrain").rglob(pattern))
 
 
 def test_there_is_something_to_check():

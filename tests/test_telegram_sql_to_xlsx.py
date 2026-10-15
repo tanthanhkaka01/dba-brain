@@ -8,14 +8,14 @@ import pytest
 
 from conftest import patch_telegram
 
-from db_ops.common.sql_run import execute_capture_first
-from db_ops.db import DbOpsStore
-from db_ops.transport import common_cli
-from db_ops.telegram import command_processor, sql_commands
-from db_ops.telegram.commands import can_run_command
-from db_ops.telegram.command_processor import process_one_command_message
-from db_ops.telegram.sql_commands import SqlToXlsxError, run_sql_to_xlsx
-from db_ops.lib.xlsx_export import MAX_CELL_TEXT, write_result_set_xlsx
+from dbabrain.common.sql_run import execute_capture_first
+from dbabrain.db import DbaBrainStore
+from dbabrain.transport import common_cli
+from dbabrain.telegram import command_processor, sql_commands
+from dbabrain.telegram.commands import can_run_command
+from dbabrain.telegram.command_processor import process_one_command_message
+from dbabrain.telegram.sql_commands import SqlToXlsxError, run_sql_to_xlsx
+from dbabrain.lib.xlsx_export import MAX_CELL_TEXT, write_result_set_xlsx
 
 
 # --------------------------------------------------------------------------- #
@@ -234,7 +234,7 @@ def _patch_run_sql(monkeypatch, answer):
     own tests (``test_an_app_finishes_a_common_request_before_it_calls.py``), so here it passes the
     request through and what is checked is what this wrapper composes.
     """
-    from db_ops.telegram import sql_commands
+    from dbabrain.telegram import sql_commands
 
     monkeypatch.setattr(sql_commands, "_finished", lambda request, *, data_dir=None: dict(request))
     seen: dict = {}
@@ -311,7 +311,7 @@ def test_run_sql_to_xlsx_reports_which_login_ran_it(monkeypatch):
 def test_a_failed_run_sql_reaches_the_operator_with_its_reason(monkeypatch):
     """The reason has to survive the boundary: without this check a failed run became a
     KeyError on `columns` — a traceback where a sentence belongs."""
-    from db_ops.telegram import sql_commands
+    from dbabrain.telegram import sql_commands
 
     monkeypatch.setattr(sql_commands, "_finished", lambda request, *, data_dir=None: dict(request))
     monkeypatch.setattr(common_cli, "run_allowing_failure", lambda command, request, **_kw: (
@@ -325,7 +325,7 @@ def test_a_target_this_node_cannot_resolve_reaches_the_operator_before_any_call(
     """Since run-sql reads no configuration (rules R09) an unknown server_id is found here, while
     the login is filled - and it must still arrive as a sentence, not a traceback, and without
     run-sql being started for a request that cannot work."""
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     def refuse(command, request, *, data_dir=None):
         raise request_fill.RequestFillError("Unknown server_id: ACME-nope.")
@@ -380,7 +380,7 @@ def write_sql_to_xlsx_command(path):
 
 
 def insert_command_message(sqlite_path, text, *, user_id="100"):
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     store.upsert_telegram_messages(
         [
             {
@@ -541,7 +541,7 @@ def write_status_command(path, *, command_type):
 
 
 def test_cli_action_values_resolves_target_to_server_id(monkeypatch):
-    from db_ops.lib import data_sources as target_resolve
+    from dbabrain.lib import data_sources as target_resolve
 
     monkeypatch.setattr(
         target_resolve,
@@ -695,7 +695,7 @@ def test_list_server_id_command_replies_with_targets(tmp_path, monkeypatch):
          "ip": "192.0.2.10", "port": 1433, "db_type": "sqlserver",
          "instance_name": "MSSQLSERVER", "service_name": "SALESDB", "enabled": True},
     ])
-    monkeypatch.setattr("db_ops.lib.data_sources.DEFAULT_DATA_DIR", tmp_path)
+    monkeypatch.setattr("dbabrain.lib.data_sources.DEFAULT_DATA_DIR", tmp_path)
 
     command_message_id = insert_command_message(sqlite_path, "/spbot_list_server_id")
     result = process_one_command_message(

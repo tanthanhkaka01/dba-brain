@@ -6,9 +6,9 @@ The Reports App builds manual or scheduled reports from collected metric data an
 
 ## Package / Files
 
-- `db_ops/reports/` - `server-metrics.html` is built by `server_report.py` (the payload, the page, the publish) over four layers split out of it on 2026-10-03: `server_series.py` (the catalog, one server's series, freshness - imports nothing else of the page), `server_health.py` (areas, problems, timeline, health), `server_sections.py` (linked servers, volumes, capacity, Query Store, databases, jobs, access) and `server_oracle.py` (tablespaces and the Oracle sections). `server_report` re-exports every name, so `server_report.build_volumes` and the other names below still resolve; the catalog's caches are `server_series`'s
+- `dbabrain/reports/` - `server-metrics.html` is built by `server_report.py` (the payload, the page, the publish) over four layers split out of it on 2026-10-03: `server_series.py` (the catalog, one server's series, freshness - imports nothing else of the page), `server_health.py` (areas, problems, timeline, health), `server_sections.py` (linked servers, volumes, capacity, Query Store, databases, jobs, access) and `server_oracle.py` (tablespaces and the Oracle sections). `server_report` re-exports every name, so `server_report.build_volumes` and the other names below still resolve; the catalog's caches are `server_series`'s
 - `data/reports_config.json`
-- the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/db_ops.sqlite` when the backend is `sqlite`)
+- the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/dbabrain.sqlite` when the backend is `sqlite`)
 
 ## Index usage report (`rp_index_usage_by_server`) — one per server_id
 
@@ -37,7 +37,7 @@ that object from defaults.
 **PostgreSQL shares the SQL Server page rather than getting its own.** It is the one engine whose
 catalog answers the question properly: `pg_stat_user_indexes.idx_scan` is a real per-index read
 counter, and from PG 16 `last_idx_scan` says *when* it was last read — which SQL Server cannot
-tell you at all. Its SQL (`db_ops/metrics/collectors/postgresql/072_postgresql_index_usage.sql`) emits the
+tell you at all. Its SQL (`dbabrain/metrics/collectors/postgresql/072_postgresql_index_usage.sql`) emits the
 same field names, so the parser and renderer are shared; only the engine-specific words differ,
 and each of those is a way to print an instruction that does not work:
 
@@ -82,7 +82,7 @@ inventory included.
 The standalone command remains for ad-hoc use — one server, or a different window:
 
 ```bash
-python -m db_ops.reports.cli --config config.json index-usage-report [--days 3] [--limit 25] [--server-id ...]
+python -m dbabrain.reports.cli --config config.json index-usage-report [--days 3] [--limit 25] [--server-id ...]
 ```
 
 Rendered as tables, one recommended action **per row** — the right action differs inside a section,
@@ -106,14 +106,14 @@ feeds Telegram, where a 29k-row body is neither storable nor sendable. Two rende
 
 ### Running it by hand
 
-The reports CLI accepts `--key` / `--key-base64`, like every other db_ops CLI. Without them a
-manual run could not open the encrypted store: the daemon forwards `DB_OPS_SECRET_KEY` to the
+The reports CLI accepts `--key` / `--key-base64`, like every other dbabrain CLI. Without them a
+manual run could not open the encrypted store: the daemon forwards `DBABRAIN_SECRET_KEY` to the
 children it starts, but `docker exec` does not inherit it, so forcing a report by hand was
 impossible.
 
 ```bash
-python -m db_ops.reports.cli --key-base64 "<b64>" --config config.json index-usage-report
-python -m db_ops.reports.cli --key-base64 "<b64>" --config config.json inventory-workflow --days 7 --beauty 1
+python -m dbabrain.reports.cli --key-base64 "<b64>" --config config.json index-usage-report
+python -m dbabrain.reports.cli --key-base64 "<b64>" --config config.json inventory-workflow --days 7 --beauty 1
 ```
 
 ### Where to read it
@@ -155,9 +155,9 @@ machine it was cloned from — `self-status` reported exactly that on 2026-09-14
 unactionably, because there was no command.
 
 ```bash
-db-ops reports use-base-url http://192.0.2.10:8080/report_dba/   # what to publish
-db-ops reports use-base-url --this-node                          # this node's own ip, port, mount
-db-ops reports use-base-url --clear                              # back to the derived answer
+dbabrain reports use-base-url http://192.0.2.10:8080/report_dba/   # what to publish
+dbabrain reports use-base-url --this-node                          # this node's own ip, port, mount
+dbabrain reports use-base-url --clear                              # back to the derived answer
 ```
 
 A URL without a scheme is refused: a browser reads `192.0.2.10:8080/report_dba/` as a relative path
@@ -165,8 +165,8 @@ and every published link 404s. `--this-node` is refused inside a container, wher
 node can see is on the private pool and nobody outside reaches it — v0.4.0 shipped one of those as
 a clickable link.
 
-`--this-node` learns the address by running `python -m db_ops.common.cli self-status`, whose `data`
-carries this installation's `host.ip` and `runtime` — not by importing `db_ops.common.self_status`,
+`--this-node` learns the address by running `python -m dbabrain.common.cli self-status`, whose `data`
+carries this installation's `host.ip` and `runtime` — not by importing `dbabrain.common.self_status`,
 which is the rule `tests/test_app_common_imports.py` holds every app to. Only that one form pays for
 the subprocess: a URL and `--clear` need no address and do not spawn it. When `self-status` cannot
 answer, the command **refuses** rather than guessing — writing `report_base_url` against an
@@ -180,7 +180,7 @@ URL, so the two rules cannot nest an anchor inside an anchor.
 
 **Set, the HTML pages are now relative too** (changed 2026-09-10). The report *text* keeps the
 absolute URL, because half its audience reads it in Telegram; the renderer rewrites the `href` of
-any URL under `report_base_url` to the page name alone (`db_ops.lib.report_links`), so it resolves
+any URL under `report_base_url` to the page name alone (`dbabrain.lib.report_links`), so it resolves
 against whatever host served the page. A link to another host is left exactly as it is — rewriting
 that one would silently retarget a genuine external link at us. This closes the failure the old
 behaviour had: nothing re-renders a page already on disk, so when the estate moved on 2026-09-08
@@ -313,16 +313,16 @@ Metric history + report config -> report text generation -> `reports` row -> sch
 ## How to Run
 
 ```powershell
-python -m db_ops.reports.cli --config config.json create-metrics-reports --summary-limit 150
-python -m db_ops.reports.cli --config config.json create-metrics-reports --target-ip 192.0.2.115 --summary-limit 150
-python -m db_ops.reports.cli --config config.json create-backup-health-report --days 7
-python -m db_ops.reports.cli --config config.json push-report-alerts
-python -m db_ops.reports.cli --config config.json queue-metrics-reports --summary-limit 150
-python -m db_ops.reports.cli --config config.json run-scheduled --summary-limit 150 --backup-days 7
-python -m db_ops.reports.cli --config config.json force-hourly-report --target-ip 192.0.2.115 --summary-limit 150 --dedupe-seconds 0
-python -m db_ops.reports.cli --config config.json metric-history-report --server-id ACME-192-0-2-108 --metric-code SYSTEM_CPU_MEMORY --hours 24 --summary-limit 150 --dedupe-seconds 0
+python -m dbabrain.reports.cli --config config.json create-metrics-reports --summary-limit 150
+python -m dbabrain.reports.cli --config config.json create-metrics-reports --target-ip 192.0.2.115 --summary-limit 150
+python -m dbabrain.reports.cli --config config.json create-backup-health-report --days 7
+python -m dbabrain.reports.cli --config config.json push-report-alerts
+python -m dbabrain.reports.cli --config config.json queue-metrics-reports --summary-limit 150
+python -m dbabrain.reports.cli --config config.json run-scheduled --summary-limit 150 --backup-days 7
+python -m dbabrain.reports.cli --config config.json force-hourly-report --target-ip 192.0.2.115 --summary-limit 150 --dedupe-seconds 0
+python -m dbabrain.reports.cli --config config.json metric-history-report --server-id ACME-192-0-2-108 --metric-code SYSTEM_CPU_MEMORY --hours 24 --summary-limit 150 --dedupe-seconds 0
 # Disambiguate when several targets share one IP (e.g. HA cluster nodes on different ports):
-python -m db_ops.reports.cli --config config.json force-hourly-report --target-ip 192.0.2.249 --db-type postgresql --port 5433
+python -m dbabrain.reports.cli --config config.json force-hourly-report --target-ip 192.0.2.249 --db-type postgresql --port 5433
 ```
 
 `force-hourly-report` reports **the latest stored results** for one target, then queues its alerts. **It collects nothing** (0.24.0, the operator: *a report does not run metrics*): it used to start `metrics.cli collect --force` for the target first - one app running another's CLI (rules R42), and on-demand work against a production instance at whatever hour someone typed it. So the report is at most one collection cycle old. A target with no stored rows is refused with the reason - collection switched off, or not reached by the schedule yet. `--include-windowed` is refused with the command that replaces it: to collect a night-window metric in the daytime, run `metrics.cli collect --target-id <id> --force --include-windowed` first.
@@ -354,13 +354,13 @@ reporting (the control app's `inventory-*` commands are legacy — see
 
 ```powershell
 # Build only the dated health overlay from collected metrics:
-python -m db_ops.reports.cli build-inventory-health --days 7
+python -m dbabrain.reports.cli build-inventory-health --days 7
 
 # Full workflow: build overlay -> merge into architecture/database-inventory.json -> render summary:
-python -m db_ops.reports.cli inventory-workflow --days 7
+python -m dbabrain.reports.cli inventory-workflow --days 7
 
 # ...same, plus the styled HTML + Markdown report (TEMPLATE.html / TEMPLATE.md layout):
-python -m db_ops.reports.cli inventory-workflow --days 7 --beauty 1
+python -m dbabrain.reports.cli inventory-workflow --days 7 --beauty 1
 ```
 
 | Command | What it does |
@@ -398,7 +398,7 @@ safe:
   appended. Nothing is ever removed — a server dropped from `db_instances.json` keeps its page and
   its history until a person deletes it.
 * **idempotent.** A daily workflow does not grow the file.
-* **the register decides**, through the flags db_ops already cascades —
+* **the register decides**, through the flags dbabrain already cascades —
   `enabled` → `metrics` → `reports` → `alerts`, each defaulting to the one before
   (`lib.target_flags`). A plain registration with no flags is collected *and* reported, which is
   what makes "add an instance and it appears" true without a second switch to learn.
@@ -407,7 +407,7 @@ That last point replaced an older rule, deliberately. Until 2026-09-12 a server 
 canonical file stayed deleted, on the reasoning that the file is the operator's. It is — but the
 cost was forty-two invisible instances, and the deliberate-removal case keeps a better route than
 deletion: `reports: {"enabled": false}` on the instance keeps it collected and off the page, and
-`enabled: false` stops both. Both are read from the register, where every other part of db_ops
+`enabled: false` stops both. Both are read from the register, where every other part of dbabrain
 already looks.
 
 **The SLA app needed no such fix and got none.** Its population comes from
@@ -424,7 +424,7 @@ run. An instance registered *after* the seed is not added — the merge reports 
 the canonical inventory; add it to the file.
 
 The styled report's HTML shell is shipped as package data at
-`db_ops/reports/templates/inventory_report.html`; the renderer (`db_ops/reports/inventory_report.py`)
+`dbabrain/reports/templates/inventory_report.html`; the renderer (`dbabrain/reports/inventory_report.py`)
 injects the computed `SCOPE` / `SERVERS` / `TRIAGE` data the template renders from. Triage
 (Priority Attention) items are **auto-derived from thresholds** (violated backup RPO, low disk,
 low PLE, config drift, xp_cmdshell, un-collected hosts) plus one card per current metric problem
@@ -488,7 +488,7 @@ booted" — on the instance measured, nine months.
 
 Three collectors now record those totals raw and grade nothing
 (`PERFORMANCE_WORKLOAD_COUNTERS`, `PERFORMANCE_QUERY_STATS_TOTALS`, `PERFORMANCE_WAIT_TOTALS` —
-see `docs/04_metrics_engine.md`), and `db_ops/reports/workload.py` subtracts two collections.
+see `docs/04_metrics_engine.md`), and `dbabrain/reports/workload.py` subtracts two collections.
 Both pages render from that one builder, so they cannot describe the same hour differently.
 
 **On `server-metrics.html`** — a folded section, open by default, under the coverage block:
@@ -532,7 +532,7 @@ the top wait beside it because *busy* and *busy waiting on WRITELOG* are differe
 
 Added 2026-09-11, directly under Workload: the WRITELOG row and the plan-cache table there say *how
 much*, these two blocks say *which database* and *which statement*. Built by
-`db_ops/reports/workload_attribution.py` from `PERFORMANCE_LOG_BY_DATABASE` and
+`dbabrain/reports/workload_attribution.py` from `PERFORMANCE_LOG_BY_DATABASE` and
 `PERFORMANCE_TOP_QUERIES` — `metric_results` only, never a live query — over the same three windows.
 Each entity is differenced against **its own** earlier sample.
 
@@ -615,7 +615,7 @@ Manager figure is a combination of the nodes rather than the worst of them, whic
 **Which partitions are holding the buffer pool.** Asked on 2026-09-11 after a manual
 `sys.dm_os_buffer_descriptors` scan on 192.0.2.250 found 31.88 GB of *future-dated* partitions
 cached against 6.81 GB of past and current ones — a third of the pool held by days that have not
-happened, pulled in by a join that could not eliminate partitions. Nothing in db_ops reads that
+happened, pulled in by a join that could not eliminate partitions. Nothing in dbabrain reads that
 DMV, and this section cannot answer it: it reports the pool's **size and pressure**, never its
 **contents**.
 
@@ -921,7 +921,7 @@ reports `sys.databases.state_desc` (`ONLINE`) and PostgreSQL follows it, while O
 the literal `ONLINE` made **every Oracle instance in the fleet read `0/1 databases online`**,
 permanently, and be graded WARNING on it — while the database was open and serving.
 
-The rule is `db_ops.lib.inventory_render.is_database_online()`, in `lib` because the fleet page's
+The rule is `dbabrain.lib.inventory_render.is_database_online()`, in `lib` because the fleet page's
 `online/total` count, the per-server database table and the summary's "Databases not ONLINE" line
 all decide it, and two pages disagreeing about one database is worse than either being wrong
 alone. The page's own JavaScript carries the same list as `ONLINE_STATES`; a test asserts the two
@@ -1020,7 +1020,7 @@ cannot say is that the other volume is 199 GB, or that 28% of the first one leav
 headroom while the same percentage on the second would leave 143 GB. **Size is what turns a
 percentage into a decision**, and it was collected all along: `total_gb`, `used_gb`, `free_gb`,
 `filesystem` and the device or volume label ride in the message of both
-`db_ops/metrics/collectors/os/windows/003_os_disk_usage.ps1` and `db_ops/metrics/collectors/os/linux/003_os_disk_usage.sh`.
+`dbabrain/metrics/collectors/os/windows/003_os_disk_usage.ps1` and `dbabrain/metrics/collectors/os/linux/003_os_disk_usage.sh`.
 The report parsed out the percentage and discarded the rest.
 
 `server_report.build_volumes()` renders one row per volume, fullest first: size, used, free, used %
@@ -1083,7 +1083,7 @@ volume two days from full and one flat for a month rendered identically. The sto
 answer: `192.0.2.115`'s `L:` fell 618 GB → 163 GB in three days while `SALESDB`'s log grew
 21 → 428 GB.
 
-The analysis is [`db_ops/lib/capacity_forecast.py`](../db_ops/lib/capacity_forecast.py) — in
+The analysis is [`dbabrain/lib/capacity_forecast.py`](../dbabrain/lib/capacity_forecast.py) — in
 `common`, because the fleet page and the server page must not disagree about which volume is about
 to fill. `server_report.build_capacity()` reads the **raw store rows** (like `backup` and
 `linkedServers`): the chart pipeline drops and caps series for display, and a slope wants every
@@ -1112,7 +1112,7 @@ not zero.
 All three pages answer `?date=YYYY-MM-DD`; see [`12_webhost_app.md`](./12_webhost_app.md) for the
 resolution rules. The inventory gets it free (it is published per run under a stamped name); the
 other two keep stable names, so each run also writes one dated copy per calendar day via
-`db_ops.lib.report_archive.archive_daily()` — the page **and** its series files, since reading
+`dbabrain.lib.report_archive.archive_daily()` — the page **and** its series files, since reading
 the page at a past date means fetching that date's series, not today's.
 
 Adding a new published file that should be readable by date? Archive it in the same pass, or
@@ -1125,7 +1125,7 @@ unreachable. The data is not missing — `metric_results` is append-only — so 
 re-rendered from the rows collected at the time:
 
 ```bash
-python -m db_ops.reports.cli --config config.json backfill-dated-reports \
+python -m dbabrain.reports.cli --config config.json backfill-dated-reports \
     --date 2026-08-01 --date 2026-08-02 --days 7
 ```
 
@@ -1155,7 +1155,7 @@ NULL-item rows included.** Not the newest row per item. When a metric's conditio
 collector writes one row with `metric_item = NULL` ("SQL returned no rows"); that lands in a
 different partition from the item it cleared, so per-item recency kept a CRITICAL lock row on the
 fleet page for the whole window after blocking had ended. Implemented in
-`db_ops/lib/health_model.py` (`latest_snapshot`), applied by
+`dbabrain/lib/health_model.py` (`latest_snapshot`), applied by
 `MetricStore.fetch_severity_by_server`, `MetricStore.fetch_current_problems` and
 `inventory_health.index_by_server`. `metric_results` stays append-only — timelines and charts
 read the history; a verdict never does.
@@ -1193,7 +1193,7 @@ nothing judges it; its memory is percent of the container's limit, WARNING at 90
 problem carries its own action - the docker host, `docker ps -a`, `docker logs` - not the CPU note.
 
 **Backup is judged per database against a policy**, never from the newest backup evidence on the
-instance — see `data/backup_policy.json` and `db_ops/lib/backup_policy.py`. Each database gets
+instance — see `data/backup_policy.json` and `dbabrain/lib/backup_policy.py`. Each database gets
 the types its recovery model and the policy require, with `compliant/eligible` counts per type; a
 type the policy does not require reads *not required*, not *missing*. A stale LOG backup is
 reported as an **RPO violation**, never as a broken chain: chain continuity needs backup LSNs and
@@ -1209,7 +1209,7 @@ first: without a policy the verdict is `UNKNOWN`, `compliant` is 0 while `eligib
 databases evidence was found for, the coverage cell reads **No policy configured** rather than
 *No policy match*, the badge is grey *Unverified* rather than green *Compliant*, and Priority
 Attention carries a card naming the file. `init` writes the shipped default
-(`db_ops/backup_restore/catalogue/backup_policy.json`), so a fresh install grades from its first
+(`dbabrain/backup_restore/catalogue/backup_policy.json`), so a fresh install grades from its first
 collection instead of waiting to be told how.
 
 ## Useful Manual Queries
@@ -1244,7 +1244,7 @@ LIMIT 50;
 The reports app resolves its config file using this chain:
 
 1. `--config <path>` CLI argument.
-2. `DB_OPS_REPORTS_CONFIG` environment variable.
+2. `DBABRAIN_REPORTS_CONFIG` environment variable.
 3. `config.reports.json` next to `config.json`, or in the current working directory.
 4. `config.json` shared fallback.
 

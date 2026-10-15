@@ -25,7 +25,7 @@ import pytest
 
 from conftest import shipped_config
 
-from db_ops.telegram.command_processor import menu_order_of
+from dbabrain.telegram.command_processor import menu_order_of
 
 MD = Path("data") / "telegram_support_commands.md"
 

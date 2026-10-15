@@ -15,8 +15,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.jobs import daemon
-from db_ops.lib import app_timeout
+from dbabrain.jobs import daemon
+from dbabrain.lib import app_timeout
 from test_jobs_daemon import (
     FakeConfig,
     FakeProcess,

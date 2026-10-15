@@ -10,7 +10,7 @@ examples are the reference; this page is the map.
 
 Paths here are relative to the **tool root** — the directory holding `config.json` and this
 folder — so `data/store_config.json` means the `store_config.json` next to this README. How that
-directory is located (`DB_OPS_HOME`, then the working directory, then the package) is in
+directory is located (`DBABRAIN_HOME`, then the working directory, then the package) is in
 [`docs/configuration.md`](../docs/configuration.md).
 
 `config.json` at the tool root holds only runtime settings — `log_dir`, `runtime_dir`, log levels,
@@ -66,10 +66,10 @@ scheduler, which is why a few field names still read like columns.
 
 App-owned config files:
 
-- `store_config.json`: which database db_ops stores its **own** runtime data in — `backend` is `sqlite` or `postgresql`, and the matching section holds the full connection details. See "Runtime Store Backend" below.
+- `store_config.json`: which database dbabrain stores its **own** runtime data in — `backend` is `sqlite` or `postgresql`, and the matching section holds the full connection details. See "Runtime Store Backend" below.
 - `config_catalog.json`: which files in this folder are mirrored into the runtime store, which app
   owns each, and the field(s) that identify one record inside a file. It is the **allow-list** for
-  `python -m db_ops.db.cli sync-config`: a file not listed here is never synced, which is why
+  `python -m dbabrain.db.cli sync-config`: a file not listed here is never synced, which is why
   `encrypted_secret_text.json`, the `*.example.json` samples and the generated
   `database-inventory.json` are deliberately absent. Adding a new config file to this folder means
   adding it here too (or to the `NOT_SYNCED` list in `tests/test_config_sync.py`, with the reason).
@@ -79,7 +79,7 @@ App-owned config files:
   `notify_rule`, `cmd_access`, `sql_access` and the field `cleanup_retention` — with each field's
   type, whether it is required, its range, its default, and what its number is measured against.
   It is identical on every node, nothing an app decides reads it, and editing it changes nothing.
-  It is here rather than only in `docs/` so a program can ask: `python -m db_ops.common.cli
+  It is here rather than only in `docs/` so a program can ask: `python -m dbabrain.common.cli
   describe-object '{"object": "time_window", "field": "retry_interval"}'` — which is how the
   console and the bot answer a field question. `tests/test_shared_config_objects_reference.py`
   checks it against the code, so it cannot quietly go stale; that guard is the only thing that
@@ -87,7 +87,7 @@ App-owned config files:
 - `config_references.json`: **also reference.** Which field in which file must point at
   which field in another - `backups[].server_id` into `db_instances.json`,
   `sql_targets[].credential_name` into `users.json`, and five more. `python -m
-  db_ops.common.cli check-references '{}'` follows all of them and reports the ones that
+  dbabrain.common.cli check-references '{}'` follows all of them and reports the ones that
   land nowhere; only **active** records fail, and an inactive one is listed rather than
   ignored. It exists because of a run on 2026-09-19: an active backup named a `server_id`
   the worker's inventory did not have, both files were valid, and the first report of it was
@@ -97,9 +97,9 @@ App-owned config files:
   stored session carry the same lifetime, which is why closing the browser does not sign anyone
   out; shorten it to shorten both), the cookie flags, the lockout thresholds, and the
   `min_level_*` gates checked against a user's level of 1..100. The `apps` array is one entry per
-  package under `db_ops/` — all fourteen — with the `app_command_ids` each owns, which is how a
+  package under `dbabrain/` — all fourteen — with the `app_command_ids` each owns, which is how a
   block shows its schedule and its last run. See `docs/12_webhost_app.md`.
-- `app_commands.json`: top-level app command definitions for `db_ops.jobs.daemon`.
+- `app_commands.json`: top-level app command definitions for `dbabrain.jobs.daemon`.
 - `metric_definitions.json`: metric catalog and SQL variant mapping. Each metric also declares what
   a **failed** collection of it is worth: `connection_error_severity` (never reached the target)
   and `execution_error_severity` (connected, but the check failed) — `WARNING` on every metric
@@ -111,23 +111,23 @@ App-owned config files:
   (`format`: `xlsx` / `plain` / `none` — absent means `plain`; `max_rows` for how many rows a `plain`
   target sends to the chat, 1..5000, default 1000 — past a few hundred use `xlsx` instead, because
   the limit is Telegram's rate limit rather than memory). See `docs/05_sql_task_runner.md`.
-- `reports_config.json`: scheduled report definitions consumed by `db_ops.reports.cli run-scheduled`.
+- `reports_config.json`: scheduled report definitions consumed by `dbabrain.reports.cli run-scheduled`.
 - `backup_policy.json`: what each database is required to be backed up with — required FULL/DIFF/LOG
   types (LOG keyed by recovery model) and the warn/critical age for each, with per-server and
   per-database `overrides`. The reports evaluate every eligible database against this rather than
   taking the newest backup on the instance as the instance's answer. **Deleting it does not make the
   backup report quiet, it makes it refuse to grade**: every server reads *Unverified* and Priority
-  Attention names the missing file. `db-ops init` writes the shipped default, so a node should never
+  Attention names the missing file. `dbabrain init` writes the shipped default, so a node should never
   be without one. See `docs/06_reports_app.md`.
 - `restore_config.json`: backup restore source/target/database mapping.
 - `maintenance_policy.json`: timing budgets and thresholds for host maintenance operations
-  (`db_ops.common.host_ops`, `db_ops.common.sqlserver_patch`): how long to wait for a host to go
+  (`dbabrain.common.host_ops`, `dbabrain.common.sqlserver_patch`): how long to wait for a host to go
   down, come back and finish starting its services, plus the disk/backup-age gates a SQL Server
   cumulative update must pass. Resolution is built-in defaults < `defaults` < `servers.<server_id>`
   < the request's own `wait` block, so one slow host is a config entry rather than a code change.
   See `docs/13_common.md`.
 - `sqlserver_instance_policy.json`: what is portable between two SQL Server instances, for
-  `db_ops.common.sqlserver_instance` (`sqlserver-export-instance` / `-replay-instance` /
+  `dbabrain.common.sqlserver_instance` (`sqlserver-export-instance` / `-replay-instance` /
   `-verify-instance`). A SQL Server backup covers user databases only — `master`/`msdb`/`model`
   are excluded — so logins, server roles, credentials, linked servers, endpoints, `sp_configure`,
   Database Mail and SQL Agent survive nowhere in the bundle. This file declares the artifact set
@@ -140,7 +140,7 @@ App-owned config files:
 
 ## Runtime Store Backend
 
-The database db_ops writes its own operational data to (job runs, metric results, reports, SLA
+The database dbabrain writes its own operational data to (job runs, metric results, reports, SLA
 runs, Telegram messages, backup/restore history) is declared in:
 
 ```text
@@ -148,34 +148,34 @@ data/store_config.json
 data/store_config.example.json
 ```
 
-This is **not** about the databases db_ops monitors — those live in `db_instances.json`.
+This is **not** about the databases dbabrain monitors — those live in `db_instances.json`.
 
 ```json
 {
   "backend": "sqlite",
-  "sqlite": { "path": "runtime/db_ops.sqlite", "connection_string": "sqlite:///runtime/db_ops.sqlite" },
+  "sqlite": { "path": "runtime/dbabrain.sqlite", "connection_string": "sqlite:///runtime/dbabrain.sqlite" },
   "postgresql": { "host": "...", "port": 5433, "database_name": "db_ops", "schema": "db_ops",
                   "username": "postgres", "password_ref": "POSTGRES_WORKER",
-                  "connection_string": "postgresql://postgres:{password}@.../db_ops?..." }
+                  "connection_string": "postgresql://postgres:{password}@.../dbabrain?..." }
 }
 ```
 
 Rules:
 
 - `backend` picks the live section: `sqlite` or `postgresql` (`postgres` accepted as an alias).
-- **Who creates what.** On `sqlite`, db_ops creates the file and its parent folder itself — the
+- **Who creates what.** On `sqlite`, dbabrain creates the file and its parent folder itself — the
   path is the whole configuration. On `postgresql` it creates **neither the database nor the
   schema**: point it at ones that already exist and it builds only the tables inside them, on
   first use. An absent database fails at connect (`3D000 database "..." does not exist`) rather
-  than being created silently. `python -m db_ops.db.cli create-store-database` is an optional,
+  than being created silently. `python -m dbabrain.db.cli create-store-database` is an optional,
   idempotent helper that will `CREATE DATABASE` + `CREATE SCHEMA` when the login may; where a
   DBA provisions them, skip it and run `init` alone. See `docs/01_runtime_store.md`.
 - **`schema` is free** — any name works and the tables land there, not in `public`; blank means
-  `public`. `db_ops` is only what this tree happens to use.
+  `public`. `dbabrain` is only what this tree happens to use.
 - **PostgreSQL also needs a login, already in place.** SQLite has none — the file is reached by
   path. PostgreSQL needs `postgresql.username` here, the password already encrypted into
   `encrypted_secret_text.json` under the name `password_ref` gives, and the passphrase supplied
-  at run time (`DB_OPS_SECRET_KEY` / `--key-base64`). None of the three is created for you, and
+  at run time (`DBABRAIN_SECRET_KEY` / `--key-base64`). None of the three is created for you, and
   a ref that is configured but absent raises rather than connecting as nobody. A missing role and
   a wrong password look identical (`28P01 password authentication failed`), so check both. The
   role needs `CONNECT` on the database and `USAGE` **+ `CREATE`** on the schema, because `init`
@@ -184,26 +184,26 @@ Rules:
 - `connection_string` is authoritative when non-empty; the sibling fields are the readable
   breakdown and build the string when it is blank. Only one of the two is ever read, so the file
   cannot state two different destinations.
-- Relative paths resolve against the **tool root**, not `data/` — `runtime/db_ops.sqlite` means
-  `<tool_root>/runtime/db_ops.sqlite` on every node.
+- Relative paths resolve against the **tool root**, not `data/` — `runtime/dbabrain.sqlite` means
+  `<tool_root>/runtime/dbabrain.sqlite` on every node.
 - No password here. `password_ref` names a key in `data/encrypted_secret_text.json`, decrypted at
-  runtime with `DB_OPS_SECRET_KEY` and substituted into the `{password}` placeholder.
+  runtime with `DBABRAIN_SECRET_KEY` and substituted into the `{password}` placeholder.
 - An explicit `sqlite_path` in the config being loaded still overrides this file (the
   standalone-EXE layouts rely on it); an inline `store` block overrides it too.
 - **Start on `sqlite`, move to `postgresql` when the store matters** — more than one node writing
-  to it, or history you want to outlive the machine. Both engines are fully live: `DbOpsStore` and
-  the metrics/SLA/backup-restore stores all go through `db_ops.db.backend`, so `backend` is the
+  to it, or history you want to outlive the machine. Both engines are fully live: `DbaBrainStore` and
+  the metrics/SLA/backup-restore stores all go through `dbabrain.db.backend`, so `backend` is the
   only switch, and the unused section stays in the file fully specified so switching back is not a
   rediscovery of host, port and credentials. See `docs/01_runtime_store.md`.
 
 Check what a node resolved:
 
 ```powershell
-python -m db_ops.jobs.cli status
-python -m db_ops.db.cli store-info
+python -m dbabrain.jobs.cli status
+python -m dbabrain.db.cli store-info
 ```
 
-Provision the PostgreSQL store and migrate SQLite into it with `python -m db_ops.db.cli`
+Provision the PostgreSQL store and migrate SQLite into it with `python -m dbabrain.db.cli`
 (`create-store-database`, `migrate-sqlite-to-postgres`, `verify-migration`, `snapshot-sqlite`).
 Run it on the node that owns the SQLite file — see `docs/01_runtime_store.md`.
 
@@ -235,7 +235,7 @@ Sample file:
 data/telegram_groups.example.json
 ```
 
-Standard DB Ops levels:
+Standard dbabrain levels:
 
 | Level | Meaning |
 | --- | --- |
@@ -295,7 +295,7 @@ Command message status:
 | `-2` | No matching command configuration |
 
 `command_type` is the **minimum clearance level** a command needs — not a fixed enumeration. Any
-level works (1, 2, 3, 10, 100) with no code change; see `db_ops/telegram/commands.py::can_run_command`.
+level works (1, 2, 3, 10, 100) with no code change; see `dbabrain/telegram/commands.py::can_run_command`.
 
 | command_type | Meaning |
 | --- | --- |
@@ -335,7 +335,7 @@ Two files, because they answer different questions and `common` reads no Telegra
 clearance lives here, the confirmation cost lives in `emergency_operations.json`, and
 `tests/test_emergency_operations.py` pins that they carry the same number for the same operation.
 The confirmation is enforced by the CLI, not by this config — calling
-`python -m db_ops.common.cli host-restart` directly costs exactly the same two answers.
+`python -m dbabrain.common.cli host-restart` directly costs exactly the same two answers.
 
 Levels in use (raised on 2026-07-31, after an audit found that an unregistered Telegram user
 reached the listing commands):
@@ -350,7 +350,7 @@ reached the listing commands):
 Fetch Telegram updates and persist messages, groups, and users. Messages are stored in the runtime store, while groups and users remain JSON configuration files:
 
 ```powershell
-python -m db_ops.telegram.cli --config config.json save-updates --limit 20
+python -m dbabrain.telegram.cli --config config.json save-updates --limit 20
 ```
 
 ## DB Instance Metrics Template
@@ -437,7 +437,7 @@ data/docker_db_connections.json
 This file is written/updated automatically by:
 
 ```bash
-python -m db_ops.sre.cli create-db-docker --name pg_lab_01 --engine postgres \
+python -m dbabrain.sre.cli create-db-docker --name pg_lab_01 --engine postgres \
   --version 16 --mode single --host-port 5433 --password-ref POSTGRES_PASSWORD
 ```
 
@@ -456,7 +456,7 @@ Build it on the worker's host from the master with the control app; the record a
 password are written on the master, and the worker has them after the next deploy:
 
 ```bash
-python -m db_ops.control.cli worker-create-db-docker --key-base64 "<key>" \
+python -m dbabrain.control.cli worker-create-db-docker --key-base64 "<key>" \
   --name pg_lab_01 --engine postgres --version 16 --mode single \
   --host-port 5433 --password-ref POSTGRES_PASSWORD
 ```

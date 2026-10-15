@@ -24,8 +24,8 @@ def _ts(hours: float = 0) -> str:
 
 import pytest
 
-from db_ops.reports.inventory_health import build_server_overlay
-from db_ops.reports.inventory_report import _merge_findings, _status
+from dbabrain.reports.inventory_health import build_server_overlay
+from dbabrain.reports.inventory_report import _merge_findings, _status
 
 
 def _model(**over):
@@ -121,7 +121,7 @@ def test_overlay_without_severity_is_still_valid():
     assert build_server_overlay("SRV", "10.0.0.1", {})["metric_severity"] == {}
 
 
-@pytest.mark.parametrize("module_name", ["db_ops.reports.inventory_summary", "db_ops.control.inventory"])
+@pytest.mark.parametrize("module_name", ["dbabrain.reports.inventory_summary", "dbabrain.control.inventory"])
 def test_both_merge_allowlists_carry_the_new_blocks(module_name):
     """HEALTH_BLOCKS gates which overlay blocks survive the merge, and there are two copies of it.
     A block missing from one is silently dropped before the report renders.
@@ -151,10 +151,10 @@ def test_severity_uses_only_the_latest_row_per_metric_item(tmp_path):
     failure that had already recovered, and inflated warning counts by re-counting the same
     condition once per collection cycle.
     """
-    from db_ops.metrics.models import MetricResult
-    from db_ops.metrics.storage import MetricStore
+    from dbabrain.metrics.models import MetricResult
+    from dbabrain.metrics.storage import MetricStore
 
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     run = store.start_run(started_at=_ts(0))
 
@@ -175,10 +175,10 @@ def test_severity_uses_only_the_latest_row_per_metric_item(tmp_path):
 
 
 def test_a_still_failing_metric_is_still_critical(tmp_path):
-    from db_ops.metrics.models import MetricResult
-    from db_ops.metrics.storage import MetricStore
+    from dbabrain.metrics.models import MetricResult
+    from dbabrain.metrics.storage import MetricStore
 
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     run = store.start_run(started_at=_ts(0))
     for stamp in (_ts(1), _ts(9)):

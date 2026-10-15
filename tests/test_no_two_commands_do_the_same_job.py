@@ -30,7 +30,7 @@ import pytest
 
 
 REPO = Path(__file__).resolve().parents[1]
-PACKAGE = REPO / "db_ops"
+PACKAGE = REPO / "dbabrain"
 _KEBAB = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 
 

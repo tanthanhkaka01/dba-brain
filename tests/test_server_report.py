@@ -13,8 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.reports.server_report import (
+from dbabrain.db import DbaBrainStore
+from dbabrain.reports.server_report import (
     MAX_POINTS,
     PAGE_NAME,
     build_server_pages,
@@ -29,7 +29,7 @@ def stamp(minutes_ago: int) -> str:
 
 
 def seed(sqlite_path, rows):
-    DbOpsStore(sqlite_path).initialize()
+    DbaBrainStore(sqlite_path).initialize()
     with sqlite3.connect(sqlite_path) as conn:
         conn.executemany(
             """
@@ -44,7 +44,7 @@ def seed(sqlite_path, rows):
 
 def seed_with_messages(sqlite_path, rows):
     """Seed rows whose collector message is significant to the report."""
-    DbOpsStore(sqlite_path).initialize()
+    DbaBrainStore(sqlite_path).initialize()
     with sqlite3.connect(sqlite_path) as conn:
         conn.executemany(
             """
@@ -394,7 +394,7 @@ def test_rebuilding_the_same_day_overwrites_instead_of_adding_files(sqlite_path,
 # --------------------------------------------------------------------------- #
 # The verdict: the page has to answer "is this server healthy" before anything else.
 # --------------------------------------------------------------------------- #
-from db_ops.reports.server_report import (  # noqa: E402
+from dbabrain.reports.server_report import (  # noqa: E402
     STALE_AFTER_SECONDS,
     build_areas,
     build_payload,
@@ -554,7 +554,7 @@ def test_metric_codes_get_a_readable_name_and_keep_the_code():
 
 
 def test_the_cadence_exemption_reads_the_metric_catalog(tmp_path):
-    from db_ops.reports.server_report import _is_low_cadence, metric_intervals
+    from dbabrain.reports.server_report import _is_low_cadence, metric_intervals
 
     catalog = tmp_path / "metric_definitions.json"
     catalog.write_text(json.dumps({"metrics": [
@@ -569,7 +569,7 @@ def test_the_cadence_exemption_reads_the_metric_catalog(tmp_path):
 
 
 def test_the_sparse_item_exemption_reads_the_metric_catalog(tmp_path):
-    from db_ops.reports.server_report import sparse_item_metric_codes
+    from dbabrain.reports.server_report import sparse_item_metric_codes
 
     catalog = tmp_path / "metric_definitions.json"
     catalog.write_text(json.dumps({"metrics": [
@@ -682,7 +682,7 @@ def test_the_page_script_declares_each_top_level_name_once():
     A duplicate top-level declaration is always that bug: JavaScript rejects the file outright
     rather than letting the second one win.
     """
-    from db_ops.reports.server_report import TEMPLATE_HTML
+    from dbabrain.reports.server_report import TEMPLATE_HTML
 
     script = re.search(r"<script>(.*?)</script>", TEMPLATE_HTML.read_text(encoding="utf-8"),
                        re.S).group(1)
@@ -703,7 +703,7 @@ def _linked(item, message, status="OK"):
 
 
 def test_a_dead_linked_server_nothing_references_is_a_drop():
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([_linked(
         "OLDSRV",
@@ -717,7 +717,7 @@ def test_a_dead_linked_server_nothing_references_is_a_drop():
 def test_a_dead_linked_server_code_still_calls_is_a_fix_not_a_drop():
     """The pair is the whole point. Same unreachable server, one procedure behind it, and it stops
     being cleanup and becomes the next outage."""
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([_linked(
         "PayrollServer",
@@ -732,7 +732,7 @@ def test_a_dead_linked_server_code_still_calls_is_a_fix_not_a_drop():
 def test_a_view_only_reference_still_counts_as_referenced():
     """The metric's own severity uses the procedure count alone, so a linked server reached only
     through a view read as droppable — and a view over a four-part name breaks just as loudly."""
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([_linked(
         "VIEWSRV",
@@ -743,7 +743,7 @@ def test_a_view_only_reference_still_counts_as_referenced():
 
 
 def test_a_healthy_linked_server_nobody_uses_is_flagged_for_review():
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([_linked(
         "IDLE",
@@ -756,7 +756,7 @@ def test_a_healthy_linked_server_nobody_uses_is_flagged_for_review():
 def test_an_unreadable_credential_points_the_fix_at_the_local_instance():
     """One service-master-key problem fans out into an alert per linked server, all blaming
     innocent remote hosts. The row has to say the fix is here."""
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([_linked(
         "REMOTE",
@@ -769,7 +769,7 @@ def test_an_unreadable_credential_points_the_fix_at_the_local_instance():
 
 
 def test_linked_servers_are_listed_worst_first():
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([
         _linked("keep", "linked_server=keep, usable=yes, referenced_by_procedures=2, "
@@ -803,7 +803,7 @@ def test_a_failed_collection_is_not_reported_as_a_nameless_linked_server():
     """A run that could not execute is stored as a row of this metric with no item. It surfaced
     in the table as an unnamed server recommended for DROP — a monitoring failure dressed up as
     a configuration finding."""
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([
         {"metric_code": "LINKED_SERVER_STATUS", "metric_item": "", "metric_value": "ERROR",
@@ -817,7 +817,7 @@ def test_the_state_keeps_the_token_and_drops_the_explanation():
     """The SQL appends prose after the state ("CREDENTIAL_UNREADABLE (LOCAL problem: ...)") and
     the message parser reads to the next comma, so a whole sentence arrived as the state — and
     then matched none of the per-failure fixes."""
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([_linked(
         "REMOTE",
@@ -834,7 +834,7 @@ def test_an_untested_linked_server_is_never_recommended_for_dropping():
     192.0.2.111 one service-master-key problem made all 8 linked servers unusable at once and
     five of them read as "safe to remove" — a drop recommendation on evidence that does not exist.
     """
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([_linked(
         "UNTESTED",
@@ -848,7 +848,7 @@ def test_an_untested_linked_server_is_never_recommended_for_dropping():
 
 def test_a_genuinely_unreachable_server_is_still_droppable():
     """The guard above must not swallow the case it was built around."""
-    from db_ops.reports.server_report import build_linked_servers
+    from dbabrain.reports.server_report import build_linked_servers
 
     rows = build_linked_servers([_linked(
         "DEAD",

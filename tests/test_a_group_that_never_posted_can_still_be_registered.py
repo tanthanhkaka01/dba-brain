@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.telegram import updates as telegram_updates
+from dbabrain.telegram import updates as telegram_updates
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ def telegram(monkeypatch):
         return {"ok": True, "result": {"id": payload["chat_id"], "type": "supergroup",
                                        "title": "Alerts - critical"}}
 
-    monkeypatch.setattr("db_ops.telegram.api.call_telegram_api", fake_call)
+    monkeypatch.setattr("dbabrain.telegram.api.call_telegram_api", fake_call)
     return asked
 
 

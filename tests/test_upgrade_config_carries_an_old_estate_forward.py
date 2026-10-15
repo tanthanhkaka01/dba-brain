@@ -13,8 +13,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from db_ops.common import config_upgrade
-from db_ops.lib.paths import PACKAGED_CATALOGUE
+from dbabrain.common import config_upgrade
+from dbabrain.lib.paths import PACKAGED_CATALOGUE
 
 
 def _old_estate(root: Path) -> Path:
@@ -93,7 +93,7 @@ def test_a_root_this_version_initialised_has_nothing_to_move(tmp_path):
     template still said `database`, and the reference files `init` had just written were called an
     older version's because they were compared byte for byte with the packaged copies - so a new
     operator was told on their first command to upgrade a root nothing older had touched."""
-    from db_ops.common import scaffold
+    from dbabrain.common import scaffold
 
     scaffold.initialise(tmp_path / "root")
     _, plan = config_upgrade.upgrade({"data_dir": str(tmp_path / "root" / "data")})
@@ -178,9 +178,9 @@ def test_a_command_line_naming_a_moved_command_is_pointed_at_its_cli(tmp_path):
     plans nothing the second time."""
     data = tmp_path / "data"
     data.mkdir()
-    status = ["{python}", "-m", "db_ops.db.cli", "self-status", '{"format": "txt"}']
-    clock = ["{python}", "-m", "db_ops.common.cli", "timezone", '{"format": "txt"}']
-    stays = ["{python}", "-m", "db_ops.common.cli", "kill-spid", "-"]
+    status = ["{python}", "-m", "dbabrain.db.cli", "self-status", '{"format": "txt"}']
+    clock = ["{python}", "-m", "dbabrain.common.cli", "timezone", '{"format": "txt"}']
+    stays = ["{python}", "-m", "dbabrain.common.cli", "kill-spid", "-"]
     path = data / "telegram_support_commands.json"
     path.write_text(json.dumps({"telegram_support_commands": [
         {"command_text": "spbot_self_status", "action_config": {"command_argv": status}},
@@ -192,8 +192,8 @@ def test_a_command_line_naming_a_moved_command_is_pointed_at_its_cli(tmp_path):
                                         "steps": ["moved-commands"]})
 
     commands = _read(data, "telegram_support_commands.json")["telegram_support_commands"]
-    assert commands[0]["action_config"]["command_argv"][2:4] == ["db_ops.common.cli", "self-status"]
-    assert commands[1]["action_config"]["command_argv"][2:4] == ["db_ops.db.cli", "timezone"]
+    assert commands[0]["action_config"]["command_argv"][2:4] == ["dbabrain.common.cli", "self-status"]
+    assert commands[1]["action_config"]["command_argv"][2:4] == ["dbabrain.db.cli", "timezone"]
     assert commands[2]["action_config"]["command_argv"] == stays
     assert result["records_changed"] == 2
     assert '    "telegram_support_commands": [' in path.read_text(encoding="utf-8"), "layout kept"
@@ -205,7 +205,7 @@ def test_a_console_app_this_version_added_reaches_a_node_carried_forward(tmp_pat
     """`init` writes the console's app list once. The 0.26 soak node, filled from an older node's
     bundle, had no `transport` app - 0.24.0 added it - and nothing ever offered it (the 0.26 sheet,
     section 6, C2). Only added: an entry the node already holds, renamed here, is left as it is."""
-    from db_ops.common import scaffold
+    from dbabrain.common import scaffold
 
     shipped = scaffold.packaged_default("data/webhost_config.json")
     codes = [app["app_code"] for app in shipped["apps"]]

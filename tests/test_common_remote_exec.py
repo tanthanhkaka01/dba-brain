@@ -1,4 +1,4 @@
-"""The shared remote-access layer: db_ops.common.remote_exec.
+"""The shared remote-access layer: dbabrain.common.remote_exec.
 
 Reaching a VM (ssh / winrm / local) and running a command on it used to be re-implemented
 per app. These tests pin the contract every app now depends on: a **JSON access object**
@@ -14,7 +14,7 @@ import types
 
 import pytest
 
-from db_ops.common import remote_exec as rx
+from dbabrain.common import remote_exec as rx
 
 
 # ---------------------------------------------------------------------------
@@ -194,16 +194,16 @@ def test_an_unknown_method_or_shell_is_rejected_by_name():
 
 def test_a_password_resolves_explicit_then_from_the_secrets_handed_over(monkeypatch):
     """Owner decision G3.5: no environment lookup. `password_env` is the old spelling of a ref."""
-    monkeypatch.setenv("DB_OPS_TEST_REF", "in the environment, never read")
+    monkeypatch.setenv("DBABRAIN_TEST_REF", "in the environment, never read")
 
-    explicit = {"password": "literal", "password_ref": "DB_OPS_TEST_REF"}
+    explicit = {"password": "literal", "password_ref": "DBABRAIN_TEST_REF"}
     assert rx.resolve_secret_value(explicit) == "literal"
 
-    store = {"DB_OPS_TEST_REF": "from-store"}
-    assert rx.resolve_secret_value({"password_ref": "DB_OPS_TEST_REF"}, secrets=store) == "from-store"
-    assert rx.resolve_secret_value({"password_env": "DB_OPS_TEST_REF"}, secrets=store) == "from-store"
+    store = {"DBABRAIN_TEST_REF": "from-store"}
+    assert rx.resolve_secret_value({"password_ref": "DBABRAIN_TEST_REF"}, secrets=store) == "from-store"
+    assert rx.resolve_secret_value({"password_env": "DBABRAIN_TEST_REF"}, secrets=store) == "from-store"
     with pytest.raises(rx.RemoteExecError, match="not among the secrets"):
-        rx.resolve_secret_value({"password_ref": "DB_OPS_TEST_REF"})
+        rx.resolve_secret_value({"password_ref": "DBABRAIN_TEST_REF"})
     with pytest.raises(rx.RemoteExecError, match="two different secrets"):
         rx.resolve_secret_value({"password_ref": "A", "password_env": "B"}, secrets={"A": "1", "B": "2"})
 
@@ -247,9 +247,9 @@ def test_an_argv_is_quoted_and_a_cwd_becomes_a_cd_prefix(monkeypatch):
 
     with rx.open_session({"method": "ssh", "host": "h", "username": "u", "auth_type": "password",
                           "password": "pw"}) as session:
-        session.run(["docker", "compose", "-f", "my file.yml", "up"], cwd="/opt/db ops")
+        session.run(["docker", "compose", "-f", "my file.yml", "up"], cwd="/opt/dba brain")
 
-    assert captured["command"] == "cd '/opt/db ops' && docker compose -f 'my file.yml' up"
+    assert captured["command"] == "cd '/opt/dba brain' && docker compose -f 'my file.yml' up"
 
 
 def test_a_bash_script_is_a_private_file_run_with_stdin_closed_and_carries_its_env(monkeypatch):

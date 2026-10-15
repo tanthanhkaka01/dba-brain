@@ -12,7 +12,7 @@ the SLA app grades them against objectives. Neither ever connects to a monitored
 
 | | |
 | --- | --- |
-| Run it | `python -m db_ops.metrics.cli --config config.json collect` |
+| Run it | `python -m dbabrain.metrics.cli --config config.json collect` |
 | Look first | add `--dry-run`: it names every metric that would run against every target, and opens no connection |
 | Configured by | `data/db_instances.json` (targets), `data/metric_definitions.json` (the catalogue), `data/metric_importance_overrides.json` (what matters here) |
 | Least privilege | a read-only login per engine — see [`docs/security.md`](./security.md) |
@@ -39,7 +39,7 @@ Declare it on the metric, not in the report:
 "report_policy": { "collect_only": true }
 ```
 
-`db_ops/reports/metrics_reports.py::_filter_rows_for_reports` drops those metric codes from the
+`dbabrain/reports/metrics_reports.py::_filter_rows_for_reports` drops those metric codes from the
 scheduled reports. Collection, storage and the inventory report are untouched.
 
 Two safeguards, because the dangerous failure is the filter removing too much rather than too
@@ -323,7 +323,7 @@ I/O metric above. Both variants now read at most `OS_EVENTLOG_MAX_EVENTS` (defau
 truthfully answers `NOT_CONFIGURED`, and that was being read as "HA is fine" — the ERP FCI
 (192.0.2.115 / .113, listener `SALESCLUSTER`) had no cluster monitoring at all.
 
-`CLUSTER_FCI_HEALTH` (`db_ops/metrics/collectors/os/windows/015_os_failover_cluster.ps1`, `collector_type:
+`CLUSTER_FCI_HEALTH` (`dbabrain/metrics/collectors/os/windows/015_os_failover_cluster.ps1`, `collector_type:
 cmd`) reports what an FCI's health actually lives in: nodes, quorum and witness, roles and which
 node owns them, resources that are not Online, failover events in the last 24h, and services.
 
@@ -419,7 +419,7 @@ not happened and is not what the section below is.
 
 Added 2026-09-03, and deliberately on the other side of the line the withdrawal drew. Three
 collectors record cumulative counters and grade **nothing**; the arithmetic lives in
-`db_ops/lib/interval_rates.py` and runs in the **report**, not in the collector. No policy module,
+`dbabrain/lib/interval_rates.py` and runs in the **report**, not in the collector. No policy module,
 no store lookup in the collect path, no per-metric branch, and no metric's severity depends on it.
 A collector that records a number and never judges it is the same shape as `PAGE_LIFE_EXPECTANCY`.
 
@@ -618,11 +618,11 @@ one host genuinely is a warning — so the answer belongs to each metric, per ph
 
 **Which phase a failure is.** The raiser says so; the message is only a fallback. The connect and
 the execute are held apart where they run - `common.cli metric-batch` answers each item's error
-with the phase it declared - and `db_ops/metrics/executor.py` raises `MetricConnectionError` /
+with the phase it declared - and `dbabrain/metrics/executor.py` raises `MetricConnectionError` /
 `MetricExecutionError` from that answer. The script transports' verdict is read off the
 `remote_exec` exception class, in `common` too (auth rejected and host unreachable are the session;
 a timeout is the session only when no command had been sent yet). Anything that declares no phase is
-classified from its message by `db_ops/lib/event_policy.py::resolve_failure_phase` — the legacy
+classified from its message by `dbabrain/lib/event_policy.py::resolve_failure_phase` — the legacy
 Oracle bridge is the real case, since it connects and queries in one call. **Unknown counts as an
 execution failure**, never a connection one: the louder claim is never made on a guess.
 
@@ -658,14 +658,14 @@ kinds: [`13_common.md`](./13_common.md) → `metric-batch`.
 
 ## Package / Files
 
-- `db_ops/metrics/` - `batch.py` sends a target's prepared items; `executor.py` prepares a SQL
+- `dbabrain/metrics/` - `batch.py` sends a target's prepared items; `executor.py` prepares a SQL
   metric and reads its answer; `collector.py` decides and grades
-- `db_ops/common/metric_batch.py` - where the items run
+- `dbabrain/common/metric_batch.py` - where the items run
 - `data/db_instances.json`
 - `data/metric_definitions.json`
 - `data/metric_importance_overrides.json`
-- `db_ops/metrics/collectors/`
-- the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/db_ops.sqlite` when the backend is `sqlite`)
+- `dbabrain/metrics/collectors/`
+- the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/dbabrain.sqlite` when the backend is `sqlite`)
 
 ## Runtime Tables
 
@@ -678,15 +678,15 @@ kinds: [`13_common.md`](./13_common.md) → `metric-batch`.
 
 `data/db_instances.json` defines database targets, platform metadata, optional `cmd_access`, active flags, and credential references. `data/metric_definitions.json` defines metric codes, `collector_type`, variants, collection interval, and status rules. `data/metric_importance_overrides.json` can override severity/importance by target or metric.
 
-Metric files live under `db_ops/metrics/collectors/`. SQL collectors execute `.sql` files. Command collectors execute script variants selected by `target.platform`; `target.cmd_access.method` decides whether execution is `local`, `ssh`, or `winrm`.
+Metric files live under `dbabrain/metrics/collectors/`. SQL collectors execute `.sql` files. Command collectors execute script variants selected by `target.platform`; `target.cmd_access.method` decides whether execution is `local`, `ssh`, or `winrm`.
 
 Four collector transports are defined (a metric declares exactly one via `collector_type`):
 
 | `collector_type` | What it collects | How it runs | File/variant |
 | --- | --- | --- | --- |
-| `sql` | Database-engine metrics (SQL Server, Oracle, MySQL, PostgreSQL, …) | Connects to the DB and runs the per-engine `.sql` variant (direct, or the legacy Oracle tool for `sql_access.method="api"`/`"subprocess"`) | per-engine `.sql` under `db_ops/metrics/collectors/<engine>/` |
-| `cmd` | OS metrics, **Windows and Linux** | Runs the per-platform script (`.ps1`/`.sh`) `local`, `ssh`, or `winrm` per `cmd_access.method` | per-platform script under `db_ops/metrics/collectors/os/{windows,linux}/` |
-| `docker` | Per-**container** stats (CPU/memory/net/block IO, status, restarts) for a DB-in-Docker target | Runs the metric's script with the target's `container_name` in `$DOCKER_CONTAINER`; transport mirrors `cmd` — local against the worker's mounted `/var/run/docker.sock` by default, or shipped over **SSH** when the target declares an `ssh` `cmd_access` (a remote docker host, e.g. a cloud VM). `collector_type` stays `docker` (not `cmd`) so it is enable/disabled independently of OS metrics | script under `db_ops/metrics/collectors/docker/*.sh` (same JSON contract as `cmd`) |
+| `sql` | Database-engine metrics (SQL Server, Oracle, MySQL, PostgreSQL, …) | Connects to the DB and runs the per-engine `.sql` variant (direct, or the legacy Oracle tool for `sql_access.method="api"`/`"subprocess"`) | per-engine `.sql` under `dbabrain/metrics/collectors/<engine>/` |
+| `cmd` | OS metrics, **Windows and Linux** | Runs the per-platform script (`.ps1`/`.sh`) `local`, `ssh`, or `winrm` per `cmd_access.method` | per-platform script under `dbabrain/metrics/collectors/os/{windows,linux}/` |
+| `docker` | Per-**container** stats (CPU/memory/net/block IO, status, restarts) for a DB-in-Docker target | Runs the metric's script with the target's `container_name` in `$DOCKER_CONTAINER`; transport mirrors `cmd` — local against the worker's mounted `/var/run/docker.sock` by default, or shipped over **SSH** when the target declares an `ssh` `cmd_access` (a remote docker host, e.g. a cloud VM). `collector_type` stays `docker` (not `cmd`) so it is enable/disabled independently of OS metrics | script under `dbabrain/metrics/collectors/docker/*.sh` (same JSON contract as `cmd`) |
 | `k8s` | *(reserved)* Kubernetes pod/workload metrics | *not implemented yet* — the type is recognized and any `k8s` metric is skipped cleanly | a script directory alongside the others, not created yet |
 
 Remote execution mechanisms such as SSH and WinRM are target **execution methods** (`cmd_access.method`), not collector types.
@@ -766,17 +766,17 @@ Deliberately narrow, because this writes into SQL text:
 
 ## Supported Database Engines
 
-SQL collectors dispatch by the `db_type` in `db_instances.json`; each engine uses its own driver and per-engine SQL variant under `db_ops/metrics/collectors/<engine>/`:
+SQL collectors dispatch by the `db_type` in `db_instances.json`; each engine uses its own driver and per-engine SQL variant under `dbabrain/metrics/collectors/<engine>/`:
 
 | `db_type` | Python driver | SQL variants |
 |---|---|---|
-| `sqlserver` | `pyodbc` (falls back to `pymssql`) | `db_ops/metrics/collectors/sqlserver/` (+ `legacy_2008r2/`) |
-| `oracle` | `oracledb` thin; `sql_access.method="api"`/`"subprocess"` routes through the legacy 8i tool, which is installed separately (see [`13_common.md`](./13_common.md) → `oracle_bridge`) | `db_ops/metrics/collectors/oracle/` (+ `legacy_8i/`) |
-| `mysql` | `pymysql` (falls back to `mysql-connector-python`) | `db_ops/metrics/collectors/mysql/` |
-| `postgresql` | `pg8000` (pure-Python) | `db_ops/metrics/collectors/postgresql/` |
+| `sqlserver` | `pyodbc` (falls back to `pymssql`) | `dbabrain/metrics/collectors/sqlserver/` (+ `legacy_2008r2/`) |
+| `oracle` | `oracledb` thin; `sql_access.method="api"`/`"subprocess"` routes through the legacy 8i tool, which is installed separately (see [`13_common.md`](./13_common.md) → `oracle_bridge`) | `dbabrain/metrics/collectors/oracle/` (+ `legacy_8i/`) |
+| `mysql` | `pymysql` (falls back to `mysql-connector-python`) | `dbabrain/metrics/collectors/mysql/` |
+| `postgresql` | `pg8000` (pure-Python) | `dbabrain/metrics/collectors/postgresql/` |
 
 **The selection rule itself is shared, not private to this app.** Since 2026-08-19 the
-db_type/platform/version filter lives in `db_ops/lib/target_profile.py`
+db_type/platform/version filter lives in `dbabrain/lib/target_profile.py`
 (`candidate_variants` / `select_variant` / `version_matches`) and `metrics/collector.py` calls it.
 It moved because it was the *only* version-aware tool selection in the tree, and being an app's
 private function is what stopped `common.cli run-sql` from reproducing a collector run on an 8i or
@@ -862,7 +862,7 @@ and no Oracle between 8i and 23 was at hand to run it on.
 ### Oracle 8i (`legacy_8i/`) — what it collects and what it deliberately does not
 
 An 8.1.7 instance reaches none of the modern dictionary views, so it has its own variant of most
-Oracle metrics under `db_ops/metrics/collectors/oracle/legacy_8i/`. Two rules make that split work:
+Oracle metrics under `dbabrain/metrics/collectors/oracle/legacy_8i/`. Two rules make that split work:
 
 - **`major_version` on the instance is not optional.** Without it the collector cannot tell 8.1.7
   from a current release: version-bounded variants stop filtering, and the metric falls back to
@@ -958,15 +958,15 @@ Target config + metric definitions + metric files + secrets -> collector dispatc
 ## How to Run
 
 ```powershell
-python -m db_ops.metrics.cli --config config.json collect --dry-run
-python -m db_ops.metrics.cli --config config.json collect
-python -m db_ops.metrics.cli --config config.json collect --target-ip 192.0.2.115
-python -m db_ops.metrics.cli --config config.json collect --metric-code BACKUP_AGE --force
-python -m db_ops.metrics.cli --config config.json latest --limit 50
-python -m db_ops.metrics.cli --config config.json report --db-type sqlserver
-python -m db_ops.metrics.cli --config config.json summary-latest --db-type sqlserver
-python -m db_ops.metrics.cli --config config.json health-summary-latest --db-type sqlserver
-python -m db_ops.metrics.cli --config config.json alert-summary
+python -m dbabrain.metrics.cli --config config.json collect --dry-run
+python -m dbabrain.metrics.cli --config config.json collect
+python -m dbabrain.metrics.cli --config config.json collect --target-ip 192.0.2.115
+python -m dbabrain.metrics.cli --config config.json collect --metric-code BACKUP_AGE --force
+python -m dbabrain.metrics.cli --config config.json latest --limit 50
+python -m dbabrain.metrics.cli --config config.json report --db-type sqlserver
+python -m dbabrain.metrics.cli --config config.json summary-latest --db-type sqlserver
+python -m dbabrain.metrics.cli --config config.json health-summary-latest --db-type sqlserver
+python -m dbabrain.metrics.cli --config config.json alert-summary
 ```
 
 ## Useful Manual Queries
@@ -1072,7 +1072,7 @@ produce one:
 `LOOPBACK_ONLY` is deliberately not CRITICAL: a service bound to loopback on purpose (a local
 agent, a tunnelled port) is configured that way, not broken.
 
-The host address comes from **`DB_OPS_TARGET_HOST`**, injected into every cmd collector from
+The host address comes from **`DBABRAIN_TARGET_HOST`**, injected into every cmd collector from
 `cmd_access.host` (falling back to `ip`) — the address the collector itself already reached the
 host on. A script never restates what the inventory records, and never guesses from the host's own
 NICs, which picks the wrong one on a multi-homed box. A target that means something else by it —
@@ -1134,7 +1134,7 @@ the report's history chart before acting on one sample.
 
 `OS_TOP_PROCESSES` is **retired** (`active: false`): it returned a single row whose `metric_value` was a JSON blob, which cannot be queried, thresholded, or reported per process. `OS_PROCESS_TOP_CPU` and `OS_PROCESS_TOP_MEMORY` replace it. Its history stays in `metric_results`.
 
-These are `collector_type: "cmd"` metrics. Each has two variants — `windows_powershell` (`.ps1`) and `linux_bash` (`.sh`) — selected by `target.platform`. Scripts live under `db_ops/metrics/collectors/os/windows/` and `db_ops/metrics/collectors/os/linux/`.
+These are `collector_type: "cmd"` metrics. Each has two variants — `windows_powershell` (`.ps1`) and `linux_bash` (`.sh`) — selected by `target.platform`. Scripts live under `dbabrain/metrics/collectors/os/windows/` and `dbabrain/metrics/collectors/os/linux/`.
 
 **Target requirements:**
 
@@ -1158,7 +1158,7 @@ A cmd script reads its inputs from environment variables. They are declared per 
 }
 ```
 
-`DB_OPS_TARGET_HOST` is added to every cmd collector's environment automatically, from
+`DBABRAIN_TARGET_HOST` is added to every cmd collector's environment automatically, from
 `cmd_access.host` (falling back to `ip`) — see `OS_TCP_PORT_STATUS` above. It is the only injected
 value; everything else is declared. Listing it in `collector_env` overrides it.
 
@@ -1185,7 +1185,7 @@ config. Same field name and same contract as `restore_config.json`, so one conce
 It is accepted target-wide and under `metric_overrides.<CODE>`, the per-metric block winning. A ref
 that is not in the store raises rather than running the script with an empty value — a validation
 that silently skips decryption is the false CRITICAL this feature exists to end. The collection run
-needs the store key (`--key-base64`, or `DB_OPS_SECRET_KEY`, which the daemon already forwards).
+needs the store key (`--key-base64`, or `DBABRAIN_SECRET_KEY`, which the daemon already forwards).
 
 **Execution paths:**
 
@@ -1312,11 +1312,11 @@ Run a single OS metric via the CLI:
 
 ```powershell
 # Dry run — confirms target and metric are active without executing
-python -m db_ops.metrics.cli --config config.json collect --dry-run --target-ip 192.0.2.250 --metric-code OS_CPU_USAGE
+python -m dbabrain.metrics.cli --config config.json collect --dry-run --target-ip 192.0.2.250 --metric-code OS_CPU_USAGE
 
 # Live collection — writes the result to the runtime store
-python -m db_ops.metrics.cli --config config.json collect --target-ip 192.0.2.250 --metric-code OS_CPU_USAGE --force
-python -m db_ops.metrics.cli --config config.json latest --limit 10
+python -m dbabrain.metrics.cli --config config.json collect --target-ip 192.0.2.250 --metric-code OS_CPU_USAGE --force
+python -m dbabrain.metrics.cli --config config.json latest --limit 10
 ```
 
 ### Troubleshooting OS SSH Metrics
@@ -1336,7 +1336,7 @@ Each metric's `time_window` drives when it is due, the same way `app_commands.js
 
 - **`repeat_interval`** — after a **successful** collection, the metric is due again this many seconds later, counted from `metric_results.collected_at`, which is stamped **before** the collector runs. So it is the previous collection's *start*, the same anchor every other app uses — see [`configuration.md` §5](./configuration.md).
 - **`retry_interval`** (default **600s**) — after a **failed** collection (the most recent attempt produced only errors, or the metric never succeeded), the metric may be due again **sooner** than `repeat_interval`: set it lower to retry a failure faster than the normal schedule.
-  **It cannot make a failure wait longer**, which this page claimed until 2026-09-19. The shared rule checks "still running", then "`repeat_interval` elapsed", then "failed" ([`lib/time_window.py` `explain_due`](../db_ops/lib/time_window.py)), so a failed metric is due the moment its repeat interval elapses whatever `retry_interval` says — and the 600s default therefore does nothing at all for the many metrics whose interval is shorter than 600s. `tests/test_repeat_interval_is_measured_from_start.py` pins both directions.
+  **It cannot make a failure wait longer**, which this page claimed until 2026-09-19. The shared rule checks "still running", then "`repeat_interval` elapsed", then "failed" ([`lib/time_window.py` `explain_due`](../dbabrain/lib/time_window.py)), so a failed metric is due the moment its repeat interval elapses whatever `retry_interval` says — and the 600s default therefore does nothing at all for the many metrics whose interval is shorter than 600s. `tests/test_repeat_interval_is_measured_from_start.py` pins both directions.
 
 Both are per-metric and optional in `data/metric_definitions.json`'s `time_window`; omit `retry_interval` to use the 600s default. "Failed" is judged from `metric_results`: the last collection is a failure when the newest row is newer than the last non-error row for that `(target, metric_code)`.
 
@@ -1393,7 +1393,7 @@ of up to 120 s, and a report is due within half a minute of its window. A launch
 due ends in about a second, and the daemon never starts a second run of a command while one is
 still going, so a pass longer than 30 s simply delays the next. `init` seeds new nodes with 30 s;
 an existing node keeps the value in its own `data/app_commands.json` until it is changed there -
-`python -m db_ops.common.cli app-command-set`, or the console.
+`python -m dbabrain.common.cli app-command-set`, or the console.
 
 ### A metric's `timeout` is enforced by wall clock
 
@@ -1434,7 +1434,7 @@ throughout. That is graded at `@tran_age_critical_seconds` (1800 s) and reported
 Its rules grade `idle_minutes` / `is_blocking` / `has_x_lock`, which the Oracle and legacy-2008R2
 variants emit deliberately; the modern SQL Server variant emits `idle_seconds` / `blocked_sessions`
 and grades itself in SQL. Editing those thresholds will not change SQL Server behaviour — change
-`db_ops/metrics/collectors/sqlserver/024_sqlserver_sleeping_open_transaction.sql`. The split is pinned by
+`dbabrain/metrics/collectors/sqlserver/024_sqlserver_sleeping_open_transaction.sql`. The split is pinned by
 `tests/test_sleeping_open_transaction_grading.py` so it cannot rot into a silent no-op.
 
 ## Common Issues
@@ -1448,7 +1448,7 @@ and grades itself in SQL. Editing those thresholds will not change SQL Server be
   counts and stored on the run. Before that, all five ended at the same accurate, useless `0`.
 - No rows collected: run `collect --dry-run` and confirm targets and metrics are active and due.
 - Connection failures: check target credential names and secret references.
-- Missing metric file: confirm the variant `file` in `data/metric_definitions.json` exists under `db_ops/metrics/collectors/`.
+- Missing metric file: confirm the variant `file` in `data/metric_definitions.json` exists under `dbabrain/metrics/collectors/`.
 - Command failures: check `target.platform`, `cmd_access.method`, `cmd_access.credential_name`, and `data/users.json`.
 - Reports show old data: check `metric_results.collected_at` and whether the metric was skipped by interval rules.
 
@@ -1457,7 +1457,7 @@ and grades itself in SQL. Editing those thresholds will not change SQL Server be
 The metrics app resolves its config file using this chain:
 
 1. `--config <path>` CLI argument.
-2. `DB_OPS_METRICS_CONFIG` environment variable.
+2. `DBABRAIN_METRICS_CONFIG` environment variable.
 3. `config.metrics.json` next to `config.json`, or in the current working directory.
 4. `config.json` shared fallback.
 
@@ -1469,7 +1469,7 @@ App-specific config file: `config.metrics.json`
 
 **Full-suite mode** (default): the app reads `config.json` and `data/db_instances.json` alongside all other apps. `metric_results` are read by the reports and SLA apps from the shared runtime store.
 
-**Standalone mode**: copy `config.metrics.json`, `data/db_instances.json`, `data/metric_definitions.json`, and relevant `db_ops/metrics/collectors/` files next to the EXE. Point the store at a local path - a standalone EXE is the one layout where `sqlite_path` is still the natural setting, because it has no shared server. The reports and SLA apps will not have access to metric data unless they read the same store.
+**Standalone mode**: copy `config.metrics.json`, `data/db_instances.json`, `data/metric_definitions.json`, and relevant `dbabrain/metrics/collectors/` files next to the EXE. Point the store at a local path - a standalone EXE is the one layout where `sqlite_path` is still the natural setting, because it has no shared server. The reports and SLA apps will not have access to metric data unless they read the same store.
 
 Required config keys: `log_dir`, plus a resolvable runtime store (`store_config_file`, an inline `store` block, or `sqlite_path`).
 
@@ -1535,7 +1535,7 @@ alone does not prove recoverability.
 
 - It emits the same message contract as the SQL Server `BACKUP_LAST_RESULT` (`database=`,
   `recovery_model=`, `backup_type=`, `backup_finish_date=`); both codes are listed in
-  `db_ops.lib.backup_policy.BACKUP_LAST_RESULT_CODES`, so the policy engine and the fleet
+  `dbabrain.lib.backup_policy.BACKUP_LAST_RESULT_CODES`, so the policy engine and the fleet
   report read them as one metric.
 - `PG_BACKUP_DIR` (the target's `collector_env`) must match the `backup_dir` that cluster's backup
   job writes to in `restore_config.json`. A mismatch makes the metric report "never backed up" for
@@ -1561,4 +1561,4 @@ The metrics app has no optional integrations. It writes to the runtime store and
 ## EXE Packaging Notes
 
 - `DEFAULT_DATA_DIR` and `DEFAULT_DEFINITIONS_PATH` are resolved relative to the Python package location. Pass `--data-dir` explicitly when running outside the repo.
-- Secrets (`data/encrypted_secret_text.json`, decrypted at runtime with the `--key_base64`/`--key` passphrase or `DB_OPS_SECRET_KEY`) and inventory (`data/db_instances.json`) are resolved from the `data/` directory via `db_ops/lib/data_sources/`. Both degrade gracefully to empty if absent — targets relying on them will fail to connect.
+- Secrets (`data/encrypted_secret_text.json`, decrypted at runtime with the `--key_base64`/`--key` passphrase or `DBABRAIN_SECRET_KEY`) and inventory (`data/db_instances.json`) are resolved from the `data/` directory via `dbabrain/lib/data_sources/`. Both degrade gracefully to empty if absent — targets relying on them will fail to connect.

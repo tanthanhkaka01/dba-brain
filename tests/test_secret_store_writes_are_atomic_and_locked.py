@@ -14,7 +14,7 @@ import threading
 
 import pytest
 
-from db_ops.lib import secret_text
+from dbabrain.lib import secret_text
 
 KEY = "test-passphrase"
 
@@ -44,7 +44,7 @@ def test_registering_a_target_takes_the_same_lock_as_every_other_writer(tmp_path
     """`instance-add` and `remote-credential-add` store a secret through a writer of their own, and
     it was the one left without the lock: beside a console password change or a rotation, whichever
     wrote second kept only its own change (found reading the fixes back, 2026-10-02)."""
-    from db_ops.common import instance_admin
+    from dbabrain.common import instance_admin
 
     added = [f"INSTANCE_{n}" for n in range(8)]
     rotated = [f"ROTATED_{n}" for n in range(8)]
@@ -88,7 +88,7 @@ def test_a_failed_write_leaves_the_old_store_whole(tmp_path, monkeypatch):
     def broken(*_a, **_k):
         raise OSError("disk full")
 
-    monkeypatch.setattr("db_ops.lib.json_io.os.replace", broken)
+    monkeypatch.setattr("dbabrain.lib.json_io.os.replace", broken)
     with pytest.raises(OSError):
         secret_text.set_secret_text(tmp_path, "B", "y", key=KEY)
 

@@ -1,8 +1,8 @@
-"""Every component of db_ops has a doc, and every doc has a component.
+"""Every component of dbabrain has a doc, and every doc has a component.
 
 `docs/NN_*.md` is the current-state reference — one file per component, numbered to match the
 README capability table. The rule is easy to state and easy to break silently: a new package under
-`db_ops/` is a new component, and it arrives with code, tests and a CLI long before anyone thinks
+`dbabrain/` is a new component, and it arrives with code, tests and a CLI long before anyone thinks
 about the doc. Nothing fails, so nothing reminds you.
 
 `lib` is why this test exists. It was split out of `common` on 2026-08-15 and grew to 46 modules
@@ -21,10 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.distribution import DOC_FOR_PACKAGE
+from dbabrain.lib.distribution import DOC_FOR_PACKAGE
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DB_OPS_ROOT = REPO_ROOT / "db_ops"
+DBABRAIN_ROOT = REPO_ROOT / "dbabrain"
 DOCS_ROOT = REPO_ROOT / "docs"
 
 #: `docs/NN_<slug>.md` — the number orders the set, the slug names the component but does not have
@@ -33,7 +33,7 @@ DOCS_ROOT = REPO_ROOT / "docs"
 #:
 #: **Imported, not restated.** It used to be a second copy of the same fourteen rows, and the two
 #: were free to disagree — which they would have, silently, the first time a component was renamed
-#: in one and not the other. `db_ops/lib/distribution.py` owns it because the export needs the same
+#: in one and not the other. `dbabrain/lib/distribution.py` owns it because the export needs the same
 #: mapping to decide which docs travel with which packages.
 COMPONENT_DOCS: dict[str, str] = dict(DOC_FOR_PACKAGE)
 
@@ -49,15 +49,15 @@ def _present(mapping: dict[str, str]) -> dict[str, str]:
     """
     return {
         component: doc for component, doc in mapping.items()
-        if (DB_OPS_ROOT / component).is_dir()
+        if (DBABRAIN_ROOT / component).is_dir()
     }
 
 
 def _components() -> set[str]:
-    """Every importable package under ``db_ops/`` — the definition of "a component"."""
+    """Every importable package under ``dbabrain/`` — the definition of "a component"."""
     return {
         path.name
-        for path in DB_OPS_ROOT.iterdir()
+        for path in DBABRAIN_ROOT.iterdir()
         if path.is_dir() and not path.name.startswith("__") and (path / "__init__.py").exists()
     }
 
@@ -67,7 +67,7 @@ def _docs() -> set[str]:
 
 
 def test_every_component_has_a_doc() -> None:
-    """A new package under `db_ops/` is a new component, and it needs its own reference page."""
+    """A new package under `dbabrain/` is a new component, and it needs its own reference page."""
     undocumented = sorted(_components() - set(COMPONENT_DOCS))
 
     assert not undocumented, (

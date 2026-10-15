@@ -15,15 +15,15 @@ import sqlite3
 import pytest
 
 from conftest import patch_telegram
-from db_ops.db import DbOpsStore
-from db_ops.telegram.command_processor import (
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram.command_processor import (
     process_one_command_message,
     process_pending_conversation_messages,
 )
 
 USER = "100"
 
-#: /spbot_backup's two parameters as shipped (db_ops/telegram/catalogue/telegram_support_commands.json).
+#: /spbot_backup's two parameters as shipped (dbabrain/telegram/catalogue/telegram_support_commands.json).
 COMMAND = {
     "command_id": 16, "command_text": "spbot_backup", "command_type": 1, "is_group": 1,
     "is_private": 1, "need_file": 0, "reply_default": 0, "reply_text": "",
@@ -56,7 +56,7 @@ class _Chat:
         (tmp_path / "telegram_users.json").write_text(json.dumps(
             {"telegram_users": [{"user_id": USER, "user_type": 2, "status": "active"}]}), encoding="utf-8")
         (tmp_path / "telegram_groups.json").write_text(json.dumps({"telegram_groups": []}), encoding="utf-8")
-        self.store = DbOpsStore(self.sqlite_path)
+        self.store = DbaBrainStore(self.sqlite_path)
         self.next_id = 10
         self.ran: list[list[str]] = []
 

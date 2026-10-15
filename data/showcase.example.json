@@ -1,6 +1,6 @@
 {
   "notes": [
-    "The request `python -m db_ops.common.cli build-showcase @data/showcase.json` reads.",
+    "The request `python -m dbabrain.common.cli build-showcase @data/showcase.json` reads.",
     "",
     "source : a folder holding the pages copied off a node that publishes them, and the data",
     "         they fetch (server-metrics_<slug>.json). Where that node is comes from",

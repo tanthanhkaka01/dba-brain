@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.backup_restore import workflow
+from dbabrain.backup_restore import workflow
 from conftest import shipped_config
 
 
@@ -45,7 +45,7 @@ def harness(monkeypatch, tmp_path):
         def update_job_run(self, *a, **k): return None
         def fetch_running_job_runs(self, *a, **k): return []
 
-    monkeypatch.setattr(workflow, "DbOpsStore", _Store)
+    monkeypatch.setattr(workflow, "DbaBrainStore", _Store)
     monkeypatch.setattr(workflow.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(workflow.schedule, "start_run", lambda **k: (1, "2026-07-28T00:00:00Z"))
     monkeypatch.setattr(workflow.schedule, "finish_run", lambda **k: "2026-07-28T00:00:10Z")
@@ -66,7 +66,7 @@ def _run(monkeypatch, harness, *, outcome, output=None):
 
     import inspect
 
-    import db_ops.backup_restore.cli as cli
+    import dbabrain.backup_restore.cli as cli
     real = inspect.signature(cli.run_restore_workflow)
 
     def _inner(**kwargs):
@@ -153,7 +153,7 @@ def test_the_copy_boundaries_are_announced_by_whoever_does_the_copy(monkeypatch)
     any more. The symptom was a remote drill going silent for 41 minutes between START and END -
     indistinguishable from a hang, which is exactly what the two events exist to prevent.
     """
-    from db_ops.backup_restore import restore_by_id as module
+    from dbabrain.backup_restore import restore_by_id as module
 
     seen = []
     job = SimpleNamespace(
@@ -164,17 +164,17 @@ def test_the_copy_boundaries_are_announced_by_whoever_does_the_copy(monkeypatch)
     )
     # Patched at the source module: restore_by_id imports it inside the function, so patching the
     # name on restore_by_id would bind nothing.
-    monkeypatch.setattr("db_ops.backup_restore.restore_script.load_script_restores",
+    monkeypatch.setattr("dbabrain.backup_restore.restore_script.load_script_restores",
                         lambda _p=None: [job])
     monkeypatch.setattr(module, "_host_block", lambda job, **_: {"runtime": "linux", "host": "h"})
     monkeypatch.setattr(module, "assert_target_is_not_source", lambda *a, **k: None)
     monkeypatch.setattr(module, "_PLANNERS", {"oracle": lambda *a, **k: []})
-    monkeypatch.setattr("db_ops.backup_restore.backup.resolve_ssh_target",
+    monkeypatch.setattr("dbabrain.backup_restore.backup.resolve_ssh_target",
                         lambda *a, **k: SimpleNamespace(host="h", port=22, username="u",
                                                         container_name="", key_file=None))
-    monkeypatch.setattr("db_ops.backup_restore.restore_script.transfer_backup_to_target",
+    monkeypatch.setattr("dbabrain.backup_restore.restore_script.transfer_backup_to_target",
                         lambda *a, **k: {"copied": 3, "skipped": 1, "bytes_copied": 99, "pruned": 0})
-    monkeypatch.setattr("db_ops.backup_restore.restore_script.prune_staged_backups",
+    monkeypatch.setattr("dbabrain.backup_restore.restore_script.prune_staged_backups",
                         lambda *a, **k: {"pruned": 0, "retention_seconds": 86400})
 
     module.restore_by_id({"cleanup_retention": 691200, "restore_id": "R1"}, on_phase=lambda p, m, e=None: seen.append(p))
@@ -194,7 +194,7 @@ def test_a_caller_that_wants_no_events_still_restores():
     `server_metadata._announce`, the last already drifted to different parameter names — and this
     test only ever covered one of them.
     """
-    from db_ops.backup_restore.events import announce
+    from dbabrain.backup_restore.events import announce
 
     assert announce(None, "COPY_START", "x") is None
     announce(lambda *_a: 1 / 0, "COPY_START", "x")   # raises inside, swallowed
@@ -229,10 +229,10 @@ def test_script_restores_report_too(monkeypatch, harness):
         target_server_id="DST", notify={}, time_window=SimpleNamespace(timeout=7200),
     )
     monkeypatch.setattr(workflow, "load_script_restores", lambda _p: [job])
-    # The seam moved in 2.69.52: the scheduled restore drives db_ops.common's primitives through
+    # The seam moved in 2.69.52: the scheduled restore drives dbabrain.common's primitives through
     # restore_by_id instead of shipping a shell script. What this test is about - that a
     # script-driven entry reports START and END like every other job - is unchanged.
-    monkeypatch.setattr("db_ops.backup_restore.restore_by_id.restore_by_id",
+    monkeypatch.setattr("dbabrain.backup_restore.restore_by_id.restore_by_id",
                         lambda *a, **k: {"cleanup_retention": 691200, "restore_id": "X", "db_type": "oracle", "steps": []})
 
     workflow.run_scheduled_restores(
@@ -256,7 +256,7 @@ def test_the_default_retention_spans_more_than_one_weekly_full():
     """8 days is not arbitrary. The full backup is weekly, so the newest full is at most 7 days
     old; a cutoff shorter than that would delete the full while its incrementals survive, and
     an incremental without its parent restores nothing."""
-    from db_ops.backup_restore.config import DEFAULT_CLEANUP_RETENTION
+    from dbabrain.backup_restore.config import DEFAULT_CLEANUP_RETENTION
 
     assert DEFAULT_CLEANUP_RETENTION >= 8 * 24 * 3600
 
@@ -264,7 +264,7 @@ def test_the_default_retention_spans_more_than_one_weekly_full():
 def test_retention_is_read_per_entry_so_targets_can_differ():
     import pytest as _pytest
 
-    from db_ops.backup_restore.config import parse_cleanup_retention
+    from dbabrain.backup_restore.config import parse_cleanup_retention
 
     assert parse_cleanup_retention({"cleanup_retention": 86400}, context="x") == 86400
     # 0 is a real setting, not "unset": it removes the *age* gate and leaves the chain rule alone.
@@ -281,7 +281,7 @@ def test_a_negative_or_unparsable_retention_is_refused():
     """Silently treating garbage as the default would hide a typo that changes how much of the
     backup set survives on the target."""
     import pytest as _pytest
-    from db_ops.backup_restore.config import parse_cleanup_retention
+    from dbabrain.backup_restore.config import parse_cleanup_retention
 
     for bad in (-1, "soon", []):
         with _pytest.raises(ValueError):
@@ -291,7 +291,7 @@ def test_a_negative_or_unparsable_retention_is_refused():
 def test_pruning_is_skipped_when_retention_is_zero():
     """0 must not be read as "delete everything older than 0 seconds" - that would wipe the
     staging directory on the first run."""
-    from db_ops.common.backup_copy import prune_target_dir
+    from dbabrain.common.backup_copy import prune_target_dir
 
     class _Client:
         def open_stream(self, *a, **k):
@@ -301,7 +301,7 @@ def test_pruning_is_skipped_when_retention_is_zero():
 
 
 def test_pruning_deletes_by_age_and_reports_the_count():
-    from db_ops.common.backup_copy import prune_target_dir
+    from dbabrain.common.backup_copy import prune_target_dir
 
     sent = {}
 
@@ -329,7 +329,7 @@ def test_pruning_deletes_by_age_and_reports_the_count():
 # What a run stores of its own output.
 
 def test_a_short_output_is_stored_whole():
-    from db_ops.backup_restore.events import stdout_excerpt
+    from dbabrain.backup_restore.events import stdout_excerpt
 
     assert stdout_excerpt("PHASE=verify\nRESULT=ok\n") == "PHASE=verify\nRESULT=ok\n"
 
@@ -338,7 +338,7 @@ def test_a_long_output_keeps_the_phase_lines_at_the_start():
     """The regression this fixes: a tail-only excerpt dropped the copy-backup phase line -
     "copied=N skipped=N pruned=N", the chain that was selected - because SQL Server prints
     hundreds of upgrade lines after it. Those first lines are what say what the run did."""
-    from db_ops.backup_restore.events import stdout_excerpt
+    from dbabrain.backup_restore.events import stdout_excerpt
 
     text = ("PHASE=copy-backup transferred A -> B copied=2919 skipped=3901 pruned=4\n"
             + "Database 'x' running the upgrade step from version 900 to 901.\n" * 200
@@ -356,7 +356,7 @@ def test_the_excerpt_never_silently_stitches_two_unrelated_halves():
     """Without the marker, the head's last line runs straight into the tail's first and reads
     as one continuous log - which is worse than truncation, because it invents a sequence of
     events that never happened."""
-    from db_ops.backup_restore.events import stdout_excerpt
+    from dbabrain.backup_restore.events import stdout_excerpt
 
     excerpt = stdout_excerpt("A" * 5000)
 
@@ -385,7 +385,7 @@ def test_a_point_in_time_script_restore_says_so_on_every_message(monkeypatch, ha
         kwargs["on_phase"]("RESTORE_START", "restoring ...", {})
         return {"restore_id": "LAB_PG_A_TO_B", "db_type": "postgresql", "steps": [], "plan": "p"}
 
-    monkeypatch.setattr("db_ops.backup_restore.restore_by_id.restore_by_id", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.restore_by_id.restore_by_id", fake_restore)
 
     workflow.run_scheduled_restores(app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x.json",
                                     force=True, point_in_time="2026-09-25 12:37:42 +08:00")

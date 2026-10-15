@@ -30,9 +30,9 @@ import subprocess
 
 import pytest
 
-from db_ops.common.docker_db import mover
-from db_ops.lib import docker_db_registry as register_config
-from db_ops.lib import docker_db_registry as resolve
+from dbabrain.common.docker_db import mover
+from dbabrain.lib import docker_db_registry as register_config
+from dbabrain.lib import docker_db_registry as resolve
 
 
 class FakeHost:
@@ -90,7 +90,7 @@ SOURCE_ANSWERS = {
     "docker inspect -f {{range $p, $c := .HostConfig.PortBindings}}": "1521",
     'docker inspect -f {{index .Config.Labels "com.docker.compose.service"}}': "ora11g_lab",
     "docker inspect --size -f {{.SizeRw}}": "15240000000",
-    "ls -A /dbops_src | head -1": "",
+    "ls -A /dbabrain_src | head -1": "",
     "docker network ls --filter": "ora11g_lab_default",
     "docker network inspect": "172.30.241.0/24",
     "id -u; id -g": "1000\n1000",
@@ -104,6 +104,8 @@ def _spec(**overrides):
         "commit_container": True,
         "source_target": "SRC",
         "dest_target": "DST",
+        # Stated, as every caller states it since 0.29.0: the lab is found under this folder.
+        "containers_dir": "/opt/db_ops/containers",
         "engine": "oracle-xe",
         "health_timeout": 1,
     }
@@ -231,7 +233,7 @@ def test_the_stop_gives_the_engine_time_to_shut_itself_down():
 def test_the_containers_start_again_even_when_packing_the_volume_fails():
     """A lab left down by a failed tar is a second outage caused by the tool meant to avoid one."""
     source = FakeHost("192.0.2.249", answers=SOURCE_ANSWERS,
-                      failures={"tar czf /dbops_out/volume_": 2})
+                      failures={"tar czf /dbabrain_out/volume_": 2})
     facts = _facts()
 
     with pytest.raises(mover.MoveError):
@@ -282,7 +284,7 @@ def test_the_bundle_is_handed_back_to_the_ssh_user_that_has_to_stream_it():
 
     mover.export_bundle(source, facts, _spec(), log=lambda *_: None)
 
-    assert source.ran("chown -R 1000:1000 /dbops_out")
+    assert source.ran("chown -R 1000:1000 /dbabrain_out")
 
 
 # --------------------------------------------------------------------------- #
@@ -305,9 +307,9 @@ def test_compose_creates_the_volumes_before_they_are_filled():
     mover.import_bundle(destination, _facts(), _spec(), _manifest(), log=lambda *_: None)
 
     load = destination.index_of("docker load")
-    unpack = destination.index_of("tar xzf /dbops_out/instance.tar.gz")
+    unpack = destination.index_of("tar xzf /dbabrain_out/instance.tar.gz")
     create = destination.index_of("docker compose create")
-    restore = destination.index_of("tar xzf /dbops_out/volume_")
+    restore = destination.index_of("tar xzf /dbabrain_out/volume_")
     up = destination.index_of("docker compose up -d")
     assert load < unpack < create < restore < up
 
@@ -319,7 +321,7 @@ def test_the_moved_instance_directory_belongs_to_the_user_that_must_run_compose(
 
     mover.import_bundle(destination, _facts(), _spec(), _manifest(), log=lambda *_: None)
 
-    unpack = destination.commands[destination.index_of("tar xzf /dbops_out/instance.tar.gz")]
+    unpack = destination.commands[destination.index_of("tar xzf /dbabrain_out/instance.tar.gz")]
     assert "chown -R 1001:1001" in unpack
 
 
@@ -328,7 +330,7 @@ def test_a_restored_volume_is_emptied_first_so_the_copy_replaces_rather_than_mer
 
     mover.import_bundle(destination, _facts(), _spec(), _manifest(), log=lambda *_: None)
 
-    restore = destination.commands[destination.index_of("tar xzf /dbops_out/volume_")]
+    restore = destination.commands[destination.index_of("tar xzf /dbabrain_out/volume_")]
     assert "rm -rf" in restore
 
 
@@ -499,7 +501,7 @@ def test_a_database_that_lives_in_the_container_is_refused_rather_than_shipped_e
 
 def test_a_volume_that_holds_something_is_taken_at_its_word():
     source = FakeHost("192.0.2.249", answers={**SOURCE_ANSWERS,
-                                                 "ls -A /dbops_src | head -1": "system.dbf"})
+                                                 "ls -A /dbabrain_src | head -1": "system.dbf"})
     facts = _facts(source)
 
     mover.assert_data_travels(source, facts, _spec(commit_container=False))
@@ -531,7 +533,7 @@ def test_the_container_is_committed_while_it_is_stopped():
 
     assert source.index_of("docker stop") < source.index_of("docker commit")
     assert manifest["image_overrides"] == {"ora11g_lab": manifest["images"][0]}
-    assert manifest["images"][0].startswith("db_ops/ora11g_lab-ora11g_lab:moved-")
+    assert manifest["images"][0].startswith("dbabrain/ora11g_lab-ora11g_lab:moved-")
 
 
 def test_the_committed_image_is_the_one_saved_not_the_stock_one():
@@ -550,13 +552,13 @@ def test_the_moved_instance_is_pinned_to_the_committed_image_by_an_override_file
     """An override rather than an edit of docker-compose.yml: the file that travelled stays the
     file the operator wrote, and compose loads the override with no extra arguments."""
     destination = _destination()
-    manifest = {**_manifest(), "images": ["db_ops/ora11g_lab-ora11g_lab:moved-1"],
-                "image_overrides": {"ora11g_lab": "db_ops/ora11g_lab-ora11g_lab:moved-1"}}
+    manifest = {**_manifest(), "images": ["dbabrain/ora11g_lab-ora11g_lab:moved-1"],
+                "image_overrides": {"ora11g_lab": "dbabrain/ora11g_lab-ora11g_lab:moved-1"}}
 
     mover.import_bundle(destination, _facts(), _spec(), manifest, log=lambda *_: None)
 
     override = destination.written["/opt/db_ops/containers/ora11g_lab/docker-compose.override.yml"]
-    assert "image: db_ops/ora11g_lab-ora11g_lab:moved-1" in override
+    assert "image: dbabrain/ora11g_lab-ora11g_lab:moved-1" in override
     assert "services:" in override
 
 

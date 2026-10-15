@@ -31,7 +31,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 
 SCRIPT = resolve_tool_path("assets/restore/sqlserver/mssql_restore.sh")
 

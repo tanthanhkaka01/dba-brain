@@ -27,9 +27,9 @@ import json
 
 import pytest
 
-from db_ops.reports.cli import _this_node_address, _use_base_url_command
-from db_ops.reports.service import ReportWorkflowError
-from db_ops.reports.use_base_url import BASE_URL_KEY, UseBaseUrlError, use_base_url
+from dbabrain.reports.cli import _this_node_address, _use_base_url_command
+from dbabrain.reports.service import ReportWorkflowError
+from dbabrain.reports.use_base_url import BASE_URL_KEY, UseBaseUrlError, use_base_url
 
 
 def written(root) -> dict:
@@ -130,16 +130,16 @@ def test_the_command_runs_through_its_own_cli(tmp_path, monkeypatch, capsys):
     `config.data_dir` that does not exist. Both were found running a release run sheet, because
     nothing here came through the front door.
     """
-    from db_ops.reports import cli as reports_cli
+    from dbabrain.reports import cli as reports_cli
 
-    monkeypatch.setattr("db_ops.lib.paths.DEFAULT_DATA_DIR", tmp_path)
-    monkeypatch.setattr("db_ops.reports.cli.DEFAULT_DATA_DIR", tmp_path, raising=False)
+    monkeypatch.setattr("dbabrain.lib.paths.DEFAULT_DATA_DIR", tmp_path)
+    monkeypatch.setattr("dbabrain.reports.cli.DEFAULT_DATA_DIR", tmp_path, raising=False)
     # The config is WRITTEN, not borrowed from whatever directory the suite runs in. Reading
     # `config.json` out of the working tree passes on a developer's machine and fails in the
     # exported one, which ships no such file - the coupling `ci.yml` calls "tests read
     # configuration the distribution does not ship", and this test was one of them.
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"app_name": "db_ops"}), encoding="utf-8")
+    config.write_text(json.dumps({"app_name": "dbabrain"}), encoding="utf-8")
 
     code = reports_cli.main(["--config", str(config), "use-base-url",
                             "http://192.0.2.10:8080/report_dba/", "--dry-run"])
@@ -154,12 +154,12 @@ def test_the_command_runs_through_its_own_cli(tmp_path, monkeypatch, capsys):
 # asked for `args`, which `call_report_function` binds by name and never supplies
 # (`_use_base_url_command() missing 1 required keyword-only argument: 'args'`, still in the
 # estate's errors.log on 2026-09-15), and it reached this node's address by importing
-# `db_ops.common.self_status` - which an app may not do.
+# `dbabrain.common.self_status` - which an app may not do.
 # --------------------------------------------------------------------------- #
 def test_the_command_reaches_this_node_through_the_common_cli(monkeypatch):
     """An app hands `common` a JSON object and reads one back. `self-status` is the command that
     answers what this installation is, so `--this-node` asks it rather than importing it."""
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
 
     asked = []
 
@@ -176,7 +176,7 @@ def test_the_command_reaches_this_node_through_the_common_cli(monkeypatch):
 def test_the_command_refuses_this_node_when_self_status_cannot_answer(monkeypatch):
     """Guessing the address writes links to a machine nobody can reach - the failure the whole
     command exists to stop. It has to refuse instead."""
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
 
     def fake_run(command, request, **kwargs):
         raise common_cli.CommonCliError("self-status failed: no reason given")
@@ -190,13 +190,13 @@ def test_the_command_refuses_this_node_when_self_status_cannot_answer(monkeypatc
 def test_a_url_needs_no_address_at_all(monkeypatch, tmp_path):
     """Only `--this-node` has a use for the subprocess, so the other two forms must not pay for
     one - and must keep working on a node whose `self-status` is broken."""
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
 
     def refuse(*_a, **_kw):
         raise AssertionError("use-base-url asked self-status for an address it does not need")
 
     monkeypatch.setattr(common_cli, "run", refuse)
-    monkeypatch.setattr("db_ops.lib.paths.DEFAULT_DATA_DIR", tmp_path)
+    monkeypatch.setattr("dbabrain.lib.paths.DEFAULT_DATA_DIR", tmp_path)
 
     result = _use_base_url_command(config=None, url="http://192.0.2.10:8080/report_dba/",
                                    dry_run=True)

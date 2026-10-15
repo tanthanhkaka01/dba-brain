@@ -5,7 +5,7 @@ does not fail: it succeeds and returns **this** machine's numbers under that hos
 target looks monitored and healthy while none of its OS data is its own.
 
 Found in production on 2026-08-01: `ACME-192-0-2-111` was declared Ubuntu 22.04 with
-`method: local`, and its `OS_INFO` reported the db_ops image (Ubuntu 24.04) with hostname
+`method: local`, and its `OS_INFO` reported the dbabrain image (Ubuntu 24.04) with hostname
 `dbcd646aaa1c` — a container id that changed on every run, because `docker compose run` creates a
 new container each time. CPU, memory, disk and uptime for that server had been the collector's
 own. The only visible symptom was `OS_EVENTLOG_CRITICAL` saying journalctl was missing, which is
@@ -18,8 +18,8 @@ import socket
 
 import pytest
 
-from db_ops.common import remote_exec
-from db_ops.common.remote_exec import RemoteExecError
+from dbabrain.common import remote_exec
+from dbabrain.common.remote_exec import RemoteExecError
 
 
 def _access(host: str) -> dict:

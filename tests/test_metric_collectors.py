@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.config import DbOpsConfig
-from db_ops.metrics.collector import (
+from dbabrain.lib.config import DbaBrainConfig
+from dbabrain.metrics.collector import (
     CommandExecution,
     _apply_metric_result_overrides,
     _collect_one_metric,
@@ -15,8 +15,8 @@ from db_ops.metrics.collector import (
     collect_metrics,
 )
 from conftest import answer_metric_items, shipped_config
-from db_ops.metrics.definitions import DEFAULT_SQL_DIR, load_metric_definitions
-from db_ops.metrics.models import MetricDefinition, MetricTarget, MetricVariant
+from dbabrain.metrics.definitions import DEFAULT_SQL_DIR, load_metric_definitions
+from dbabrain.metrics.models import MetricDefinition, MetricTarget, MetricVariant
 
 
 def _target(db_type="sqlserver", *, platform="windows", method="local"):
@@ -135,21 +135,21 @@ def test_collect_metrics_skips_report_policy_disabled_metric_codes(tmp_path, mon
         return [[] for _ in planned]
 
     monkeypatch.setattr(
-        "db_ops.metrics.collector.load_metric_definitions",
+        "dbabrain.metrics.collector.load_metric_definitions",
         lambda *_, **__: [_definition(metric_code="OS_CPU_USAGE"), _definition(metric_code="OS_MEMORY_USAGE")],
     )
-    monkeypatch.setattr("db_ops.metrics.collector.load_metric_importance_overrides", lambda *_, **__: [])
-    monkeypatch.setattr("db_ops.metrics.collector.load_metric_targets", lambda **_: [target])
-    monkeypatch.setattr("db_ops.metrics.collector.data_sources.load_secret_text", lambda *_, **__: {})
-    monkeypatch.setattr("db_ops.metrics.collector._collect_metric_batch", fake_collect_metric_batch)
+    monkeypatch.setattr("dbabrain.metrics.collector.load_metric_importance_overrides", lambda *_, **__: [])
+    monkeypatch.setattr("dbabrain.metrics.collector.load_metric_targets", lambda **_: [target])
+    monkeypatch.setattr("dbabrain.metrics.collector.data_sources.load_secret_text", lambda *_, **__: {})
+    monkeypatch.setattr("dbabrain.metrics.collector._collect_metric_batch", fake_collect_metric_batch)
     # The catalogue is read twice on this path: once for the definitions, which this test supplies,
     # and once by `load_max_parallel_servers`, which takes its own default path. Redirecting only
     # the first left the second reading the repository's real `data/` — so on a checkout without
     # it the test failed on a missing file rather than on the thing it is about.
-    monkeypatch.setattr("db_ops.metrics.collector.load_max_parallel_servers", lambda *_, **__: 1)
+    monkeypatch.setattr("dbabrain.metrics.collector.load_max_parallel_servers", lambda *_, **__: 1)
 
     summary = collect_metrics(
-        config=DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime.sqlite"),
+        config=DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime.sqlite"),
         dry_run=False,
         force=True,
     )
@@ -557,7 +557,7 @@ def test_cmd_winrm_execution_dispatch(tmp_path, monkeypatch):
 
 
 def test_winrm_execution_uses_cmd_access_port_and_ssl(tmp_path, monkeypatch):
-    from db_ops.metrics.collector import execute_winrm
+    from dbabrain.metrics.collector import execute_winrm
 
     script = tmp_path / "metric.ps1"
     script.write_text(
@@ -599,7 +599,7 @@ def test_winrm_execution_uses_cmd_access_port_and_ssl(tmp_path, monkeypatch):
 
 
 def test_winrm_non_string_streams_are_coerced_to_text(tmp_path, monkeypatch):
-    from db_ops.metrics.collector import execute_winrm
+    from dbabrain.metrics.collector import execute_winrm
 
     script = tmp_path / "metric.ps1"
     script.write_text("Write-Output nope", encoding="utf-8")
@@ -769,7 +769,7 @@ def test_ssh_windows_ps1_runs_as_a_file_placed_on_the_target(tmp_path, monkeypat
     """SSH to Windows places the PS1's content on the target and runs it with ``-File`` - never
     this machine's path, which the target does not have, and not ``-EncodedCommand``, which runs
     out of command line past ~8 KB of script (0.25.0)."""
-    from db_ops.metrics.collector import execute_ssh
+    from dbabrain.metrics.collector import execute_ssh
 
     script = tmp_path / "metric.ps1"
     script.write_text("Get-Date", encoding="utf-8")
@@ -791,7 +791,7 @@ def test_ssh_windows_ps1_runs_as_a_file_placed_on_the_target(tmp_path, monkeypat
 def test_ssh_linux_sh_runs_as_a_file_placed_on_the_target_with_stdin_closed(tmp_path, monkeypatch):
     """SSH to Linux places the .sh's content on the target and runs it with stdin closed. As
     ``bash -s`` stdin, a command in the script that read stdin swallowed the rest (0.25.0)."""
-    from db_ops.metrics.collector import execute_ssh
+    from dbabrain.metrics.collector import execute_ssh
 
     script = tmp_path / "metric.sh"
     script.write_text("echo hi", encoding="utf-8")
@@ -810,7 +810,7 @@ def test_ssh_linux_sh_runs_as_a_file_placed_on_the_target_with_stdin_closed(tmp_
 
 def test_ssh_uses_port_22_by_default(tmp_path, monkeypatch):
     """SSH resolves to port 22 when no explicit port is set in cmd_access."""
-    from db_ops.metrics.collector import execute_ssh
+    from dbabrain.metrics.collector import execute_ssh
 
     script = tmp_path / "metric.ps1"
     script.write_text("$true", encoding="utf-8")
@@ -826,7 +826,7 @@ def test_ssh_uses_port_22_by_default(tmp_path, monkeypatch):
 
 def test_ssh_auth_failure_gives_clear_message(tmp_path, monkeypatch):
     """Authentication failure produces an ERROR result with an informative message."""
-    from db_ops.metrics.collector import execute_ssh, MetricCommandError
+    from dbabrain.metrics.collector import execute_ssh, MetricCommandError
 
     script = tmp_path / "metric.ps1"
     script.write_text("$true", encoding="utf-8")
@@ -839,7 +839,7 @@ def test_ssh_auth_failure_gives_clear_message(tmp_path, monkeypatch):
 
 def test_ssh_connection_refused_gives_clear_message(tmp_path, monkeypatch):
     """Port-closed / unreachable error produces a MetricCommandError describing port and host."""
-    from db_ops.metrics.collector import execute_ssh, MetricCommandError
+    from dbabrain.metrics.collector import execute_ssh, MetricCommandError
 
     script = tmp_path / "metric.ps1"
     script.write_text("$true", encoding="utf-8")
@@ -856,7 +856,7 @@ def test_an_os_metric_is_skipped_on_a_target_with_no_cmd_access():
     WARNING row on the PostgreSQL lab targets on every cycle (61 rows a day), and each new OS
     metric added another one until someone remembered to list its code in a per-target disable
     list."""
-    from db_ops.metrics.collector import _metric_unsupported_reason
+    from dbabrain.metrics.collector import _metric_unsupported_reason
 
     container_target = MetricTarget(                      # a lab database in Docker: no OS access
         target_id="ACME-192-0-2-249-PGLAB-5433/postgresql/pg_ha_01_primary",
@@ -924,7 +924,7 @@ def _fail_collection(monkeypatch, message):
     """Make the SQL collector raise, the way a refused connect does."""
     def boom(**_kwargs):
         raise RuntimeError(message)
-    monkeypatch.setattr("db_ops.metrics.collector._run_sql_file", boom)
+    monkeypatch.setattr("dbabrain.metrics.collector._run_sql_file", boom)
 
 
 ORA_01033 = "ORA-01033: ORACLE initialization or shutdown in progress"

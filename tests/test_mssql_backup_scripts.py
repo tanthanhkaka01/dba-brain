@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 
 import pytest
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 
 BASH = resolve_tool_path("assets/backup/sqlserver/mssql_backup_database.sh")
 PS1 = resolve_tool_path("assets/backup/sqlserver/mssql_backup_database.ps1")
@@ -52,7 +52,7 @@ def test_both_use_the_same_directory_layout(scripts, flavour):
 
 @pytest.mark.parametrize("flavour", ["bash", "ps1"])
 def test_both_print_the_same_receipt(scripts, flavour):
-    """`RESULT=ok` is what db_ops.common.backup checks for. A script that exits 0 without it is
+    """`RESULT=ok` is what dbabrain.common.backup checks for. A script that exits 0 without it is
     reported as a failure, so a script that never prints it can never succeed."""
     text = scripts[flavour]
 

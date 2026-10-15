@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.metrics import cli as metrics_cli
+from dbabrain.metrics import cli as metrics_cli
 
 
 class _Row:

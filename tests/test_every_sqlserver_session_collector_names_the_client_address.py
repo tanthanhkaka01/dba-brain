@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-COLLECTORS = Path(__file__).resolve().parents[1] / "db_ops" / "metrics" / "collectors" / "sqlserver"
+COLLECTORS = Path(__file__).resolve().parents[1] / "dbabrain" / "metrics" / "collectors" / "sqlserver"
 
 
 def _live_sql(path: Path) -> str:

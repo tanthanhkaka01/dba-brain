@@ -20,9 +20,9 @@ import pytest
 
 from conftest import patch_restore
 
-from db_ops.backup_restore import restore_by_id
-from db_ops.backup_restore.restore_script import load_script_restores
-from db_ops.common.restorestep import sqlserver as mssql
+from dbabrain.backup_restore import restore_by_id
+from dbabrain.backup_restore.restore_script import load_script_restores
+from dbabrain.common.restorestep import sqlserver as mssql
 
 FILES = {"data": "/var/opt/mssql/data/HR.mdf", "log": "/var/opt/mssql/data/HR.ldf"}
 
@@ -53,7 +53,7 @@ def test_only_a_full_with_replace_is_guarded():
 
 
 def test_the_drill_entry_s_word_reaches_the_restore(monkeypatch):
-    from db_ops.backup_restore import restore_database
+    from dbabrain.backup_restore import restore_database
 
     config = SimpleNamespace(overwrite_existing=True)
     candidate = SimpleNamespace(restore_database_name="HR", restore_data_file_on_vm="d", restore_log_file_on_vm="l")

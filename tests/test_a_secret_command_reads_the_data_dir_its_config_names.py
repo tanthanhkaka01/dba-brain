@@ -14,11 +14,11 @@ import json
 
 import pytest
 
-from db_ops.common import cli
+from dbabrain.common import cli
 
 
 def test_a_named_config_reads_its_own_data_dir(tmp_path, monkeypatch):
-    monkeypatch.delenv("DB_OPS_DATA_DIR", raising=False)
+    monkeypatch.delenv("DBABRAIN_DATA_DIR", raising=False)
     config = tmp_path / "other_root" / "config.json"
     config.parent.mkdir()
     config.write_text("{}", encoding="utf-8")

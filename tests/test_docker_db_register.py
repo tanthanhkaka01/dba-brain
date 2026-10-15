@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from db_ops.common.docker_db import provisioner
-from db_ops.lib import docker_db_registry as register_config
-from db_ops.lib import docker_db_registry as resolve
-from db_ops.lib.docker_db_spec import DockerDbSpec
+from dbabrain.common.docker_db import provisioner
+from dbabrain.lib import docker_db_registry as register_config
+from dbabrain.lib import docker_db_registry as resolve
+from dbabrain.lib.docker_db_spec import DockerDbSpec
 
 
 def _spec(**over):
@@ -31,7 +31,7 @@ def test_build_connection_entry_shape():
     assert entry["username"] == "postgres"
     assert entry["password_ref"] == "POSTGRES_PASSWORD"
     assert entry["docker"]["instance_name"] == "pg_lab_01"
-    assert entry["created_by"] == "db_ops.sre.create-db-docker"
+    assert entry["created_by"] == "dbabrain.sre.create-db-docker"
     # No password value anywhere in the entry.
     assert "password" not in json.dumps(entry).replace("password_ref", "")
 
@@ -88,14 +88,14 @@ def test_resolve_password_from_env(monkeypatch):
 
 def test_resolve_password_missing_allow(monkeypatch):
     monkeypatch.delenv("MY_PW", raising=False)
-    monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("DBABRAIN_SECRET_KEY", raising=False)
     value, _ = resolve.resolve_password_value("MY_PW", allow_missing=True)
     assert value is None
 
 
 def test_resolve_password_missing_raises(monkeypatch):
     monkeypatch.delenv("MY_PW", raising=False)
-    monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("DBABRAIN_SECRET_KEY", raising=False)
     with pytest.raises(resolve.DockerDbRequestError, match="Password not found"):
         resolve.resolve_password_value("MY_PW", allow_missing=False)
 

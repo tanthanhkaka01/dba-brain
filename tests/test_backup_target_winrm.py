@@ -3,7 +3,7 @@
 ``resolve_ssh_target`` refused anything but ``cmd_access.method = ssh``, which read as a statement
 about the transport and was really a statement about what nobody had needed yet:
 ``hostcmd.run_script`` has dispatched WinRM the whole time, delegating to the same
-:mod:`db_ops.common.remote_exec` the metrics collectors use against these hosts every cycle. The
+:mod:`dbabrain.common.remote_exec` the metrics collectors use against these hosts every cycle. The
 cost of the check was that 192.0.2.248 — a Windows SQL Server reached over WinRM, like most of
 this estate — could not be backed up at all. It failed at config resolution with
 ``needs cmd_access.method=ssh, got winrm``, before anything was attempted, and the only workarounds
@@ -16,7 +16,7 @@ one piece every one of them goes through.
 
 import pytest
 
-from db_ops.backup_restore.backup import (
+from dbabrain.backup_restore.backup import (
     SUPPORTED_BACKUP_ACCESS,
     _default_access_port,
     resolve_ssh_target,
@@ -24,7 +24,7 @@ from db_ops.backup_restore.backup import (
 
 
 def _instances(monkeypatch, *records):
-    from db_ops.lib import data_sources
+    from dbabrain.lib import data_sources
 
     monkeypatch.setattr(data_sources, "load_db_instances", lambda *_a, **_k: list(records))
     monkeypatch.setattr(
@@ -100,7 +100,7 @@ def test_a_key_file_is_dropped_on_a_winrm_target(monkeypatch):
 def test_the_resolved_target_reaches_hostcmd_as_a_winrm_host(monkeypatch):
     """The point of the whole change: what the resolver decided has to survive into the object the
     transport dispatches on."""
-    from db_ops.common.hostcmd import parse_host
+    from dbabrain.common.hostcmd import parse_host
 
     _instances(monkeypatch, _record())
     target = resolve_ssh_target("SRV", label="job")
@@ -134,7 +134,7 @@ def test_an_ssh_key_file_is_still_carried(monkeypatch):
 
 
 def test_local_is_still_refused(monkeypatch):
-    """`local` would back up the db_ops container itself, under the target's name — the same
+    """`local` would back up the dbabrain container itself, under the target's name — the same
     mistake remote_exec.assert_local_host exists to stop for metrics."""
     _instances(monkeypatch, _record(cmd_access={
         "enabled": True, "method": "local", "host": "10.0.0.9", "credential_name": "cred"}))

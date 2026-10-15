@@ -1,5 +1,5 @@
-from db_ops.sla.models import SlaPolicyResult, SlaValidationSummary
-from db_ops.sla.publish import (
+from dbabrain.sla.models import SlaPolicyResult, SlaValidationSummary
+from dbabrain.sla.publish import (
     chat_id_for_level,
     publish_html,
     publish_index,

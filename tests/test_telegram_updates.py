@@ -1,7 +1,7 @@
 import json
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram.updates import TelegramUpdatePaths, save_updates
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram.updates import TelegramUpdatePaths, save_updates
 
 
 def load_users(path):
@@ -51,7 +51,7 @@ def test_save_updates_adds_new_chat_members_to_users_json(tmp_path):
             }
         ],
         paths=TelegramUpdatePaths(groups_path=groups_path, users_path=users_path),
-        store=DbOpsStore(sqlite_path),
+        store=DbaBrainStore(sqlite_path),
     )
 
     users_by_id = {row["user_id"]: row for row in load_users(users_path)}

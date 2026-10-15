@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore import copy_backup
-from db_ops.common import smb
+from dbabrain.backup_restore import copy_backup
+from dbabrain.common import smb
 
 
 ENTRY = "  f_LOG_20260813_021500.trn   A   99  Thu Aug 13 02:15:00 2026"

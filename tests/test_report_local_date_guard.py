@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.db import DbOpsStore
+from dbabrain.db import DbaBrainStore
 
 
 #: The offset these boundary cases are written against. Named rather than repeated, because half
@@ -33,7 +33,7 @@ SEVEN_HOURS = 7 * 60
 def _store_with_report(tmp_path, created_at, *, status="created", report_code="rp_daily"):
     # BACKUP_HEALTH because `reports.report_type` is a foreign key into the seeded `report_types`,
     # and this guard is about the day a report landed on, not about its type.
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     report_id = store.insert_report(
         report_code=report_code,

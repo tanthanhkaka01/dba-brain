@@ -1,4 +1,4 @@
-"""Every page db_ops publishes leads with the same head, and says when it was measured.
+"""Every page dbabrain publishes leads with the same head, and says when it was measured.
 
 Asked for on 2026-09-10 by someone reading `index-usage_<server>.html`, which opened straight on a
 server picker: no title, no machine name, and **no stamp**. "How old is this page" is the first
@@ -7,7 +7,7 @@ different wordings while the fourth did not answer it at all.
 
 Two properties are load-bearing rather than cosmetic, and both were learned the same week:
 
-* the stamp is **passed in**, already rendered through `db_ops.lib.timezone`, so a page rebuilt for
+* the stamp is **passed in**, already rendered through `dbabrain.lib.timezone`, so a page rebuilt for
   a past day says that day and every reader sees the same hour rather than their own browser's;
 * every link is **relative** and only to a page that exists — an absolute one goes stale the moment
   the estate moves, and a link to a report that was never generated is a 404 with a label on it.
@@ -15,7 +15,7 @@ Two properties are load-bearing rather than cosmetic, and both were learned the 
 
 from __future__ import annotations
 
-from db_ops.lib import page_banner
+from dbabrain.lib import page_banner
 
 
 def test_the_banner_names_the_product_the_page_and_the_machine():
@@ -75,7 +75,7 @@ def test_a_title_carrying_markup_cannot_break_out_of_the_banner():
 
 
 def test_the_index_usage_page_carries_the_banner_with_its_own_snapshot(tmp_path):
-    from db_ops.reports.index_report import write_index_report_html
+    from dbabrain.reports.index_report import write_index_report_html
 
     entry = {"server_id": "ACME-192-0-2-115", "collected_at": "2026-09-10T03:57:00Z"}
     path = write_index_report_html(entry, "Index Inventory Report\n", tmp_path)
@@ -90,7 +90,7 @@ def test_the_index_usage_page_carries_the_banner_with_its_own_snapshot(tmp_path)
 
 
 def test_the_index_usage_page_offers_only_reports_that_exist_beside_it(tmp_path):
-    from db_ops.reports.index_report import write_index_report_html
+    from dbabrain.reports.index_report import write_index_report_html
 
     entry = {"server_id": "ACME-192-0-2-115", "collected_at": "2026-09-10T03:57:00Z"}
     page = write_index_report_html(entry, "x\n", tmp_path).read_text(encoding="utf-8")
@@ -104,7 +104,7 @@ def test_the_index_usage_page_offers_only_reports_that_exist_beside_it(tmp_path)
 def test_the_sla_page_carries_the_same_banner(tmp_path):
     from tests.test_sla_publish import _result, _summary
 
-    from db_ops.sla.publish import render_html
+    from dbabrain.sla.publish import render_html
 
     summary = _summary([_result("SS_AVAIL", "PASSED", 99.9, 99.0, 0.9)],
                        status="PASSED", passed=1, at_risk=0, failed=0, no_data=0)
@@ -122,7 +122,7 @@ def test_no_page_leads_with_one_estate_s_company_name():
     """
     from pathlib import Path
 
-    templates = Path("db_ops/reports/templates")
+    templates = Path("dbabrain/reports/templates")
     for name in ("inventory_report.html", "server_report.html"):
         markup = (templates / name).read_text(encoding="utf-8")
         assert "ORG1" not in markup, name

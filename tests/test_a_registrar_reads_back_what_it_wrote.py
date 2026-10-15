@@ -5,7 +5,7 @@ read out of `data/sql_targets.json` and handed straight back to `sql-target-add`
 
     ConfigAdminError: Unknown time_window field: retry_interval
 
-`retry_interval` is read by `db_ops.lib.time_window`, documented in
+`retry_interval` is read by `dbabrain.lib.time_window`, documented in
 `data/shared_config_objects.json` as one of `time_window`'s thirteen fields, and set by targets in
 this estate. `common/config_admin.py` had its own twelve-key copy of that list, and the copy had
 drifted. Nothing caught it: the file is valid, the runtime reads it, `check-objects` passes it — the
@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import config_admin
-from db_ops.lib import time_window
+from dbabrain.common import config_admin
+from dbabrain.lib import time_window
 
 
 def test_the_registrar_accepts_exactly_the_fields_the_runtime_reads():

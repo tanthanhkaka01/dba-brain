@@ -16,10 +16,10 @@ from pathlib import Path
 import pytest
 
 
-DB_OPS = Path(__file__).resolve().parents[1] / "db_ops"
-TRANSPORT = DB_OPS / "transport"
+DBABRAIN = Path(__file__).resolve().parents[1] / "dbabrain"
+TRANSPORT = DBABRAIN / "transport"
 #: The two CLIs every component is meant to reach, and only through `transport`.
-REACHED_THROUGH_TRANSPORT = ("db_ops.common.cli", "db_ops.db.cli")
+REACHED_THROUGH_TRANSPORT = ("dbabrain.common.cli", "dbabrain.db.cli")
 #: How a process is started, by module. `os.system` and friends count: a launch by another name is
 #: still a launch.
 _LAUNCHERS = {"subprocess"}
@@ -31,7 +31,7 @@ def _files(root: Path) -> list[Path]:
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(DB_OPS).as_posix()
+    return path.relative_to(DBABRAIN).as_posix()
 
 
 def _tree(path: Path) -> ast.AST:
@@ -55,7 +55,7 @@ def _names_a_reached_cli(tree: ast.AST) -> bool:
                for node in ast.walk(tree))
 
 
-def _db_ops_imports(tree: ast.AST) -> set[str]:
+def _dbabrain_imports(tree: ast.AST) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -63,27 +63,27 @@ def _db_ops_imports(tree: ast.AST) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             found.add(node.module)
             found |= {f"{node.module}.{alias.name}" for alias in node.names}
-    return {name for name in found if name.split(".")[0] == "db_ops"}
+    return {name for name in found if name.split(".")[0] == "dbabrain"}
 
 
 def test_the_layer_exists():
     assert (TRANSPORT / "process.py").is_file() and (TRANSPORT / "common_cli.py").is_file()
 
 
-@pytest.mark.parametrize("path", [p for p in _files(DB_OPS) if TRANSPORT not in p.parents], ids=_relative)
+@pytest.mark.parametrize("path", [p for p in _files(DBABRAIN) if TRANSPORT not in p.parents], ids=_relative)
 def test_nothing_outside_transport_starts_common_or_db_cli(path):
     """R38. Naming the module is allowed - `lib` builds the command - starting it is not."""
     tree = _tree(path)
     assert not (_starts_processes(tree) and _names_a_reached_cli(tree)), (
         f"{_relative(path)} starts {' / '.join(REACHED_THROUGH_TRANSPORT)} itself. Call it through "
-        "`db_ops.transport.common_cli` (run / run_allowing_failure / spawn).")
+        "`dbabrain.transport.common_cli` (run / run_allowing_failure / spawn).")
 
 
 @pytest.mark.parametrize("path", _files(TRANSPORT), ids=_relative)
 def test_transport_imports_only_lib(path):
     """R39. Anything it imported would come along into every process that reaches `common`."""
-    outside = sorted(name for name in _db_ops_imports(_tree(path))
-                     if not name.startswith(("db_ops.lib", "db_ops.transport")))
+    outside = sorted(name for name in _dbabrain_imports(_tree(path))
+                     if not name.startswith(("dbabrain.lib", "dbabrain.transport")))
     assert not outside, f"{_relative(path)} imports {outside}; transport imports only lib"
 
 
@@ -94,12 +94,12 @@ SHARED_LAYERS_BELOW_THE_APPS = ("lib", "common", "db", "logging_ops")
 
 
 @pytest.mark.parametrize("path", [path for layer in SHARED_LAYERS_BELOW_THE_APPS
-                                  for path in _files(DB_OPS / layer)], ids=_relative)
+                                  for path in _files(DBABRAIN / layer)], ids=_relative)
 def test_no_shared_layer_imports_transport(path):
     """R39. `common` is what transport starts, `lib` what it builds from, `db` and `logging_ops` what
     apps import beside it - none of them reaches up into the layer that starts processes; only an
     app does."""
-    reached = sorted(name for name in _db_ops_imports(_tree(path)) if name.startswith("db_ops.transport"))
+    reached = sorted(name for name in _dbabrain_imports(_tree(path)) if name.startswith("dbabrain.transport"))
     assert not reached, f"{_relative(path)} imports {reached}"
 
 

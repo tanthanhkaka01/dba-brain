@@ -20,9 +20,9 @@ import os
 import time
 from pathlib import Path
 
-from db_ops.backup_restore import copy_backup
-from db_ops.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
-from db_ops.lib.sqlserver_backup_chain import Candidate, restore_chain
+from dbabrain.backup_restore import copy_backup
+from dbabrain.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
+from dbabrain.lib.sqlserver_backup_chain import Candidate, restore_chain
 
 DAY = 86400.0
 
@@ -177,7 +177,7 @@ def _nothing_staged(monkeypatch) -> None:
 
 
 def test_the_space_check_counts_the_chain(tmp_path, monkeypatch):
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     share = tmp_path / "share"
     _eight_days(share)
@@ -197,7 +197,7 @@ def test_the_default_is_the_chain(tmp_path):
 def test_window_copies_every_file_of_the_range_and_the_space_check_counts_it(tmp_path, monkeypatch):
     """The operator (2026-10-01): one field on the restore entry says whether only the files the
     restore needs are copied, or every file in the range."""
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     share = tmp_path / "share"
     _eight_days(share)
@@ -227,7 +227,7 @@ def test_the_entry_s_choice_is_read_from_restore_config_and_a_misspelling_is_ref
 
     import pytest
 
-    from db_ops.backup_restore.config import load_restore_configs
+    from dbabrain.backup_restore.config import load_restore_configs
 
     def write(entry_value):
         entry = {"restore_id": "R1", "server_id": "SRC", "target_server_id": "TGT", "active": True,

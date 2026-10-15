@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.control import worker_exec
+from dbabrain.control import worker_exec
 
 
 @pytest.fixture

@@ -20,8 +20,8 @@ import json
 import subprocess
 import sys
 
-from db_ops.common import cli_docker_db
-from db_ops.transport import common_cli
+from dbabrain.common import cli_docker_db
+from dbabrain.transport import common_cli
 
 
 def _run(monkeypatch, capfd, work):
@@ -60,7 +60,7 @@ def test_a_non_ascii_character_in_the_answer_survives_the_pipe():
     back UTF-8, whatever this machine's code page."""
     ok, _data, error = common_cli.run_allowing_failure(
         "create-db-docker", {"name": "lab—1", "engine": "postgres", "version": "18",
-                             "dry_run": True})
+                             "containers_dir": "/opt/acme/containers", "dry_run": True})
 
     assert ok is False
     assert "lab—1" in error, ascii(error)

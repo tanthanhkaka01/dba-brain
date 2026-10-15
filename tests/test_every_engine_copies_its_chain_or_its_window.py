@@ -24,7 +24,7 @@ import stat as st
 
 import pytest
 
-from db_ops.common import backup_copy
+from dbabrain.common import backup_copy
 
 NOW = 1_759_469_400          # 2026-10-03 05:30:00Z
 HOURS = 3600
@@ -358,7 +358,7 @@ def _entry(**extra):
 
 
 def _parsed(**extra):
-    from db_ops.backup_restore.restore_script import _script_restore
+    from dbabrain.backup_restore.restore_script import _script_restore
 
     entry = _entry(**extra)
     return _script_restore(0, entry, entry["restore_id"])
@@ -379,7 +379,7 @@ def test_a_script_entry_reads_its_copy_selection_and_refuses_a_misspelling():
 ])
 def test_the_copy_asks_common_for_the_chain_and_the_window_the_entry_chose(
         monkeypatch, selection, hours, asks_chain, window_hours):
-    from db_ops.backup_restore import restore_script
+    from dbabrain.backup_restore import restore_script
 
     job = _parsed(copy_selection=selection, copy_recent_hours=hours)
     sent: list[tuple[str, dict]] = []

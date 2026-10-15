@@ -27,7 +27,7 @@ import re
 
 import pytest
 
-from db_ops.telegram.command_processor import SupportCommand, build_cli_argv, cli_action_values
+from dbabrain.telegram.command_processor import SupportCommand, build_cli_argv, cli_action_values
 
 from conftest import shipped_config
 

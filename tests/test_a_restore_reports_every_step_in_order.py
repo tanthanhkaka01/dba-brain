@@ -32,9 +32,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.backup_restore import events, restore_by_id, restore_script
-from db_ops.common import backup_copy
-from db_ops.lib import restore_space
+from dbabrain.backup_restore import events, restore_by_id, restore_script
+from dbabrain.common import backup_copy
+from dbabrain.lib import restore_space
 
 SUCCESS = ["COPY_START", "COPY_DONE", "METADATA_SKIP", "RESTORE_START", "RESTORE_DONE",
            "VERIFY_START", "VERIFY_DONE", "DELETE_START", "DELETE_DONE"]
@@ -48,7 +48,7 @@ def _job(db_type="postgresql", *, remote=True, metadata=False):
         backup_dir="/b/PG_LAB_A", source_backup_host_dir="/b/PG_LAB_A",
         target_backup_dir="/b/pg_restore_from_a", target_visible_dir="/b/pg_restore_from_a",
         cleanup_retention=259200, copy_mode="auto", space_check=restore_space.SpaceCheck(),
-        copy_selection="chain", copy_recent_hours=24,
+        copy_selection="chain", copy_recent_hours=24, staging_marker="",
         server_metadata=SimpleNamespace(enabled=metadata))
 
 
@@ -71,7 +71,7 @@ def drill(monkeypatch):
         monkeypatch.setattr(restore_by_id, "_host_block", lambda j, **_: {"host": "h"})
         monkeypatch.setattr(restore_by_id, "assert_target_is_not_source", lambda *a, **k: None)
         monkeypatch.setitem(restore_by_id._PLANNERS, job.db_type, lambda *a, **k: plan)
-        monkeypatch.setattr("db_ops.backup_restore.backup.resolve_ssh_target",
+        monkeypatch.setattr("dbabrain.backup_restore.backup.resolve_ssh_target",
                             lambda *a, **k: SimpleNamespace(host="h", port=22, username="u",
                                                             container_name="c", key_file=None))
 
@@ -293,7 +293,7 @@ def test_a_point_in_time_copies_the_whole_directory_without_asking_the_source():
 
 
 def test_the_copy_commands_take_their_request_on_stdin_only(capsys):
-    from db_ops.common import cli_backup_copy
+    from dbabrain.common import cli_backup_copy
 
     for command in cli_backup_copy.COMMANDS:
         code = cli_backup_copy.run(command, ['{"source_dir": "/b"}'], read_request=None)
@@ -326,9 +326,9 @@ class _Store:
 
 @pytest.mark.parametrize("status, expected", [("done", ["START", "END"]), ("error", ["START", "ERROR"])])
 def test_a_backup_reports_start_then_its_end_or_its_error_with_the_reason(monkeypatch, status, expected):
-    from db_ops.backup_restore import backup as backup_module
-    from db_ops.backup_restore.server_metadata import ServerMetadataPlan
-    from db_ops.lib.time_window import TimeWindow
+    from dbabrain.backup_restore import backup as backup_module
+    from dbabrain.backup_restore.server_metadata import ServerMetadataPlan
+    from dbabrain.lib.time_window import TimeWindow
 
     emitted = []
     job = backup_module.BackupJob(
@@ -336,7 +336,7 @@ def test_a_backup_reports_start_then_its_end_or_its_error_with_the_reason(monkey
         server_id="LAB-192-0-2-49", script="assets/backup/postgresql/pg_basebackup_database.sh",
         backup_dir="/b/PG_LAB_A", cleanup_retention=259200, time_window=TimeWindow(),
         server_metadata=ServerMetadataPlan())
-    monkeypatch.setattr(backup_module, "DbOpsStore", _Store)
+    monkeypatch.setattr(backup_module, "DbaBrainStore", _Store)
     monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: emitted.append(k))
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
@@ -356,8 +356,8 @@ def test_a_backup_reports_start_then_its_end_or_its_error_with_the_reason(monkey
 
 @pytest.fixture
 def empty_root(tmp_path, monkeypatch):
-    from db_ops.backup_restore import backup as backup_module
-    from db_ops.backup_restore import config as config_module
+    from dbabrain.backup_restore import backup as backup_module
+    from dbabrain.backup_restore import config as config_module
 
     data = tmp_path / "data"
     data.mkdir()
@@ -375,13 +375,13 @@ def empty_root(tmp_path, monkeypatch):
 def test_a_refused_id_is_named_in_the_refusal(empty_root, monkeypatch, argv, key, value):
     """The bot's refusal cases read `backup_id=<unknown>` - the one message that most needs to
     name the id it was given (2026-09-25)."""
-    from db_ops.backup_restore import cli
-    from db_ops.lib.config import DbOpsConfig
+    from dbabrain.backup_restore import cli
+    from dbabrain.lib.config import DbaBrainConfig
 
     emitted = []
-    monkeypatch.setattr(cli, "load_config", lambda _path: DbOpsConfig(
+    monkeypatch.setattr(cli, "load_config", lambda _path: DbaBrainConfig(
         log_dir=empty_root / "logs", runtime_dir=empty_root / "runtime",
-        sqlite_path=empty_root / "runtime" / "db_ops.sqlite"))
+        sqlite_path=empty_root / "runtime" / "dbabrain.sqlite"))
     monkeypatch.setattr(cli, "patch_stdout", lambda *a, **k: None)
     monkeypatch.setattr(cli, "setup_app_logger", lambda *a, **k: None)
     monkeypatch.setattr(cli, "emit_backup_restore_event", lambda **k: emitted.append(k))
@@ -397,7 +397,7 @@ def test_what_a_copy_command_says_while_working_never_reaches_its_answer(monkeyp
     behind it and the app could not read it ("backup-chain exited 0 without a JSON response")."""
     import json
 
-    from db_ops.common import cli_backup_copy
+    from dbabrain.common import cli_backup_copy
 
     class _Client:
         def close(self):
@@ -448,7 +448,7 @@ def test_metadata_replayed_adds_no_warning(drill):
 def test_the_skip_names_the_node_that_writes_the_bundle_and_the_command_that_exports_it(tmp_path, monkeypatch):
     """It said "the backup entry needs server_metadata.enabled too" - on the soak node the entry had
     it on and was inactive, the worker running it; the advice pointed at a setting already set."""
-    from db_ops.backup_restore import server_metadata
+    from dbabrain.backup_restore import server_metadata
 
     monkeypatch.setattr(server_metadata, "instance_bundle_dir", lambda server_id: tmp_path / server_id)
     plan = SimpleNamespace(enabled=True, phases=("pre-database", "post-database"))

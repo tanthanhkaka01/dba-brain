@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 from conftest import shipped_config
 
 DEFINITIONS = shipped_config("metric_definitions.json")
@@ -49,7 +49,7 @@ def test_the_version_split_exists_and_the_legacy_variant_is_matched_first(sqlser
 def test_every_variant_file_the_metric_names_exists(checkdb):
     for variant in checkdb["variants"]:
         if variant.get("file"):
-            # Per file, as the engine resolves them (db_ops.lib.paths.asset_dir): an operator's own
+            # Per file, as the engine resolves them (dbabrain.lib.paths.asset_dir): an operator's own
             # assets/metrics/ folder would otherwise hide every shipped query.
             assert resolve_tool_path(f"assets/metrics/{variant['file']}").is_file(), variant["file"]
 

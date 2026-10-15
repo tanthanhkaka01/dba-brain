@@ -18,20 +18,20 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import cleanup_retention, shared_objects
-from db_ops.lib.cmd_access import CMD_ACCESS_FIELDS, SUPPORTED_CMD_ACCESS_METHODS
-from db_ops.lib.notify import NOTIFY_RULE_NAMES, NotifyRule
-from db_ops.lib.sql_access import (
+from dbabrain.lib import cleanup_retention, shared_objects
+from dbabrain.lib.cmd_access import CMD_ACCESS_FIELDS, SUPPORTED_CMD_ACCESS_METHODS
+from dbabrain.lib.notify import NOTIFY_RULE_NAMES, NotifyRule
+from dbabrain.lib.sql_access import (
     SECRET_REF_FIELDS,
     SQL_ACCESS_FIELDS,
     SUPPORTED_SQL_ACCESS_METHODS,
 )
-from db_ops.lib.task_output import MAX_INLINE_MAX_ROWS, OUTPUT_FIELDS, OUTPUT_FORMATS
-from db_ops.lib.time_window import NEW_FIELDS
+from dbabrain.lib.task_output import MAX_INLINE_MAX_ROWS, OUTPUT_FIELDS, OUTPUT_FORMATS
+from dbabrain.lib.time_window import NEW_FIELDS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COPIES = (
-    REPO_ROOT / "db_ops" / "common" / "catalogue" / "shared_config_objects.json",
+    REPO_ROOT / "dbabrain" / "common" / "catalogue" / "shared_config_objects.json",
     REPO_ROOT / "data" / "shared_config_objects.json",
     REPO_ROOT / "data" / "shared_config_objects.example.json",
 )
@@ -284,7 +284,7 @@ def test_a_packaged_copy_is_the_one_init_writes_the_file_from(reference):
     """`packaged` is the fallback for a file that ships no example. A site naming a copy other than
     the one `init` writes from would check a document no node ever receives - so the two are pinned
     to each other, and every site whose file ships no example must name one."""
-    from db_ops.common import scaffold
+    from dbabrain.common import scaffold
 
     for item in reference:
         for site in item.get("used_in") or []:
@@ -311,7 +311,7 @@ def test_a_root_init_just_wrote_obeys_it(tmp_path):
     thing a new operator's `check-objects` reads. The 0.22.0 soak node's fresh root reported three
     violations: `schema_version` undescribed on the two Telegram files, and the bot's empty token
     ref, which is the "not configured" state `init` means to write, called an error."""
-    from db_ops.common import scaffold
+    from dbabrain.common import scaffold
 
     scaffold.initialise(tmp_path / "root")
     result = shared_objects.check_data_dir(tmp_path / "root" / "data")
@@ -406,7 +406,7 @@ def test_a_bridge_url_is_required_only_when_the_method_asks_for_one():
 
 
 def test_a_docker_connection_is_described_with_the_provisioners_own_engines(reference):
-    from db_ops.lib.docker_db_spec import VALID_ENGINES
+    from dbabrain.lib.docker_db_spec import VALID_ENGINES
 
     entry = next(item for item in reference if item["object"] == "docker_db_connection")
     field = next(f for f in entry["fields"] if f["field"] == "db_type")

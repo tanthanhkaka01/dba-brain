@@ -1,8 +1,8 @@
 import json
 import sqlite3
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram.command_processor import process_one_command_message
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram.command_processor import process_one_command_message
 
 
 def write_json(path, root_key, rows):
@@ -29,7 +29,7 @@ def write_commands(path):
 
 
 def insert_command_message(sqlite_path, *, chat_id, chat_type, user_id, message_id=10):
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     store.upsert_telegram_messages(
         [
             {

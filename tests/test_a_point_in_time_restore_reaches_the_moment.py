@@ -20,10 +20,10 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.backup_restore.restore_by_id import _logs_through
-from db_ops.common.backupfiles import _in_window, _later
-from db_ops.common.restorestep import RestoreStepError, restore_step
-from db_ops.lib.restore.moment import server_clock_text
+from dbabrain.backup_restore.restore_by_id import _logs_through
+from dbabrain.common.backupfiles import _in_window, _later
+from dbabrain.common.restorestep import RestoreStepError, restore_step
+from dbabrain.lib.restore.moment import server_clock_text
 
 
 def _mssql_log(stopat):
@@ -116,7 +116,7 @@ def test_a_moment_after_every_log_takes_them_all():
 # PostgreSQL
 # --------------------------------------------------------------------------- #
 def test_a_postgresql_target_time_promotes_rather_than_pauses():
-    from db_ops.common.restorestep.postgresql import _recovery_config
+    from dbabrain.common.restorestep.postgresql import _recovery_config
 
     config = _recovery_config("/data", "/wal", "2026-09-24 23:02:15 +00:00")
 
@@ -125,8 +125,8 @@ def test_a_postgresql_target_time_promotes_rather_than_pauses():
 
 
 def test_a_paused_recovery_ends_the_wait_at_once(monkeypatch):
-    import db_ops.common.restorestep.postgresql as pg
-    from db_ops.common.hostcmd import parse_host
+    import dbabrain.common.restorestep.postgresql as pg
+    from dbabrain.common.hostcmd import parse_host
 
     def fake_run(host, command, **kwargs):
         if "State.Status" in command:
@@ -177,9 +177,9 @@ def test_an_oracle_duplicate_never_resumes_onto_an_earlier_ones_files():
 # PostgreSQL's listing: the host's clock, and a staging copy's dates
 # --------------------------------------------------------------------------- #
 def _pg_listing(monkeypatch, stdout):
-    from db_ops.common.backupfiles import list_backup_files
+    from dbabrain.common.backupfiles import list_backup_files
 
-    monkeypatch.setattr("db_ops.common.backupfiles.postgresql.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.postgresql.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": stdout, "stderr": ""})
     return lambda **request: list_backup_files({"db_type": "postgresql", "path": "/b", **request})
 
@@ -210,7 +210,7 @@ def test_the_postgresql_listing_dates_a_backup_by_its_manifest_not_its_folder():
     """A staged folder is dated by the copy that made it; the manifest keeps the backup's time."""
     import inspect
 
-    from db_ops.common.backupfiles import postgresql
+    from dbabrain.common.backupfiles import postgresql
 
     assert "backup_manifest" in inspect.getsource(postgresql.list_files)
 
@@ -218,7 +218,7 @@ def test_the_postgresql_listing_dates_a_backup_by_its_manifest_not_its_folder():
 def test_an_incremental_staged_in_the_same_second_as_its_full_stays_in_the_chain(monkeypatch):
     from types import SimpleNamespace
 
-    from db_ops.backup_restore import restore_by_id as rbi
+    from dbabrain.backup_restore import restore_by_id as rbi
 
     rows = {"full": [{"path": "/s/base/20260925T035306Z_FULL", "kind": "full",
                       "finished_at": "2026-09-25 10:53:22"}],

@@ -3,21 +3,21 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.lib.time_window import TimeWindow
-from db_ops.jobs import daemon
+from dbabrain.lib.time_window import TimeWindow
+from dbabrain.jobs import daemon
 
 
 class FakeConfig:
     def __init__(self, log_dir):
         self.log_dir = log_dir
-        self.sqlite_path = log_dir / "db_ops.sqlite"
+        self.sqlite_path = log_dir / "dbabrain.sqlite"
 
 
 
     @property
     def store(self):
-        """SQLite store declaration matching this fake's sqlite_path (see db_ops.lib.config)."""
-        from db_ops.lib.config import SqliteStoreConfig, StoreConfig
+        """SQLite store declaration matching this fake's sqlite_path (see dbabrain.lib.config)."""
+        from dbabrain.lib.config import SqliteStoreConfig, StoreConfig
         from pathlib import Path as _Path
 
         return StoreConfig(sqlite=SqliteStoreConfig(path=_Path(str(self.sqlite_path))))

@@ -20,11 +20,11 @@ import json
 
 import pytest
 
-from db_ops.common import sql_run, sql_task_admin
-from db_ops.lib import sql_text
-from db_ops.lib.sql_text import SqlParameterError
-from db_ops.sql_tasks import runner
-from db_ops.sql_tasks.runner import SqlCommand, SqlTarget
+from dbabrain.common import sql_run, sql_task_admin
+from dbabrain.lib import sql_text
+from dbabrain.lib.sql_text import SqlParameterError
+from dbabrain.sql_tasks import runner
+from dbabrain.sql_tasks.runner import SqlCommand, SqlTarget
 
 
 # --------------------------------------------------------------------------- #
@@ -169,7 +169,7 @@ _STATED = {"target": "ACME-LAB", "connection": {"db_type": "postgresql", "host":
 
 
 def _resolved(db_type, sql_access=None):
-    from db_ops.lib.target_profile import TargetProfile
+    from dbabrain.lib.target_profile import TargetProfile
 
     return {"server_id": "ACME-LAB", "db_type": db_type, "database_name": "labtest",
             "credential_name": "c", "username": "u", "password": "x", "credential_role": "",
@@ -208,7 +208,7 @@ def _command(db_type="oracle", parameters=({"name": "job_no", "type": "varchar(5
 
 
 def _target(db_type="oracle", sql_access=None):
-    from db_ops.lib.time_window import TimeWindow
+    from dbabrain.lib.time_window import TimeWindow
 
     return SqlTarget(sql_id=55, target_no=1, server_id="ACME-LAB", db_type=db_type,
                      service_name="FREEPDB1", instance_name="", credential_name="c",

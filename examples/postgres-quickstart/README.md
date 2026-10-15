@@ -29,7 +29,7 @@ turning delivery on actually takes.
   [`docs/installation.md`](../../docs/installation.md).
 
 Run every command below **from this directory**. That is not incidental: the toolkit finds its
-configuration by asking `DB_OPS_HOME`, then the working directory if it holds `data/` or
+configuration by asking `DBABRAIN_HOME`, then the working directory if it holds `data/` or
 `config.json`, then the package location. Standing here is what makes this directory the tool
 root, so `logs/`, `runtime/` and the store all appear here and nowhere else.
 
@@ -50,13 +50,13 @@ in this example needs, and no privilege to change the instance it is measuring.
 Wait for it to report healthy:
 
 ```bash
-docker inspect -f '{{.State.Health.Status}}' dbops_quickstart_pg
+docker inspect -f '{{.State.Health.Status}}' dbabrain_quickstart_pg
 ```
 
 ## 2. Create the store
 
 ```bash
-python -m db_ops.db.cli --config config.json init
+python -m dbabrain.db.cli --config config.json init
 ```
 
 That is the toolkit's own database — job runs, metric results, reports, history. It is SQLite here
@@ -68,7 +68,7 @@ is a one-word edit of `backend` rather than a rediscovery of host, port and cred
 thing to know first. **On PostgreSQL the toolkit creates neither the database nor the schema.** Give
 it ones that already exist and it builds only its own tables inside them; a database that is not
 there fails at connect rather than being created behind you. Either ask your DBA for an empty
-database and a schema, or run the idempotent `python -m db_ops.db.cli create-store-database` when
+database and a schema, or run the idempotent `python -m dbabrain.db.cli create-store-database` when
 the login may create them.
 
 It also needs a **login that already exists** — SQLite needs none, because a file is reached by
@@ -86,7 +86,7 @@ Passwords are never written in configuration. `data/users.json` names a *referen
 
 ```bash
 cp secrets/secret_text.example.json secrets/secret_text.json
-python -m db_ops.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
+python -m dbabrain.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
 ```
 
 - `secrets/secret_text.json` is the plaintext source and is git-ignored. Only the encrypted file
@@ -95,17 +95,17 @@ python -m db_ops.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
   Base64 is not encryption — it only avoids `$` and `#` being eaten by a shell. The encrypted file
   is exactly as safe as the passphrase behind it.
 - The passphrase is supplied at run time and never stored. Every command that reaches a database
-  needs it, as `DB_OPS_SECRET_KEY` or as `--key` / `--key-base64`.
+  needs it, as `DBABRAIN_SECRET_KEY` or as `--key` / `--key-base64`.
 
 ## 4. Collect
 
 Look first, run second:
 
 ```bash
-export DB_OPS_SECRET_KEY=quickstart          # Windows PowerShell: $env:DB_OPS_SECRET_KEY="quickstart"
+export DBABRAIN_SECRET_KEY=quickstart          # Windows PowerShell: $env:DBABRAIN_SECRET_KEY="quickstart"
 
-python -m db_ops.metrics.cli --config config.json collect --dry-run
-python -m db_ops.metrics.cli --config config.json collect
+python -m dbabrain.metrics.cli --config config.json collect --dry-run
+python -m dbabrain.metrics.cli --config config.json collect
 ```
 
 ```text
@@ -123,8 +123,8 @@ opening a connection, which is how you find out that a target resolves to the wr
 ## 5. Read what you collected
 
 ```bash
-python -m db_ops.metrics.cli --config config.json report
-python -m db_ops.metrics.cli --config config.json summary-latest
+python -m dbabrain.metrics.cli --config config.json report
+python -m dbabrain.metrics.cli --config config.json summary-latest
 ```
 
 `report` prints one row per metric with the SQL file behind it — the answer and its provenance in
@@ -134,7 +134,7 @@ and what is fine.
 ## 6. Read what it found
 
 ```bash
-python -m db_ops.metrics.cli --key-base64 "cXVpY2tzdGFydA==" alert-summary --include-warning
+python -m dbabrain.metrics.cli --key-base64 "cXVpY2tzdGFydA==" alert-summary --include-warning
 ```
 
 ```text
@@ -149,7 +149,7 @@ Message: active_sessions=1, running_requests=1, blocked_sessions=0
 instance nothing. It is also what you would send to a chat — see the SQL Server quickstart's
 [step 6](../sqlserver-quickstart/README.md#6-send-it-to-telegram).
 
-> `db-ops reports run-scheduled` is the scheduled form: it builds the report and queues it for
+> `dbabrain reports run-scheduled` is the scheduled form: it builds the report and queues it for
 > delivery on the interval its `reports_config.json` entry declares. `alert-summary` above is the
 > one to read first, because it shows the finding without involving delivery at all.
 
@@ -162,7 +162,7 @@ separate steps, and the second one is optional.
 entries you want and start the daemon:
 
 ```bash
-python -m db_ops.jobs.daemon --config config.json --delay-seconds 5 --key-base64 "cXVpY2tzdGFydA=="
+python -m dbabrain.jobs.daemon --config config.json --delay-seconds 5 --key-base64 "cXVpY2tzdGFydA=="
 ```
 
 It runs each active entry on its own interval, inside its allowed hours, and forwards the

@@ -13,7 +13,7 @@ What these tests pin:
   exists - hiding them is how a node running nothing looked the same as one running everything;
 * the last-run column is the one part allowed to fail, and it fails into a named reason, never into
   no report - this is still the status asked for first when the store is what is down;
-* the role rule itself lives in one place (``db_ops.lib.node_role``); the daemon and the Telegram
+* the role rule itself lives in one place (``dbabrain.lib.node_role``); the daemon and the Telegram
   processor had two copies that already disagreed about an empty role.
 """
 
@@ -23,10 +23,10 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from db_ops.common import self_status
-from db_ops.db import ops_status
-from db_ops.lib import node_role
-from db_ops.lib.time_window import weekdays_text
+from dbabrain.common import self_status
+from dbabrain.db import ops_status
+from dbabrain.lib import node_role
+from dbabrain.lib.time_window import weekdays_text
 
 NOW = datetime(2026, 9, 23, 7, 0, 0, tzinfo=timezone.utc)
 
@@ -202,17 +202,17 @@ def test_the_telegram_command_calls_common_and_the_bot_finishes_it():
     bot must know to finish it, or the reply comes back without the column and nobody notices."""
     import json
 
-    from db_ops.telegram import command_processor
+    from dbabrain.telegram import command_processor
 
     root = Path(__file__).resolve().parents[1]
-    copies = [root / "db_ops" / "telegram" / "catalogue" / "telegram_support_commands.json",
+    copies = [root / "dbabrain" / "telegram" / "catalogue" / "telegram_support_commands.json",
               root / "data" / "telegram_support_commands.json",
               root / "data" / "telegram_support_commands.example.json"]
     for path in (p for p in copies if p.is_file()):
         rows = json.loads(path.read_text(encoding="utf-8-sig"))["telegram_support_commands"]
         command = next(r for r in rows if r["command_text"] == "spbot_self_status")
         argv = command["action_config"]["command_argv"]
-        assert argv[2:4] == ["db_ops.common.cli", "self-status"], f"{path.name}: {argv}"
+        assert argv[2:4] == ["dbabrain.common.cli", "self-status"], f"{path.name}: {argv}"
         # Refusing without a key would cost the whole reply; the key only buys one column.
         assert not command["action_config"].get("requires_secret_key"), path.name
     assert command_processor.finishes("self-status")
@@ -225,7 +225,7 @@ class _Store:
 def test_the_bot_states_each_apps_newest_run_from_its_store(monkeypatch, tmp_path):
     import json
 
-    from db_ops.telegram import command_processor
+    from dbabrain.telegram import command_processor
 
     (tmp_path / "app_commands.json").write_text(json.dumps({"app_commands": [
         _command("APP-A"), _command("APP-B")]}), encoding="utf-8")
@@ -246,7 +246,7 @@ def test_the_bot_states_each_apps_newest_run_from_its_store(monkeypatch, tmp_pat
 
 
 def test_a_store_the_bot_cannot_read_costs_the_column_never_the_reply(monkeypatch, tmp_path):
-    from db_ops.telegram import command_processor
+    from dbabrain.telegram import command_processor
 
     def down(*_args, **_kwargs):
         raise ConnectionRefusedError("could not connect to server\nsecond line")
@@ -260,9 +260,9 @@ def test_a_store_the_bot_cannot_read_costs_the_column_never_the_reply(monkeypatc
 
 
 def _no_config(monkeypatch):
-    import db_ops.lib.config as db_ops_config
-    from db_ops.common import cli as common_cli
-    from db_ops.lib import config as lib_config
+    import dbabrain.lib.config as dbabrain_config
+    from dbabrain.common import cli as common_cli
+    from dbabrain.lib import config as lib_config
 
     # The load has to FAIL, not be skipped: loading this tree's config.json binds the process-wide
     # display timezone, and the first version of this test left it bound for every test after it -
@@ -270,7 +270,7 @@ def _no_config(monkeypatch):
     def refuse(*_a, **_kw):
         raise FileNotFoundError("no config on this machine")
 
-    monkeypatch.setattr(db_ops_config, "load_config", refuse)
+    monkeypatch.setattr(dbabrain_config, "load_config", refuse)
     monkeypatch.setattr(lib_config, "load_config", refuse)
     monkeypatch.setattr(common_cli, "read_app_commands",
                         lambda data_dir=None: [_command("APP-A")])

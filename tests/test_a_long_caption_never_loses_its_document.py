@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_ops.db import DbOpsStore
-from db_ops.lib.telegram_text import CAPTION_CONTINUED, TELEGRAM_CAPTION_LIMIT, document_caption
-from db_ops.telegram import send_queue
+from dbabrain.db import DbaBrainStore
+from dbabrain.lib.telegram_text import CAPTION_CONTINUED, TELEGRAM_CAPTION_LIMIT, document_caption
+from dbabrain.telegram import send_queue
 
 LONG = "\n".join(f"line {n:03d}: " + "x" * 40 for n in range(60))   # ~3000 characters
 
@@ -37,8 +37,8 @@ def test_a_long_caption_is_cut_at_a_line_inside_the_limit_and_the_whole_text_fol
 def test_the_queue_delivers_the_document_and_then_the_whole_text(tmp_path: Path, monkeypatch):
     report = tmp_path / "result.xlsx"
     report.write_bytes(b"xlsx")
-    path = tmp_path / "db_ops.sqlite"
-    store = DbOpsStore(path)
+    path = tmp_path / "dbabrain.sqlite"
+    store = DbaBrainStore(path)
     store.initialize()
     row_id = store.insert_telegram_send_message(tlgchat_id="-100", message_text=LONG,
                                                metadata={"document_path": str(report)})
@@ -62,8 +62,8 @@ def test_the_queue_delivers_the_document_and_then_the_whole_text(tmp_path: Path,
 def _queued_document(tmp_path: Path) -> tuple[Path, int]:
     report = tmp_path / "result.xlsx"
     report.write_bytes(b"xlsx")
-    path = tmp_path / "db_ops.sqlite"
-    store = DbOpsStore(path)
+    path = tmp_path / "dbabrain.sqlite"
+    store = DbaBrainStore(path)
     store.initialize()
     return path, store.insert_telegram_send_message(
         tlgchat_id="-100", message_text=LONG, metadata={"document_path": str(report)})
@@ -106,7 +106,7 @@ def test_a_rate_limit_on_the_text_hands_the_row_back_and_the_next_pass_sends_onl
     assert len(documents) == 1, "the file went out once"
     assert [kw["text"] for kw in texts] == [LONG, LONG]
     assert texts[0]["wait_before_first_part"] is False, "the send pass is not held by one chat's limit"
-    row = DbOpsStore(path).fetch_telegram_send_message(send_tlgmsg_id=row_id)
+    row = DbaBrainStore(path).fetch_telegram_send_message(send_tlgmsg_id=row_id)
     assert int(row["message_id"]) == 7, "the row's message is the document"
 
 
@@ -122,7 +122,7 @@ def test_a_text_that_fails_outright_is_retried_without_the_file(tmp_path: Path, 
 
     assert answer["status"] == "failed"
     assert len(documents) == 1 and len(texts) == 3, "three attempts at the text, one file"
-    row = DbOpsStore(path).fetch_telegram_send_message(send_tlgmsg_id=row_id)
+    row = DbaBrainStore(path).fetch_telegram_send_message(send_tlgmsg_id=row_id)
     assert "the document was delivered" in str(row["metadata_json"])
 
 

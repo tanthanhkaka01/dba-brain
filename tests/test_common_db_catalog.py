@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import db_catalog
+from dbabrain.common import db_catalog
 
 
 #: The login a caller states - common.cli reads no configuration (rules R09), so every request here

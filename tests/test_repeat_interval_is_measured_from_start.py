@@ -15,10 +15,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from db_ops.backup_restore import schedule as backup_schedule
-from db_ops.jobs import daemon
-from db_ops.lib.time_window import TimeWindow, due_from_row, run_anchor
-from db_ops.sql_tasks import runner as sql_runner
+from dbabrain.backup_restore import schedule as backup_schedule
+from dbabrain.jobs import daemon
+from dbabrain.lib.time_window import TimeWindow, due_from_row, run_anchor
+from dbabrain.sql_tasks import runner as sql_runner
 
 START = datetime(2026, 9, 19, 1, 0, 0, tzinfo=timezone.utc)
 RAN_FOR = 240
@@ -87,7 +87,7 @@ def test_it_is_not_due_while_the_interval_has_not_elapsed_and_says_how_far_off_i
 def test_the_daemon_measures_an_app_command_from_the_start_of_the_last_run():
     command = daemon.AppCommand(
         app_command_id="APP-X", app_code="x", app_name="x", display_name="x",
-        log_scope="x", working_dir="tools/db_ops", command_text="python -c pass",
+        log_scope="x", working_dir="tools/dbabrain", command_text="python -c pass",
         time_window=_window(), active=True,
     )
     row = _row()

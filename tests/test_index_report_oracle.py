@@ -13,7 +13,7 @@ the page *does* carry is what Oracle states on its own — what exists, its size
 still usable, and how old its statistics are.
 """
 
-from db_ops.reports.index_report import format_index_report
+from dbabrain.reports.index_report import format_index_report
 
 
 def _entry(indexes, totals=None, disabled=None):

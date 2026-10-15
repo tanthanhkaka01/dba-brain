@@ -1,4 +1,4 @@
-"""The shared confirmation control: db_ops.common.confirm.
+"""The shared confirmation control: dbabrain.common.confirm.
 
 Restarting a host, stopping a database service and applying a cumulative update are different
 operations with the same failure mode — the right command aimed at the wrong machine. They
@@ -14,8 +14,8 @@ therefore share one control rather than one each, and these tests pin what it gu
 
 import io
 
-from db_ops.common import confirm
-from db_ops.common.evidence import FAIL, OK, GateReport
+from dbabrain.common import confirm
+from dbabrain.common.evidence import FAIL, OK, GateReport
 
 
 def _report():

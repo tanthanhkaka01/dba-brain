@@ -13,7 +13,7 @@ first: [`standing-up-a-node.md`](./standing-up-a-node.md) §6.
 - **Clearance.** A command has a `command_type`; it runs for a user whose level is at least that, and
   in a group the group's `allow_command` must reach it too. `/spbot_list_*` is level 1, running a SQL
   task or killing a session is 50, restarting a server is 100. A new user is level 0 until
-  `db-ops telegram user-level` clears them — level 0 runs only the two public commands.
+  `dbabrain telegram user-level` clears them — level 0 runs only the two public commands.
 - **Long answers are split, never cut**, at 4096 characters.
 - **`(N inactive entries hidden)`** appears wherever a list has switched-off rows: the bot shows what
   you can act on, and says how much it left out.
@@ -29,7 +29,7 @@ Level 1. The first command to run after standing a node up: it answers with the 
 host it is on, and **the URLs it publishes**, which is otherwise guesswork.
 
 ```
-✅ DBA Brain / db_ops - current state
+✅ DBA Brain / dbabrain - current state
 product   : DBA Brain (published)  [pip: dbabrain 0.19.0]
 version   : 0.19.0  (public 0.19.0)
 running   : on the OS directly, on Windows 11 (10.0.26200)
@@ -45,9 +45,9 @@ memory    : 21.7 GiB used of 31.7 GiB (68%), 10.0 GiB free
             source: GlobalMemoryStatusEx
 disk      : 541.6 GiB free of 600.0 GiB (10% used)
 uptime    : 38.20 h  (host up since 2026-09-10 10:31:59 +00)
-db_ops up : 12.23 h  (since 2026-09-11 12:30:22 +00)
+dbabrain up : 12.23 h  (since 2026-09-11 12:30:22 +00)
 
-web UI    : http://192.0.2.93:8080/db_ops/
+web UI    : http://192.0.2.93:8080/dbabrain/
 reports   : http://192.0.2.93:8080/report_dba/
   inventory  : http://192.0.2.93:8080/report_dba/database-inventory.html
   server metr: http://192.0.2.93:8080/report_dba/server-metrics.html
@@ -226,7 +226,7 @@ It can also be sent as one line, which is what a repeat from `/spbot_list_my_com
 > - `password_ref` — the database password comes from a ref already in the encrypted store (or
 >   an environment variable of the same name on the host);
 > - `remote_password_ref` — the host login comes from a ref already in the encrypted store
->   (`db-ops common secret-set -`), or use `remote_key_name` for key authentication.
+>   (`dbabrain common secret-set -`), or use `remote_key_name` for key authentication.
 >
 > If a secret has already gone through a command line, rotate it — the row and the chat message are
 > both copies you cannot reliably delete everywhere.
@@ -259,7 +259,7 @@ recorded with who asked for it.
 
 | | |
 | --- | --- |
-| No reply at all | no token stored, or the daemon is not running. `db-ops telegram --config config.json bot-info` answers the first; `ops-status` the second |
-| "Permission denied … user_type=0" | you are not cleared: `db-ops telegram user-level --user @you --level 100` |
+| No reply at all | no token stored, or the daemon is not running. `dbabrain telegram --config config.json bot-info` answers the first; `ops-status` the second |
+| "Permission denied … user_type=0" | you are not cleared: `dbabrain telegram user-level --user @you --level 100` |
 | Works privately, ignored in a group | the group's `allow_command` is 0 (`group-level --allow-command 10`), or the bot's **privacy mode** is on, so it only sees commands addressed to it |
 | A flood of old answers at once | a newly tokened bot works through Telegram's 24-hour backlog, including commands sent before this node existed |

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import json
 
-from db_ops.lib.html_json import json_for_html
-from db_ops.reports import inventory_report
+from dbabrain.lib.html_json import json_for_html
+from dbabrain.reports import inventory_report
 
-EVIL = "</script><script>fetch('/db_ops/api/config')</script><!--"
+EVIL = "</script><script>fetch('/dbabrain/api/config')</script><!--"
 
 
 def test_the_helper_escapes_what_can_start_a_tag_and_stays_json():
@@ -33,6 +33,6 @@ def test_the_inventory_page_carries_no_closing_script_tag_from_the_data():
 
 
 def test_the_console_uses_the_same_helper():
-    from db_ops.webhost.pages import json_script
+    from dbabrain.webhost.pages import json_script
 
     assert json_script({"v": EVIL}) == json_for_html({"v": EVIL}, default=str)

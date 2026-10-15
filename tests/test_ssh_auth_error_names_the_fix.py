@@ -19,7 +19,7 @@ import pytest
 
 paramiko = pytest.importorskip("paramiko")
 
-from db_ops.common.ssh import SshAuthError, _connect_error
+from dbabrain.common.ssh import SshAuthError, _connect_error
 
 
 def _classify(*, offered_password: bool, offered_key: bool) -> SshAuthError:

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_ops.lib.paths import ROOT_MARKERS, resolve_data_dir, resolve_tool_root
+from dbabrain.lib.paths import ROOT_MARKERS, resolve_data_dir, resolve_tool_root
 
 
 def _make_root(tmp_path: Path, name: str) -> Path:
@@ -102,7 +102,7 @@ def test_the_data_directory_can_be_pointed_somewhere_else_on_its_own(tmp_path: P
     is rarely next to the package.
     """
     root = _make_root(tmp_path, "root")
-    elsewhere = tmp_path / "etc" / "dbops"
+    elsewhere = tmp_path / "etc" / "dbabrain"
     elsewhere.mkdir(parents=True)
 
     assert resolve_data_dir(data_dir=str(elsewhere), tool_root=root) == elsewhere

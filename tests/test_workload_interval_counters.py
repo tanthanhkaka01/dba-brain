@@ -13,7 +13,7 @@ presented as the instance's, and a zero that means "did not collect" are all num
 right on the page and send a DBA the wrong way.
 """
 
-from db_ops.reports import workload
+from dbabrain.reports import workload
 
 
 def _rows(code, stamp, values, *, since="2026-08-01 03:00:00", cpu_count=8, extra=""):

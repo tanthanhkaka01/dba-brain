@@ -16,7 +16,7 @@ path so a tree under a directory called `build` was never opened - are pinned at
 Both were measured on 2026-09-05, in a package that was already on the index.
 """
 
-from db_ops.common import identifier_scan as scan
+from dbabrain.common import identifier_scan as scan
 
 
 def test_a_host_and_instance_pair_teaches_the_scan_the_host_on_its_own():

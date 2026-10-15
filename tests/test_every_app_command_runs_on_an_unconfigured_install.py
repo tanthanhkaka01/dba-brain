@@ -35,11 +35,11 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import scaffold
-from db_ops.jobs.daemon import use_this_interpreter
+from dbabrain.common import scaffold
+from dbabrain.jobs.daemon import use_this_interpreter
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CATALOGUE = REPO_ROOT / "db_ops" / "jobs" / "catalogue" / "app_commands.json"
+CATALOGUE = REPO_ROOT / "dbabrain" / "jobs" / "catalogue" / "app_commands.json"
 
 
 def _catalogue() -> list[dict]:
@@ -66,13 +66,13 @@ def bare_root(tmp_path_factory):
 def _env(root: Path) -> dict[str, str]:
     env = dict(os.environ)
     env.update({
-        "DB_OPS_HOME": str(root),
+        "DBABRAIN_HOME": str(root),
         "PYTHONPATH": str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", ""),
         # A new node sets its own passphrase before anything else; the guide says so first.
-        "DB_OPS_SECRET_KEY": "unconfigured-install-passphrase",
+        "DBABRAIN_SECRET_KEY": "unconfigured-install-passphrase",
         "PYTHONIOENCODING": "utf-8",
         # Nothing here is a worker in a two-node estate; the shipped entries are node_role "all".
-        "DB_OPS_NODE_ROLE": "master",
+        "DBABRAIN_NODE_ROLE": "master",
     })
     return env
 
@@ -114,7 +114,7 @@ def test_each_service_starts_and_answers_with_nothing_configured(bare_root, comm
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and process.poll() is None:
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/db_ops/login", timeout=2) as reply:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/dbabrain/login", timeout=2) as reply:
                     answered = reply.status
                     break
             except OSError:
@@ -139,7 +139,7 @@ def test_one_daemon_pass_over_the_whole_schedule_returns_and_every_job_is_done(t
     schedule.write_text(schedule.read_text(encoding="utf-8-sig")
                         .replace("--port 8080", f"--port {_free_port()}"), encoding="utf-8")
 
-    process = subprocess.Popen([sys.executable, "-m", "db_ops.cli", "daemon", "--config",
+    process = subprocess.Popen([sys.executable, "-m", "dbabrain.cli", "daemon", "--config",
                                 "config.json", "--once"], cwd=tmp_path, env=_env(tmp_path),
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:

@@ -18,7 +18,7 @@ import pytest
 
 from conftest import write_sqlserver_instance_policy
 
-from db_ops.backup_restore import server_metadata as sm
+from dbabrain.backup_restore import server_metadata as sm
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +26,7 @@ def _the_request_is_sent_as_the_app_finished_it(monkeypatch):
     """The app finishes a `common.cli` request from its node's data/ before it sends it (rules
     R09). These tests are about what it does with the answer, so the fill hands the request back
     unchanged; `request_fill` has tests of its own."""
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     monkeypatch.setattr(request_fill, "fill_request", lambda command, request, **_kwargs: dict(request))
 
@@ -233,7 +233,7 @@ def test_the_replay_request_does_not_repeat_the_artifact_list(monkeypatch):
 
     # Stubbed at the CLI client: the app hands `common` a finished request across a process
     # boundary now, so this is where the request can be seen.
-    monkeypatch.setattr("db_ops.backup_restore.instance_metadata.replay_instance", _fake)
+    monkeypatch.setattr("dbabrain.backup_restore.instance_metadata.replay_instance", _fake)
     sm.replay_for_restore(plan, phase="pre-database", bundle_dir="/tmp/x", target="T")
 
     assert "include" not in captured
@@ -256,7 +256,7 @@ def test_an_export_failure_is_returned_not_raised(monkeypatch):
         return {"ok": False, "error": "permission denied on sys.credentials",
                 "operation": "sqlserver-export-instance"}
 
-    monkeypatch.setattr("db_ops.backup_restore.instance_metadata.export_instance", _boom)
+    monkeypatch.setattr("dbabrain.backup_restore.instance_metadata.export_instance", _boom)
     plan = sm.parse_server_metadata({"enabled": True}, label="X")
 
     outcome = sm.export_for_backup(plan, server_id="SRC", bundle_dir="/tmp/x")
@@ -272,7 +272,7 @@ def test_a_replay_failure_is_returned_as_a_failed_result(monkeypatch):
         return {"ok": False, "error": "target refused the connection",
                 "operation": "sqlserver-replay-instance"}
 
-    monkeypatch.setattr("db_ops.backup_restore.instance_metadata.replay_instance", _boom)
+    monkeypatch.setattr("dbabrain.backup_restore.instance_metadata.replay_instance", _boom)
     plan = sm.parse_server_metadata({"enabled": True, "target": "T"}, label="X", for_restore=True)
 
     outcome = sm.replay_for_restore(plan, phase="pre-database", bundle_dir="/tmp/x",
@@ -297,7 +297,7 @@ def test_a_go_inside_a_job_step_does_not_split_the_statement():
     the export had reported success, because writing a bundle and being able to run it are
     different things and only the first was ever checked.
     """
-    from db_ops.common.sqlserver_instance import _split_batches
+    from dbabrain.common.sqlserver_instance import _split_batches
 
     text = NL.join([
         "EXEC msdb.dbo.sp_add_jobstep @job_name = 'J', @command = 'USE APPDB_Prod",
@@ -318,14 +318,14 @@ def test_a_go_inside_a_job_step_does_not_split_the_statement():
 
 def test_a_real_go_still_separates_batches():
     """The fix must not stop GO working where it genuinely is a separator."""
-    from db_ops.common.sqlserver_instance import _split_batches
+    from dbabrain.common.sqlserver_instance import _split_batches
 
     assert _split_batches(NL.join(["SELECT 1;", "GO", "SELECT 2;"])) == ["SELECT 1;", "SELECT 2;"]
 
 
 def test_an_escaped_quote_pair_leaves_the_literal_state_alone():
     """``''`` is T-SQL's escape for a quote: two characters, so parity is unchanged."""
-    from db_ops.common.sqlserver_instance import _split_batches
+    from dbabrain.common.sqlserver_instance import _split_batches
 
     text = NL.join(["EXEC p @t = 'it''s fine';", "GO", "SELECT 1;"])
 
@@ -343,8 +343,8 @@ def test_an_escaped_quote_pair_leaves_the_literal_state_alone():
 # house because the transport grew a wrapper. These pin that seam.
 
 def test_the_gate_report_is_unwrapped_from_the_envelope(monkeypatch):
-    from db_ops.backup_restore import instance_metadata
-    from db_ops.transport import common_cli
+    from dbabrain.backup_restore import instance_metadata
+    from dbabrain.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure", lambda command, request, **_kw: (
         True,
@@ -364,8 +364,8 @@ def test_the_gate_report_is_unwrapped_from_the_envelope(monkeypatch):
 def test_a_failed_gate_keeps_its_reason_and_its_blockers(monkeypatch):
     """`summarize()` writes `error` and `blockers` into `job_runs.metadata_json`; losing either in
     the unwrap would leave a restore reporting that metadata failed without saying what failed."""
-    from db_ops.backup_restore import instance_metadata, server_metadata
-    from db_ops.transport import common_cli
+    from dbabrain.backup_restore import instance_metadata, server_metadata
+    from dbabrain.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure", lambda command, request, **_kw: (
         False,
@@ -386,8 +386,8 @@ def test_a_command_that_could_not_run_at_all_is_passed_through(monkeypatch):
     """A process that never answered raises out of the reader. This module's contract is that a
     metadata step never fails the restore beside it, so the raise is caught and shaped like a
     failed report — one failure shape for the caller, not two."""
-    from db_ops.backup_restore import instance_metadata
-    from db_ops.transport import common_cli
+    from dbabrain.backup_restore import instance_metadata
+    from dbabrain.transport import common_cli
 
     def boom(command, request, **_kw):
         raise common_cli.CommonCliError(f"{command} could not run: boom")

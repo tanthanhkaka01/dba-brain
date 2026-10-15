@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import deploy_selection
-from db_ops.lib.deploy_selection import PushSelectionError, normalise_type, select_push_files
+from dbabrain.lib import deploy_selection
+from dbabrain.lib.deploy_selection import PushSelectionError, normalise_type, select_push_files
 
 MANIFEST = {
     "data_files": [

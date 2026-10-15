@@ -19,18 +19,18 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram import api, send_queue
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram import api, send_queue
 
 FLOODED = "-1001"
 OTHER_GROUP = "-1002"
 PRIVATE = "851"
 
 
-def _store(tmp_path: Path, rows: list[tuple[str, str]]) -> tuple[Path, DbOpsStore, list[int]]:
+def _store(tmp_path: Path, rows: list[tuple[str, str]]) -> tuple[Path, DbaBrainStore, list[int]]:
     """A real store with ``rows`` (chat, text) queued in that order."""
-    path = tmp_path / "db_ops.sqlite"
-    store = DbOpsStore(path)
+    path = tmp_path / "dbabrain.sqlite"
+    store = DbaBrainStore(path)
     store.initialize()
     ids = [store.insert_telegram_send_message(tlgchat_id=chat, message_text=text) for chat, text in rows]
     return path, store, ids
@@ -42,7 +42,7 @@ def _flood_then_others(flood: int = 12) -> list[tuple[str, str]]:
             + [(PRIVATE, "0.25.0 on DB-THANH")])
 
 
-def _pending_ids(store: DbOpsStore) -> set[int]:
+def _pending_ids(store: DbaBrainStore) -> set[int]:
     return {int(row["send_tlgmsg_id"]) for row in store.fetch_pending_telegram_send_messages(limit=10_000)}
 
 
@@ -200,8 +200,8 @@ def test_a_documents_rate_limit_is_a_pause_not_a_failure(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(("configured", "expected"), [(None, 5), (3, 3), ("8", 8), (0, 5), ("five", 5)])
 def test_send_per_chat_is_read_from_telegram_config(tmp_path, configured, expected):
-    from db_ops.common import scaffold
-    from db_ops.lib.config import load_config
+    from dbabrain.common import scaffold
+    from dbabrain.lib.config import load_config
 
     scaffold.initialise(tmp_path, app_name="dbabrain", force=False)
     telegram_config = tmp_path / "data" / "telegram_config.json"

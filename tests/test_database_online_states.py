@@ -16,8 +16,8 @@ page cannot disagree about the same database.
 import re
 from pathlib import Path
 
-from db_ops.lib.inventory_render import ONLINE_DATABASE_STATES, is_database_online
-from db_ops.reports.server_report import TEMPLATE_HTML, build_databases
+from dbabrain.lib.inventory_render import ONLINE_DATABASE_STATES, is_database_online
+from dbabrain.reports.server_report import TEMPLATE_HTML, build_databases
 
 
 def test_an_oracle_database_open_read_write_is_online():

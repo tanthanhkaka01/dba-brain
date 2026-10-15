@@ -3,9 +3,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.backup_restore import schedule, workflow
-from db_ops.backup_restore.config import BackupRestoreConfig
-from db_ops.lib.time_window import TimeWindow
+from dbabrain.backup_restore import schedule, workflow
+from dbabrain.backup_restore.config import BackupRestoreConfig
+from dbabrain.lib.time_window import TimeWindow
 
 
 class _Row(dict):
@@ -159,7 +159,7 @@ def _script_config(tmp_path, **over):
 
 
 def test_script_restores_are_loaded_from_the_same_restores_list(tmp_path):
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     jobs = load_script_restores(_script_config(tmp_path))
 
@@ -172,15 +172,15 @@ def test_script_restores_are_loaded_from_the_same_restores_list(tmp_path):
 def test_the_sql_server_parser_skips_script_restores(tmp_path):
     """They live in one list but only the SQL Server engine's entries reach its parser, which
     requires SMB/sqlcmd fields a script entry does not have."""
-    from db_ops.backup_restore.config import load_restore_configs
+    from dbabrain.backup_restore.config import load_restore_configs
 
     assert load_restore_configs(_script_config(tmp_path)) == []
 
 
 def test_a_script_restore_refuses_to_target_its_own_source(monkeypatch, tmp_path):
     """A drill that restores over the database it is validating destroys the thing it proves."""
-    from db_ops.backup_restore import restore_script
-    from db_ops.backup_restore.backup import BackupTarget
+    from dbabrain.backup_restore import restore_script
+    from dbabrain.backup_restore.backup import BackupTarget
 
     job = restore_script.load_script_restores(_script_config(tmp_path, target_container="same_c"))[0]
     monkeypatch.setattr(restore_script, "resolve_ssh_target", lambda *a, **k: BackupTarget(
@@ -194,8 +194,8 @@ def test_a_script_restore_refuses_to_target_its_own_source(monkeypatch, tmp_path
 
 def test_a_script_restore_without_the_ok_receipt_is_an_error(monkeypatch, tmp_path):
     """Exit 0 alone is not proof: the script prints RESULT=ok only after verifying the restore."""
-    from db_ops.backup_restore import restore_script
-    from db_ops.backup_restore.backup import BackupTarget
+    from dbabrain.backup_restore import restore_script
+    from dbabrain.backup_restore.backup import BackupTarget
 
     job = restore_script.load_script_restores(_script_config(tmp_path))[0]
     monkeypatch.setattr(restore_script, "resolve_ssh_target", lambda *a, **k: BackupTarget(
@@ -211,8 +211,8 @@ def test_a_script_restore_without_the_ok_receipt_is_an_error(monkeypatch, tmp_pa
 
 
 def test_a_script_restore_with_the_receipt_is_done(monkeypatch, tmp_path):
-    from db_ops.backup_restore import restore_script
-    from db_ops.backup_restore.backup import BackupTarget
+    from dbabrain.backup_restore import restore_script
+    from dbabrain.backup_restore.backup import BackupTarget
 
     job = restore_script.load_script_restores(_script_config(tmp_path))[0]
     monkeypatch.setattr(restore_script, "resolve_ssh_target", lambda *a, **k: BackupTarget(
@@ -230,7 +230,7 @@ def test_a_script_restore_with_the_receipt_is_done(monkeypatch, tmp_path):
 def test_restore_id_filter_finds_a_script_only_entry(tmp_path, monkeypatch):
     """Regression: --restore-id was judged against the SQL Server list alone, so a valid
     script-driven restore_id was rejected as 'No backup_restore entry found'."""
-    from db_ops.backup_restore import workflow as wf
+    from dbabrain.backup_restore import workflow as wf
 
     class _Store:
 
@@ -242,7 +242,7 @@ def test_restore_id_filter_finds_a_script_only_entry(tmp_path, monkeypatch):
         def fetch_latest_job_runs_by_job_code(self): return {}
         def fetch_running_job_runs(self, _prefix=""): return []
 
-    monkeypatch.setattr(wf, "DbOpsStore", _Store)
+    monkeypatch.setattr(wf, "DbaBrainStore", _Store)
     monkeypatch.setattr(wf, "load_restore_configs", lambda _p: [])
 
     class _Cfg:
@@ -263,7 +263,7 @@ def test_restore_id_filter_finds_a_script_only_entry(tmp_path, monkeypatch):
 
 def test_a_remote_target_requires_somewhere_to_put_the_backup(tmp_path):
     """It cannot be shared through a mount any more, so the transfer needs a destination."""
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     cfg = _script_config(tmp_path, target_container="", target_server_id="VM1")
     with pytest.raises(ValueError, match="target_backup_dir"):
@@ -271,7 +271,7 @@ def test_a_remote_target_requires_somewhere_to_put_the_backup(tmp_path):
 
 
 def test_an_entry_must_name_a_target_at_all(tmp_path):
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     cfg = _script_config(tmp_path, target_container="", target_server_id="")
     with pytest.raises(ValueError, match="requires target_server_id"):
@@ -280,7 +280,7 @@ def test_an_entry_must_name_a_target_at_all(tmp_path):
 
 def test_a_container_alone_no_longer_means_the_source_machine(tmp_path):
     """Owner decision 2026-10-01 (review 0.25.0, B4.5 / G2.1): the target is named, never assumed."""
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     cfg = _script_config(tmp_path, target_container="target_c", target_server_id="")
     with pytest.raises(ValueError, match="requires target_server_id"):
@@ -293,7 +293,7 @@ def test_a_container_alone_no_longer_means_the_source_machine(tmp_path):
     ({"db_type": ""}, "requires db_type"),
 ])
 def test_an_in_place_entry_states_every_target_field(tmp_path, missing, message):
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     with pytest.raises(ValueError, match=message):
         load_script_restores(_script_config(tmp_path, **missing))
@@ -301,7 +301,7 @@ def test_an_in_place_entry_states_every_target_field(tmp_path, missing, message)
 
 def test_an_in_place_sql_server_entry_states_the_target_port(tmp_path):
     """Without it the restore connected to the source's own port: production restored over itself."""
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     # The login stated, as every SQL Server entry must (rules R50): the port is what is tested.
     with pytest.raises(ValueError, match="env.MSSQL_PORT"):
@@ -312,7 +312,7 @@ def test_an_in_place_sql_server_entry_states_the_target_port(tmp_path):
 
 
 def test_remote_and_native_modes_are_derived_from_the_entry(tmp_path):
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     remote = load_script_restores(_script_config(
         tmp_path, target_container="", target_server_id="VM1", target_backup_dir="/opt/db_ops/stage",
@@ -333,8 +333,8 @@ def test_remote_and_native_modes_are_derived_from_the_entry(tmp_path):
 
 def test_a_remote_restore_transfers_then_runs_on_the_target_host(monkeypatch, tmp_path):
     """The script must run where the database will live, not where the backup came from."""
-    from db_ops.backup_restore import restore_script as rs
-    from db_ops.backup_restore.backup import BackupTarget
+    from dbabrain.backup_restore import restore_script as rs
+    from dbabrain.backup_restore.backup import BackupTarget
 
     job = load_remote_job(tmp_path)
     hosts = {"SRC": "src.host", "VM1": "vm1.host"}
@@ -371,7 +371,7 @@ def test_a_remote_restore_transfers_then_runs_on_the_target_host(monkeypatch, tm
 
 
 def load_remote_job(tmp_path):
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     return load_script_restores(_script_config(
         tmp_path, target_container="", target_server_id="VM1", target_backup_dir="/opt/target/backup",
@@ -384,8 +384,8 @@ def load_remote_job(tmp_path):
 # --------------------------------------------------------------------------- #
 def _remote_restore_with_phases(monkeypatch, tmp_path, *, transfer=None, fail_announce=False):
     """Run a remote restore, collecting the phase boundaries it announces."""
-    from db_ops.backup_restore import restore_script as rs
-    from db_ops.backup_restore.backup import BackupTarget
+    from dbabrain.backup_restore import restore_script as rs
+    from dbabrain.backup_restore.backup import BackupTarget
 
     job = load_remote_job(tmp_path)
     hosts = {"SRC": "src.host", "VM1": "vm1.host"}
@@ -434,9 +434,9 @@ def test_the_copy_done_message_carries_what_actually_moved(monkeypatch, tmp_path
 def test_an_in_place_restore_announces_no_copy_because_none_happens(monkeypatch, tmp_path):
     """In place, both ends share the directory through a mount. Reporting a copy there would
     describe work that never ran."""
-    from db_ops.backup_restore import restore_script as rs
-    from db_ops.backup_restore.backup import BackupTarget
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore import restore_script as rs
+    from dbabrain.backup_restore.backup import BackupTarget
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     job = load_script_restores(_script_config(tmp_path, target_container="target_c"))[0]
     monkeypatch.setattr(rs, "resolve_ssh_target", lambda sid, **k: BackupTarget(
@@ -462,7 +462,7 @@ def test_a_failing_announcement_does_not_fail_the_restore(monkeypatch, tmp_path)
 
 def test_a_remote_restore_requires_the_source_host_path(tmp_path):
     """backup_dir is a container path; SFTP reads the host, so the two cannot be the same field."""
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     cfg = _script_config(tmp_path, target_server_id="VM1", target_backup_dir="/backup")
     with pytest.raises(ValueError, match="source_backup_host_dir"):
@@ -472,8 +472,8 @@ def test_a_remote_restore_requires_the_source_host_path(tmp_path):
 def test_a_remote_restore_hides_the_source_container_from_the_script(tmp_path, monkeypatch):
     """The source container does not exist on the target host, so guarding on it would fail a
     perfectly good restore."""
-    from db_ops.backup_restore import restore_script as rs
-    from db_ops.backup_restore.backup import BackupTarget
+    from dbabrain.backup_restore import restore_script as rs
+    from dbabrain.backup_restore.backup import BackupTarget
 
     job = load_remote_job(tmp_path)
     source = BackupTarget(server_id="SRC", host="src", port=22, username="u",
@@ -486,7 +486,7 @@ def test_the_transfer_recreates_empty_directories(monkeypatch):
     """A PostgreSQL backup needs its empty dirs (pg_tblspc, pg_replslot). Copying only files
     yields a directory that looks complete and that pg_combinebackup refuses."""
     import stat as stat_mod
-    from db_ops.common import backup_copy as transfer
+    from dbabrain.common import backup_copy as transfer
 
     class _Attr:
         def __init__(self, name, is_dir, size=0):
@@ -510,7 +510,7 @@ def test_the_transfer_recreates_empty_directories(monkeypatch):
         def mkdir(self, path): made.append(path)
         def open(self, path, *a, **k):
             # The writability probe is expected; a real file copy in this fixture is not.
-            if path.endswith((".db_ops_write_probe", ".dbops-staging")):
+            if path.endswith((".dbabrain_write_probe", ".dbabrain-staging")):
                 return _Probe()
             raise AssertionError("no files to copy in this fixture")
         def remove(self, path): pass
@@ -538,7 +538,7 @@ def test_a_failure_before_the_entries_resolve_reports_the_real_error(tmp_path, c
     """The notify object is read on the failure path, so leaving it unbound until the entries
     resolve turned every early failure — an unknown restore_id, a bad config — into an
     UnboundLocalError that hid the actual cause."""
-    from db_ops.backup_restore import cli
+    from dbabrain.backup_restore import cli
 
     rc = cli.main(["restore-workflow", "NO_SUCH_RESTORE_ID", "--config", str(tmp_path / "missing.json")])
 
@@ -567,14 +567,14 @@ def _two_remote_entries(tmp_path, first_dir, second_dir, second_target="VM1"):
 
 @pytest.mark.parametrize("second", ["/opt/db_ops/stage/a", "/opt/db_ops/stage/a/b", "/opt/db_ops/stage"])
 def test_two_restores_cannot_share_or_nest_a_staging_dir_on_one_target(tmp_path, second):
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     with pytest.raises(ValueError, match="Give every restore its own target_backup_dir"):
         load_script_restores(_two_remote_entries(tmp_path, "/opt/db_ops/stage/a", second))
 
 
 def test_the_same_dir_on_two_different_targets_is_fine(tmp_path):
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     jobs = load_script_restores(_two_remote_entries(
         tmp_path, "/opt/db_ops/stage/a", "/opt/db_ops/stage/a", second_target="VM2"))
@@ -583,7 +583,7 @@ def test_the_same_dir_on_two_different_targets_is_fine(tmp_path):
 
 @pytest.mark.parametrize("shallow", ["/", "/data", "/opt/db_ops"])
 def test_a_shallow_staging_dir_is_refused(tmp_path, shallow):
-    from db_ops.backup_restore.restore_script import load_script_restores
+    from dbabrain.backup_restore.restore_script import load_script_restores
 
     with pytest.raises(ValueError, match="too shallow"):
         load_script_restores(_two_remote_entries(tmp_path, shallow, "/opt/db_ops/stage/b"))

@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.transport import common_cli
-from db_ops.lib import data_sources
-from db_ops.telegram import sql_commands
+from dbabrain.transport import common_cli
+from dbabrain.lib import data_sources
+from dbabrain.telegram import sql_commands
 
 
 class _Command:

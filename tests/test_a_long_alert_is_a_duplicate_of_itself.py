@@ -9,16 +9,16 @@ match its neighbours, as it would under ``LIKE``.
 
 from __future__ import annotations
 
-from db_ops.db.store import DbOpsStore
+from dbabrain.db.store import DbaBrainStore
 
 
-def _queue(store: DbOpsStore, source_id: str) -> None:
+def _queue(store: DbaBrainStore, source_id: str) -> None:
     store.insert_telegram_send_message(tlgchat_id="-100", message_text="x", source_type="reports",
                                        source_id=source_id)
 
 
 def test_a_report_queued_in_parts_is_found_by_its_own_id(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     _queue(store, "metrics_latest:critical:LAB_01:part:1")
     _queue(store, "metrics_latest:critical:LAB_01:part:2")
 
@@ -26,14 +26,14 @@ def test_a_report_queued_in_parts_is_found_by_its_own_id(tmp_path):
 
 
 def test_a_single_message_still_matches_exactly(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     _queue(store, "backup_health:2026-10-01")
 
     assert store.recent_alert_exists(source_id="backup_health:2026-10-01", within_seconds=300)
 
 
 def test_a_neighbour_s_id_is_not_a_match(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     _queue(store, "metrics_latest:critical:LABX01:part:1")
     _queue(store, "metrics_latest:critical:LAB_01_B:part:1")
 

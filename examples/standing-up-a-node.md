@@ -4,8 +4,8 @@ A walkthrough, not a tool root: every command below was run in this order on a r
 one states **what it proves**. Values are placeholders — addresses from RFC 5737 (`192.0.2.x`), a
 bot called `@your_bot`, chat ids like `-1001234567890`. Substitute your own.
 
-The toolkit is `dbabrain` on PyPI, and every command is available two ways: the `db-ops` console
-script, or `python -m db_ops.<app>.cli`. They are the same code.
+The toolkit is `dbabrain` on PyPI, and every command is available two ways: the `dbabrain` command
+(`dbabrain <app> ...`), or `python -m dbabrain.<app>.cli`. They are the same code.
 
 ---
 
@@ -22,7 +22,7 @@ script, or `python -m db_ops.<app>.cli`. They are the same code.
 Every shell that runs a step exports two variables:
 
 ```powershell
-$env:DB_OPS_SECRET_KEY = "<your passphrase>"   # never written to a file by the toolkit
+$env:DBABRAIN_SECRET_KEY = "<your passphrase>"   # never written to a file by the toolkit
 $env:PYTHONIOENCODING  = "utf-8"               # a Windows console is cp1252 and dies on an emoji
 ```
 
@@ -31,14 +31,14 @@ $env:PYTHONIOENCODING  = "utf-8"               # a Windows console is cp1252 and
 ## 1. Install into its own folder
 
 The folder you install into is the **tool root**: the toolkit looks for `config.json` and `data/`
-in `DB_OPS_HOME`, else in the directory you are standing in, never beside its own code.
+in `DBABRAIN_HOME`, else in the directory you are standing in, never beside its own code.
 
 ```powershell
 mkdir C:\dbabrain-node
 cd    C:\dbabrain-node
 py -m venv .venv
 .venv\Scripts\python.exe -m pip install "dbabrain[postgres,mssql,ssh,winrm]"
-.venv\Scripts\python.exe -m db_ops.cli --version
+.venv\Scripts\python.exe -m dbabrain.cli --version
 ```
 
 **The extras are not optional, and are the part most often got wrong.** `postgres` for a PostgreSQL
@@ -51,8 +51,8 @@ the failure reads as the *host's* fault.
 ## 2. `init` — write the starter tree, then read it
 
 ```powershell
-db-ops guide      # prints the getting-started text; writes nothing
-db-ops init
+dbabrain guide      # prints the getting-started text; writes nothing
+dbabrain init
 ```
 
 `init` writes `config.json`, `data/*.json` (inventory, metrics catalogue, schedule, report and
@@ -60,14 +60,14 @@ Telegram settings, an empty `restore_config.json`), `secrets/secret_text.json`, 
 and `runtime/`. It **never overwrites**: an existing file is reported and left alone.
 
 Read what it wrote before changing any of it — `data/store_config.json` says **sqlite**, which is
-the right first store. Move to PostgreSQL later with `db-ops db use-store postgresql`.
+the right first store. Move to PostgreSQL later with `dbabrain db use-store postgresql`.
 
 Then say which clock this node's schedules are read against, before anything is scheduled or
 stamped:
 
 ```powershell
-db-ops db --config config.json timezone --set Europe/Berlin    # or UTC, Asia/Singapore, ...
-db-ops db --config config.json timezone                        # read it back
+dbabrain db --config config.json timezone --set Europe/Berlin    # or UTC, Asia/Singapore, ...
+dbabrain db --config config.json timezone                        # read it back
 ```
 
 Every `time_window.from_hour` is a **local** hour read against this setting, so it decides when the
@@ -84,7 +84,7 @@ Do this here, not later. The node has no inventory, no secret and no token, whic
 state you are in for the next ten minutes — and every scheduled app must come back **clean** in it.
 
 ```powershell
-db-ops daemon --config config.json --once
+dbabrain daemon --config config.json --once
 ```
 
 One pass over the whole shipped schedule. Every command ships **active**, so this runs them all.
@@ -97,22 +97,22 @@ service that never exits, and `--once` waits for what it starts.
 ## 4. Start the daemon
 
 ```powershell
-$env:DB_OPS_NODE_ROLE = "worker"
+$env:DBABRAIN_NODE_ROLE = "worker"
 Start-Process -FilePath ".venv\Scripts\python.exe" `
-              -ArgumentList "-m","db_ops.cli","daemon","--config","config.json" `
+              -ArgumentList "-m","dbabrain.cli","daemon","--config","config.json" `
               -WorkingDirectory (Get-Location) -WindowStyle Hidden -PassThru |
   ForEach-Object { $_.Id | Set-Content daemon.pid }
 ```
 
-**`DB_OPS_NODE_ROLE=worker` is not optional and is easy to miss.** Every entry in
+**`DBABRAIN_NODE_ROLE=worker` is not optional and is easy to miss.** Every entry in
 `app_commands.json` is `node_role: all` or `worker`; a daemon left in the default `master` role
 schedules nothing and looks like a healthy idle process.
 
 After two or three minutes:
 
 ```powershell
-db-ops db --config config.json ops-status '{}'
-curl http://127.0.0.1:8080/db_ops/login
+dbabrain db --config config.json ops-status '{}'
+curl http://127.0.0.1:8080/dbabrain/login
 ```
 
 **Proves:** every command has run at least once, none is overdue, and the console answers 200. The
@@ -127,10 +127,10 @@ Two ways in, and they do not mix well:
 
 ```powershell
 # ONE secret, nothing in clear on disk - the request goes on stdin, never on the command line
-'{"ref": "TELEGRAM_BOT_TOKEN", "value": "<bot token>"}' | db-ops common secret-set -
+'{"ref": "TELEGRAM_BOT_TOKEN", "value": "<bot token>"}' | dbabrain common secret-set -
 
 # MANY secrets at once: fill secrets/secret_text.json, then
-db-ops encrypt-secret --key-base64 "<passphrase, base64>"
+dbabrain encrypt-secret --key-base64 "<passphrase, base64>"
 ```
 
 > **`encrypt-secret` REPLACES the store with that file.** The `secrets/secret_text.json` that `init`
@@ -142,14 +142,14 @@ db-ops encrypt-secret --key-base64 "<passphrase, base64>"
 A secret is never passed as a command-line argument: argv is readable by every process on the
 machine. That is why `secret-set` accepts stdin only.
 
-**Proves:** `data/encrypted_secret_text.json` exists and `db-ops common check-secret '{}'` can read it.
+**Proves:** `data/encrypted_secret_text.json` exists and `dbabrain common check-secret '{}'` can read it.
 
 ## 6. Telegram — the bot answers, then the alerts flow
 
 ```powershell
-'{"ref": "TELEGRAM_BOT_TOKEN", "value": "<bot token>"}' | db-ops common secret-set -
-db-ops telegram --config config.json use-bot --ref TELEGRAM_BOT_TOKEN
-db-ops telegram --config config.json bot-info
+'{"ref": "TELEGRAM_BOT_TOKEN", "value": "<bot token>"}' | dbabrain common secret-set -
+dbabrain telegram --config config.json use-bot --ref TELEGRAM_BOT_TOKEN
+dbabrain telegram --config config.json bot-info
 ```
 
 `use-bot` is what points this node at that token. It matters most on a node built from somebody
@@ -169,16 +169,16 @@ each group** — a group is recorded only when a message arrives in it, and the 
 them within seconds. Then say what each is for:
 
 ```powershell
-db-ops telegram --config config.json user-level  --user @you --level 100
-db-ops telegram --config config.json group-level --group "Alerts - critical" --level critical --allow-command 10
-db-ops telegram --config config.json route critical
+dbabrain telegram --config config.json user-level  --user @you --level 100
+dbabrain telegram --config config.json group-level --group "Alerts - critical" --level critical --allow-command 10
+dbabrain telegram --config config.json route critical
 ```
 
 Two commands exist for the case where that cannot happen yet, and both are new in 0.19.0:
 
 ```powershell
-db-ops telegram --config config.json group-add --group-id "-1001234567890" --level critical --allow-command 10
-db-ops telegram --config config.json user-level --user @you --level 100 --pending
+dbabrain telegram --config config.json group-add --group-id "-1001234567890" --level critical --allow-command 10
+dbabrain telegram --config config.json user-level --user @you --level 100 --pending
 ```
 
 - `group-add` registers a chat that has never posted. A group created *for* alerts has nobody
@@ -204,7 +204,7 @@ db-ops telegram --config config.json user-level --user @you --level 100 --pendin
 One test message, to prove delivery rather than assume it:
 
 ```powershell
-db-ops telegram --config config.json send-message --chat-id "-1001234567890" --text "node online"
+dbabrain telegram --config config.json send-message --chat-id "-1001234567890" --text "node online"
 ```
 
 **Proves:** the token belongs to the bot you think it does, your own commands are allowed, each level
@@ -215,7 +215,7 @@ resolves to the chat you meant, and a message arrives there.
 ```powershell
 '{"server_id": "ACME-192-0-2-10-SQL01", "db_type": "sqlserver", "ip": "192.0.2.10",
   "port": 1433, "major_version": 16, "service_name": "MSSQLSERVER", "platform": "windows",
-  "environment": "prod", "username": "monitor_user", "password": "<password>"}' | db-ops common instance-add -
+  "environment": "prod", "username": "monitor_user", "password": "<password>"}' | dbabrain common instance-add -
 ```
 
 It writes the inventory record, the credential in `users.json`, and the password **encrypted only** —
@@ -233,12 +233,12 @@ Anything else in the object is passed through to the record: `cmd_access`, `sql_
 `note`. Then prove it, in this order:
 
 ```powershell
-db-ops check-credentials                     # every target resolves to a real login
-db-ops common check-secret '{}'              # each secret actually logs in
+dbabrain check-credentials                     # every target resolves to a real login
+dbabrain common check-secret '{}'              # each secret actually logs in
 $env:SQL01_MONITOR = "<password>"            # this shell only - never on a command line
 '{"target": "ACME-192-0-2-10-SQL01", "sql": "SELECT @@VERSION",
   "connection": {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433,
-                 "username": "dbops_monitor", "password_ref": "SQL01_MONITOR"}}' | db-ops common run-sql -
+                 "username": "dbops_monitor", "password_ref": "SQL01_MONITOR"}}' | dbabrain common run-sql -
 ```
 
 **Proves:** the credential resolves, the login works, and the driver can reach the instance. A target
@@ -264,7 +264,7 @@ the instance that names it:
   "username": "svc_dbops", "password": "<password>",
   "credential_name": "remote_192_0_2_10_admin",
   "method": "winrm", "auth_type": "password", "port": 5985,
-  "shell": "powershell", "platform": "windows"}' | db-ops common remote-credential-add -
+  "shell": "powershell", "platform": "windows"}' | dbabrain common remote-credential-add -
 ```
 
 It refuses the three ways this used to go wrong as a hand-edit, which is why it exists:
@@ -287,7 +287,7 @@ disabled `cmd_access` back on.
 ```
 
 ```powershell
-'{"ref": "TOKEN_BRIDGE", "value": "<bridge token>"}' | db-ops common secret-set -
+'{"ref": "TOKEN_BRIDGE", "value": "<bridge token>"}' | dbabrain common secret-set -
 ```
 
 **Nothing warns you if that ref is missing** — `check-credentials` passes, `check-secret` calls it
@@ -305,9 +305,9 @@ Both are entries in `data/restore_config.json`, and both are registered rather t
   "time_window": {"from_hour": 1, "to_hour": 5, "repeat_interval": 3600},
   "notify": {"logging_on_run": {"enabled": true, "telegram_chat": "backup"},
              "alert_on_error": {"enabled": true, "telegram_chat": "backup"}}}' |
-  db-ops backup_restore backup-add -
+  dbabrain backup_restore backup-add -
 
-db-ops backup_restore list-backups
+dbabrain backup_restore list-backups
 ```
 
 `restore-add` takes the same shape for a drill that restores somewhere else. Three fields are
@@ -340,14 +340,14 @@ then **where**, once per server.
 # WHAT runs. `sql_text` writes the script for you; `script_path` names one that already exists.
 '{"display_name": "Row count of the audit table", "db_type": "sqlserver",
   "sql_text": "SELECT COUNT(*) AS n FROM dbo.audit_log;"}' |
-  db-ops common sql-command-add -
+  dbabrain common sql-command-add -
 
 # WHERE it runs. One call per target; `sql_id` is the one the first call answered with.
 '{"sql_id": 1, "server_id": "ACME-192-0-2-10-SQL01", "database_name": "PAYROLL_Test",
   "time_window": {"repeat_interval": 300, "timeout": 600}}' |
-  db-ops common sql-target-add -
+  dbabrain common sql-target-add -
 
-db-ops sql-tasks list-tasks --sql-id 1 --all
+dbabrain sql-tasks list-tasks --sql-id 1 --all
 ```
 
 - A task fed by a Python program (`input_type: "python"`) may use `{target_server_id}` and
@@ -367,16 +367,16 @@ db-ops sql-tasks list-tasks --sql-id 1 --all
 The daemon needs no further help. Within a few minutes:
 
 ```powershell
-db-ops db --config config.json check          # tables and row counts, climbing
-db-ops db --config config.json ops-status '{}'
+dbabrain db --config config.json check          # tables and row counts, climbing
+dbabrain db --config config.json ops-status '{}'
 ```
 
 Three things make the node usable **by a person** rather than only by its own scheduler:
 
 ```powershell
-db-ops webhost --config config.json user-add --username you --level 100 --password-stdin --remember
-db-ops db --config config.json sync-config '{"actor": "you"}'
-db-ops reports --config config.json use-base-url --this-node
+dbabrain webhost --config config.json user-add --username you --level 100 --password-stdin --remember
+dbabrain db --config config.json sync-config '{"actor": "you"}'
+dbabrain reports --config config.json use-base-url --this-node
 ```
 
 - **`user-add`** creates the console account. It lives in the **store**, not in `data/`, so a node
@@ -399,7 +399,7 @@ And on the pages it publishes, at `http://<this node>:8080/`:
 | `/report_dba/database-inventory.html` | the fleet: every server, storage, health triage |
 | `/report_dba/server-metrics.html` | per server: workload, waits, memory, top queries, the log by database |
 | `/report_dba/sla.html` | SLA / SLO compliance |
-| `/db_ops/login` | the console: config, logs, run a command |
+| `/dbabrain/login` | the console: config, logs, run a command |
 
 The inventory page is built by the report `rp_inventory_health` (reports_config.json), every 30 minutes. On its first run it **seeds**
 `runtime/reports/database-inventory.json` from your `db_instances.json` and merges fresh health into
@@ -424,10 +424,10 @@ need a day of history — a new node fills in as it goes.
 
 ```powershell
 Get-Content logs\errors.log                  # only a header = nothing has failed
-db-ops db --config config.json ops-status '{}'   # which app failed, when, and whether it is overdue
-db-ops check-credentials                     # a target with no resolvable credential
-db-ops common self-status '{"format":"txt"}'  # what this node is, and the addresses it serves
-db-ops common db-status @db_status.json   # is one instance, database or schema up and usable
+dbabrain db --config config.json ops-status '{}'   # which app failed, when, and whether it is overdue
+dbabrain check-credentials                     # a target with no resolvable credential
+dbabrain common self-status '{"format":"txt"}'  # what this node is, and the addresses it serves
+dbabrain common db-status @db_status.json   # is one instance, database or schema up and usable
 ```
 
 `db_status.json` is `{"target": "ACME-192-0-2-248", "connection": {...}}` - the same login

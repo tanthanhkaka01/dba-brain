@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import sys
 
-from db_ops.lib.common_cli import CommandSpec
-from db_ops.lib.time_window import TimeWindow
-from db_ops.sql_tasks import runner
-from db_ops.sql_tasks.runner import SqlCommand, SqlTarget
-from db_ops.transport import process
+from dbabrain.lib.common_cli import CommandSpec
+from dbabrain.lib.time_window import TimeWindow
+from dbabrain.sql_tasks import runner
+from dbabrain.sql_tasks.runner import SqlCommand, SqlTarget
+from dbabrain.transport import process
 
 
 def _target(timeout: int) -> SqlTarget:

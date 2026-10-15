@@ -18,11 +18,11 @@ import ast
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-PACKAGE = REPO / "db_ops"
+PACKAGE = REPO / "dbabrain"
 
 #: The executor, and the one module it opens its connection through.
-EXECUTOR = "db_ops/common/remote_exec.py"
-CONNECTOR = "db_ops/common/ssh.py"
+EXECUTOR = "dbabrain/common/remote_exec.py"
+CONNECTOR = "dbabrain/common/ssh.py"
 
 #: Calls that run something on a host, or open the way to it, by their attribute name.
 PRIMITIVES = frozenset({"exec_command", "get_transport", "open_sftp", "invoke_shell"})
@@ -65,13 +65,13 @@ def test_the_guard_sees_what_it_is_for():
     """A scan that matches nothing passes every tree. It must catch each shape it names."""
     sample = ast.parse(
         "import paramiko\n"
-        "from db_ops.common.ssh import open_ssh_client\n"
+        "from dbabrain.common.ssh import open_ssh_client\n"
         "client.exec_command('ls')\n"
         "client.get_transport().open_session()\n"
         "client.open_sftp()\n"
         "paramiko.SSHClient()\n")
 
-    offences = _offences("db_ops/common/elsewhere.py", sample)
+    offences = _offences("dbabrain/common/elsewhere.py", sample)
 
     assert len(offences) == 6, offences
 

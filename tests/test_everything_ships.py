@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.distribution import (
+from dbabrain.lib.distribution import (
     DOC_FOR_PACKAGE,
     PRIVATE_PACKAGES,
     PRIVATE_SUBPATHS,
@@ -26,7 +26,7 @@ from db_ops.lib.distribution import (
 )
 
 REPO = Path(__file__).resolve().parent.parent
-PACKAGE_ROOT = REPO / "db_ops"
+PACKAGE_ROOT = REPO / "dbabrain"
 
 
 def test_every_package_in_the_tree_ships_or_says_why():
@@ -43,7 +43,7 @@ def test_control_ships_because_the_manifest_it_reads_already_did():
     """The last exclusion, and the reason it did not survive review.
 
     `control` was withheld so that "the thing that produces the public tree" would not be in it —
-    partly because it carries the private-forever list. But the list is `db_ops/lib/distribution.py`
+    partly because it carries the private-forever list. But the list is `dbabrain/lib/distribution.py`
     and that has shipped since `v0.1.0`. The map was never withheld; only the tool that reads it,
     which hid nothing and cost readers a working `bump-version`, `build-image` and `deploy`.
     """

@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import report_archive
-from db_ops.webhost.server import (
+from dbabrain.lib import report_archive
+from dbabrain.webhost.server import (
     make_handler,
     normalize_stamp,
     parse_date_param,
@@ -225,7 +225,7 @@ def test_the_end_of_day_is_what_a_backfilled_date_means():
     """A date-only `?date=` already means "the last snapshot of that day" everywhere else, and
     the archive it looks for holds the last build of the day. Rebuilding from the START of the
     day would produce a page holding none of that day's collections."""
-    from db_ops.reports.backfill import _end_of_day
+    from dbabrain.reports.backfill import _end_of_day
 
     assert _end_of_day("2026-08-01") == "2026-08-01T23:59:59Z"
 
@@ -233,7 +233,7 @@ def test_the_end_of_day_is_what_a_backfilled_date_means():
 def test_the_window_closes_at_the_as_of_moment(tmp_path):
     """Without a ceiling, a report built for 1 August reads rows collected on the 3rd and claims
     to be the 1st."""
-    from db_ops.db.metric_store import as_of_text, cutoff_text
+    from dbabrain.db.metric_store import as_of_text, cutoff_text
 
     assert as_of_text("2026-08-01T23:59:59Z") == "2026-08-01T23:59:59Z"
     assert as_of_text(None) is None
@@ -245,7 +245,7 @@ def test_the_window_closes_at_the_as_of_moment(tmp_path):
 def test_a_backfill_writes_only_the_dated_copy(tmp_path):
     """The live name is the URL everybody reads as "now". A backfill putting 1 August's data
     there would be worse than having no history at all."""
-    from db_ops.reports import server_report
+    from dbabrain.reports import server_report
 
     out = tmp_path / "reports"
     out.mkdir()
@@ -259,7 +259,7 @@ def test_a_backfill_writes_only_the_dated_copy(tmp_path):
 
 
 def test_a_normal_run_writes_both_names(tmp_path):
-    from db_ops.reports import server_report
+    from dbabrain.reports import server_report
 
     out = tmp_path / "reports"
     out.mkdir()
@@ -274,7 +274,7 @@ def test_a_normal_run_writes_both_names(tmp_path):
 def test_the_fleet_linked_server_table_tags_each_row_with_its_instance(tmp_path):
     """The fleet asks a question no per-server page can: a dead target is usually referenced from
     several instances at once, and the drop list is work somebody schedules once."""
-    import db_ops.reports.inventory_report as inventory_report
+    import dbabrain.reports.inventory_report as inventory_report
 
     rows_by_server = [
         {"server_id": "ACME-2", "metric_code": "LINKED_SERVER_STATUS", "metric_item": "DEAD",
@@ -292,7 +292,7 @@ def test_the_fleet_linked_server_table_tags_each_row_with_its_instance(tmp_path)
         def fetch_health_metrics(self, **_kw): return rows_by_server
 
     original = inventory_report.__dict__.get("MetricStore")
-    import db_ops.db.metric_store as ms
+    import dbabrain.db.metric_store as ms
     saved = ms.MetricStore
     ms.MetricStore = _Store
     try:
@@ -484,7 +484,7 @@ def test_the_mount_is_a_symlink_where_the_platform_allows_one(tmp_path):
     if not _symlinks_work(tmp_path):
         pytest.skip("this account cannot create symlinks here (Windows without the privilege)")
 
-    from db_ops.webhost.server import build_webroot
+    from dbabrain.webhost.server import build_webroot
 
     root = tmp_path / "reports"
     root.mkdir()

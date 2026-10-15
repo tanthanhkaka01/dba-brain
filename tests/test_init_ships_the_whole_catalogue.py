@@ -2,7 +2,7 @@
 
 Until 2026-08-23 the two halves of the metric catalogue shipped to different people. The
 *collectors* — 150 SQL files, 29 shell and PowerShell scripts — went into the wheel as package
-data, so `pip install dbabrain` had them all. The *catalogue* that names them did not: `db-ops
+data, so `pip install dbabrain` had them all. The *catalogue* that names them did not: `dbabrain
 init` wrote three hand-written SQL Server metrics, and the 90-metric catalogue lived in
 `data/metric_definitions.example.json`, which only exists for someone who clones the repository.
 
@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import json
 
-from db_ops.common import scaffold
-from db_ops.lib.paths import builtin_asset_root
+from dbabrain.common import scaffold
+from dbabrain.lib.paths import builtin_asset_root
 
 from conftest import shipped_config
 
@@ -39,7 +39,7 @@ def test_the_shipped_catalogue_and_the_example_do_not_drift():
         shipped_config("metric_definitions.json").read_text(encoding="utf-8"))
     assert scaffold.packaged_catalogue() == example, (
         "data/metric_definitions.example.json is the documented copy of the catalogue the package "
-        "ships; re-copy it to db_ops/metrics/catalogue/ when you change one of them")
+        "ships; re-copy it to dbabrain/metrics/catalogue/ when you change one of them")
 
 
 def test_a_first_run_gets_the_os_metrics(tmp_path):

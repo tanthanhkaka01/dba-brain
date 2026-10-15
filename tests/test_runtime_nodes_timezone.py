@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.lib import timezone as tz
+from dbabrain.db import DbaBrainStore
+from dbabrain.lib import timezone as tz
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +29,7 @@ def _restore_zone():
 
 @pytest.fixture()
 def store(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     return store
 

@@ -28,11 +28,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.db.job_runs import JobRun
-from db_ops.jobs import daemon
-from db_ops.lib.common_cli import CommonCliError, read_answer
-from db_ops.lib.process_liveness import (
+from dbabrain.db import DbaBrainStore
+from dbabrain.db.job_runs import JobRun
+from dbabrain.jobs import daemon
+from dbabrain.lib.common_cli import CommonCliError, read_answer
+from dbabrain.lib.process_liveness import (
     child_start_marker,
     is_pid_alive,
     own_group_kwargs,
@@ -124,7 +124,7 @@ def test_a_process_that_is_not_our_child_gets_no_marker():
 
 
 def test_start_up_closes_a_daemon_row_whose_command_was_removed_and_leaves_a_backup_s(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     removed = store.insert_job_run(JobRun(
         job_code="APP-RETIRED", claim_key="APP-RETIRED", level="logging", status="running", message="m",

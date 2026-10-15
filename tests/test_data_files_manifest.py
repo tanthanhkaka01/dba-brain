@@ -10,7 +10,7 @@ says so nowhere. These tests hold three agreements:
 
 The third is the one with a history. Four modules used to answer "which files are configuration"
 and none of them was the whole answer; the fourth was ``sftp.listdir``, which is not a list at
-all. That is the defect in :mod:`db_ops.lib.data_files`'s docstring, and the last test in this
+all. That is the defect in :mod:`dbabrain.lib.data_files`'s docstring, and the last test in this
 file is the one that would have caught it.
 """
 
@@ -21,11 +21,11 @@ from pathlib import Path
 import pytest
 
 from conftest import shipped_data_dir
-from db_ops.db import config_sync
-from db_ops.lib import data_files
-from db_ops.lib.paths import DEFAULT_DATA_DIR
-from db_ops.common.scaffold import PACKAGED_DEFAULTS
-from db_ops.lib.data_files import (
+from dbabrain.db import config_sync
+from dbabrain.lib import data_files
+from dbabrain.lib.paths import DEFAULT_DATA_DIR
+from dbabrain.common.scaffold import PACKAGED_DEFAULTS
+from dbabrain.lib.data_files import (
     KNOWN_TRANSFERS,
     TRANSFER_FIELD_MERGE,
     TRANSFER_LOCAL,
@@ -71,7 +71,7 @@ NO_EXAMPLE_SHIPS = frozenset(
     name for name in BY_NAME
     if not (DEFAULT_DATA_DIR / name.replace(".json", ".example.json")).is_file())
 
-#: Files `db-ops init` writes from a copy the package carries. An estate that predates one simply
+#: Files `dbabrain init` writes from a copy the package carries. An estate that predates one simply
 #: does not have it yet, and that is not a stale entry — the manifest says what *may* travel, and
 #: whether a given host has a given file is reported separately (`missing_at_source` in a bundle,
 #: `MISSING (not on worker)` in a pull).
@@ -104,8 +104,8 @@ def test_the_entries_with_no_example_are_the_four_that_should_not_have_one() -> 
     An exclusion list that anybody can add to is a way of turning a failing test off. Four of
     these are the only files in `data/` that are not configuration at all: generated output, the
     secret store, a worked sample and a test fixture. The fifth is configuration, and ships as a
-    *packaged default* instead of an example — `db-ops init` writes it from the copy inside
-    `db_ops.db`, so an example beside it would be a third copy of one small document.
+    *packaged default* instead of an example — `dbabrain init` writes it from the copy inside
+    `dbabrain.db`, so an example beside it would be a third copy of one small document.
     """
     assert NO_EXAMPLE_SHIPS == {
         "database-inventory.json",
@@ -175,7 +175,7 @@ def test_every_merged_file_is_declared_as_merging() -> None:
     it — but the two halves have to describe the same set, or a file merges without the manifest
     knowing and the pull refuses to fetch what the merge needs.
     """
-    from db_ops.control import worker_data
+    from dbabrain.control import worker_data
 
     for name, *_ in worker_data.MERGED_ON_DEPLOY:
         assert name in BY_NAME, f"{name} is merged on deploy but is not in the manifest"
@@ -196,7 +196,7 @@ def test_nothing_claims_to_merge_without_a_rule_to_merge_it_by() -> None:
     Deploy would report nothing merged and overwrite the worker's records at the next bundle —
     the 2026-07-31 failure, arrived at from the other side.
     """
-    from db_ops.control import worker_data
+    from dbabrain.control import worker_data
 
     has_a_rule = ({name for name, *_ in worker_data.MERGED_ON_DEPLOY}
                   | {name for name, *_ in worker_data.FIELD_MERGED_ON_DEPLOY})
@@ -209,7 +209,7 @@ def test_nothing_claims_to_merge_without_a_rule_to_merge_it_by() -> None:
 
 def test_the_secret_store_is_the_only_secret_merge() -> None:
     """It is the one file with its own merge path, and it must not acquire quiet company."""
-    from db_ops.control import worker_data
+    from dbabrain.control import worker_data
 
     secret_merged = {item.file for item in MANIFEST
                      if item.transfer == TRANSFER_SECRET_MERGE}
@@ -243,7 +243,7 @@ def test_a_local_file_neither_leaves_nor_arrives() -> None:
 
 def test_the_bundle_requirements_come_from_the_manifest() -> None:
     """``control.deploy`` used to write its own list of data files. Now it reads this one."""
-    from db_ops.control import deploy
+    from dbabrain.control import deploy
 
     required = data_files.required_in_bundle(DATA_DIR)
 
@@ -323,7 +323,7 @@ def test_a_manifest_that_cannot_be_honoured_is_refused(
 
 
 def test_every_file_init_writes_is_in_the_manifest() -> None:
-    """`db-ops init` writes twelve files. Every one of them has to be allowed to travel.
+    """`dbabrain init` writes twelve files. Every one of them has to be allowed to travel.
 
     Found by running the daemon from a clean install: `ops_status_request.json` is written by
     `init` and was in no manifest, so on any install that had run `init` it would have reached no
@@ -335,5 +335,5 @@ def test_every_file_init_writes_is_in_the_manifest() -> None:
 
     missing = sorted(init_writes - set(BY_NAME))
     assert not missing, (
-        f"`db-ops init` writes {missing}, which the manifest does not list, so no deploy, pull or "
+        f"`dbabrain init` writes {missing}, which the manifest does not list, so no deploy, pull or "
         "config bundle would ever carry them.")

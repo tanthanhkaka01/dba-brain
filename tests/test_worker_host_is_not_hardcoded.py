@@ -19,11 +19,11 @@ import json
 import re
 from pathlib import Path
 
-from db_ops.telegram.command_processor import _default_worker_host
+from dbabrain.telegram.command_processor import _default_worker_host
 
 ADDRESS = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 
-CATALOGUE = Path("db_ops/telegram/catalogue/telegram_support_commands.json")
+CATALOGUE = Path("dbabrain/telegram/catalogue/telegram_support_commands.json")
 EXAMPLE = Path("data/telegram_support_commands.example.json")
 
 

@@ -1,0 +1,617 @@
+from __future__ import annotations
+
+from dbabrain.lib import errors as error_kinds
+import datetime as _datetime
+import json
+import os
+import re
+import struct
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+# Re-exported: five modules already import load_json_file from here, and the function is
+# not SQL-specific. It now lives in common/json_io.py as the tool's single JSON reader.
+from dbabrain.lib.inventory_file import (  # noqa: F401 - moved to lib in 0.24.0
+    load_database_inventory, load_database_inventory_without_yaml, parse_yaml_scalar)
+from dbabrain.lib.packaging import install_hint
+from dbabrain.lib.json_io import load_json_file  # noqa: F401 - re-exported for compatibility
+from dbabrain.lib.credential_files import (  # noqa: F401 - re-exported for compatibility
+    load_credentials_file, load_remote_credentials_file)
+# Re-exported: the SQL text vocabulary — limits, the DECLARE prelude, parameter types and the
+# password lookup — moved to dbabrain/lib/sql_text.py so apps can use it without importing `common`.
+# Executing the SQL stayed here, because that is an operation.
+from dbabrain.lib.sql_text import (  # noqa: F401 - re-exported for compatibility
+    DEFAULT_CONNECT_TIMEOUT_SECONDS, MAX_RESULT_ROWS, SQL_PARAMETER_TYPES, SqlParameterError, build_parameter_prelude,
+    resolve_password)
+
+
+
+# SQL Server-specific ODBC type codes pyodbc cannot decode on its own. Reading a
+# ``datetimeoffset`` column without a converter fails the whole query with
+# "ODBC SQL type -155 is not yet supported. column-index=N type=-155" (SQLSTATE HY106),
+# which is how every Query Store / sys.dm_* view with a datetimeoffset column used to blow up.
+SQL_SS_TIMESTAMPOFFSET = -155
+
+
+def connect_sqlserver(
+    pyodbc_module: Any,
+    *,
+    server: str,
+    database: str,
+    username: str,
+    password: str,
+    timeout: int,
+    driver: str = "",
+) -> Any:
+    """Open an ODBC connection, walking the candidate drivers until one answers.
+
+    Kept returning a bare connection because that is what callers and tests have always taken
+    from it; :func:`open_sqlserver_odbc` is the same walk with the *evidence* — which candidate
+    won and what the losers said — for the one caller that reports it.
+    """
+    return open_sqlserver_odbc(
+        pyodbc_module, server=server, database=database, username=username,
+        password=password, timeout=timeout, driver=driver,
+    ).conn
+
+
+@dataclass
+class OdbcAttempt:
+    """One candidate that was tried, and how it went. The audit trail behind a driver choice."""
+
+    driver: str
+    encryption: str
+    ok: bool
+    error: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        item = {"driver": self.driver, "encryption": self.encryption, "ok": self.ok}
+        if self.error:
+            item["error"] = self.error[:300]
+        return item
+
+
+@dataclass
+class OdbcConnection:
+    """An open ODBC connection plus which candidate opened it and what came before."""
+
+    conn: Any
+    driver: str
+    encryption: str
+    attempts: list[OdbcAttempt]
+
+
+def open_sqlserver_odbc(
+    pyodbc_module: Any,
+    *,
+    server: str,
+    database: str,
+    username: str,
+    password: str,
+    timeout: int,
+    driver: str = "",
+    tls_verify: bool = False,
+) -> OdbcConnection:
+    """The candidate walk, with the result of every attempt kept.
+
+    ``tls_verify`` (an instance's ``sqlserver_tls_verify``) narrows the walk to drivers that can
+    verify a certificate, at ``Encrypt=yes;TrustServerCertificate=no``, and never steps down to
+    plaintext: a TLS failure there is the answer, not a reason to try without TLS (review 0.25.0,
+    B5.5). Off by default - the walk below is what fourteen live instances connect with.
+
+    **Why the attempts are kept.** Until 2026-08-19 this walk reported itself as the single word
+    ``odbc``: which of five drivers answered, at which encryption setting, and whether it had to
+    fall back at all were invisible from the outside. That is the information needed to decide
+    whether the *order* is right — and the order was being decided by a TLS error string
+    (:func:`_is_sqlserver_tls_error`) rather than by knowing the target is a 2008 R2 instance.
+    Reporting first, re-ordering second, is the only way to change that under fourteen live
+    instances and be able to say what changed.
+    """
+    attempts: list[OdbcAttempt] = []
+    errors: list[str] = []
+    candidates = sqlserver_driver_candidates(pyodbc_module, preferred_driver=driver)
+    if tls_verify:
+        candidates = [(name, "yes") for name in dict.fromkeys(name for name, _ in candidates)
+                      if name in VERIFYING_DRIVERS]
+        if not candidates:
+            raise error_kinds.InvalidConfig(
+                "sqlserver_tls_verify is set, and no installed ODBC driver can verify the server's "
+                f"certificate - install one of: {', '.join(VERIFYING_DRIVERS)}.")
+    for candidate_driver, encryption_mode in candidates:
+        conn_str = build_sqlserver_conn_str(
+            driver=candidate_driver,
+            encryption_mode=encryption_mode,
+            server=server,
+            database=database,
+            username=username,
+            password=password,
+            trust_server_certificate=not tls_verify,
+        )
+        try:
+            conn = pyodbc_module.connect(conn_str, timeout=timeout)
+            register_output_converters(conn)
+            attempts.append(OdbcAttempt(candidate_driver, encryption_mode, True))
+            return OdbcConnection(conn=conn, driver=candidate_driver,
+                                  encryption=encryption_mode, attempts=attempts)
+        except Exception as exc:  # noqa: BLE001 - retry legacy driver for TLS/cert compatibility.
+            error_text = str(exc)
+            mode_text = f" {encryption_mode}" if encryption_mode else ""
+            errors.append(f"{candidate_driver}{mode_text}: {error_text}")
+            attempts.append(OdbcAttempt(candidate_driver, encryption_mode, False, error_text))
+            if not _is_sqlserver_tls_error(error_text):
+                raise
+    report = "SQL Server connect failed after driver fallback:\n- " + "\n- ".join(errors)
+    hint = sqlserver_tls_policy_hint(report)
+    raise error_kinds.Unreachable(report + hint if hint else report)
+
+
+#: The drivers that take ``TrustServerCertificate=no`` and check the chain and the name.
+VERIFYING_DRIVERS = ("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server")
+
+
+def build_sqlserver_conn_str(
+    *,
+    driver: str,
+    encryption_mode: str,
+    server: str,
+    database: str,
+    username: str,
+    password: str,
+    trust_server_certificate: bool = True,
+) -> str:
+    conn_str = (
+        f"DRIVER={odbc_value(driver)};"
+        f"SERVER={odbc_value(server)};"
+        f"DATABASE={odbc_value(database)};"
+        f"UID={odbc_value(username)};"
+        f"PWD={odbc_value(password)};"
+    )
+    if driver in {"ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"}:
+        trust = "yes" if trust_server_certificate else "no"
+        conn_str += f"Encrypt={encryption_mode};TrustServerCertificate={trust};"
+    return conn_str
+
+
+@dataclass
+class SqlServerConnection:
+    """An open SQL Server connection plus *how* it was opened.
+
+    Quacks like a DB-API connection (``cursor``/``commit``/``rollback``/``close``) so a caller
+    that does not care which driver answered writes one code path; ``conn`` is the raw driver
+    connection for the cases that do, and ``odbc_error`` keeps the ODBC failure that forced a
+    pymssql fallback visible for troubleshooting.
+    """
+
+    conn: Any
+    driver: str
+    odbc_error: Exception | None = None
+    #: The ``Encrypt`` value the winning candidate used, and every candidate tried before it.
+    #: Reported by ``run-sql`` since 2026-08-19: "odbc" alone could not tell a first-attempt
+    #: success from a TLS fallback, which is the difference this driver order was changed on.
+    encryption: str = ""
+    attempts: list[OdbcAttempt] = field(default_factory=list)
+
+    @property
+    def is_pymssql(self) -> bool:
+        return self.driver == "pymssql"
+
+    def describe_tool(self) -> dict[str, Any]:
+        """What actually opened this connection, as JSON — for the caller's answer."""
+        return {
+            "driver": self.driver,
+            "encryption": self.encryption,
+            "fell_back": bool(self.odbc_error),
+            "attempts": [item.to_dict() for item in self.attempts],
+        }
+
+    def cursor(self) -> Any:
+        """A cursor with pyodbc's multi-result-set semantics on either driver."""
+        cursor = self.conn.cursor()
+        return PymssqlCursorAdapter(cursor) if self.is_pymssql else cursor
+
+    def commit(self) -> None:
+        self.conn.commit()
+
+    def rollback(self) -> None:
+        self.conn.rollback()
+
+    def close(self) -> None:
+        self.conn.close()
+
+
+class PymssqlCursorAdapter:
+    """Give a pymssql cursor the attributes result-set walking relies on.
+
+    pymssql updates ``description``/``rowcount`` differently from pyodbc, so code that steps
+    through result sets (``sql_run.execute_capture``) needs
+    them refreshed on ``execute``. Without this a pymssql fallback silently returns nothing.
+    """
+
+    def __init__(self, cursor: Any) -> None:
+        self._cursor = cursor
+        self.description = None
+        self.rowcount = -1
+
+    def execute(self, sql_text: str, parameters: Any = None) -> None:
+        """Run one statement, with bound parameters when the caller passes them.
+
+        ``parameters`` was missing until 2026-08-13 and the signature simply refused them —
+        `execute() takes 2 positional arguments but 3 were given`, raised from inside a table
+        load on the worker. The adapter promises a DB-API cursor and DB-API `execute` takes
+        parameters; the same class already learned this lesson once for `fetchall`, and the
+        note below says why the promise has to be kept rather than partly kept.
+
+        pymssql interpolates client-side and its paramstyle is ``%s``, **not** ``?``. A caller
+        must therefore ask which style to write — see
+        :func:`dbabrain.common.db_connect.parameter_style`, which is why it takes the connection.
+        """
+        if parameters is None:
+            self._cursor.execute(sql_text)
+        else:
+            self._cursor.execute(sql_text, tuple(parameters))
+        self.description = self._cursor.description
+        self.rowcount = int(getattr(self._cursor, "rowcount", -1) or -1)
+
+    def executemany(self, sql_text: str, seq_of_parameters: Any) -> None:
+        """Run one statement once per parameter row.
+
+        Absent entirely until 2026-08-13, so a batch insert reached the adapter and died on
+        `execute` instead — the caller had no way to tell that this cursor could not do it.
+        """
+        rows = [tuple(item) for item in seq_of_parameters]
+        if not rows:
+            return
+        self._cursor.executemany(sql_text, rows)
+        self.description = self._cursor.description
+        self.rowcount = int(getattr(self._cursor, "rowcount", -1) or -1)
+
+    def fetchmany(self, size: int) -> list[Any]:
+        return list(self._cursor.fetchmany(size))
+
+    # fetchall/fetchone are forwarded because the adapter is what callers get, not the pymssql
+    # cursor: a caller that reads rows any other way than fetchmany died with
+    # "'PymssqlCursorAdapter' object has no attribute 'fetchall'" - on the one target whose ODBC
+    # stack could not negotiate TLS, so the failure only ever appeared on the fallback path and
+    # only for the code that happened to run there. The adapter promises a DB-API cursor; these
+    # are part of that promise.
+    def fetchall(self) -> list[Any]:
+        return list(self._cursor.fetchall())
+
+    def fetchone(self) -> Any:
+        return self._cursor.fetchone()
+
+    def nextset(self) -> Any:
+        return self._cursor.nextset()
+
+
+def connect_sqlserver_with_fallback(
+    *,
+    host: str,
+    port: int = 1433,
+    database: str = "master",
+    username: str,
+    password: str,
+    driver: str = "",
+    connect_timeout: int = DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    command_timeout: int | None = None,
+    autocommit: bool = False,
+    tls_verify: bool = False,
+) -> SqlServerConnection:
+    """Open a SQL Server connection over ODBC, falling back to pymssql.
+
+    ``tls_verify`` keeps both fallbacks shut - to plaintext ODBC and to pymssql, which verifies
+    nothing - so an instance that asks for a verified connection gets one or an error.
+
+    **The one place dbabrain reaches a SQL Server instance.** The rule it encodes: use the
+    target's configured ``sqlserver_driver`` when it names one (``pymssql`` goes straight to
+    pymssql, and a pinned ODBC driver that fails is an error, not a reason to try something
+    else); with nothing configured, try ODBC and fall back to pymssql, which reaches the older
+    servers local ODBC cannot negotiate TLS with.
+
+    ``connect_timeout`` bounds opening the session; ``command_timeout`` (default: the connect
+    timeout) bounds the statements that follow — different questions, so they never share a
+    number. ``autocommit=True`` suits read-only work: a caught per-database error inside a
+    cursor cannot doom an ambient transaction and make every later statement fail with 3930.
+    """
+    command_timeout = connect_timeout if command_timeout is None else command_timeout
+    driver = str(driver or "").strip()
+    if tls_verify and driver.lower() == "pymssql":
+        raise error_kinds.InvalidConfig("sqlserver_tls_verify is set, and sqlserver_driver=pymssql cannot verify "
+                           "a certificate; name an ODBC driver (17 or 18) or turn verification off.")
+    if driver.lower() == "pymssql":
+        return _connect_pymssql(
+            host=host, port=port, database=database, username=username, password=password,
+            connect_timeout=connect_timeout, command_timeout=command_timeout,
+            autocommit=autocommit,
+            odbc_error=RuntimeError("Configured sqlserver_driver=pymssql."),
+        )
+
+    try:
+        import pyodbc  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise error_kinds.NotConfigured(
+            "pyodbc is required to connect to SQL Server. Install it with: "
+            + install_hint("mssql") + " (and a system ODBC driver)"
+        ) from exc
+    try:
+        opened = open_sqlserver_odbc(
+            pyodbc,
+            server=f"{host},{port}",
+            database=database,
+            username=username,
+            password=password,
+            timeout=connect_timeout,
+            driver=driver,
+            tls_verify=tls_verify,
+        )
+    except Exception as odbc_exc:  # noqa: BLE001 - pymssql reaches servers ODBC cannot TLS with.
+        if driver or tls_verify:
+            raise
+        return _connect_pymssql(
+            host=host, port=port, database=database, username=username, password=password,
+            connect_timeout=connect_timeout, command_timeout=command_timeout,
+            autocommit=autocommit, odbc_error=odbc_exc,
+        )
+
+    conn = opened.conn
+    try:
+        conn.timeout = command_timeout
+    except Exception:  # noqa: BLE001 - driver without a settable timeout; harmless.
+        pass
+    if autocommit:
+        try:
+            conn.autocommit = True
+        except Exception:  # noqa: BLE001 - driver without autocommit attr; harmless.
+            pass
+    # The driver *name* rather than the word "odbc": which of five candidates answered is the
+    # thing a caller could not see, and the thing the version-ordering change has to be judged on.
+    return SqlServerConnection(conn=conn, driver=opened.driver, encryption=opened.encryption,
+                               attempts=opened.attempts)
+
+
+def _connect_pymssql(
+    *,
+    host: str,
+    port: int,
+    database: str,
+    username: str,
+    password: str,
+    connect_timeout: int,
+    command_timeout: int,
+    autocommit: bool,
+    odbc_error: Exception,
+) -> SqlServerConnection:
+    try:
+        import pymssql  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise error_kinds.Unreachable(
+            f"SQL Server ODBC connect failed and pymssql is not installed. ODBC error: {odbc_error}"
+        ) from exc
+    try:
+        conn = pymssql.connect(
+            server=host,
+            port=port,
+            user=username,
+            password=password,
+            database=database,
+            login_timeout=connect_timeout,
+            timeout=command_timeout,
+            autocommit=autocommit,
+        )
+    except Exception as exc:  # noqa: BLE001 - keep both driver errors visible for troubleshooting.
+        raise error_kinds.Unreachable(
+            f"SQL Server pymssql connect failed: {exc}. ODBC error: {odbc_error}"
+        ) from exc
+    return SqlServerConnection(conn=conn, driver="pymssql", odbc_error=odbc_error)
+
+
+def register_output_converters(conn: Any) -> Any:
+    """Teach a pyodbc connection the SQL Server types it cannot decode by itself.
+
+    Only ``datetimeoffset`` (``SQL_SS_TIMESTAMPOFFSET``) needs this today: pyodbc raises
+    ``HY106 ODBC SQL type -155 is not yet supported`` instead of returning a value, so a single
+    such column kills an otherwise valid SELECT. Registering the converter here — on the one
+    connect helper every app goes through — means no caller has to know the type code.
+
+    Safe on any connection object: a driver without ``add_output_converter`` (pymssql, a fake in
+    tests) is left untouched. Returns ``conn`` so callers can chain.
+    """
+    add_converter = getattr(conn, "add_output_converter", None)
+    if callable(add_converter):
+        add_converter(SQL_SS_TIMESTAMPOFFSET, decode_timestampoffset)
+    return conn
+
+
+def decode_timestampoffset(raw: Any) -> Any:
+    """Decode the 20-byte ``SQL_SS_TIMESTAMPOFFSET`` buffer into an aware ``datetime``.
+
+    Layout (little-endian): year, month, day, hour, minute, second as int16, nanoseconds as
+    uint32, then the offset's hour and minute as int16. Python datetimes carry microseconds, so
+    the nanosecond field is truncated. A buffer that is not the expected length is returned as
+    text rather than raising — a readable cell beats failing the whole export.
+    """
+    if raw is None:
+        return None
+    data = bytes(raw)
+    if len(data) != 20:
+        return data.decode("utf-16-le", errors="replace") if len(data) % 2 == 0 else data.hex()
+    year, month, day, hour, minute, second, nanoseconds, tz_hour, tz_minute = struct.unpack(
+        "<6hI2h", data
+    )
+    return _datetime.datetime(
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        nanoseconds // 1000,
+        _datetime.timezone(_datetime.timedelta(hours=tz_hour, minutes=tz_minute)),
+    )
+
+
+def make_json_safe(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [make_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): make_json_safe(item) for key, item in value.items()}
+    return str(value)
+
+
+def choose_sqlserver_driver(pyodbc_module: Any) -> str:
+    candidates = sqlserver_driver_candidates(pyodbc_module)
+    if candidates:
+        return candidates[0][0]
+    raise error_kinds.NotConfigured("No ODBC driver found for SQL Server.")
+
+
+def sqlserver_driver_candidates(pyodbc_module: Any, preferred_driver: str = "") -> list[tuple[str, str]]:
+    """The (driver, Encrypt) pairs to try, in order.
+
+    **A version-aware re-ordering was proposed, measured, and rejected on 2026-08-19.** The
+    proposal was to put Driver 17 / ``Encrypt=no`` first for SQL Server 2008 R2 and older, on the
+    premise that 10.50 offers TLS 1.0 only and Driver 18 refuses it — making the ODBC-18 attempt a
+    wasted handshake on those instances. The premise is false on this estate. All four 10.50
+    instances (`ACME-192-0-2-245`, `ACME-192-0-2-253`, `ACME-192-0-2-8`, `ACME-192-0-2-41`)
+    complete on **Driver 18 with ``Encrypt=optional``, first attempt, no fallback** — measured
+    through the ``tool.actual`` report added the same day.
+
+    So the change would have bought nothing and cost something real: ``optional`` encrypts whenever
+    the server offers a certificate, and ``Encrypt=no`` is plaintext. Re-ordering by version would
+    have quietly downgraded four production instances. The order below stays as it is because the
+    evidence says it is already right, not because nobody looked.
+    """
+    drivers = list(pyodbc_module.drivers())
+    preferred_driver = preferred_driver.strip()
+    if preferred_driver:
+        if preferred_driver not in drivers:
+            raise error_kinds.InvalidConfig(f"Configured SQL Server ODBC driver is not installed: {preferred_driver}")
+        if preferred_driver == "ODBC Driver 18 for SQL Server":
+            # Prefer encrypted transport ("optional" = encrypt when the server offers
+            # a cert, proceed if not) over plaintext ("no"), so credentials/data are
+            # encrypted whenever the server supports it and only fall back to cleartext.
+            # NOTE: "optional" is an ODBC Driver 18 value only — Driver 17 rejects it
+            # ("Invalid value specified for connection string attribute 'Encrypt'").
+            return [(preferred_driver, "optional"), (preferred_driver, "no")]
+        if preferred_driver == "ODBC Driver 17 for SQL Server":
+            # Driver 17 accepts only yes/no for Encrypt (not "optional"), and it is the
+            # driver reserved for legacy (e.g. SQL 2008 R2, TLS 1.0-only) hosts that
+            # cannot be forced to encrypt. Keep the known-good plaintext value.
+            return [(preferred_driver, "no")]
+        return [(preferred_driver, "")]
+
+    preferred: list[tuple[str, tuple[str, ...]]] = [
+        ("ODBC Driver 18 for SQL Server", ("optional", "no")),
+        ("ODBC Driver 17 for SQL Server", ("no",)),
+        ("SQL Server Native Client 11.0", ("",)),
+        ("SQL Server Native Client 10.0", ("",)),
+        ("SQL Server", ("",)),
+    ]
+    candidates: list[tuple[str, str]] = []
+    for driver, encryption_modes in preferred:
+        if driver in drivers:
+            candidates.extend((driver, mode) for mode in encryption_modes)
+    if not candidates and drivers:
+        candidates.append((drivers[-1], ""))
+    return candidates
+
+
+def _is_sqlserver_tls_error(error_text: str) -> bool:
+    lowered = error_text.lower()
+    return any(
+        pattern in lowered
+        for pattern in (
+            "certificate chain",
+            "encryption not supported",
+            "ssl provider",
+            "ssl security error",
+            "security package",
+        )
+    )
+
+
+#: What OpenSSL says when the process refuses the protocol the server offered, and what it says
+#: when the configuration meant to allow it is itself malformed. Two problems that look alike from
+#: here, and each needs a different sentence.
+_TLS_PROTOCOL_REFUSED = "unsupported protocol"
+_TLS_CONFIG_REJECTED = "cmd=minprotocol"
+
+
+def sqlserver_tls_policy_hint(error_text: str) -> str:
+    """The sentence a raw driver error does not say: this is the *process's* TLS policy.
+
+    SQL Server 2008 R2 and 2012 offer nothing above TLS 1.0, and OpenSSL 3 refuses anything below
+    TLS 1.2. The driver reports that as ``SSL routines::unsupported protocol``, which names neither
+    the instance's age nor the setting that caused it - so it reads like the network, or the
+    credential, or the driver. It is none of those, and nothing in this toolkit can fix it: the
+    policy belongs to the TLS library and is decided before any of this code runs.
+
+    The container image has always patched ``/etc/ssl/openssl.cnf`` at build time. On 2026-09-03
+    the same estate was run from a ``pip install`` on a host that had not been patched, and five
+    instances that had answered every check for months went CRITICAL together, carrying this error
+    and no explanation with it.
+
+    The second case is the trap that followed. ``MinProtocol = TLSv1.0`` is not a token OpenSSL
+    documents; 3.0 tolerated it and 3.5 rejects it, and because that is a *config* error rather
+    than a policy one it then breaks every TLS connection, modern instances included. Someone who
+    has just added the stanza needs to be told the spelling, not told about old instances.
+    """
+    lowered = error_text.lower()
+    if _TLS_CONFIG_REJECTED in lowered:
+        return (
+            "\n\nOpenSSL refused the TLS configuration itself, so every connection fails, "
+            "not only the old ones. The token is 'TLSv1' - 'TLSv1.0' is not a value OpenSSL "
+            "accepts (3.0 tolerated it, 3.5 does not). Fix MinProtocol in the openssl.cnf this "
+            "process uses (OPENSSL_CONF, or /etc/ssl/openssl.cnf)."
+        )
+    if _TLS_PROTOCOL_REFUSED in lowered:
+        return (
+            "\n\nThis is the TLS policy of the machine running the toolkit, not the "
+            "instance and not the credential. OpenSSL 3 refuses anything below TLS 1.2, and SQL "
+            "Server 2008 R2 and 2012 offer nothing above TLS 1.0. The container image lowers this "
+            "at build time; a pip install inherits the host's setting and does not. Set "
+            "MinProtocol = TLSv1 and CipherString = DEFAULT@SECLEVEL=0 in the openssl.cnf this "
+            "process uses - see docs/installation.md, 'Old instances also need OpenSSL told to "
+            "allow TLS 1.0'."
+        )
+    return ""
+
+
+def odbc_value(value: Any) -> str:
+    text = str(value).replace("}", "}}")
+    return "{" + text + "}"
+
+
+def split_sql_batches(sql_text: str) -> list[str]:
+    batches: list[str] = []
+    current: list[str] = []
+    for line in sql_text.splitlines():
+        if line.strip().upper() == "GO":
+            batch = "\n".join(current).strip()
+            if batch:
+                batches.append(batch)
+            current = []
+            continue
+        current.append(line)
+    batch = "\n".join(current).strip()
+    if batch:
+        batches.append(batch)
+    return batches
+
+
+def load_secret_text(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    data = load_json_file(path)
+    return {str(key): str(value) for key, value in data.items()}
+
+
+
+
+
+
+
+

@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from db_ops.lib import run_claim
-from db_ops.sql_tasks import runner
+from dbabrain.lib import run_claim
+from dbabrain.sql_tasks import runner
 from tests.test_sql_task_claims import FakeLogger, RecordingSqlRunStore, sql_command, sql_target
 
 HOST = "this-node"

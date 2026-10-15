@@ -21,7 +21,7 @@ import pytest
 
 from conftest import write_sqlserver_instance_policy
 
-from db_ops.common import sqlserver_instance as si
+from dbabrain.common import sqlserver_instance as si
 
 @pytest.fixture(autouse=True)
 def _instance_policy(estate):
@@ -70,7 +70,7 @@ class _FakeCursor:
 def _policy():
     """This estate's policy, read the way the app reads it before it calls - common.cli takes it in
     the request (rules R09)."""
-    from db_ops.lib import data_sources
+    from dbabrain.lib import data_sources
 
     return data_sources.load_sqlserver_instance_policy()
 
@@ -344,7 +344,7 @@ def test_a_missing_policy_is_refused_rather_than_defaulted(tmp_path):
     list would give two different answers depending on whether anyone noticed it was gone. The
     command takes the policy in its request (rules R09) and refuses one without it; the app that
     reads the node's file refuses a node that has none."""
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     with pytest.raises(si.SqlServerInstanceError, match='needs "policy"'):
         si.load_policy({"connection": {}})

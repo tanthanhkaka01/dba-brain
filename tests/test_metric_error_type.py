@@ -13,8 +13,8 @@ metric's own SQL comment contains "timeout", and 27 `INSTANCE_STATUS` rows becam
 because the finding they were reporting was failed logins on the target.
 """
 
-from db_ops.lib.event_policy import COLLECTOR_FAILURE_ERROR_TYPES
-from db_ops.metrics.collector import _metric_result
+from dbabrain.lib.event_policy import COLLECTOR_FAILURE_ERROR_TYPES
+from dbabrain.metrics.collector import _metric_result
 
 
 class _Metric:
@@ -62,7 +62,7 @@ def test_a_real_collector_failure_still_classifies_by_its_exception_text():
 
 
 def test_an_auth_failure_from_the_exception_path_is_still_auth_failed():
-    row = _result(status="ERROR", message="Login failed for user 'db_ops'", collector_failed=True)
+    row = _result(status="ERROR", message="Login failed for user 'dbabrain'", collector_failed=True)
 
     assert row.error_type == "AUTH_FAILED"
 

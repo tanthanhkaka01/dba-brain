@@ -15,7 +15,7 @@ has only 1 - adding an instance has to add it to the report automatically."*
 
 from __future__ import annotations
 
-from db_ops.lib.inventory_render import (
+from dbabrain.lib.inventory_render import (
     adopt_new_servers,
     reportable_servers,
     seed_inventory,
@@ -70,7 +70,7 @@ def test_a_record_with_no_server_id_is_skipped_rather_than_added_as_an_empty_row
 def test_the_flags_that_decide_a_report_are_the_ones_the_register_already_has():
     """A plain registration is reported; a fourth opinion on "enabled" would be a bug.
 
-    db_ops already cascades `enabled` -> `metrics` -> `reports` -> `alerts`, each defaulting to the
+    dbabrain already cascades `enabled` -> `metrics` -> `reports` -> `alerts`, each defaulting to the
     one before. Adoption reads the third, so an instance added with no flags at all is collected
     **and** appears on the fleet page - which is what makes "add an instance and it shows up" true
     without the operator learning a second switch - while `reports: {"enabled": false}` keeps a

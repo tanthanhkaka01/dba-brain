@@ -18,13 +18,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from db_ops.backup_restore.cli import (
+from dbabrain.backup_restore.cli import (
     _restored_databases,
     _verify_plan,
     _verify_request,
     _verify_targets,
 )
-from db_ops.backup_restore.config import DatabaseRestoreMapping
+from dbabrain.backup_restore.config import DatabaseRestoreMapping
 
 
 def _mapping(source: str, restored: str = "") -> DatabaseRestoreMapping:
@@ -118,10 +118,10 @@ def _nightly(tmp_path, monkeypatch, *, mappings, restore_all=False):
     restored. Returns the verify requests sent and the run's summary."""
     import dataclasses
 
-    from db_ops.backup_restore import cli
-    from db_ops.backup_restore.copy_backup import CopyBackupResult
-    from db_ops.backup_restore.delete_backup import DeleteBackupResult
-    from db_ops.lib.config import DbOpsConfig
+    from dbabrain.backup_restore import cli
+    from dbabrain.backup_restore.copy_backup import CopyBackupResult
+    from dbabrain.backup_restore.delete_backup import DeleteBackupResult
+    from dbabrain.lib.config import DbaBrainConfig
     from tests.test_backup_restore import make_config
 
     config = dataclasses.replace(
@@ -145,8 +145,8 @@ def _nightly(tmp_path, monkeypatch, *, mappings, restore_all=False):
         {"ok": True, "checked": len(request["database_names"]), "failed": 0, "databases": []})[1])
     summary = cli.run_restore_workflow(
         restore_configs=[config],
-        app_config=DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
-                               sqlite_path=tmp_path / "runtime" / "db_ops.sqlite"))
+        app_config=DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
+                               sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite"))
     return asked, summary
 
 

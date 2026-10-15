@@ -4,12 +4,11 @@
 # repository was only ever *run from a checkout* — there was no way to install it, so nothing
 # forced the question of what belongs to the package and what belongs to the operator.
 #
-# Deliberately still named `db_ops`, with the package still at the repository root rather than
-# under `src/`. Both of those change to `dbabrain` and `src/` at the moment the code moves to the
-# public repository, not before: the module path is stored as text in `data/app_commands.json`
-# for every scheduled app and named in the Dockerfile and `docker/entrypoint.sh`, so renaming or
-# relocating it in place breaks the running worker until it is redeployed in lockstep. See
-# `audits/go-live/PUBLIC_RELEASE_ROADMAP.md` (D-03).
+# The package is `dbabrain`, at the repository root rather than under `src/`. It took that name in
+# 0.29.0, in one step and with nothing kept for the earlier one (the operator, 2026-10-12): the
+# module path is stored as text in a node's `data/app_commands.json` and
+# `data/telegram_support_commands.json`, so `upgrade-config` rewrites those (step
+# `package-rename`) rather than the package answering to two names.
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -23,7 +22,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.28.0"
+version = "0.29.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -36,7 +35,7 @@ version = "0.28.0"
 #
 # That reasoning produced a *policy* floor of 3.11, and the CI matrix — added to prove the claim
 # rather than trust it — disproved it on its first unrestricted run. **The floor is 3.12, and it is
-# measured**: `db_ops/lib/result_format.py` writes CSV with `csv.QUOTE_STRINGS`, which arrived in
+# measured**: `dbabrain/lib/result_format.py` writes CSV with `csv.QUOTE_STRINGS`, which arrived in
 # 3.12, so every CSV path raises `AttributeError` on 3.11. The property it is there for — NULL and
 # the empty string staying distinct while numbers stay unquoted — cannot be had from the 3.11
 # stdlib writer, and hand-rolled quoting is the one thing that module refuses to do.
@@ -95,16 +94,11 @@ all = [
 ]
 dev = ["pytest>=8.0.0", "mypy>=1.10"]
 
-# One command, apps as subcommands. `db-ops metrics --help` rather than twelve entry points a
-# reader has to discover — and it becomes `dbabrain` with the package rename, which is the whole
-# reason the dispatcher is a lookup table and not twelve script declarations.
+# One command, apps as subcommands. `dbabrain metrics --help` rather than twelve entry points a
+# reader has to discover - which is why the dispatcher is a lookup table and not twelve script
+# declarations. Since 0.29.0 it is the only command.
 [project.scripts]
-db-ops = "db_ops.cli:main"
-# The distribution is `dbabrain`, so `dbabrain` has to be a command. Measured on a clean install:
-# a reader who runs `pip install dbabrain` and then types `dbabrain` was told "command not found",
-# with no README, no guide and no config in the directory to suggest otherwise. `db-ops` stays --
-# it is in every runbook, every dated record and every operator's notes.
-dbabrain = "db_ops.cli:main"
+dbabrain = "dbabrain.cli:main"
 
 # `Homepage` is the project's own page since 0.28.0 (it went live on 2026-10-09). Until then it
 # repeated `Repository`, so PyPI's sidebar showed two links to one place and none to the page that
@@ -119,36 +113,36 @@ Changelog = "https://github.com/tanthanhkaka01/dba-brain/blob/main/CHANGELOG.md"
 # `data`, `assets`, `docs`, `tests`, `scripts` and `tools` are all top-level directories that are
 # emphatically not part of the distribution.
 #
-# The list is narrower than `db_ops*` from 2026-08-22, and the reason is the release rather than
+# The list is narrower than `dbabrain*` from 2026-08-22, and the reason is the release rather than
 # the packaging: `v0.1.0` is one sentence — point it at one SQL Server, collect metrics, add a
 # Telegram token, get an alert — so seven of the fourteen apps do not ship until `v0.2.0`. The
-# authority is `db_ops/lib/distribution.py`, which states which and why; this list is generated
+# authority is `dbabrain/lib/distribution.py`, which states which and why; this list is generated
 # from it and `tests/test_distribution_closure.py` fails if the two drift apart. A second copy of
 # that decision is how a wheel and a repository start shipping different software.
 #
 # Nothing is deleted from this repository to achieve it. The worker runs the full toolkit, and the
-# image copies `db_ops/` wholesale rather than installing the wheel, so what is distributed and
+# image copies `dbabrain/` wholesale rather than installing the wheel, so what is distributed and
 # what is deployed are independent by construction.
 [tool.setuptools.packages.find]
 include = [
-    "db_ops",
-    "db_ops.lib*",
-    "db_ops.common*",
+    "dbabrain",
+    "dbabrain.lib*",
+    "dbabrain.common*",
     # 0.24.0: the one client of common.cli / db.cli (docs/15_transport.md). Missing here, the
     # wheel shipped every app that calls common without the module that makes the call.
-    "db_ops.transport*",
-    "db_ops.db*",
-    "db_ops.logging_ops*",
-    "db_ops.metrics*",
-    "db_ops.telegram*",
-    "db_ops.jobs*",
-    "db_ops.reports*",
-    "db_ops.sql_tasks*",
-    "db_ops.backup_restore*",
-    "db_ops.sla*",
-    "db_ops.sre*",
-    "db_ops.webhost*",
-    "db_ops.control*",
+    "dbabrain.transport*",
+    "dbabrain.db*",
+    "dbabrain.logging_ops*",
+    "dbabrain.metrics*",
+    "dbabrain.telegram*",
+    "dbabrain.jobs*",
+    "dbabrain.reports*",
+    "dbabrain.sql_tasks*",
+    "dbabrain.backup_restore*",
+    "dbabrain.sla*",
+    "dbabrain.sre*",
+    "dbabrain.webhost*",
+    "dbabrain.control*",
 ]
 namespaces = false
 
@@ -162,17 +156,17 @@ namespaces = false
 # without them cannot collect a metric. Each lives with the component that owns it; the
 # operator's own `assets/` stays at the repository root and deliberately never ships.
 [tool.setuptools.package-data]
-"db_ops.metrics" = ["collectors/**/*.sql", "collectors/**/*.sh", "collectors/**/*.ps1",
+"dbabrain.metrics" = ["collectors/**/*.sql", "collectors/**/*.sh", "collectors/**/*.ps1",
                     "catalogue/*.json"]
-# The rest of what `db-ops init` writes. These are product data - which reports exist, which bot
+# The rest of what `dbabrain init` writes. These are product data - which reports exist, which bot
 # commands are answered, which apps can be scheduled - so each ships with the component that owns
 # it. Without them the daemon starts and every scheduled command fails on a missing file.
-"db_ops.telegram" = ["catalogue/*.json"]
-"db_ops.jobs" = ["catalogue/*.json"]
-"db_ops.db" = ["catalogue/*.json"]
-"db_ops.control" = ["catalogue/*.json"]
-"db_ops.sla" = ["catalogue/*.json"]
-"db_ops.common" = ["backup_scripts/**/*.sh", "backup_scripts/**/*.ps1",
+"dbabrain.telegram" = ["catalogue/*.json"]
+"dbabrain.jobs" = ["catalogue/*.json"]
+"dbabrain.db" = ["catalogue/*.json"]
+"dbabrain.control" = ["catalogue/*.json"]
+"dbabrain.sla" = ["catalogue/*.json"]
+"dbabrain.common" = ["backup_scripts/**/*.sh", "backup_scripts/**/*.ps1",
                    "restore_scripts/**/*.sh", "restore_scripts/**/*.ps1",
                    # The lab compose templates moved here from `sre` with create-db-docker (0.23.0).
                    "docker_db/templates/**/*",
@@ -189,7 +183,7 @@ namespaces = false
 # Every one of these is a file the code *executes or renders*, not documentation that happens to
 # live nearby: without them `sre` cannot write a compose file or run a playbook, `reports` renders
 # a blank page, and `webhost` serves one.
-"db_ops.sre" = ["host_config/**/*", "automation/**/*.j2", "automation/**/*.yml",
+"dbabrain.sre" = ["host_config/**/*", "automation/**/*.j2", "automation/**/*.yml",
                 "automation/**/*.ps1", "automation/**/*.sh", "automation/**/*.cfg",
                 "inventory/**/*.sql", "inventory/**/*.md",
                 # Added 2026-09-16, with the seeds for the last two catalogued config files. The
@@ -198,14 +192,14 @@ namespaces = false
                 # every source-tree test passed while an installed node's `init` would have
                 # skipped both in silence.
                 "catalogue/*.json"]
-"db_ops.reports" = ["templates/**/*.html", "catalogue/*.json"]
-"db_ops.webhost" = ["templates/**/*", "static/**/*", "catalogue/*.json"]
+"dbabrain.reports" = ["templates/**/*.html", "catalogue/*.json"]
+"dbabrain.webhost" = ["templates/**/*", "static/**/*", "catalogue/*.json"]
 # catalogue/ is the empty restore_config.json `init` writes. Missing from this line on the day it was
 # added (2026-09-11), so the source tree's tests passed while an installed node's `init` skipped the
 # file in silence - found by building the wheel, which is why the test now derives its list from
 # scaffold.PACKAGED_DEFAULTS instead of naming files by hand.
-"db_ops.backup_restore" = ["sql/**/*.sql", "**/*.ps1", "**/*.sh", "catalogue/*.json"]
-"db_ops.sql_tasks" = ["**/*.sql"]
+"dbabrain.backup_restore" = ["sql/**/*.sql", "**/*.ps1", "**/*.sh", "catalogue/*.json"]
+"dbabrain.sql_tasks" = ["**/*.sql"]
 
 
 # Lint and format. Added 2026-08-22 for go-live gate `G-08`, which requires CI green on tests,

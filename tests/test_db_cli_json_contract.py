@@ -1,7 +1,7 @@
 """The three store commands keep the JSON-object contract after leaving ``common``.
 
 ``queue-telegram-message``, ``ops-status`` and ``restore-drill-status`` moved from
-``db_ops.common.cli`` to ``db_ops.db.cli`` on 2026-08-15, because they open the runtime store and
+``dbabrain.common.cli`` to ``dbabrain.db.cli`` on 2026-08-15, because they open the runtime store and
 `common` writes to no database. The contract they were held to did not move with them: they stayed
 listed in ``tests/test_common_cli_json_contract.py``, where they went on *passing* — an unknown
 command falls through to ``config_admin.main``, whose JSON branch rejects a malformed payload
@@ -21,7 +21,7 @@ import json
 
 import pytest
 
-from db_ops.db import cli
+from dbabrain.db import cli
 
 
 #: The JSON-object commands `db.cli` dispatches by bare word, before argparse. Its other commands
@@ -86,7 +86,7 @@ def test_stdin_is_read_for_the_dash_form(command: str, stdin_holding, capsys) ->
 
 
 #: The exact shape the daemon builds: it inserts the forwarded passphrase immediately after
-#: `python -m db_ops.db.cli`, so the subcommand is NOT argv[0].
+#: `python -m dbabrain.db.cli`, so the subcommand is NOT argv[0].
 DAEMON_PREFIX = ["--key-base64", "Zm9yd2FyZGVkLWJ5LXRoZS1kYWVtb24="]
 
 
@@ -95,9 +95,9 @@ def test_the_command_is_found_when_the_daemon_injects_the_key_first(command: str
     """The daemon puts ``--key-base64 <value>`` *before* the subcommand, and that broke production.
 
     ``jobs/daemon.py::forwarded_key_insert_index`` inserts at token 3 — straight after
-    ``python -m db_ops.db.cli`` — for any child CLI whose source declares ``add_key_argument``.
+    ``python -m dbabrain.db.cli`` — for any child CLI whose source declares ``add_key_argument``.
     These three commands were key-unaware while they lived in ``common/cli.py`` (the key reached
-    them through ``DB_OPS_SECRET_KEY``), so argv[0] was always the command name and the dispatcher
+    them through ``DBABRAIN_SECRET_KEY``), so argv[0] was always the command name and the dispatcher
     could just read it. Moving them into this key-aware module changed that silently: argparse
     received the passphrase as the subcommand and exited 2, every 30 seconds, 529 times, and
     ``ops-status`` — the command whose job is to notice failures — was the thing failing.
@@ -141,7 +141,7 @@ def test_an_argparse_subcommand_is_not_swallowed() -> None:
 # `ops-status` and `restore-drill-status` followed, and the baseline is empty. Both answer
 # `success: true` for *the check ran*: an app that is failing is exactly what `ops-status` exists
 # to report, and a database whose restore drill is overdue is a fact about the estate. Answering
-# `success: false` for either would make "db_ops noticed a problem" and "db_ops could not look"
+# `success: false` for either would make "dbabrain noticed a problem" and "dbabrain could not look"
 # the same answer — for the two commands whose whole job is that difference. Their exit codes
 # still say 1, because a runbook reads `$?`.
 
@@ -156,7 +156,7 @@ NOT_YET_ENVELOPE: frozenset[str] = frozenset()
 def _answer(command: str, capsys) -> object:
     cli.main([command, "{}"])
     text = capsys.readouterr().out.strip()
-    # `restore-drill-status` prints a `[db_ops.config]` banner before its JSON; take the object.
+    # `restore-drill-status` prints a `[dbabrain.config]` banner before its JSON; take the object.
     brace = text.find("{")
     try:
         return json.loads(text[brace:]) if brace >= 0 else None
@@ -170,7 +170,7 @@ def test_a_store_command_answers_in_the_response_envelope(command: str, capsys) 
     assert isinstance(parsed, dict), f"{command} printed no JSON object."
     missing = sorted(ENVELOPE_KEYS - set(parsed))
     assert not missing, (
-        f"{command} is missing {missing}. Build the answer with db_ops.lib.response.ok()/fail(). "
+        f"{command} is missing {missing}. Build the answer with dbabrain.lib.response.ok()/fail(). "
         "Do not add it to NOT_YET_ENVELOPE: that list only shrinks."
     )
 
@@ -194,7 +194,7 @@ def test_the_baseline_names_only_commands_that_exist() -> None:
 def test_no_handler_prints_a_listing_and_an_envelope_on_the_same_run() -> None:
     """A human line in front of a JSON document leaves stdout parsing as neither.
 
-    `db_ops.common.cli` has held this rule since 2026-08-16 — `format: "txt"` prints the listing
+    `dbabrain.common.cli` has held this rule since 2026-08-16 — `format: "txt"` prints the listing
     and returns, the default prints the envelope and nothing else — and
     `tests/test_common_cli_response_shape.py` enforces it *there*. `db.cli` was never covered, and
     both of its history commands did exactly what that file calls the worse case: printed the

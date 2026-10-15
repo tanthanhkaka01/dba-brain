@@ -19,10 +19,10 @@ import types
 
 import pytest
 
-from db_ops.common import db_connect, metric_batch, sql_execution, sql_run
-from db_ops.db import postgres_store
-from db_ops.lib.connection_spec import ConnectionSpec
-from db_ops.lib.data_sources import request_fill
+from dbabrain.common import db_connect, metric_batch, sql_execution, sql_run
+from dbabrain.db import postgres_store
+from dbabrain.lib.connection_spec import ConnectionSpec
+from dbabrain.lib.data_sources import request_fill
 
 DRIVERS = ["ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"]
 
@@ -108,16 +108,16 @@ def test_an_unknown_sslmode_is_refused():
 
 
 def test_the_switch_reaches_a_metric_s_request(tmp_path, monkeypatch):
-    from db_ops.metrics.executor import connection_block
-    from db_ops.metrics.targets import load_metric_targets
+    from dbabrain.metrics.executor import connection_block
+    from dbabrain.metrics.targets import load_metric_targets
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     (data_dir / "db_instances.json").write_text(
         '{"db_instances": [{"site": "LAB", "ip": "192.0.2.30", "db_type": "sqlserver", '
         '"service_name": "LAB01", "enabled": true, "sqlserver_tls_verify": true}]}', encoding="utf-8")
-    monkeypatch.setattr("db_ops.metrics.targets.load_database_inventory", lambda *_a, **_k: [])
-    monkeypatch.setattr("db_ops.metrics.targets.load_credentials_file", lambda *_a, **_k: [])
+    monkeypatch.setattr("dbabrain.metrics.targets.load_database_inventory", lambda *_a, **_k: [])
+    monkeypatch.setattr("dbabrain.metrics.targets.load_credentials_file", lambda *_a, **_k: [])
 
     [target] = load_metric_targets(data_dir=data_dir)
 

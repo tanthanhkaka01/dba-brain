@@ -1,4 +1,4 @@
-"""The web console has to show the apps a fresh `db-ops init` configured.
+"""The web console has to show the apps a fresh `dbabrain init` configured.
 
 It showed **0 apps** on a clean `pip install`, with five zeroed tiles and "nothing is failing" —
 which is exactly what a healthy console with no problems looks like. Nothing was wrong with the
@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import json
 
-from db_ops.common import scaffold
-from db_ops.webhost import pages
+from dbabrain.common import scaffold
+from dbabrain.webhost import pages
 
 
 def test_init_writes_what_the_console_needs(tmp_path):
@@ -76,7 +76,7 @@ def test_the_config_catalog_covers_every_file_init_writes(tmp_path):
 def test_an_empty_dashboard_says_what_to_run():
     """Rendered with no blocks, the page must not look like a healthy console with no work."""
     html = pages.overview_page(
-        prefix="/db_ops", session={"csrf_token": "x"}, blocks=[],
+        prefix="/dbabrain", session={"csrf_token": "x"}, blocks=[],
         can_edit=False, can_run=False, generated_at="2026-08-24 00:00:00 UTC")
     assert "sync-config" in html, "the empty console has to name the command that fills it"
     assert "config_catalog" in html, "and the file whose absence stops that command working"
@@ -86,6 +86,6 @@ def test_a_populated_dashboard_does_not_nag():
     block = {"app_code": "metrics", "ord": 1, "display_name": "Metrics", "summary": "",
              "doc": "", "commands": [], "config": []}
     html = pages.overview_page(
-        prefix="/db_ops", session={"csrf_token": "x"}, blocks=[block],
+        prefix="/dbabrain", session={"csrf_token": "x"}, blocks=[block],
         can_edit=False, can_run=False, generated_at="2026-08-24 00:00:00 UTC")
     assert "sync-config" not in html

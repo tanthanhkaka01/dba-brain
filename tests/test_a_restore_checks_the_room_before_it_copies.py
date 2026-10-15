@@ -9,8 +9,8 @@ The rule the operator set on 2026-09-19 is deliberately blunt, so it can be chec
 
     free >= bytes_to_copy x factor        default 2.0, for every engine (1.5 until 0.26.0)
 
-These tests are that rule (:mod:`db_ops.lib.restore_space`, arithmetic only) and the refusal built
-on it (:mod:`db_ops.backup_restore.space`). The case that matters most is the last one: a restore
+These tests are that rule (:mod:`dbabrain.lib.restore_space`, arithmetic only) and the refusal built
+on it (:mod:`dbabrain.backup_restore.space`). The case that matters most is the last one: a restore
 that **cannot be measured** is refused, because the unmeasured restore is the one that emptied the
 disk.
 """
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import restore_space
+from dbabrain.lib import restore_space
 
 
 # --------------------------------------------------------------------------- #
@@ -116,7 +116,7 @@ def test_on_unknown_takes_only_the_two_answers_that_exist():
 @pytest.fixture()
 def entry(monkeypatch):
     """A restore config stub with the two measurements under the test's control."""
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     class Config:
         restore_id = "DRILL"
@@ -131,7 +131,7 @@ def entry(monkeypatch):
 
 
 def _measured(monkeypatch, *, incoming, free):
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     monkeypatch.setattr(space, "measure_copy", lambda config, **_: (
         None if incoming is None else space.CopyMeasure(to_write=incoming, staged=0)))
@@ -140,10 +140,10 @@ def _measured(monkeypatch, *, incoming, free):
 
 def test_a_linux_target_is_asked_about_a_posix_path_not_a_windows_one():
     r"""Found on the estate, 2026-09-19. `vm_import_local` is a `Path`, so on the Windows node that
-    drives these restores a Linux path renders as `\opt\db_ops\...`. `df` on the target then says
+    drives these restores a Linux path renders as `\opt\dbabrain\...`. `df` on the target then says
     "no such file", this module can only report "could not measure", and the restore is refused —
     safely, and for entirely the wrong reason. Every Linux-target restore was in that state."""
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     class LinuxTarget:
         is_linux = True
@@ -157,7 +157,7 @@ def test_a_linux_target_is_asked_about_a_posix_path_not_a_windows_one():
 
 
 def test_a_copy_that_would_not_fit_is_stopped_before_any_byte_moves(monkeypatch, entry):
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     _measured(monkeypatch, incoming=115 * GIB, free=92 * GIB)
 
@@ -171,7 +171,7 @@ def test_a_copy_that_would_not_fit_is_stopped_before_any_byte_moves(monkeypatch,
 
 
 def test_a_copy_that_fits_returns_what_it_measured(monkeypatch, entry):
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     _measured(monkeypatch, incoming=10 * GIB, free=92 * GIB)
 
@@ -184,7 +184,7 @@ def test_a_copy_that_fits_returns_what_it_measured(monkeypatch, entry):
 def test_a_restore_that_cannot_be_measured_is_refused(monkeypatch, entry):
     """The one that matters. An unmeasured restore is exactly the one that filled the disk, and
     'could not read the free space' must not read as 'there is enough'."""
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     _measured(monkeypatch, incoming=10 * GIB, free=None)
 
@@ -195,7 +195,7 @@ def test_a_restore_that_cannot_be_measured_is_refused(monkeypatch, entry):
 
 
 def test_an_entry_may_accept_an_unmeasured_restore_but_has_to_say_so(monkeypatch, entry):
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     entry.space_check = restore_space.SpaceCheck(on_unknown="proceed")
     _measured(monkeypatch, incoming=None, free=None)
@@ -208,7 +208,7 @@ def test_an_entry_may_accept_an_unmeasured_restore_but_has_to_say_so(monkeypatch
 
 
 def test_turning_the_check_off_is_possible_and_visible(monkeypatch, entry):
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     entry.space_check = restore_space.SpaceCheck(enabled=False)
     said: list[str] = []
@@ -222,7 +222,7 @@ def test_turning_the_check_off_is_possible_and_visible(monkeypatch, entry):
 def test_the_preflight_stops_on_it_the_way_it_stops_on_an_unreachable_share(monkeypatch, entry):
     """Callers already stop on PreflightError. A new exception type would need every one of them
     taught about it, and the one that was not taught is a restore that runs anyway."""
-    from db_ops.backup_restore import preflight
+    from dbabrain.backup_restore import preflight
 
     def refuse(config, **kwargs):
         raise preflight.RestoreSpaceRefused("DRILL will not fit: 115.0 GiB to copy")
@@ -242,7 +242,7 @@ def test_a_linux_target_s_staging_folder_that_does_not_exist_yet_is_measured_on_
     import shutil
     import subprocess
 
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     bash = shutil.which("bash")
     if bash is None:
@@ -259,7 +259,7 @@ def test_a_linux_target_s_staging_folder_that_does_not_exist_yet_is_measured_on_
 
 
 def test_the_linux_measurement_sends_the_climbing_command(monkeypatch):
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     sent: list[str] = []
 

@@ -88,12 +88,6 @@ bundle from another machine, and no assumption that they already know what a dat
 checked for. Today that path expects more DBA knowledge than it should. Closing that gap is the
 current priority; see [`docs/first_run.md`](./docs/first_run.md) for where it stands.
 
-> **This project is being renamed.** The distribution and the module path are still `db_ops`, so
-> every command below reads `python -m db_ops.<app>.cli`. They become `dbabrain` when the code
-> moves to the public repository; nothing else changes with them.
-> <!-- TODO(rename): update the distribution name and every `python -m` path in this file once the
-> package rename lands. -->
-
 ---
 
 ## What it is not
@@ -179,25 +173,25 @@ Every command answers in the same envelope, whether the work succeeded or not:
 
 Ordered to match the reference docs; the **ORD** number links to each one.
 
-**Fifteen components of two kinds.** An **app** (10: `jobs` - run as `db-ops daemon` -, `metrics`, `sql_tasks`, `reports`, `telegram`, `backup_restore`, `sla`, `sre`, `control`, `webhost`) does one job, has its own `cli.py`, and never imports another app. A **shared layer** (5: `db`, `logging_ops`, `common`, `lib`, `transport`) is what every app stands on, and never imports an app. The root package `db_ops` is neither: it is the `db-ops` entry point and only dispatches. The same table, and who may import or run whom, is in [`docs/rules.md`](./docs/rules.md#the-components).
+**Fifteen components of two kinds.** An **app** (10: `jobs` - run as `dbabrain daemon` -, `metrics`, `sql_tasks`, `reports`, `telegram`, `backup_restore`, `sla`, `sre`, `control`, `webhost`) does one job, has its own `cli.py`, and never imports another app. A **shared layer** (5: `db`, `logging_ops`, `common`, `lib`, `transport`) is what every app stands on, and never imports an app. The root package `dbabrain` is neither: it is the `dbabrain` entry point and only dispatches. The same table, and who may import or run whom, is in [`docs/rules.md`](./docs/rules.md#the-components).
 
 | ORD | Component | Kind | Package / config | Responsibility |
 | :---: | --- | --- | --- | --- |
-| [01](./docs/01_runtime_store.md) | Runtime store | shared layer | `db_ops/db`, `data/store_config.json` | The database the toolkit keeps its **own** data in — job runs, measurements, report state, the delivery queue, restore history. SQLite to start, PostgreSQL when you outgrow it; the backend is one word in one file. |
-| [02](./docs/02_logging_engine.md) | Logging engine | shared layer | `db_ops/logging_ops`, `logs/` | Scoped application logs, runtime logs, shared errors, and daily archives. |
-| [03](./docs/03_app_command_daemon.md) | App command daemon | app | `db_ops/jobs` (run as `db-ops daemon`), `data/app_commands.json` | The scheduler: runs each app on its own interval inside its allowed hours, skips one that is still running, and forwards the secret passphrase to every child process. |
-| [04](./docs/04_metrics_engine.md) | Metrics engine | app | `db_ops/metrics`, `data/db_instances.json`, `data/metric_definitions.json` | Around ninety metrics across four engines — availability, capacity, performance, recoverability, security, maintenance — collected and normalised into one shape. |
-| [05](./docs/05_sql_task_runner.md) | SQL task runner | app | `db_ops/sql_tasks`, `data/sql_commands.json`, `data/sql_targets.json` | Your own SQL, on a schedule or on request, against approved targets, delivered as text or a spreadsheet. The SQL is a reviewable file, never a string in configuration. |
-| [06](./docs/06_reports_app.md) | Reports | app | `db_ops/reports`, `data/reports_config.json` | Turns measurements into scheduled reports and inventory pages, with a freshness gate so a stale number is never reported as a current one. |
-| [07](./docs/07_telegram_app.md) | Chat delivery and commands | app | `db_ops/telegram`, the Telegram data files | Delivers the outgoing queue one message at a time, and executes the commands people send back — gated by the person's clearance *and* the chat's. |
-| [08](./docs/08_backup_restore_app.md) | Backup / restore | app | `db_ops/backup_restore`, `data/restore_config.json` | Runs backups, restores them onto a disposable target, verifies the result, and records what was proven and when. |
-| [09](./docs/09_sla_slo_compliance_app.md) | SLA / SLO compliance | app | `db_ops/sla`, `data/sla_policies.json` | Computes indicators from stored measurement history, evaluates objectives with an error budget, and reports what is left of it. |
-| [10](./docs/10_sre_app.md) | SRE | app | `db_ops/sre`, `data/sre_config.json` | Provisions the disposable lab databases that drills and rehearsals need — single instances or small HA clusters, in Docker or on VMs. |
-| [11](./docs/11_control_app.md) | Control | app | `db_ops/control`, `config.json` | Builds and deploys the toolkit to another node, and watches the toolkit itself — the one app that reports on the others. |
-| [12](./docs/12_webhost_app.md) | Web host | app | `db_ops/webhost`, `data/webhost_config.json` | Serves the rendered reports over HTTP and hosts the console. Publishes files; never generates them. |
-| [13](./docs/13_common.md) | **Common** — shared operations | shared layer | `db_ops/common` | Reaching a host, running SQL, moving a file, rotating a password, confirming something dangerous. Every command takes one JSON object. **Invoked as a CLI, never imported.** |
-| [14](./docs/14_lib.md) | **Lib** — shared rules | shared layer | `db_ops/lib` | Values and rules that are pure functions of their arguments: time windows, notify routing, severity, formatting. Imports nothing from the rest of the project. **Only ever imported, never run as a CLI.** |
-| [15](./docs/15_transport.md) | **Transport** — the one client | shared layer | `db_ops/transport` | Starts `common.cli` and `db.cli` for every component: `lib` builds the command and reads the answer, this runs the process between them. Imports only `lib`. |
+| [01](./docs/01_runtime_store.md) | Runtime store | shared layer | `dbabrain/db`, `data/store_config.json` | The database the toolkit keeps its **own** data in — job runs, measurements, report state, the delivery queue, restore history. SQLite to start, PostgreSQL when you outgrow it; the backend is one word in one file. |
+| [02](./docs/02_logging_engine.md) | Logging engine | shared layer | `dbabrain/logging_ops`, `logs/` | Scoped application logs, runtime logs, shared errors, and daily archives. |
+| [03](./docs/03_app_command_daemon.md) | App command daemon | app | `dbabrain/jobs` (run as `dbabrain daemon`), `data/app_commands.json` | The scheduler: runs each app on its own interval inside its allowed hours, skips one that is still running, and forwards the secret passphrase to every child process. |
+| [04](./docs/04_metrics_engine.md) | Metrics engine | app | `dbabrain/metrics`, `data/db_instances.json`, `data/metric_definitions.json` | Around ninety metrics across four engines — availability, capacity, performance, recoverability, security, maintenance — collected and normalised into one shape. |
+| [05](./docs/05_sql_task_runner.md) | SQL task runner | app | `dbabrain/sql_tasks`, `data/sql_commands.json`, `data/sql_targets.json` | Your own SQL, on a schedule or on request, against approved targets, delivered as text or a spreadsheet. The SQL is a reviewable file, never a string in configuration. |
+| [06](./docs/06_reports_app.md) | Reports | app | `dbabrain/reports`, `data/reports_config.json` | Turns measurements into scheduled reports and inventory pages, with a freshness gate so a stale number is never reported as a current one. |
+| [07](./docs/07_telegram_app.md) | Chat delivery and commands | app | `dbabrain/telegram`, the Telegram data files | Delivers the outgoing queue one message at a time, and executes the commands people send back — gated by the person's clearance *and* the chat's. |
+| [08](./docs/08_backup_restore_app.md) | Backup / restore | app | `dbabrain/backup_restore`, `data/restore_config.json` | Runs backups, restores them onto a disposable target, verifies the result, and records what was proven and when. |
+| [09](./docs/09_sla_slo_compliance_app.md) | SLA / SLO compliance | app | `dbabrain/sla`, `data/sla_policies.json` | Computes indicators from stored measurement history, evaluates objectives with an error budget, and reports what is left of it. |
+| [10](./docs/10_sre_app.md) | SRE | app | `dbabrain/sre`, `data/sre_config.json` | Provisions the disposable lab databases that drills and rehearsals need — single instances or small HA clusters, in Docker or on VMs. |
+| [11](./docs/11_control_app.md) | Control | app | `dbabrain/control`, `config.json` | Builds and deploys the toolkit to another node, and watches the toolkit itself — the one app that reports on the others. |
+| [12](./docs/12_webhost_app.md) | Web host | app | `dbabrain/webhost`, `data/webhost_config.json` | Serves the rendered reports over HTTP and hosts the console. Publishes files; never generates them. |
+| [13](./docs/13_common.md) | **Common** — shared operations | shared layer | `dbabrain/common` | Reaching a host, running SQL, moving a file, rotating a password, confirming something dangerous. Every command takes one JSON object. **Invoked as a CLI, never imported.** |
+| [14](./docs/14_lib.md) | **Lib** — shared rules | shared layer | `dbabrain/lib` | Values and rules that are pure functions of their arguments: time windows, notify routing, severity, formatting. Imports nothing from the rest of the project. **Only ever imported, never run as a CLI.** |
+| [15](./docs/15_transport.md) | **Transport** — the one client | shared layer | `dbabrain/transport` | Starts `common.cli` and `db.cli` for every component: `lib` builds the command and reads the answer, this runs the process between them. Imports only `lib`. |
 
 **Fifteen components, and the list is closed.** Ten apps and five shared layers, as the Kind column
 says; anything new is one of them or a sixteenth ORD with its own directory and its own doc.
@@ -237,8 +231,8 @@ image: **[`docs/installation.md`](./docs/installation.md)**.
 **Upgrading** an installed root: `pip install --upgrade dbabrain`, then
 
 ```bash
-python -m db_ops.common.cli upgrade-config '{}'                   # the plan: what moves, file by file
-python -m db_ops.common.cli upgrade-config '{"dry_run": false}'   # apply; each file is copied first
+python -m dbabrain.common.cli upgrade-config '{}'                   # the plan: what moves, file by file
+python -m dbabrain.common.cli upgrade-config '{"dry_run": false}'   # apply; each file is copied first
 ```
 
 A release that renames or moves a field keeps reading the old shape, so nothing breaks if you skip
@@ -299,10 +293,10 @@ a real problem with the instance, then clears it once you fix it.
 ```bash
 cd examples/postgres-quickstart
 docker compose up -d
-python -m db_ops.db.cli      --config config.json init
-python -m db_ops.metrics.cli --config config.json collect --dry-run
-python -m db_ops.metrics.cli --config config.json collect
-python -m db_ops.metrics.cli --config config.json report
+python -m dbabrain.db.cli      --config config.json init
+python -m dbabrain.metrics.cli --config config.json collect --dry-run
+python -m dbabrain.metrics.cli --config config.json collect
+python -m dbabrain.metrics.cli --config config.json report
 ```
 
 ---
@@ -337,7 +331,7 @@ bites people, is [`examples/standing-up-a-node.md`](./examples/standing-up-a-nod
 Two things belong in every shell that runs these:
 
 ```bash
-export DB_OPS_SECRET_KEY="<your passphrase>"   # or --key / --key-base64 per command
+export DBABRAIN_SECRET_KEY="<your passphrase>"   # or --key / --key-base64 per command
 export PYTHONIOENCODING=utf-8                  # a Windows console is cp1252 and dies on the emoji
 ```
 
@@ -346,8 +340,8 @@ export PYTHONIOENCODING=utf-8                  # a Windows console is cp1252 and
 ```bash
 pip install "dbabrain[postgres,mssql,ssh,winrm]"
 mkdir my-estate && cd my-estate
-db-ops guide          # writes nothing; says what the next steps are
-db-ops init           # config.json, data/*.json, secrets/secret_text.json
+dbabrain guide          # writes nothing; says what the next steps are
+dbabrain init           # config.json, data/*.json, secrets/secret_text.json
 ```
 
 `[winrm]` is not optional if you monitor a Windows host outside a domain: without `pypsrp` the OS
@@ -357,8 +351,8 @@ nothing.
 ### 2. The store
 
 ```bash
-python -m db_ops.db.cli --config config.json init
-python -m db_ops.db.cli --config config.json check      # tables, schema_version
+python -m dbabrain.db.cli --config config.json init
+python -m dbabrain.db.cli --config config.json check      # tables, schema_version
 ```
 
 SQLite under `runtime/` by default — nothing else to install. `data/store_config.json` is where you
@@ -367,7 +361,7 @@ move to PostgreSQL later; `db use-store sqlite|postgres` switches it.
 ### 3. Prove the schedule runs before configuring anything
 
 ```bash
-python -m db_ops.jobs.cli --config config.json --once
+python -m dbabrain.jobs.cli --config config.json --once
 ```
 
 **Every shipped command must reach `status=done` on a root where nothing is configured**, reporting
@@ -377,7 +371,7 @@ long-running service. If something errors here, stop: it will not get better onc
 ### 4. Add a database — one command, not four hand-edits
 
 ```bash
-python -m db_ops.common.cli instance-add - <<'JSON'
+python -m dbabrain.common.cli instance-add - <<'JSON'
 {"server_id": "ACME-192-0-2-9", "db_type": "sqlserver", "ip": "192.0.2.9",
  "port": 1433, "service_name": "MSSQLSERVER", "major_version": 16,
  "environment": "prod", "username": "dba_monitor", "password": "<the password>"}
@@ -405,16 +399,16 @@ For an OS-only host (no database), add `cmd_access` with `method: "ssh"` or `"wi
 with a remote `host` reports the local machine's CPU under that host's name, and is refused.
 
 ```bash
-python -m db_ops.common.cli list-targets '{}'          # what is registered
-python -m db_ops.common.cli check-secret '{}'          # can each credential actually authenticate
-python -m db_ops.metrics.cli --config config.json collect --dry-run
-python -m db_ops.metrics.cli --config config.json collect
+python -m dbabrain.common.cli list-targets '{}'          # what is registered
+python -m dbabrain.common.cli check-secret '{}'          # can each credential actually authenticate
+python -m dbabrain.metrics.cli --config config.json collect --dry-run
+python -m dbabrain.metrics.cli --config config.json collect
 ```
 
 ### 5. Start the daemon
 
 ```powershell
-Start-Process -FilePath ".venv\Scripts\db-ops.exe" `
+Start-Process -FilePath ".venv\Scripts\dbabrain.exe" `
               -ArgumentList "daemon","--config","config.json" `
               -WorkingDirectory (Get-Location) -WindowStyle Hidden
 ```
@@ -424,29 +418,29 @@ Set `timezone` in `config.json` to your own zone **before** this. It decides wha
 metrics (`DATABASE_CHECKDB`, `MAINTENANCE_INDEX_*`, `OS_REBOOT_PENDING`) in the middle of the
 working day.
 
-The reports and the console come up on `http://<host>:8080/report_dba/` and `/db_ops/`.
+The reports and the console come up on `http://<host>:8080/report_dba/` and `/dbabrain/`.
 
 ### 6. Telegram — the bot, its groups, and who may command it
 
 ```bash
 # 1. the token, straight into the encrypted store - stdin only, never inline
-python -m db_ops.common.cli secret-set - <<'JSON'
+python -m dbabrain.common.cli secret-set - <<'JSON'
 {"ref": "TELEGRAM_BOT_TOKEN", "value": "<token from BotFather>"}
 JSON
 
 # 2. who the token belongs to
-python -m db_ops.telegram.cli --config config.json bot-info
+python -m dbabrain.telegram.cli --config config.json bot-info
 
 # 3. add the bot to your groups as an ADMIN, post one message in each, then discover them
-python -m db_ops.telegram.cli --config config.json save-updates
+python -m dbabrain.telegram.cli --config config.json save-updates
 
 # 4. give each discovered group a level, and yourself the level that may run commands
-python -m db_ops.telegram.cli --config config.json group-level --group -1001234567890 --level 40
-python -m db_ops.telegram.cli --config config.json user-level  --user @you --level 100
+python -m dbabrain.telegram.cli --config config.json group-level --group -1001234567890 --level 40
+python -m dbabrain.telegram.cli --config config.json user-level  --user @you --level 100
 
 # 5. prove the routing before trusting it - `route` takes the level as a positional argument
-python -m db_ops.telegram.cli --config config.json route warning
-python -m db_ops.telegram.cli --config config.json send-message --chat-id -1001234567890 --text "hello"
+python -m dbabrain.telegram.cli --config config.json route warning
+python -m dbabrain.telegram.cli --config config.json send-message --chat-id -1001234567890 --text "hello"
 ```
 
 A **non-admin bot cannot read group messages** unless privacy mode is off — that is the usual reason
@@ -465,16 +459,16 @@ Backups are declared in `data/restore_config.json` under `backups`, each with it
 fills a disk and "keep forever" should be something somebody wrote down.
 
 ```bash
-python -m db_ops.backup_restore.cli --config config.json list-backups     # what is configured
-python -m db_ops.backup_restore.cli --config config.json backup           # run what is due
-python -m db_ops.backup_restore.cli --config config.json prune-backups    # apply retention
+python -m dbabrain.backup_restore.cli --config config.json list-backups     # what is configured
+python -m dbabrain.backup_restore.cli --config config.json backup           # run what is due
+python -m dbabrain.backup_restore.cli --config config.json prune-backups    # apply retention
 ```
 
 One backup from a self-contained spec, without configuring anything:
 
 ```bash
-python -m db_ops.common.cli backup-database @request.json
-python -m db_ops.common.cli list-backup-files @request.json   # full / diff / log, per engine
+python -m dbabrain.common.cli backup-database @request.json
+python -m dbabrain.common.cli list-backup-files @request.json   # full / diff / log, per engine
 ```
 
 ### 8. Restore, and the drill that proves a backup is real
@@ -483,9 +477,9 @@ Restores are declared beside the backups under `restores`. A restore is how you 
 backup rather than a file.
 
 ```bash
-python -m db_ops.backup_restore.cli --config config.json restore-latest    # newest FULL, with recovery
-python -m db_ops.backup_restore.cli --config config.json restore-workflow  # copy, restore, then clean up
-python -m db_ops.backup_restore.cli --config config.json restore-workflow --restore-id <id> --point-in-time "2026-09-25 12:00:00 +07:00"
+python -m dbabrain.backup_restore.cli --config config.json restore-latest    # newest FULL, with recovery
+python -m dbabrain.backup_restore.cli --config config.json restore-workflow  # copy, restore, then clean up
+python -m dbabrain.backup_restore.cli --config config.json restore-workflow --restore-id <id> --point-in-time "2026-09-25 12:00:00 +07:00"
 ```
 
 **A physical restore carries the source's logins with it.** After a drill the target answers to the
@@ -498,9 +492,9 @@ Both halves run on the schedule as `APP-BACKUP-RESTORE`; an install with nothing
 ### 9. Check what you built
 
 ```bash
-python -m db_ops.common.cli self-status '{}'                       # this node, and the URLs it serves
-python -m db_ops.reports.cli --config config.json inventory-workflow --days 7 --beauty 1
-python -m db_ops.sla.cli --config config.json validate
+python -m dbabrain.common.cli self-status '{}'                       # this node, and the URLs it serves
+python -m dbabrain.reports.cli --config config.json inventory-workflow --days 7 --beauty 1
+python -m dbabrain.sla.cli --config config.json validate
 ```
 
 The fleet page should list every instance you registered, each row linking to its own metrics page
@@ -525,7 +519,7 @@ Every configuration file has a `*.example.json` beside it, complete enough to co
 edit, with a `notes` array explaining what it decides and why.
 
 **The tool finds its configuration by a stated order**, not by where its code sits on disk:
-`DB_OPS_HOME`, then the working directory if it holds `data/` or `config.json`, then the package
+`DBABRAIN_HOME`, then the working directory if it holds `data/` or `config.json`, then the package
 location. That is what makes an installed copy work, and it is why standing in an example
 directory is enough to run against it.
 

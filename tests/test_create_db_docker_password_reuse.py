@@ -4,7 +4,7 @@
 store, or a **value**. Sending `-` for the value means "I gave you a ref, reuse it". That path was
 unreachable, and the way it failed named nothing about passwords:
 
-* `--password-text-env DB_OPS_NEW_DB_PASSWORD` sat in the command's unconditional ``command_argv``
+* `--password-text-env DBABRAIN_NEW_DB_PASSWORD` sat in the command's unconditional ``command_argv``
   while the env var was fed from ``password_text``. So a skipped password arrived as a variable
   holding the literal ``-``, and the flag looked entirely legitimate.
 * With a new ref, the store then held a password of ``-``, which SQL Server rejected for failing
@@ -23,9 +23,9 @@ import json
 
 import pytest
 
-from db_ops.sre.cli import SKIP_SENTINEL, _supplied_password_text
-from db_ops.lib.docker_db_registry import DockerDbRequestError
-from db_ops.telegram.command_processor import DEFAULT_COMMANDS_PATH, build_cli_argv
+from dbabrain.sre.cli import SKIP_SENTINEL, _supplied_password_text
+from dbabrain.lib.docker_db_registry import DockerDbRequestError
+from dbabrain.telegram.command_processor import DEFAULT_COMMANDS_PATH, build_cli_argv
 
 
 def _config():
@@ -68,9 +68,9 @@ def _args(**overrides):
 def test_the_sentinel_inside_the_environment_variable_is_not_a_password(monkeypatch):
     """The exact shape that stored a password of '-'. A worker running the old command definition
     still sends this, so the CLI has to recognise it on its own."""
-    monkeypatch.setenv("DB_OPS_NEW_DB_PASSWORD", SKIP_SENTINEL)
+    monkeypatch.setenv("DBABRAIN_NEW_DB_PASSWORD", SKIP_SENTINEL)
 
-    assert _supplied_password_text(_args(password_text_env="DB_OPS_NEW_DB_PASSWORD")) is None
+    assert _supplied_password_text(_args(password_text_env="DBABRAIN_NEW_DB_PASSWORD")) is None
 
 
 def test_the_sentinel_on_the_flag_is_not_a_password():
@@ -82,32 +82,32 @@ def test_no_password_arguments_at_all_means_reuse_the_ref():
 
 
 def test_a_real_value_is_taken_from_the_environment(monkeypatch):
-    monkeypatch.setenv("DB_OPS_NEW_DB_PASSWORD", "Str0ng#Pass!")
+    monkeypatch.setenv("DBABRAIN_NEW_DB_PASSWORD", "Str0ng#Pass!")
 
     assert _supplied_password_text(
-        _args(password_text_env="DB_OPS_NEW_DB_PASSWORD")) == "Str0ng#Pass!"
+        _args(password_text_env="DBABRAIN_NEW_DB_PASSWORD")) == "Str0ng#Pass!"
 
 
 def test_a_sentinel_flag_does_not_veto_a_real_value_in_the_environment(monkeypatch):
     """The two spellings are checked in order, not exclusively: `-` on the flag means only that
     the flag carried nothing."""
-    monkeypatch.setenv("DB_OPS_NEW_DB_PASSWORD", "Str0ng#Pass!")
+    monkeypatch.setenv("DBABRAIN_NEW_DB_PASSWORD", "Str0ng#Pass!")
 
     assert _supplied_password_text(
         _args(password_text=SKIP_SENTINEL,
-              password_text_env="DB_OPS_NEW_DB_PASSWORD")) == "Str0ng#Pass!"
+              password_text_env="DBABRAIN_NEW_DB_PASSWORD")) == "Str0ng#Pass!"
 
 
 def test_a_named_but_genuinely_empty_variable_is_still_an_error(monkeypatch):
     """A caller who named a variable meant to set a password and lost it somewhere. Downgrading
     that to "reuse whatever is stored" would provision a database with a password nobody chose."""
-    monkeypatch.delenv("DB_OPS_NEW_DB_PASSWORD", raising=False)
+    monkeypatch.delenv("DBABRAIN_NEW_DB_PASSWORD", raising=False)
 
     with pytest.raises(DockerDbRequestError, match="empty"):
-        _supplied_password_text(_args(password_text_env="DB_OPS_NEW_DB_PASSWORD"))
+        _supplied_password_text(_args(password_text_env="DBABRAIN_NEW_DB_PASSWORD"))
 
 
 def test_surrounding_whitespace_does_not_turn_the_sentinel_into_a_password(monkeypatch):
-    monkeypatch.setenv("DB_OPS_NEW_DB_PASSWORD", f"  {SKIP_SENTINEL}  ")
+    monkeypatch.setenv("DBABRAIN_NEW_DB_PASSWORD", f"  {SKIP_SENTINEL}  ")
 
-    assert _supplied_password_text(_args(password_text_env="DB_OPS_NEW_DB_PASSWORD")) is None
+    assert _supplied_password_text(_args(password_text_env="DBABRAIN_NEW_DB_PASSWORD")) is None

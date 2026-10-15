@@ -1,7 +1,7 @@
 """A script sent to a machine must say which database it means, and admit what it leaves behind.
 
 Two assumptions were built into the engine scripts and neither was written down. Both were correct
-for the lab that grew them and neither is correct for a database db_ops did not create.
+for the lab that grew them and neither is correct for a database dbabrain did not create.
 
 **Which database.** ``rman target /`` connects to whatever ``ORACLE_SID`` the container's login
 profile exports, and ``psql``/``pg_basebackup`` connect to whatever port is the image default. One
@@ -25,7 +25,7 @@ import re
 
 import pytest
 
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 
 PG = "assets/backup/postgresql/pg_basebackup_database.sh"
 ORACLE_DB = "assets/backup/oracle/oracle_rman_database.sh"
@@ -131,7 +131,7 @@ def test_a_sid_that_could_be_shell_is_refused(rman, script):
 
 @pytest.mark.parametrize("script", [ORACLE_DB, ORACLE_ARCH])
 def test_which_database_was_chosen_is_printed(rman, script):
-    """db_ops stores this as `stdout_tail`. A backup of the wrong instance is indistinguishable from
+    """dbabrain stores this as `stdout_tail`. A backup of the wrong instance is indistinguishable from
     a backup of the right one unless the run says which it connected to."""
     assert "printf 'oracle_sid=%s rman_configure=%s" in rman[script]
 
@@ -298,7 +298,7 @@ def test_the_native_path_still_runs_as_the_database_user(script):
 @pytest.mark.parametrize("script", EVERY_SH)
 def test_a_host_with_no_client_tools_is_refused_with_both_ways_out(script):
     """The failure an operator actually meets on a host install. Naming only the missing binary
-    leaves them guessing whether db_ops supports this at all."""
+    leaves them guessing whether dbabrain supports this at all."""
     code = statements(read(script))
 
     assert "DOCKER_CONTAINER is not set, so there is no way to reach" in code or \
@@ -332,7 +332,7 @@ def test_the_listing_warns_when_a_postgres_incremental_has_no_baseline_beside_it
     So the pair is not split, and the listing an operator reads before running one says so when
     somebody splits it by hand.
     """
-    from db_ops.backup_restore.cli import _format_backup_list
+    from dbabrain.backup_restore.cli import _format_backup_list
 
     class Job:
         def __init__(self, backup_id, job, db_type="postgresql"):
@@ -359,7 +359,7 @@ def test_the_listing_warns_when_a_postgres_incremental_has_no_baseline_beside_it
 def test_the_warning_groups_by_entry_rather_than_by_job():
     """The first draft read each listing element as an entry. The listing is already flattened one
     element per JOB, so it reported every incremental in the estate — including the correct ones."""
-    from db_ops.backup_restore.cli import _format_backup_list
+    from dbabrain.backup_restore.cli import _format_backup_list
 
     class Job:
         def __init__(self, backup_id, job):
@@ -380,7 +380,7 @@ def test_a_non_postgres_incremental_is_not_warned_about():
     """SQL Server's diff does not need its full in the same directory — it needs it in the same
     database history — so full/diff/log as three separate entries is correct there and is what this
     estate already does for six of its SQL Server registrations."""
-    from db_ops.backup_restore.cli import _format_backup_list
+    from dbabrain.backup_restore.cli import _format_backup_list
 
     class Job:
         def __init__(self):

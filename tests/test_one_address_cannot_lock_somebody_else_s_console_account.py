@@ -20,15 +20,15 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.db import web_auth_store
-from db_ops.db.web_auth_store import (
+from dbabrain.db import web_auth_store
+from dbabrain.db.web_auth_store import (
     REASON_BAD_PASSWORD,
     REASON_IP_THROTTLED,
     REASON_LOCKED,
     REASON_OK,
     WebAuthStore,
 )
-from db_ops.lib import web_auth
+from dbabrain.lib import web_auth
 
 PASSWORD = "correct-horse-battery"
 ATTACKER = "198.51.100.66"
@@ -42,7 +42,7 @@ def cheap_kdf(monkeypatch):
 
 @pytest.fixture()
 def auth(tmp_path: Path) -> WebAuthStore:
-    store = WebAuthStore(tmp_path / "db_ops.sqlite")
+    store = WebAuthStore(tmp_path / "dbabrain.sqlite")
     store.create_user(username="admin1", password=PASSWORD, level=100, actor="test")
     return store
 

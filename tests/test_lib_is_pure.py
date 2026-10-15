@@ -1,4 +1,4 @@
-"""``db_ops/lib/`` imports nothing from ``db_ops``, and that is the whole reason it exists.
+"""``dbabrain/lib/`` imports nothing from ``dbabrain``, and that is the whole reason it exists.
 
 The rule that created this package on 2026-08-15 is "an app does not import ``common``; it calls
 the ``common`` CLI". That rule is right for anything that *does* something — reaching a host,
@@ -17,7 +17,7 @@ config, a store connection, or an app behind it. Then "apps do not import ``comm
 routed around rather than kept.
 
 The single exception is ``notify``, and it is named here rather than left to be discovered: it
-reads the configured notify-level vocabulary from ``db_ops.lib.config``, lazily and failing open,
+reads the configured notify-level vocabulary from ``dbabrain.lib.config``, lazily and failing open,
 because that vocabulary is data an operator adds by registering a Telegram group. The parser is
 ``lib``'s own since 0.24.0, so this does not point the layer at anything above it. Any *second* exception should be argued as hard as this one was.
 """
@@ -30,13 +30,13 @@ from pathlib import Path
 import pytest
 
 
-LIB_ROOT = Path(__file__).resolve().parents[1] / "db_ops" / "lib"
+LIB_ROOT = Path(__file__).resolve().parents[1] / "dbabrain" / "lib"
 
-#: module -> the one thing it may import from db_ops, and why.
-ALLOWED_DB_OPS_IMPORTS: dict[str, str] = {
+#: module -> the one thing it may import from dbabrain, and why.
+ALLOWED_DBABRAIN_IMPORTS: dict[str, str] = {
     # Empty since 0.24.0, and that is the rule (R06): the configuration parser moved into `lib`
     # (`lib/config.py`), so `notify` and `telegram_route` - the two entries that lived here, each
-    # reading `db_ops.config` - now read a sibling.
+    # reading `dbabrain.config` - now read a sibling.
 }
 
 
@@ -48,10 +48,10 @@ def _relative(path: Path) -> str:
     return path.relative_to(LIB_ROOT).as_posix()
 
 
-def _db_ops_imports(path: Path) -> set[str]:
-    """Every ``db_ops.*`` outside this package that the file imports.
+def _dbabrain_imports(path: Path) -> set[str]:
+    """Every ``dbabrain.*`` outside this package that the file imports.
 
-    Sibling imports (``db_ops.lib.x``, and the relative form of the same thing) are **not**
+    Sibling imports (``dbabrain.lib.x``, and the relative form of the same thing) are **not**
     offences: the invariant is that ``lib`` pulls nothing from *outside* ``lib``, and a helper
     calling a helper next to it drags nothing new in. ``delimited_import`` sharing a parser with
     ``xlsx_import`` is the shape this package is supposed to have. What must never appear is a
@@ -60,19 +60,19 @@ def _db_ops_imports(path: Path) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         if isinstance(node, ast.Import):
-            found |= {a.name for a in node.names if a.name.startswith("db_ops")}
+            found |= {a.name for a in node.names if a.name.startswith("dbabrain")}
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            if node.module.startswith("db_ops"):
+            if node.module.startswith("dbabrain"):
                 found.add(node.module)
-    return {name for name in found if not name.startswith("db_ops.lib")}
+    return {name for name in found if not name.startswith("dbabrain.lib")}
 
 
 @pytest.mark.parametrize("path", _module_files(), ids=_relative)
-def test_a_lib_module_imports_nothing_from_db_ops(path: Path) -> None:
+def test_a_lib_module_imports_nothing_from_dbabrain(path: Path) -> None:
     relative = _relative(path)
-    allowed = ALLOWED_DB_OPS_IMPORTS.get(relative)
+    allowed = ALLOWED_DBABRAIN_IMPORTS.get(relative)
     offenders = sorted(
-        name for name in _db_ops_imports(path)
+        name for name in _dbabrain_imports(path)
         if not (allowed and (name == allowed or name.startswith(allowed + ".")))
     )
     assert not offenders, (
@@ -85,18 +85,18 @@ def test_a_lib_module_imports_nothing_from_db_ops(path: Path) -> None:
 
 def test_every_allowance_still_names_a_real_module() -> None:
     """An allowance for a file that no longer exists is a rule nobody is checking."""
-    missing = [name for name in ALLOWED_DB_OPS_IMPORTS if not (LIB_ROOT / name).exists()]
-    assert not missing, f"ALLOWED_DB_OPS_IMPORTS names files that are gone: {missing}"
+    missing = [name for name in ALLOWED_DBABRAIN_IMPORTS if not (LIB_ROOT / name).exists()]
+    assert not missing, f"ALLOWED_DBABRAIN_IMPORTS names files that are gone: {missing}"
 
 
 def test_every_allowance_is_still_used() -> None:
     """And an allowance the module stopped needing should be deleted, not left as decoration."""
     unused = [
-        name for name, allowed in ALLOWED_DB_OPS_IMPORTS.items()
+        name for name, allowed in ALLOWED_DBABRAIN_IMPORTS.items()
         if (LIB_ROOT / name).exists()
         and not any(
             imported == allowed or imported.startswith(allowed + ".")
-            for imported in _db_ops_imports(LIB_ROOT / name)
+            for imported in _dbabrain_imports(LIB_ROOT / name)
         )
     ]
     assert not unused, (

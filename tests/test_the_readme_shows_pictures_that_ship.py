@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from db_ops.lib.distribution import PUBLIC_BINARIES
+from dbabrain.lib.distribution import PUBLIC_BINARIES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 README = REPO_ROOT / "README.md"

@@ -3,10 +3,6 @@
 Everything this toolkit does is decided by JSON files you own. This page is the map: where those
 files are looked for, what each one decides, and the rule the whole design rests on.
 
-> **Naming, while the project is being renamed.** Environment variables are still `DB_OPS_*` and
-> the module paths still `db_ops.*`. They become `DBABRAIN_*` and `dbabrain.*` when the code moves
-> to the public repository; nothing else here changes with them.
-> <!-- TODO(rename): update the env prefix and module paths on this page once the rename lands. -->
 
 ---
 
@@ -38,7 +34,7 @@ So the answer has an order, and the package's own location is the **last** entry
 
 | | Question it answers | |
 | --- | --- | --- |
-| 1 | `DB_OPS_HOME` | What did the operator state? |
+| 1 | `DBABRAIN_HOME` | What did the operator state? |
 | 2 | The current working directory, **if** it holds `data/` or `config.json` | Where is the operator standing? |
 | 3 | The package location | The fallback that keeps a checkout and the container working. |
 
@@ -47,11 +43,11 @@ Two details that are deliberate:
 - **Step 2 needs a marker.** Any directory would be an invention: someone running the tool from
   their home directory has said nothing about configuration, so the search falls through instead
   of treating that directory as a tool root.
-- **A `DB_OPS_HOME` that does not exist is an error, not a fallback.** Falling through would
+- **A `DBABRAIN_HOME` that does not exist is an error, not a fallback.** Falling through would
   swallow a typo and then quietly read a *different* estate's configuration. That is the one
   failure here worth being loud about.
 
-`DB_OPS_DATA_DIR` moves the data folder on its own. Once the tool is installed the two move
+`DBABRAIN_DATA_DIR` moves the data folder on its own. Once the tool is installed the two move
 independently: the code goes wherever pip puts it, and the configuration stays where you keep
 configuration.
 
@@ -64,14 +60,14 @@ idiom anywhere but the one module allowed to ask where its own code lives.
 Most commands take `--config`. When they do not, each app resolves its own, in this order:
 
 1. `--config` on the command line;
-2. the app's environment variable — `DB_OPS_METRICS_CONFIG`, `DB_OPS_REPORTS_CONFIG`,
-   `DB_OPS_SLA_CONFIG`, `DB_OPS_TELEGRAM_CONFIG`, `DB_OPS_SQL_TASKS_CONFIG`,
-   `DB_OPS_BACKUP_RESTORE_CONFIG`, `DB_OPS_JOBS_CONFIG`, `DB_OPS_SRE_CONFIG`;
+2. the app's environment variable — `DBABRAIN_METRICS_CONFIG`, `DBABRAIN_REPORTS_CONFIG`,
+   `DBABRAIN_SLA_CONFIG`, `DBABRAIN_TELEGRAM_CONFIG`, `DBABRAIN_SQL_TASKS_CONFIG`,
+   `DBABRAIN_BACKUP_RESTORE_CONFIG`, `DBABRAIN_JOBS_CONFIG`, `DBABRAIN_SRE_CONFIG`;
 3. an app-specific file beside the shared config or in the working directory —
    `config.metrics.json`, `config.reports.json`, and so on;
 4. `config.json`.
 
-The resolved source is printed to stderr on startup (`[db_ops.config] app=metrics source=cli
+The resolved source is printed to stderr on startup (`[dbabrain.config] app=metrics source=cli
 config=config.json`), because the first question when a command reads the wrong settings is which
 file it read.
 
@@ -119,16 +115,16 @@ lexically. That is what makes one configurable display clock safe.
 starts. A value that is present and unparseable raises when the config is read, rather than
 producing an estate of reports on a clock nobody questions for a month.
 
-**`DB_OPS_TIMEZONE` overrides it**, the same way `DB_OPS_NODE_ROLE` overrides the node role: the
+**`DBABRAIN_TIMEZONE` overrides it**, the same way `DBABRAIN_NODE_ROLE` overrides the node role: the
 worker runs a copy of the master's `config.json`, so a per-node answer must not require editing it.
-`DB_OPS_MESSAGE_UTC_OFFSET_HOURS` — the offset-only env var this replaces — is still read when
+`DBABRAIN_MESSAGE_UTC_OFFSET_HOURS` — the offset-only env var this replaces — is still read when
 neither is set, and is deprecated.
 
 Ask any node what it resolved, and put the answer on the record:
 
 ```bash
-python -m db_ops.db.cli timezone --format txt                   # opens no store; answers anyway
-python -m db_ops.db.cli --config config.json timezone --record --list
+python -m dbabrain.db.cli timezone --format txt                   # opens no store; answers anyway
+python -m dbabrain.db.cli --config config.json timezone --record --list
 ```
 
 The second upserts this node's row in the store's `runtime_nodes` table and reads every node back.
@@ -210,7 +206,7 @@ is a property of a machine, not its identity.
 ## 5. The shared config objects
 
 **Seven of them**, and they are the blocks that appear inside *many* `data/*.json` records rather
-than belonging to one file. They are parsed once, in `db_ops/lib`, and passed around as values; a
+than belonging to one file. They are parsed once, in `dbabrain/lib`, and passed around as values; a
 per-app copy of any of them is a bug.
 
 | # | Object | Kind | Fields | Required | Parsed in | Appears in |
@@ -229,17 +225,17 @@ does, whether it is required, what values it takes, its default, and **what its 
 against**. Ask it rather than reading it:
 
 ```bash
-python -m db_ops.common.cli describe-object '{}'                     # every entry, with field counts
-python -m db_ops.common.cli describe-object '{"object": "time_window"}'
-python -m db_ops.common.cli describe-object '{"object": "time_window", "field": "retry_interval"}'
+python -m dbabrain.common.cli describe-object '{}'                     # every entry, with field counts
+python -m dbabrain.common.cli describe-object '{"object": "time_window"}'
+python -m dbabrain.common.cli describe-object '{"object": "time_window", "field": "retry_interval"}'
 ```
 
 Each field carries a `range_text` for a person **and** a `constraint` a program can evaluate, so the
 estate can be held to it:
 
 ```bash
-python -m db_ops.common.cli check-objects '{}'                  # this node's data/
-python -m db_ops.common.cli check-objects '{"format": "txt"}'   # one line per finding
+python -m dbabrain.common.cli check-objects '{}'                  # this node's data/
+python -m dbabrain.common.cli check-objects '{"format": "txt"}'   # one line per finding
 ```
 
 It reports three things, and exits 1 if it finds any: a **required** field missing, a **value**
@@ -273,7 +269,7 @@ and two declared paths pointing at `backups[]` where the schedule actually lives
 Ten **bounds**, one **day-of-week set** and three **intervals**, answering three different questions.
 
 - `weekdays` is *may it run today?* — an array of **ISO weekdays, 1 = Monday to 7 = Sunday**, the
-  same numbering `isoweekday()`, `date +%u` and `DB_OPS_WEEKDAY` use. Absent means any day. `[]`
+  same numbering `isoweekday()`, `date +%u` and `DBABRAIN_WEEKDAY` use. Absent means any day. `[]`
   means **no day is permitted, so the record never runs on a schedule** — which is not the same as
   `repeat_interval: -1` (still runnable on request) or `active: false` (not listed at all); what
   `weekdays: []` parks is the window, leaving the interval and the hour bounds as written. `0` is
@@ -313,7 +309,7 @@ Measuring from the finish instead makes the declared number unreadable: the same
 which, and each run's duration would push the next one further out.
 
 **It is one rule, in one place, for all four schedulers.**
-`db_ops.lib.time_window.due_from_row(time_window, row, now, local_now)` is the entry point every app
+`dbabrain.lib.time_window.due_from_row(time_window, row, now, local_now)` is the entry point every app
 calls; `run_anchor` is the only code that picks which column the anchor is read from, and
 `explain_due` produces the verdict **and** the sentence explaining it, so a log line cannot disagree
 with the decision it describes.
@@ -337,7 +333,7 @@ would cost more than the work being scheduled. Everything that is *not* that hot
 rule through the CLI instead:
 
 ```bash
-python -m db_ops.common.cli due-check @data/due_request.json
+python -m dbabrain.common.cli due-check @data/due_request.json
 # -> {"due": false, "reason": "interval not elapsed: 270s/300s",
 #     "last_run": "...", "next_due_at": "..."}
 ```
@@ -359,8 +355,8 @@ The rules are data — [`data/config_references.json`](../data/config_references
 is one command:
 
 ```bash
-python -m db_ops.common.cli check-references '{}'                    # this node's data/
-python -m db_ops.common.cli check-references '{"data_dir": "…"}'     # a bundle, or a worker's copy
+python -m dbabrain.common.cli check-references '{}'                    # this node's data/
+python -m dbabrain.common.cli check-references '{"data_dir": "…"}'     # a bundle, or a worker's copy
 ```
 
 Seven pointers are declared today, 207 of them present in this estate. Three things shape how it
@@ -418,7 +414,7 @@ does. `max_rows` (1–5000) caps what `plain` fetches; out of range is refused, 
 `sql_access` the database half (4 fields, all optional, absent means `direct`). Two rules in them
 cost real time when they are missed:
 
-- **`method: "local"` means *inside the db_ops container*.** With a remote `host` it does not fail —
+- **`method: "local"` means *inside the dbabrain container*.** With a remote `host` it does not fail —
   it reports the container's own CPU, memory and disk under that host's name. `remote_exec` refuses
   the combination now.
 - **`auth_type` defaults to `key`.** A host reached with a password needs it stated, or the login is
@@ -444,14 +440,14 @@ else is JSON. Start from [`.env.example`](../.env.example).
 
 | Variable | For |
 | --- | --- |
-| `DB_OPS_SECRET_KEY` | The passphrase for the encrypted secret store. Every command that connects anywhere needs it. |
-| `DB_OPS_HOME` | The tool root, when the tool is installed and the configuration is elsewhere. |
-| `DB_OPS_DATA_DIR` | The data folder alone. |
-| `DB_OPS_NODE_ROLE` | `master` or `worker`. Declared per node so a configuration file copied between machines can never mislabel one. Unset means `master`. |
-| `DB_OPS_STORE_CONFIG` | Overrides the store declaration path, for a side-install or a test. |
-| `DB_OPS_<APP>_CONFIG` | Per-app configuration path — see §2. |
+| `DBABRAIN_SECRET_KEY` | The passphrase for the encrypted secret store. Every command that connects anywhere needs it. |
+| `DBABRAIN_HOME` | The tool root, when the tool is installed and the configuration is elsewhere. |
+| `DBABRAIN_DATA_DIR` | The data folder alone. |
+| `DBABRAIN_NODE_ROLE` | `master` or `worker`. Declared per node so a configuration file copied between machines can never mislabel one. Unset means `master`. |
+| `DBABRAIN_STORE_CONFIG` | Overrides the store declaration path, for a side-install or a test. |
+| `DBABRAIN_<APP>_CONFIG` | Per-app configuration path — see §2. |
 | `TELEGRAM_BOT_TOKEN` | The bot token, if you supply it by environment instead of the secret store. The variable *name* comes from `bot_token_env`. |
-| `DB_OPS_LOG_SCOPE` | Overrides the log scope name, when one app runs under several names. |
+| `DBABRAIN_LOG_SCOPE` | Overrides the log scope name, when one app runs under several names. |
 
 **A credential reference doubles as an environment variable name.** At use time a `password_ref`
 is resolved from the environment first and from the encrypted store only if the environment does
@@ -471,8 +467,8 @@ fixed by putting your version at the same path under your tool root, and every o
 comes from the package. A path in configuration
 (`"assets/metrics/postgresql/001_postgresql_instance_status.sql"`) names *what it wants*, not where
 the installer put it: the shipped files live with the component that runs them
-(`db_ops/metrics/collectors/`, `db_ops/common/backup_scripts/`, and so on), and
-`BUILTIN_ASSET_ROOTS` in `db_ops/lib/paths.py` is the one place the two spellings meet.
+(`dbabrain/metrics/collectors/`, `dbabrain/common/backup_scripts/`, and so on), and
+`BUILTIN_ASSET_ROOTS` in `dbabrain/lib/paths.py` is the one place the two spellings meet.
 
 ---
 
@@ -501,17 +497,17 @@ Two commands do it instead.
 
 ```bash
 # on the machine that already works
-db-ops export-data '{"bundle": "prod-bundle.json", "format": "txt"}'
+dbabrain export-data '{"bundle": "prod-bundle.json", "format": "txt"}'
 
 # on the new machine, after `pip install dbabrain`
 mkdir estate && cd estate
-db-ops import-data '{"bundle": "prod-bundle.json", "root": ".", "plan_only": true, "format": "txt"}'   # writes nothing
-db-ops import-data '{"bundle": "prod-bundle.json", "root": ".", "format": "txt"}'
-export DB_OPS_SECRET_KEY='<the source machine's passphrase>'
-db-ops check-credentials                              # proves the store decrypts here
+dbabrain import-data '{"bundle": "prod-bundle.json", "root": ".", "plan_only": true, "format": "txt"}'   # writes nothing
+dbabrain import-data '{"bundle": "prod-bundle.json", "root": ".", "format": "txt"}'
+export DBABRAIN_SECRET_KEY='<the source machine's passphrase>'
+dbabrain check-credentials                              # proves the store decrypts here
 ```
 
-**Say `--root` on a first import, or run `db-ops init` first.** A new empty directory carries
+**Say `--root` on a first import, or run `dbabrain init` first.** A new empty directory carries
 nothing the tool recognises as configuration, so the tool root falls back to the last entry in the
 order — the package's own location, which for a pip install is `site-packages`. An import that
 lands there is now refused by name. It used to succeed: it wrote the estate into `site-packages`
@@ -543,8 +539,8 @@ has no `docker_db_connections.json`, and that is not an error.
 ### The passphrase does not travel
 
 The secret store crosses as ciphertext, so the new machine inherits the estate's credentials. The
-passphrase is **not in the bundle and there is no field for it to be in**: set `DB_OPS_SECRET_KEY`
-on the new machine (§6) and prove it with `db-ops check-credentials`. Use `--no-secrets` on either
+passphrase is **not in the bundle and there is no field for it to be in**: set `DBABRAIN_SECRET_KEY`
+on the new machine (§6) and prove it with `dbabrain check-credentials`. Use `--no-secrets` on either
 side if the new machine should keep its own.
 
 ### The bundle is a credential
@@ -563,7 +559,7 @@ all — correctly, and for a reason nobody has been given.
 `import-data` now says so when it sees that mismatch, and names the fix:
 
 ```bash
-export DB_OPS_NODE_ROLE=worker      # or set node_role to "all" in data/app_commands.json
+export DBABRAIN_NODE_ROLE=worker      # or set node_role to "all" in data/app_commands.json
 ```
 
 The daemon also reports it on its first tick (`app.daemon.nothing_scheduled`), but by then it is a

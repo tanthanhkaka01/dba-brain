@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_ops.common import self_status
+from dbabrain.common import self_status
 
 
 def test_a_container_reports_its_cgroup_limit_not_the_hosts_memory(tmp_path, monkeypatch):
@@ -139,7 +139,7 @@ def test_uptime_is_reported_in_hours_and_utc(monkeypatch):
     """
     from datetime import datetime, timezone
 
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
     monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: 15_412.5)
     now = datetime(2026, 9, 5, 12, 0, 0, tzinfo=timezone.utc)
@@ -154,7 +154,7 @@ def test_uptime_is_reported_in_hours_and_utc(monkeypatch):
 def test_the_rendered_line_says_it_is_the_host_and_not_the_daemon(monkeypatch):
     """On a node whose daemon was restarted an hour ago the two are nothing like each other, and
     a bare "uptime" would be read as the one the reader came for."""
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
     monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: 3600.0)
 
@@ -166,7 +166,7 @@ def test_the_rendered_line_says_it_is_the_host_and_not_the_daemon(monkeypatch):
 def test_two_decimal_places_even_when_the_number_is_round(monkeypatch):
     """`xxxx.xx h` is the shape asked for; `1.0 h` and `1 h` are the same number differently
     formatted, and a column of them does not line up."""
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
     monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: 7200.0)
 
@@ -175,7 +175,7 @@ def test_two_decimal_places_even_when_the_number_is_round(monkeypatch):
 
 def test_a_platform_that_cannot_answer_says_so_rather_than_guessing(monkeypatch):
     """The rule this whole module follows: unavailable is a fact, zero is a lie."""
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
     monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: None)
     monkeypatch.setattr(self_status, "_uptime_seconds_from_windows", lambda: None)
@@ -189,7 +189,7 @@ def test_a_platform_that_cannot_answer_says_so_rather_than_guessing(monkeypatch)
 def test_windows_is_read_only_when_proc_has_nothing_to_say(monkeypatch):
     """Both readers exist and the order matters: /proc/uptime is the one that works in a
     container, and GetTickCount64 does not exist to be tried there."""
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
     called = []
     monkeypatch.setattr(self_status, "_uptime_seconds_from_proc", lambda: 60.0)
@@ -204,7 +204,7 @@ def test_windows_is_read_only_when_proc_has_nothing_to_say(monkeypatch):
 
 def test_uptime_travels_in_collect_so_a_program_gets_it_too(tmp_path):
     """`format: txt` is the chat line; the envelope carries the same facts for anything else."""
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
     facts = self_status.collect(tool_root=tmp_path, version="0.8.2")
 
@@ -223,8 +223,8 @@ def test_self_status_answers_from_a_directory_with_no_config(tmp_path, monkeypat
     so the failing path was never taken. Only the public suite saw it. This runs from a directory
     that has none.
     """
-    import db_ops.lib.config as db_ops_config
-    from db_ops.common import cli as common_cli
+    import dbabrain.lib.config as dbabrain_config
+    from dbabrain.common import cli as common_cli
 
     # The config *load* has to fail, which is the condition being described. Pointing the command
     # at a missing path is not enough - `resolve_config_path` falls back to the tool root's
@@ -233,29 +233,29 @@ def test_self_status_answers_from_a_directory_with_no_config(tmp_path, monkeypat
     def refuse(*_a, **_kw):
         raise FileNotFoundError("no config on this machine")
 
-    monkeypatch.setattr(db_ops_config, "load_config", refuse)
+    monkeypatch.setattr(dbabrain_config, "load_config", refuse)
 
     code = common_cli.main(["self-status", '{"format": "txt"}'])
 
     out = capsys.readouterr().out
     assert code == 0, out
-    assert "DBA Brain / db_ops - current state" in out
-    assert "db_ops up :" in out, "the line must still be there, saying what it can"
+    assert "DBA Brain / dbabrain - current state" in out
+    assert "dbabrain up :" in out, "the line must still be there, saying what it can"
 
 
 def test_the_store_line_names_the_schema_so_two_nodes_in_one_database_differ(monkeypatch, capsys):
     """On PostgreSQL the database is routinely shared and the schema is what tells stores apart.
 
-    This estate keeps the production store and every soak node inside one `db_ops` database,
+    This estate keeps the production store and every soak node inside one `dbabrain` database,
     separated only by schema. The line stopped at the database name, so on 2026-09-15 an operator
     reading `postgresql postgres@...:5433/db_ops` over Telegram could not tell which of the three
     schemas in that database the node was writing to — and only one of them was live.
     """
-    import db_ops.lib.config as db_ops_config
-    from db_ops.common import cli as common_cli
+    import dbabrain.lib.config as dbabrain_config
+    from dbabrain.common import cli as common_cli
 
     class _Postgres:
-        username, host, port, database, schema = "postgres", "192.0.2.10", 5433, "db_ops", "node7"
+        username, host, port, database, schema = "postgres", "192.0.2.10", 5433, "dbabrain", "node7"
 
     class _Store:
         backend, postgresql, sqlite = "postgresql", _Postgres(), None
@@ -263,19 +263,19 @@ def test_the_store_line_names_the_schema_so_two_nodes_in_one_database_differ(mon
     class _Config:
         store, runtime_dir, data_dir = _Store(), None, None
 
-    monkeypatch.setattr(db_ops_config, "load_config", lambda *_a, **_kw: _Config())
+    monkeypatch.setattr(dbabrain_config, "load_config", lambda *_a, **_kw: _Config())
 
     assert common_cli.main(["self-status", '{"format": "txt"}']) == 0
 
     line = next(row for row in capsys.readouterr().out.splitlines() if row.startswith("store"))
-    assert "/db_ops" in line and "schema=node7" in line
+    assert "/dbabrain" in line and "schema=node7" in line
     assert "password" not in line.lower()
 
 
 def test_a_sqlite_store_line_gains_no_empty_schema(monkeypatch, capsys):
     """SQLite has no schema, and `schema=` with nothing after it reads as a missing value."""
-    import db_ops.lib.config as db_ops_config
-    from db_ops.common import cli as common_cli
+    import dbabrain.lib.config as dbabrain_config
+    from dbabrain.common import cli as common_cli
 
     class _Sqlite:
         path = "runtime/dbabrain.sqlite"
@@ -286,7 +286,7 @@ def test_a_sqlite_store_line_gains_no_empty_schema(monkeypatch, capsys):
     class _Config:
         store, runtime_dir, data_dir = _Store(), None, None
 
-    monkeypatch.setattr(db_ops_config, "load_config", lambda *_a, **_kw: _Config())
+    monkeypatch.setattr(dbabrain_config, "load_config", lambda *_a, **_kw: _Config())
 
     assert common_cli.main(["self-status", '{"format": "txt"}']) == 0
 
@@ -295,7 +295,7 @@ def test_a_sqlite_store_line_gains_no_empty_schema(monkeypatch, capsys):
 
 
 def test_the_node_role_reported_is_the_running_daemon_s(tmp_path):
-    """`DB_OPS_NODE_ROLE` is an environment variable, and self-status runs in its own environment
+    """`DBABRAIN_NODE_ROLE` is an environment variable, and self-status runs in its own environment
     — a shell where nobody exported it, or a worker the daemon spawned. Reading its own env made
     the node whose daemon came up as `worker` answer `master (default)`, on the single line anyone
     reads to find out. The daemon records the role it started with; when one is running, that is
@@ -303,11 +303,11 @@ def test_the_node_role_reported_is_the_running_daemon_s(tmp_path):
     """
     import os
 
-    from db_ops.common import self_status
-    from db_ops.lib import daemon_state
+    from dbabrain.common import self_status
+    from dbabrain.lib import daemon_state
 
     daemon_state.record_start(tmp_path, version="0.17.0", node_role="worker")
-    os.environ.pop("DB_OPS_NODE_ROLE", None)
+    os.environ.pop("DBABRAIN_NODE_ROLE", None)
 
     facts = self_status.collect(tool_root=tmp_path, version="0.17.0", runtime_dir=tmp_path)
 
@@ -315,9 +315,9 @@ def test_the_node_role_reported_is_the_running_daemon_s(tmp_path):
 
 
 def test_with_no_daemon_running_this_process_s_environment_is_all_there_is(tmp_path, monkeypatch):
-    from db_ops.common import self_status
+    from dbabrain.common import self_status
 
-    monkeypatch.setenv("DB_OPS_NODE_ROLE", "master")
+    monkeypatch.setenv("DBABRAIN_NODE_ROLE", "master")
 
     facts = self_status.collect(tool_root=tmp_path, version="0.17.0", runtime_dir=tmp_path)
 
@@ -326,8 +326,8 @@ def test_with_no_daemon_running_this_process_s_environment_is_all_there_is(tmp_p
 
 def test_an_explicit_role_still_wins(tmp_path):
     """The caller passing one is a deliberate statement and outranks both."""
-    from db_ops.common import self_status
-    from db_ops.lib import daemon_state
+    from dbabrain.common import self_status
+    from dbabrain.lib import daemon_state
 
     daemon_state.record_start(tmp_path, version="0.17.0", node_role="worker")
 

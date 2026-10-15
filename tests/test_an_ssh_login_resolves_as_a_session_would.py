@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common.remote_exec import RemoteAccess, RemoteExecError
-from db_ops.lib.data_sources import ssh_login
-from db_ops.lib.secret_value import SecretValueError
-from db_ops.lib.ssh_errors import SshError
+from dbabrain.common.remote_exec import RemoteAccess, RemoteExecError
+from dbabrain.lib.data_sources import ssh_login
+from dbabrain.lib.secret_value import SecretValueError
+from dbabrain.lib.ssh_errors import SshError
 
 
 @pytest.fixture()
@@ -28,10 +28,10 @@ def data_dir(tmp_path, monkeypatch):
     (keys / "lab.key").write_text("not a real key", encoding="utf-8")
     (tmp_path / "absolute.key").write_text("not a real key either", encoding="utf-8")
     # The store answers a ref, never the environment (owner decision G3.5).
-    from db_ops.lib import secret_text
+    from dbabrain.lib import secret_text
 
     monkeypatch.setenv("LAB_OS_PASSWORD", "in the environment, never read")
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "a key for this test only")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "a key for this test only")
     secret_text.set_secret_text(tmp_path, "LAB_OS_PASSWORD", "from-the-store")
     return tmp_path
 

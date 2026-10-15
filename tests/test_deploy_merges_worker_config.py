@@ -15,7 +15,7 @@ import stat as stat_mod
 
 import pytest
 
-from db_ops.control import worker_data
+from dbabrain.control import worker_data
 
 
 class _FakeStat:

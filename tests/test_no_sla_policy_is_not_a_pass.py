@@ -22,14 +22,14 @@ import json
 
 import pytest
 
-from db_ops.sla import policies as sla_policies
-from db_ops.sla.cli import exit_code_for
-from db_ops.sla.compliance import validate_sla_policies
-from db_ops.sla.publish import STATUS_DISPLAY
+from dbabrain.sla import policies as sla_policies
+from dbabrain.sla.cli import exit_code_for
+from dbabrain.sla.compliance import validate_sla_policies
+from dbabrain.sla.publish import STATUS_DISPLAY
 
 
 def test_no_policies_is_not_a_pass(tmp_path):
-    summary = validate_sla_policies(sqlite_path=tmp_path / "db_ops.sqlite", policies=[])
+    summary = validate_sla_policies(sqlite_path=tmp_path / "dbabrain.sqlite", policies=[])
 
     assert summary.status == "NOT_CONFIGURED"
     assert summary.passed_count == 0
@@ -39,7 +39,7 @@ def test_no_policies_is_not_a_pass(tmp_path):
 def test_the_answer_names_the_file_and_the_word_unjudged(tmp_path):
     """The operator has to know which file to go and write. "NOT_CONFIGURED" alone sends them
     looking through the whole of data/."""
-    summary = validate_sla_policies(sqlite_path=tmp_path / "db_ops.sqlite", policies=[])
+    summary = validate_sla_policies(sqlite_path=tmp_path / "dbabrain.sqlite", policies=[])
 
     assert "data/sla_policies.json" in summary.reason
     assert "unjudged" in summary.reason
@@ -83,7 +83,7 @@ def test_a_file_whose_policies_are_all_inactive_reads_the_same_way(tmp_path, mon
 
     assert sla_policies.load_sla_policies() == []
     assert validate_sla_policies(
-        sqlite_path=tmp_path / "db_ops.sqlite", policies=[]).status == "NOT_CONFIGURED"
+        sqlite_path=tmp_path / "dbabrain.sqlite", policies=[]).status == "NOT_CONFIGURED"
 
 
 # ---------------------------------------------------------------------------
@@ -94,9 +94,9 @@ def test_a_store_that_has_never_queued_anything_answers_never(tmp_path):
     nothing has queued a message the table does not exist yet, and the raw
     `no such table: telegram_send_messages` reached the operator as a failed app command — on a
     correct install, for a queue that is simply empty."""
-    from db_ops.db import DbOpsStore
-    from db_ops.db.telegram_queue import last_queued_at
+    from dbabrain.db import DbaBrainStore
+    from dbabrain.db.telegram_queue import last_queued_at
 
-    store = DbOpsStore(tmp_path / "fresh.sqlite")      # deliberately not initialised
+    store = DbaBrainStore(tmp_path / "fresh.sqlite")      # deliberately not initialised
 
     assert last_queued_at(store=store, source_type="sla", note="sla_validate") == ""

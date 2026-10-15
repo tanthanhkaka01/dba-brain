@@ -6,7 +6,7 @@ app command - could send `"confirmations": 0` and skip the ladder.
 
 from __future__ import annotations
 
-from db_ops.common import confirm
+from dbabrain.common import confirm
 
 
 def test_zero_confirmations_in_the_request_do_not_lower_the_shipped_cost():

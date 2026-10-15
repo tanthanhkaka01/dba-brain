@@ -8,16 +8,16 @@ import pytest
 
 from conftest import patch_restore
 
-from db_ops.lib.shell import is_powershell_executable
-from db_ops.backup_restore.config import (
+from dbabrain.lib.shell import is_powershell_executable
+from dbabrain.backup_restore.config import (
     BackupRestoreConfig,
     DatabaseRestoreMapping,
     load_restore_configs,
     parse_restore_config,
     validate_restore_target_is_not_source,
 )
-from db_ops.backup_restore.cli import _build_end_event, _build_restore_mapping, _summarize_command_output, parse_args, run_restore_workflow
-from db_ops.backup_restore.copy_backup import (
+from dbabrain.backup_restore.cli import _build_end_event, _build_restore_mapping, _summarize_command_output, parse_args, run_restore_workflow
+from dbabrain.backup_restore.copy_backup import (
     CopyBackupFileResult,
     CopyBackupResult,
     build_robocopy_command,
@@ -31,14 +31,14 @@ from db_ops.backup_restore.copy_backup import (
     _selected_remote_backups,
     _smbclient_download_selected_to_staging,
 )
-from db_ops.backup_restore.delete_backup import (
+from dbabrain.backup_restore.delete_backup import (
     DeleteBackupResult,
     delete_old_target_backup_files_via_ssh,
     list_old_target_backup_files,
     run_delete_backup,
 )
-from db_ops.backup_restore.events import emit_backup_restore_event, _format_restore_workflow_telegram_message, _format_telegram_message
-from db_ops.backup_restore.certificate import (
+from dbabrain.backup_restore.events import emit_backup_restore_event, _format_restore_workflow_telegram_message, _format_telegram_message
+from dbabrain.backup_restore.certificate import (
     BackupCertificate,
     build_add_certificate_command,
     build_add_certificate_script,
@@ -47,8 +47,8 @@ from db_ops.backup_restore.certificate import (
     parse_backup_certificate,
     _run_add_certificate_command,
 )
-from db_ops.common.restorestep import sqlserver as mssql_restore
-from db_ops.backup_restore.restore_database import (
+from dbabrain.common.restorestep import sqlserver as mssql_restore
+from dbabrain.backup_restore.restore_database import (
     RestoreCandidate,
     _restore_step,
     build_restore_candidate,
@@ -75,9 +75,9 @@ from db_ops.backup_restore.restore_database import (
     summarize_restore_stdout,
     vm_unc_to_local_path,
 )
-from db_ops.backup_restore.sanitize import sanitize_text, sanitize_value
-from db_ops.lib.config import DbOpsConfig, TelegramConfig
-from db_ops.db import DbOpsStore
+from dbabrain.backup_restore.sanitize import sanitize_text, sanitize_value
+from dbabrain.lib.config import DbaBrainConfig, TelegramConfig
+from dbabrain.db import DbaBrainStore
 
 
 #: The PowerShell copy engine is chosen by `should_use_powershell_unc_copy`, which begins
@@ -137,7 +137,7 @@ class _FakeShare:
         self.listing, self.sizes, self.requests = listing, dict(sizes or {}), []
 
     def __call__(self, command, request, **_kwargs):
-        from db_ops.common import smb
+        from dbabrain.common import smb
 
         self.requests.append((command, dict(request)))
         if command == "smb-list":
@@ -158,7 +158,7 @@ class _FakeShare:
 
 
 def _share(monkeypatch, fake):
-    from db_ops.backup_restore import share
+    from dbabrain.backup_restore import share
 
     monkeypatch.setattr(share.common_cli, "run", fake)
     return fake
@@ -166,8 +166,8 @@ def _share(monkeypatch, fake):
 
 def _remote(listing: str, *, remote_dir: str):
     """What the app builds from an ``smb-list`` answer - the real parser, the app's own record."""
-    from db_ops.common import smb
-    from db_ops.backup_restore.copy_backup import _backup_time_from_name
+    from dbabrain.common import smb
+    from dbabrain.backup_restore.copy_backup import _backup_time_from_name
 
     return [_RemoteBackup(relative_path=item["path"], size_bytes=item["size_bytes"],
                           backup_timestamp=_backup_time_from_name(item["name"]))
@@ -208,7 +208,7 @@ def test_selected_remote_backups_filters_by_window_and_pattern():
 
 
 def test_smbclient_selected_staging_lists_first_and_downloads_only_selected(tmp_path, monkeypatch):
-    import db_ops.backup_restore.copy_backup as copy_module
+    import dbabrain.backup_restore.copy_backup as copy_module
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -242,7 +242,7 @@ def test_smbclient_selected_staging_lists_first_and_downloads_only_selected(tmp_
 
 
 def test_smbclient_selected_staging_skips_files_already_in_destination(tmp_path, monkeypatch):
-    import db_ops.backup_restore.copy_backup as copy_module
+    import dbabrain.backup_restore.copy_backup as copy_module
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -278,7 +278,7 @@ def test_smbclient_selected_staging_skips_files_already_in_destination(tmp_path,
 
 
 def test_smbclient_selected_staging_fails_fast_when_no_files_selected(tmp_path, monkeypatch):
-    import db_ops.backup_restore.copy_backup as copy_module
+    import dbabrain.backup_restore.copy_backup as copy_module
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -536,7 +536,7 @@ def test_build_sqlcmd_query_command_uses_sql_auth_when_configured(tmp_path, monk
 
 
 def test_sqlcmd_guard_rejects_windows_command_for_linux_restore_id(tmp_path):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -575,8 +575,8 @@ def test_linux_restore_command_uses_long_login_and_unlimited_query_timeout(tmp_p
 def test_long_running_linux_restore_has_no_default_command_deadline(tmp_path, monkeypatch):
     """The request `common.cli run-sqlcmd` is handed (1.38) - the command it builds from it is
     held in tests/test_the_sql_server_restore_runs_through_common.py."""
-    import db_ops.backup_restore.restore_database as restore_module
-    from db_ops.transport import common_cli
+    import dbabrain.backup_restore.restore_database as restore_module
+    from dbabrain.transport import common_cli
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -603,7 +603,7 @@ def test_long_running_linux_restore_has_no_default_command_deadline(tmp_path, mo
 
 
 def test_transient_login_timeout_retries_before_restore_command(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -636,7 +636,7 @@ def test_transient_login_timeout_retries_before_restore_command(tmp_path, monkey
 
 
 def test_two_restore_ids_dispatch_sql_to_their_own_remote_executor(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     windows = dataclasses.replace(
         make_config(tmp_path),
@@ -902,10 +902,10 @@ def test_run_restore_database_stops_before_recovery_when_full_fails(tmp_path, mo
     backup = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
     backup.parent.mkdir(parents=True)
     backup.write_text("backup", encoding="utf-8")
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     calls = []
 
@@ -918,7 +918,7 @@ def test_run_restore_database_stops_before_recovery_when_full_fails(tmp_path, mo
     with pytest.raises(RuntimeError, match="Msg 3013"):
         run_restore_database(
             config=config,
-            db_ops_config=app_config,
+            dbabrain_config=app_config,
             backup_file=backup,
             ensure_certificate=False,
             ensure_credential=False,
@@ -946,7 +946,7 @@ def test_run_sqlcmd_query_command_treats_restore_error_text_as_failure(monkeypat
 
 
 def test_run_restore_database_logs_execution_timeline_and_sanitizes_secrets(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     config = BackupRestoreConfig(
@@ -971,10 +971,10 @@ def test_run_restore_database_logs_execution_timeline_and_sanitizes_secrets(tmp_
     backup = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
     backup.parent.mkdir(parents=True)
     backup.write_text("backup", encoding="utf-8")
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     messages = []
     commands = []
@@ -988,7 +988,7 @@ def test_run_restore_database_logs_execution_timeline_and_sanitizes_secrets(tmp_
 
     result = run_restore_database(
         config=config,
-        db_ops_config=app_config,
+        dbabrain_config=app_config,
         backup_file=backup,
         ensure_certificate=False,
         ensure_credential=False,
@@ -1038,7 +1038,7 @@ def test_run_sqlcmd_query_command_streams_restore_progress(monkeypatch):
 
 
 def test_restore_log_backups_are_logged_one_file_at_a_time(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     backup = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1067,7 +1067,7 @@ def test_restore_log_backups_are_logged_one_file_at_a_time(tmp_path, monkeypatch
 
 
 def test_pitr_restore_log_stopat_recovery_only_on_final_log(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1095,7 +1095,7 @@ def test_pitr_restore_log_stopat_recovery_only_on_final_log(tmp_path, monkeypatc
 
 
 def test_restore_log_failure_is_not_hidden(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1119,7 +1119,7 @@ def test_restore_log_failure_is_not_hidden(tmp_path, monkeypatch):
 
 
 def test_restore_log_msg_4305_skips_and_tries_next_log(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1153,7 +1153,7 @@ def test_restore_log_msg_4305_skips_and_tries_next_log(tmp_path, monkeypatch):
 
 
 def test_restore_log_all_msg_4305_fails_with_lsn_gap(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1176,7 +1176,7 @@ def test_restore_log_all_msg_4305_fails_with_lsn_gap(tmp_path, monkeypatch):
 
 
 def test_msg_4305_skip_applies_only_to_restore_log_not_full_or_diff(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1201,7 +1201,7 @@ def test_msg_4305_skip_applies_only_to_restore_log_not_full_or_diff(tmp_path, mo
 
 
 def test_restore_log_non_4305_error_fails_immediately(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1224,7 +1224,7 @@ def test_restore_log_non_4305_error_fails_immediately(tmp_path, monkeypatch):
 
 
 def test_restore_log_timeout_checks_history_and_does_not_duplicate_applied_log(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1256,7 +1256,7 @@ def test_restore_log_timeout_checks_history_and_does_not_duplicate_applied_log(t
 
 
 def test_restore_log_timeout_unsafe_resume_fails_explicitly(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1285,14 +1285,14 @@ def test_restore_log_timeout_unsafe_resume_fails_explicitly(tmp_path, monkeypatc
 
 
 def test_resume_check_requires_exact_log_identity(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
     current_log = config.vm_import_local / "APPDB_Prod" / "LOG" / "log_002.trn"
     candidate = build_restore_candidate(full, config)
     output = (
-        "DBOPS_RESUME|0|42|100000|200000|2|"
+        "DBABRAIN_RESUME|0|42|100000|200000|2|"
         + str(current_log)
     )
     patch_restore(
@@ -1313,7 +1313,7 @@ def test_resume_check_requires_exact_log_identity(tmp_path, monkeypatch):
 
 
 def test_resume_check_rejects_restoring_state_without_exact_log_identity(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = make_config(tmp_path)
     full = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
@@ -1321,7 +1321,7 @@ def test_resume_check_rejects_restoring_state_without_exact_log_identity(tmp_pat
     previous_log = config.vm_import_local / "APPDB_Prod" / "LOG" / "log_001.trn"
     candidate = build_restore_candidate(full, config)
     output = (
-        "DBOPS_RESUME|1|41|1|99999|2|"
+        "DBABRAIN_RESUME|1|41|1|99999|2|"
         + str(previous_log)
     )
     patch_restore(
@@ -1402,7 +1402,7 @@ def test_restore_sanitizer_redacts_json_result_values():
 def test_runtime_stdout_bridge_sanitizes_before_writing(tmp_path):
     from io import StringIO
 
-    from db_ops.logging_ops.runtime_stdout import TeeStdout
+    from dbabrain.logging_ops.runtime_stdout import TeeStdout
 
     stream = StringIO()
     log_path = tmp_path / "restore_workflow_runtime.log"
@@ -1430,10 +1430,10 @@ def test_the_smb_certificate_import_is_the_one_batch_that_works_by_thumbprint():
         private_key_password="pass'word",
     )
 
-    sql = build_add_certificate_sql(certificate, cer_path="/stage/__db_ops_cert/a.cer",
-                                    pvk_path="/stage/__db_ops_cert/a.pvk")
+    sql = build_add_certificate_sql(certificate, cer_path="/stage/__dbabrain_cert/a.cer",
+                                    pvk_path="/stage/__dbabrain_cert/a.pvk")
 
-    assert "HASHBYTES('SHA1', f.BulkColumn) FROM OPENROWSET(BULK N'/stage/__db_ops_cert/a.cer'" in sql
+    assert "HASHBYTES('SHA1', f.BulkColumn) FROM OPENROWSET(BULK N'/stage/__dbabrain_cert/a.cer'" in sql
     assert "WHERE thumbprint = @thumbprint" in sql
     assert "DECLARE @name sysname = N'APPDB_PROD_2_250_2026'" in sql
     assert "DROP CERTIFICATE" not in sql
@@ -1472,7 +1472,7 @@ def test_the_windows_certificate_script_writes_the_files_then_creates_the_certif
     assert "$CerBase64 = 'Y2VydA=='" in script
     assert "param(" not in script and "Invoke-Command" not in script
     # The paths are decided here and are already inside the batch the script runs.
-    assert r"$CerPath = 'E:\SQLBK_IMPORT\__db_ops_cert\APPDB_PROD_2_250_2026.cer'" in script
+    assert r"$CerPath = 'E:\SQLBK_IMPORT\__dbabrain_cert\APPDB_PROD_2_250_2026.cer'" in script
     assert "WriteAllBytes($CerPath, [Convert]::FromBase64String($CerBase64))" in script
     assert "& $SqlcmdPath -S $SqlInstance -C @SqlAuthArgs -b -Q $Sql" in script
     # The batch sits in a PowerShell single-quoted string, so its own quotes are doubled there.
@@ -1531,10 +1531,10 @@ def test_ensure_source_certificate_with_events_skips_alert_when_api_not_configur
         vm_password_env="",
         restore_sql_instance_on_vm="localhost",
     )
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
         telegram=TelegramConfig(
             enabled=True,
             bot_token="token",
@@ -1542,7 +1542,7 @@ def test_ensure_source_certificate_with_events_skips_alert_when_api_not_configur
         ),
     )
     result = ensure_source_certificate_with_events(config=config, app_config=app_config, dry_run=False)
-    store = DbOpsStore(app_config.sqlite_path)
+    store = DbaBrainStore(app_config.sqlite_path)
     rows = store.fetch_recent_job_runs(limit=5)
     send_messages = store.fetch_pending_telegram_send_messages(limit=10)
 
@@ -1559,7 +1559,7 @@ def test_ensure_source_certificate_with_events_pushes_critical_on_error(tmp_path
     # Routing is the Telegram app's answer, fetched through its CLI, so stub this app's client
     # rather than app_config's TelegramConfig groups.
     monkeypatch.setattr(
-        "db_ops.lib.telegram_route.telegram_route",
+        "dbabrain.lib.telegram_route.telegram_route",
         lambda level, **_: {"enabled": True, "alert": bool(_ROUTES.get(level)),
                             "chat_id": _ROUTES.get(level, "")},
     )
@@ -1581,10 +1581,10 @@ def test_ensure_source_certificate_with_events_pushes_critical_on_error(tmp_path
         target_id="TGT1",
         certificate_api_url="https://vault/v1/secret/data/sqlserver/cert.json",
     )
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
         telegram=TelegramConfig(
             enabled=True,
             bot_token="token",
@@ -1595,11 +1595,11 @@ def test_ensure_source_certificate_with_events_pushes_critical_on_error(tmp_path
     def fail_certificate(**kwargs):
         raise RuntimeError("cert failed")
 
-    monkeypatch.setattr("db_ops.backup_restore.certificate.ensure_source_certificate", fail_certificate)
+    monkeypatch.setattr("dbabrain.backup_restore.certificate.ensure_source_certificate", fail_certificate)
     with pytest.raises(RuntimeError, match="cert failed"):
         ensure_source_certificate_with_events(config=config, app_config=app_config, dry_run=False)
 
-    store = DbOpsStore(app_config.sqlite_path)
+    store = DbaBrainStore(app_config.sqlite_path)
     rows = store.fetch_recent_job_runs(limit=2)
     send_messages = store.fetch_pending_telegram_send_messages(limit=10)
 
@@ -1612,10 +1612,10 @@ def test_ensure_source_certificate_with_events_pushes_critical_on_error(tmp_path
 
 
 def test_run_add_certificate_command_reports_stdout_stderr(monkeypatch):
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure", lambda command, request, **_kw: (
-        True, {"exit_code": 1, "stdout": "CERT_IMPORT: creating cert dir: C:\\SQLBK\\__db_ops_cert",
+        True, {"exit_code": 1, "stdout": "CERT_IMPORT: creating cert dir: C:\\SQLBK\\__dbabrain_cert",
                "stderr": "CREATE CERTIFICATE failed"}, ""))
 
     with pytest.raises(RuntimeError) as exc:
@@ -1627,7 +1627,7 @@ def test_run_add_certificate_command_reports_stdout_stderr(monkeypatch):
 
 
 def test_run_add_certificate_command_reports_timeout(monkeypatch):
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
 
     sent = []
     monkeypatch.setattr(common_cli, "run_allowing_failure", lambda command, request, **_kw: sent.append(
@@ -1668,10 +1668,10 @@ def test_restore_workflow_cli_accepts_defaults():
 
 def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeypatch):
     config = make_config(tmp_path)
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     calls = []
 
@@ -1702,10 +1702,10 @@ def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeyp
             file_results=(),
         )
 
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest", fake_restore)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_delete_backup", fake_delete)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_delete_backup", fake_delete)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
     result = run_restore_workflow(restore_configs=[config], app_config=app_config)
 
@@ -1719,8 +1719,8 @@ def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeyp
 def _copy_hours_seen(tmp_path, monkeypatch, *, entry_hours, **workflow_kwargs):
     """What the copy step is handed, for an entry whose copy_recent_hours is ``entry_hours``."""
     config = dataclasses.replace(make_config(tmp_path), copy_recent_hours=entry_hours)
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
-                             sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
+                             sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     seen = {}
 
     def fake_copy(step_config, logger=None, force=False):
@@ -1729,15 +1729,15 @@ def _copy_hours_seen(tmp_path, monkeypatch, *, entry_hours, **workflow_kwargs):
         return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path,
                                 files_considered=1, copied=1, skipped=0, file_results=())
 
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest",
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest",
                         lambda **kwargs: {"status": "SUCCESS", "overall_status": "SUCCESS",
                                           "databases_considered": 0, "per_database_restore_status": {}})
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_delete_backup",
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_delete_backup",
                         lambda step_config, logger=None, dry_run=False: DeleteBackupResult(
                             returncode=0, target_backup_dir=tmp_path, cleanup_retention=0,
                             files_considered=0, deleted=0, file_results=()))
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
     run_restore_workflow(restore_configs=[config], app_config=app_config, **workflow_kwargs)
     return seen
 
@@ -2120,14 +2120,14 @@ def test_run_copy_backup_uses_powershell_for_unc_sources(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "db_ops.backup_restore.copy_backup.list_recent_backup_files_on_share",
+        "dbabrain.backup_restore.copy_backup.list_recent_backup_files_on_share",
         lambda restore_config: calls.append(restore_config.source_id) or [fake_source],
     )
     monkeypatch.setattr(
-        "db_ops.backup_restore.copy_backup.copy_backup_file_with_logging",
+        "dbabrain.backup_restore.copy_backup.copy_backup_file_with_logging",
         lambda *args, **kwargs: fake_result,
     )
-    monkeypatch.setattr("db_ops.backup_restore.copy_backup._write_copy_log", lambda *args: None)
+    monkeypatch.setattr("dbabrain.backup_restore.copy_backup._write_copy_log", lambda *args: None)
 
     result = run_copy_backup(config)
 
@@ -2193,7 +2193,7 @@ def test_copy_backup_file_with_logging_emits_failed(tmp_path, monkeypatch, capsy
     def fail_copy(*_args, **_kwargs):
         raise RuntimeError("copy exploded")
 
-    monkeypatch.setattr("db_ops.backup_restore.copy_backup.copy_backup_file", fail_copy)
+    monkeypatch.setattr("dbabrain.backup_restore.copy_backup.copy_backup_file", fail_copy)
 
     result = copy_backup_file_with_logging(
         source_file,
@@ -2232,9 +2232,9 @@ def test_run_copy_backup_logs_scan_and_final_summary(monkeypatch, capsys):
         CopyBackupFileResult(selected[1], Path(r"\\vm\SQLBK_IMPORT\SRC\db\FULL\b.bak"), "SKIPPED_EXISTS", 20),
     ]
 
-    monkeypatch.setattr("db_ops.backup_restore.copy_backup.list_recent_backup_files_on_share", lambda *_args, **_kwargs: selected)
-    monkeypatch.setattr("db_ops.backup_restore.copy_backup.copy_backup_file_with_logging", lambda source_file, **_kwargs: results[selected.index(source_file)])
-    monkeypatch.setattr("db_ops.backup_restore.copy_backup._write_copy_log", lambda *args: None)
+    monkeypatch.setattr("dbabrain.backup_restore.copy_backup.list_recent_backup_files_on_share", lambda *_args, **_kwargs: selected)
+    monkeypatch.setattr("dbabrain.backup_restore.copy_backup.copy_backup_file_with_logging", lambda source_file, **_kwargs: results[selected.index(source_file)])
+    monkeypatch.setattr("dbabrain.backup_restore.copy_backup._write_copy_log", lambda *args: None)
 
     result = run_copy_backup(config)
 
@@ -2248,12 +2248,12 @@ def test_run_copy_backup_logs_scan_and_final_summary(monkeypatch, capsys):
 
 
 def test_backup_restore_cli_restore_workflow_uses_restore_workflow_logs(tmp_path, monkeypatch, capsys):
-    import db_ops.backup_restore.cli as cli_module
+    import dbabrain.backup_restore.cli as cli_module
 
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     calls = {"patch_stdout": [], "setup_app_logger": []}
 
@@ -2301,12 +2301,12 @@ def test_backup_restore_cli_restore_workflow_uses_restore_workflow_logs(tmp_path
 
 
 def test_restore_workflow_without_restore_id_runs_only_active_configs(tmp_path, monkeypatch):
-    import db_ops.backup_restore.cli as cli_module
+    import dbabrain.backup_restore.cli as cli_module
 
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     active = dataclasses.replace(make_config(tmp_path), restore_id="RESTORE_ACTIVE", active=True)
     inactive = dataclasses.replace(make_config(tmp_path), restore_id="RESTORE_INACTIVE", active=False)
@@ -2343,12 +2343,12 @@ def test_restore_workflow_without_restore_id_runs_only_active_configs(tmp_path, 
 
 
 def test_restore_workflow_with_restore_id_runs_requested_config_even_if_inactive(tmp_path, monkeypatch):
-    import db_ops.backup_restore.cli as cli_module
+    import dbabrain.backup_restore.cli as cli_module
 
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     active = dataclasses.replace(make_config(tmp_path), restore_id="RESTORE_ACTIVE", active=True)
     inactive = dataclasses.replace(make_config(tmp_path), restore_id="RESTORE_INACTIVE", active=False)
@@ -2418,7 +2418,7 @@ def test_list_old_target_backup_files_prefers_backup_timestamp_in_filename(tmp_p
 
 
 def test_linux_delete_backup_quotes_paths_with_dollar(tmp_path, monkeypatch):
-    import db_ops.backup_restore.delete_backup as delete_module
+    import dbabrain.backup_restore.delete_backup as delete_module
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -2436,7 +2436,7 @@ def test_linux_delete_backup_quotes_paths_with_dollar(tmp_path, monkeypatch):
     newer = "/opt/mssql2025/backup/SQLBK_IMPORT/ACME-192-0-2-250/APPDB-DB$APPDB/SALESDB_Prod/FULL/APPDB-DB$APPDB_SALESDB_Prod_FULL_20260626_010000.bak"
     commands = []
 
-    from db_ops.lib.remote_host import RemoteRun
+    from dbabrain.lib.remote_host import RemoteRun
 
     class FakeSsh:
         """The Linux target, as `open_ssh_connection` hands it out: a `RemoteHost`'s `run`."""
@@ -2483,7 +2483,7 @@ def test_run_delete_backup_deletes_only_old_files_from_target(tmp_path):
         os.utime(path, (now - 90_000, now - 90_000))
     os.utime(recent_target, (now - 60, now - 60))
 
-    import db_ops.backup_restore.delete_backup as delete_backup
+    import dbabrain.backup_restore.delete_backup as delete_backup
 
     original_time = delete_backup.time.time
     delete_backup.time.time = lambda: now
@@ -2525,7 +2525,7 @@ def test_run_delete_backup_deletes_nothing_on_a_dry_run(tmp_path):
     os.utime(old_target, (now - 90_000, now - 90_000))
     os.utime(recent_target, (now - 60, now - 60))
 
-    import db_ops.backup_restore.delete_backup as delete_backup
+    import dbabrain.backup_restore.delete_backup as delete_backup
 
     original_time = delete_backup.time.time
     delete_backup.time.time = lambda: now
@@ -2555,7 +2555,7 @@ def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
     the restore. The space check in the preflight says what it would write, and the preflight is
     told it is a dry run so it prepares nothing.
     """
-    from db_ops.backup_restore import cli as cli_module
+    from dbabrain.backup_restore import cli as cli_module
 
     seen: dict[str, object] = {}
 
@@ -2567,7 +2567,7 @@ def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
     def fake_preflight(config, logger=None, recopy=False, dry_run=False):
         seen["preflight"] = dry_run
 
-    def fake_restore(config, db_ops_config, dry_run, logger, point_in_time_utc):
+    def fake_restore(config, dbabrain_config, dry_run, logger, point_in_time_utc):
         seen["restore"] = dry_run
         return {"status": "SUCCESS", "overall_status": "SUCCESS", "databases_considered": 0,
                 "per_database_restore_status": {}}
@@ -2584,8 +2584,8 @@ def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_module, "run_target_preflight", fake_preflight)
 
     cfg, _ = _make_two_target_configs(tmp_path)
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
-                             sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
+                             sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
 
     summary = cli_module.run_restore_workflow(
         restore_configs=[cfg], app_config=app_config, dry_run=True, logger=None,
@@ -2600,8 +2600,8 @@ def test_a_dry_run_reports_the_refusal_the_real_run_would_meet_and_prepares_noth
     """The question a dry run answers before a first night is the space check's line (0.26.0's
     release note, *Upgrading* 6). A refusal is that answer, said - not an error that hides the rest
     of the rehearsal; and nothing is created on a Windows target to find it out."""
-    from db_ops.backup_restore import preflight
-    from db_ops.backup_restore.space import RestoreSpaceRefused
+    from dbabrain.backup_restore import preflight
+    from dbabrain.backup_restore.space import RestoreSpaceRefused
 
     said = []
     monkeypatch.setattr(preflight, "check_free_space",
@@ -2620,7 +2620,7 @@ def test_a_dry_run_reports_the_refusal_the_real_run_would_meet_and_prepares_noth
 
 
 def test_a_dry_run_that_fits_still_creates_nothing_on_a_windows_target(tmp_path, monkeypatch):
-    from db_ops.backup_restore import preflight
+    from dbabrain.backup_restore import preflight
 
     monkeypatch.setattr(preflight, "check_free_space", lambda config, log=None, recopy=False: {"checked": True})
     monkeypatch.setattr(preflight, "_run_windows_unc_preflight",
@@ -2691,15 +2691,15 @@ def test_emit_backup_restore_event_writes_sqlite_and_pushes_telegram(tmp_path, m
     # Routing is the Telegram app's answer, fetched through its CLI, so stub this app's client
     # rather than app_config's TelegramConfig groups.
     monkeypatch.setattr(
-        "db_ops.lib.telegram_route.telegram_route",
+        "dbabrain.lib.telegram_route.telegram_route",
         lambda level, **_: {"enabled": True, "alert": bool(_ROUTES.get(level)),
                             "chat_id": _ROUTES.get(level, "")},
     )
 
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
         telegram=TelegramConfig(
             enabled=True,
             bot_token="token",
@@ -2715,7 +2715,7 @@ def test_emit_backup_restore_event_writes_sqlite_and_pushes_telegram(tmp_path, m
         metadata={"source_ids": ["SRC1"]},
     )
 
-    store = DbOpsStore(app_config.sqlite_path)
+    store = DbaBrainStore(app_config.sqlite_path)
     rows = store.fetch_recent_job_runs(limit=1)
     send_messages = store.fetch_pending_telegram_send_messages(limit=10)
 
@@ -2727,10 +2727,10 @@ def test_emit_backup_restore_event_writes_sqlite_and_pushes_telegram(tmp_path, m
 
 
 def test_emit_backup_restore_event_swallows_telegram_failure(tmp_path, monkeypatch):
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
         telegram=TelegramConfig(
             enabled=True,
             bot_token="token",
@@ -2747,7 +2747,7 @@ def test_emit_backup_restore_event_swallows_telegram_failure(tmp_path, monkeypat
         error_text="boom",
     )
 
-    store = DbOpsStore(app_config.sqlite_path)
+    store = DbaBrainStore(app_config.sqlite_path)
     rows = store.fetch_recent_job_runs(limit=1)
     with store.connect() as conn:
         row = conn.execute("SELECT error_text FROM job_runs WHERE log_id = ?;", (rows[0]["log_id"],)).fetchone()
@@ -2885,7 +2885,7 @@ def test_windows_latest_restore_chain_selects_logs_without_diff(tmp_path):
 
 
 def test_linux_latest_restore_chain_discovers_remote_diff_and_logs(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     config = dataclasses.replace(
         make_config(tmp_path),
@@ -3155,10 +3155,10 @@ def test_build_recovery_if_restoring_sql_only_recovers_when_restoring():
 
 def test_restore_workflow_pitr_passes_point_in_time_to_restore(tmp_path, monkeypatch):
     config = make_config(tmp_path)
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     captured = {}
 
@@ -3167,17 +3167,17 @@ def test_restore_workflow_pitr_passes_point_in_time_to_restore(tmp_path, monkeyp
         captured["copy_window_end_utc"] = step_config.copy_window_end_utc
         return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path, files_considered=1, copied=1, skipped=0, file_results=())
 
-    def fake_restore(config, db_ops_config, dry_run, logger, point_in_time_utc):
+    def fake_restore(config, dbabrain_config, dry_run, logger, point_in_time_utc):
         captured["point_in_time_utc"] = point_in_time_utc
         return {"status": "SUCCESS", "overall_status": "SUCCESS", "databases_considered": 0, "per_database_restore_status": {}}
 
     def fake_delete(step_config, logger=None, dry_run=False):
         return DeleteBackupResult(returncode=0, target_backup_dir=tmp_path, cleanup_retention=48, files_considered=0, deleted=0, file_results=())
 
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest", fake_restore)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_delete_backup", fake_delete)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_delete_backup", fake_delete)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
     pit = parse_point_in_time("2026-05-30 18:00:00 +07:00")
     run_restore_workflow(
@@ -3193,17 +3193,17 @@ def test_restore_workflow_pitr_passes_point_in_time_to_restore(tmp_path, monkeyp
 
 def test_restore_workflow_pitr_no_matching_copy_files_fails_fast(tmp_path, monkeypatch):
     config = make_config(tmp_path)
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
 
     def fake_copy(step_config, logger=None, force=False):
         return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path, files_considered=0, copied=0, skipped=0, file_results=())
 
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
     pit = parse_point_in_time("2026-05-30 18:00:00 +07:00")
     with pytest.raises(RuntimeError, match="copy-backup selected no files"):
@@ -3215,13 +3215,13 @@ def test_restore_workflow_pitr_no_matching_copy_files_fails_fast(tmp_path, monke
 
 
 def test_restore_workflow_emits_phase_progress_logs(tmp_path, monkeypatch):
-    import db_ops.backup_restore.cli as cli_module
+    import dbabrain.backup_restore.cli as cli_module
 
     config = make_config(tmp_path)
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     messages = []
 
@@ -3314,9 +3314,9 @@ def test_a_script_driven_restore_names_its_target_like_an_engine_restore_does():
     ``server_id``/``target_container``, so a test of the formatter alone would have passed while
     the message that ships still had no target in it.
     """
-    from db_ops.backup_restore.restore_script import ScriptRestore
-    from db_ops.backup_restore.workflow import script_restore_metadata
-    from db_ops.lib.time_window import TimeWindow
+    from dbabrain.backup_restore.restore_script import ScriptRestore
+    from dbabrain.backup_restore.workflow import script_restore_metadata
+    from dbabrain.lib.time_window import TimeWindow
 
     job = ScriptRestore(
         restore_id="CLOUD_MSSQL_TO_CLOUD2", db_type="sqlserver",
@@ -3336,9 +3336,9 @@ def test_a_script_driven_restore_names_its_target_like_an_engine_restore_does():
 def test_an_in_place_drill_reports_the_target_it_states():
     """An in-place drill states the source's machine as `target_server_id` itself (owner decision
     2026-10-01, review 0.25.0 G2): the event names that, never a target derived from the source."""
-    from db_ops.backup_restore.restore_script import ScriptRestore
-    from db_ops.backup_restore.workflow import script_restore_metadata
-    from db_ops.lib.time_window import TimeWindow
+    from dbabrain.backup_restore.restore_script import ScriptRestore
+    from dbabrain.backup_restore.workflow import script_restore_metadata
+    from dbabrain.lib.time_window import TimeWindow
 
     job = ScriptRestore(
         restore_id="CLOUD_PG_RESTORE_DRILL", db_type="postgresql",
@@ -3446,11 +3446,11 @@ def test_format_telegram_message_non_restore_workflow_uses_json():
 # ── CLI event metadata tests ───────────────────────────────────────────────────
 
 def _make_cli_restore_workflow_calls(tmp_path, monkeypatch, extra_argv=None):
-    import db_ops.backup_restore.cli as cli_module
-    app_config = DbOpsConfig(
+    import dbabrain.backup_restore.cli as cli_module
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     captured_events = []
 
@@ -3514,11 +3514,11 @@ def test_cli_restore_workflow_end_event_has_restore_mode_and_target(tmp_path, mo
 
 
 def test_cli_restore_workflow_start_event_pitr_has_pit_fields(tmp_path, monkeypatch):
-    import db_ops.backup_restore.cli as cli_module
-    app_config = DbOpsConfig(
+    import dbabrain.backup_restore.cli as cli_module
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     captured_events = []
 
@@ -3592,7 +3592,7 @@ def _fake_workflow_ops(monkeypatch, called_targets):
         called_targets.append(("copy", step_config.target_id))
         return CopyBackupResult(returncode=0, source_backup_dir=step_config.prod_backup_share, local_import_dir=step_config.vm_import_unc, files_considered=1, copied=1, skipped=0, file_results=())
 
-    def fake_restore(config, db_ops_config, dry_run, logger, point_in_time_utc=None):
+    def fake_restore(config, dbabrain_config, dry_run, logger, point_in_time_utc=None):
         called_targets.append(("restore", config.target_id))
         return {"status": "SUCCESS", "per_database_restore_status": {}}
 
@@ -3600,15 +3600,15 @@ def _fake_workflow_ops(monkeypatch, called_targets):
         called_targets.append(("delete", step_config.target_id))
         return DeleteBackupResult(returncode=0, target_backup_dir=step_config.vm_import_unc, cleanup_retention=48, files_considered=0, deleted=0, file_results=())
 
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest", fake_restore)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_delete_backup", fake_delete)
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_delete_backup", fake_delete)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
 
 def test_restore_workflow_scoping_only_runs_selected_restore_id(tmp_path, monkeypatch):
     cfg1, cfg2 = _make_two_target_configs(tmp_path)
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     called_targets = []
     _fake_workflow_ops(monkeypatch, called_targets)
 
@@ -3621,7 +3621,7 @@ def test_restore_workflow_scoping_only_runs_selected_restore_id(tmp_path, monkey
 
 def test_restore_workflow_scoping_second_restore_id_only_runs_second_target(tmp_path, monkeypatch):
     cfg1, cfg2 = _make_two_target_configs(tmp_path)
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     called_targets = []
     _fake_workflow_ops(monkeypatch, called_targets)
 
@@ -3634,7 +3634,7 @@ def test_restore_workflow_scoping_second_restore_id_only_runs_second_target(tmp_
 
 def test_restore_workflow_multi_config_runs_both_targets(tmp_path, monkeypatch):
     cfg1, cfg2 = _make_two_target_configs(tmp_path)
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     called_targets = []
     _fake_workflow_ops(monkeypatch, called_targets)
 
@@ -3647,7 +3647,7 @@ def test_restore_workflow_multi_config_runs_both_targets(tmp_path, monkeypatch):
 
 
 def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path, monkeypatch):
-    import db_ops.backup_restore.restore_database as restore_module
+    import dbabrain.backup_restore.restore_database as restore_module
 
     windows = dataclasses.replace(
         make_config(tmp_path),
@@ -3663,19 +3663,19 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
         vm_platform="linux",
         vm_credential_target="198.51.100.31",
     )
-    app_config = DbOpsConfig(
+    app_config = DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
-        sqlite_path=tmp_path / "runtime" / "db_ops.sqlite",
+        sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
     executor_calls = []
     workflow_logger = object()
 
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
-    monkeypatch.setattr("db_ops.backup_restore.cli.log_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.log_event", lambda *_args, **_kwargs: None)
     patch_restore(monkeypatch, "log_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        "db_ops.backup_restore.cli.run_copy_backup",
+        "dbabrain.backup_restore.cli.run_copy_backup",
         lambda config, logger=None, force=False: CopyBackupResult(
             returncode=0,
             source_backup_dir=config.prod_backup_share,
@@ -3687,7 +3687,7 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
         ),
     )
     monkeypatch.setattr(
-        "db_ops.backup_restore.cli.run_delete_backup",
+        "dbabrain.backup_restore.cli.run_delete_backup",
         lambda config, logger=None, dry_run=False: DeleteBackupResult(
             returncode=0,
             target_backup_dir=config.vm_import_unc,
@@ -3724,7 +3724,7 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
             "per_database_restore_status": {config.restore_id: "SUCCESS"},
         }
 
-    monkeypatch.setattr("db_ops.backup_restore.cli.run_restore_all_latest", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest", fake_restore)
 
     result = run_restore_workflow(
         restore_configs=[windows, linux],
@@ -3740,7 +3740,7 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
 
 def test_restore_workflow_summary_includes_mappings_and_per_restore_results(tmp_path, monkeypatch):
     cfg1, cfg2 = _make_two_target_configs(tmp_path)
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     called_targets = []
     _fake_workflow_ops(monkeypatch, called_targets)
 
@@ -3764,7 +3764,7 @@ def test_restore_workflow_summary_includes_mappings_and_per_restore_results(tmp_
 
 def test_restore_workflow_single_config_includes_mapping(tmp_path, monkeypatch):
     cfg1, _ = _make_two_target_configs(tmp_path)
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     called_targets = []
     _fake_workflow_ops(monkeypatch, called_targets)
 
@@ -3792,8 +3792,8 @@ def test_cli_restore_workflow_start_event_has_mappings_for_single_config(tmp_pat
 
 
 def test_cli_restore_workflow_end_event_has_per_restore_results_from_output(tmp_path, monkeypatch):
-    import db_ops.backup_restore.cli as cli_module
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    import dbabrain.backup_restore.cli as cli_module
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime", sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     captured_events = []
 
     cfg = dataclasses.replace(make_config(tmp_path), restore_id="ACME_TO_SQLSERVER_TEST", source_id="SRC", target_id="TGT-VM", vm_credential_target="10.0.0.1")

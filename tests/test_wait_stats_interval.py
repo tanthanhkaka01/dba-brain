@@ -19,7 +19,7 @@ work, each of which was a real failure found by running the collector against th
 """
 
 import pytest
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 
 MODERN = resolve_tool_path("assets/metrics/sqlserver/014_sqlserver_wait_stats.sql")
 LEGACY = resolve_tool_path("assets/metrics/sqlserver/legacy_2008r2/014_sqlserver_wait_stats.sql")

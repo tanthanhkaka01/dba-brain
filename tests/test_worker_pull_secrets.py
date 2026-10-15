@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.secret_text import encrypt_secret_text, load_secret_text_file
-from db_ops.control.worker_data import SecretMergeConflict, _merge_secret_store
+from dbabrain.lib.secret_text import encrypt_secret_text, load_secret_text_file
+from dbabrain.control.worker_data import SecretMergeConflict, _merge_secret_store
 
 KEY = "lab-passphrase"
 

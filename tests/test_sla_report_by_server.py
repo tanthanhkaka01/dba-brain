@@ -5,14 +5,14 @@ That ordering answers "what is worst in the fleet", which is a different questio
 operator holds when they open the page, and it forced them to scan for a machine's rows among
 sixteen other machines' rows.
 
-The grouping key is `server_id` and only `server_id`: it is unique across every db_ops file, and
+The grouping key is `server_id` and only `server_id`: it is unique across every dbabrain file, and
 matching a machine any other way has already produced one server under two names in production.
 """
 
 from __future__ import annotations
 
-from db_ops.lib import inventory_render
-from db_ops.sla import publish
+from dbabrain.lib import inventory_render
+from dbabrain.sla import publish
 
 
 class _Result:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.config import (
+from dbabrain.lib.config import (
     APP_CONFIG_ENV_VARS,
     APP_CONFIG_NAMES,
     DEFAULT_CONFIG_PATH,
@@ -180,7 +180,7 @@ def test_app_config_names_follow_naming_convention():
 
 def test_env_var_names_follow_naming_convention():
     for app_name, env_var in APP_CONFIG_ENV_VARS.items():
-        expected = f"DB_OPS_{app_name.upper()}_CONFIG"
+        expected = f"DBABRAIN_{app_name.upper()}_CONFIG"
         assert env_var == expected, f"Expected {expected} but got {env_var}"
 
 
@@ -200,7 +200,7 @@ def test_no_direct_import_of_telegram_from_sql_tasks():
     import importlib.util
 
     try:
-        spec = importlib.util.find_spec("db_ops.sql_tasks.runner")
+        spec = importlib.util.find_spec("dbabrain.sql_tasks.runner")
     except ModuleNotFoundError:
         spec = None
     if spec is None:
@@ -215,8 +215,8 @@ def test_no_direct_import_of_telegram_from_sql_tasks():
                 else ([node.module] if node.module else [])
             )
             for name in names:
-                assert not (name or "").startswith("db_ops.telegram"), (
-                    f"sql_tasks.runner must not import from db_ops.telegram directly; found: {name}"
+                assert not (name or "").startswith("dbabrain.telegram"), (
+                    f"sql_tasks.runner must not import from dbabrain.telegram directly; found: {name}"
                 )
 
 
@@ -231,7 +231,7 @@ def test_nested_config_finds_telegram_settings_via_tool_root_fallback(tmp_path):
     the path to data/data/telegram_config.json, found nothing, and silently produced empty
     telegram settings — the reason that file used to restate the whole telegram block inline.
     """
-    from db_ops.lib.config import load_config, resolve_telegram_config_path
+    from dbabrain.lib.config import load_config, resolve_telegram_config_path
 
     root = tmp_path
     data = root / "data"
@@ -246,7 +246,7 @@ def test_nested_config_finds_telegram_settings_via_tool_root_fallback(tmp_path):
     nested = data / "restore_config.json"
     nested.write_text('{"app_name": "nested"}', encoding="utf-8")
 
-    import db_ops.lib.config as config_module
+    import dbabrain.lib.config as config_module
 
     original = config_module.TOOL_ROOT
     config_module.TOOL_ROOT = root
@@ -262,7 +262,7 @@ def test_nested_config_finds_telegram_settings_via_tool_root_fallback(tmp_path):
 
 def test_config_at_tool_root_still_uses_its_own_folder_first(tmp_path):
     """The fallback must not shadow a path that already resolves next to the config."""
-    from db_ops.lib.config import load_config
+    from dbabrain.lib.config import load_config
 
     root = tmp_path
     data = root / "data"
@@ -273,7 +273,7 @@ def test_config_at_tool_root_still_uses_its_own_folder_first(tmp_path):
     main = root / "config.json"
     main.write_text('{"app_name": "root"}', encoding="utf-8")
 
-    import db_ops.lib.config as config_module
+    import dbabrain.lib.config as config_module
 
     original = config_module.TOOL_ROOT
     config_module.TOOL_ROOT = root
@@ -297,8 +297,8 @@ def _telegram_root(tmp_path, settings: str, groups: str = "") -> "Path":
 
 
 def _load_at(root):
-    from db_ops.lib.config import load_config
-    import db_ops.lib.config as config_module
+    from dbabrain.lib.config import load_config
+    import dbabrain.lib.config as config_module
 
     original = config_module.TOOL_ROOT
     config_module.TOOL_ROOT = root

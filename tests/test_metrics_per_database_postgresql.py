@@ -3,7 +3,7 @@
 PostgreSQL cannot read another database's catalog from one connection. `_metric_database` sends a
 PostgreSQL metric to `connection_info.database`, falling back to `postgres` — and no target in
 this estate sets it. So every per-database PostgreSQL metric was describing `postgres`, which on
-the PGLAB cluster holds no user tables at all, while the real data sat in `db_ops` where nothing
+the PGLAB cluster holds no user tables at all, while the real data sat in `dbabrain` where nothing
 looked. Four metrics reported OK from an empty database
 - four metrics reporting OK from a database with nothing in it.
 
@@ -18,10 +18,10 @@ partial answer that reads like a complete one.
 
 import pytest
 
-from db_ops.common import metric_batch
-from db_ops.lib.event_policy import PHASE_CONNECT, PHASE_EXECUTE
-from db_ops.metrics import executor
-from db_ops.metrics.models import MetricTarget
+from dbabrain.common import metric_batch
+from dbabrain.lib.event_policy import PHASE_CONNECT, PHASE_EXECUTE
+from dbabrain.metrics import executor
+from dbabrain.metrics.models import MetricTarget
 
 
 def _target(db_type="postgresql", database=None):
@@ -64,23 +64,23 @@ def _databases(monkeypatch, names):
 
 
 def test_the_sql_runs_once_per_database(monkeypatch, visited):
-    _databases(monkeypatch, ["postgres", "db_ops", "test01"])
+    _databases(monkeypatch, ["postgres", "dbabrain", "test01"])
 
     rows = executor.execute_metric_sql(
         target=_target(), sql_text="SELECT 1", secrets={}, per_database=True)
 
-    assert visited == ["postgres", "db_ops", "test01"]
-    assert [row["metric_item"] for row in rows] == ["postgres.idx", "db_ops.idx", "test01.idx"]
+    assert visited == ["postgres", "dbabrain", "test01"]
+    assert [row["metric_item"] for row in rows] == ["postgres.idx", "dbabrain.idx", "test01.idx"]
 
 
 def test_without_the_flag_nothing_changes(monkeypatch, visited):
     """The default path must stay exactly as it was — one connection, the resolved database."""
-    _databases(monkeypatch, ["postgres", "db_ops"])
+    _databases(monkeypatch, ["postgres", "dbabrain"])
 
     rows = executor.execute_metric_sql(
-        target=_target(database="db_ops"), sql_text="SELECT 1", secrets={})
+        target=_target(database="dbabrain"), sql_text="SELECT 1", secrets={})
 
-    assert visited == ["db_ops"]
+    assert visited == ["dbabrain"]
     assert len(rows) == 1
 
 
@@ -97,14 +97,14 @@ def test_a_non_postgres_target_never_iterates(monkeypatch, visited):
 def test_one_unreadable_database_costs_only_its_own_rows(monkeypatch, visited):
     """The same rule `load_metric_targets` applies to a broken cmd_access. A database dropped
     mid-run, or one this login cannot enter, must not take the rest of the cluster with it."""
-    _databases(monkeypatch, ["db_ops", "broken", "test01"])
+    _databases(monkeypatch, ["dbabrain", "broken", "test01"])
 
     rows = executor.execute_metric_sql(
         target=_target(), sql_text="SELECT 1", secrets={}, per_database=True)
 
-    assert visited == ["db_ops", "broken", "test01"]
+    assert visited == ["dbabrain", "broken", "test01"]
     assert [row["metric_item"] for row in rows] == [
-        "db_ops.idx", "broken :: collection failed", "test01.idx"]
+        "dbabrain.idx", "broken :: collection failed", "test01.idx"]
 
 
 def test_a_failed_database_is_reported_not_skipped(monkeypatch, visited):
@@ -134,7 +134,7 @@ def test_passing_the_database_cap_is_stated_rather_than_swallowed(monkeypatch, v
 
 def test_the_caller_s_target_is_not_left_pointing_at_the_last_database(monkeypatch, visited):
     """A mutation here would silently redirect every metric collected after this one."""
-    _databases(monkeypatch, ["db_ops", "test01"])
+    _databases(monkeypatch, ["dbabrain", "test01"])
     target = _target(database="postgres")
 
     executor.execute_metric_sql(
@@ -158,7 +158,7 @@ def test_per_database_is_refused_on_any_engine_but_postgresql(tmp_path):
     the flag rather than the executor quietly ignoring it, so the mistake is caught at load."""
     import json
 
-    from db_ops.metrics.definitions import load_metric_definitions
+    from dbabrain.metrics.definitions import load_metric_definitions
 
     sql_dir = tmp_path / "sql" / "sqlserver"
     sql_dir.mkdir(parents=True)

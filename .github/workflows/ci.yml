@@ -57,7 +57,7 @@ jobs:
       # It also fails fast: on an import error there is no point running two thousand tests.
       - name: Import and collect
         run: |
-          python -c "import db_ops; print('db_ops', db_ops.__version__)"
+          python -c "import dbabrain; print('dbabrain', dbabrain.__version__)"
           python -m pytest tests --collect-only -q
 
       # No database, no network, no credentials — the suite is offline by design, and a test that

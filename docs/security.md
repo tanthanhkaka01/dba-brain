@@ -16,9 +16,6 @@ sender — `send-queue` delivers whatever is already queued if a token and a cha
 if you have configured delivery and want it to stop, remove the token reference or clear the chat
 map rather than relying on that flag alone.
 
-> **Naming, while the project is being renamed.** Environment variables are still `DB_OPS_*` and
-> module paths still `db_ops.*`.
-> <!-- TODO(rename): update the env prefix and module paths on this page once the rename lands. -->
 
 ---
 
@@ -160,7 +157,7 @@ The plaintext source you edit is `secrets/secret_text.json`, a flat map of refer
 git-ignored and stays that way. Re-encrypt after every change:
 
 ```bash
-python -m db_ops.control.cli encrypt-secret-text --key-base64 "<base64-passphrase>"
+python -m dbabrain.control.cli encrypt-secret-text --key-base64 "<base64-passphrase>"
 ```
 
 The command verifies a decrypt round-trip before writing, so a bad file never reaches disk. It
@@ -183,7 +180,7 @@ and the reference is resolved at use time:
    `run-sql` connection: the secrets the caller hands over only, **never the environment**
    (0.26.0, owner decision G3.5). A request could name any variable, the node's passphrase
    included, and have it sent to a host of its choosing. No reference may name one of the node's
-   own keys (`DB_OPS_SECRET_KEY`, `DB_OPS_KEY_BASE64`, a bot token) anywhere.
+   own keys (`DBABRAIN_SECRET_KEY`, `DBABRAIN_KEY_BASE64`, a bot token) anywhere.
 
 That order is the escape hatch: an organisation that keeps secrets in an external manager injects
 them as environment variables and never uses the built-in store at all.
@@ -286,7 +283,7 @@ An air-gapped install is therefore the default shape, not a special mode.
 ## 5a. What this tool does and does not defend (0.25.0 review)
 
 **Secrets never travel as an argument.** The passphrase reaches the daemon and its children in
-`DB_OPS_SECRET_KEY` only; SQL Server logins reach `sqlcmd` in `SQLCMDPASSWORD`; batches that carry
+`DBABRAIN_SECRET_KEY` only; SQL Server logins reach `sqlcmd` in `SQLCMDPASSWORD`; batches that carry
 the backup-encryption password go on stdin (Linux) or a private temp file (Windows); SRE commands
 that carry a password run as a script on stdin; a recovered console password is printed, not
 logged. A password typed to the bot is redacted in the store and deleted from the chat (the bot
@@ -300,7 +297,7 @@ password typed again. Logs are admin-only. Estate data embedded in a report cann
 
 **The confirmation gate prevents accidents; it is not the security boundary.** A request can make
 an operation harder to confirm, never easier, and cannot name the node's own keys as a password.
-But `assume_yes` exists for automation, so whoever can run `python -m db_ops.common.cli` with the
+But `assume_yes` exists for automation, so whoever can run `python -m dbabrain.common.cli` with the
 node's data and passphrase can do what the tool can do. The boundary is who can run it: OS
 accounts on the node, the console's levels, the bot's levels (free-SQL bot actions are level 50
 and 100).

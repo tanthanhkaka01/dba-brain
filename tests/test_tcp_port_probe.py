@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.metrics.collector import _collector_env
-from db_ops.metrics.models import MetricDefinition, MetricTarget, MetricVariant
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.metrics.collector import _collector_env
+from dbabrain.metrics.models import MetricDefinition, MetricTarget, MetricVariant
+from dbabrain.lib.paths import resolve_tool_path
 
 WINDOWS_SCRIPT = resolve_tool_path("assets/metrics/os/windows/009_os_tcp_port_status.ps1")
 LINUX_SCRIPT = resolve_tool_path("assets/metrics/os/linux/009_os_tcp_port_status.sh")
@@ -66,7 +66,7 @@ def test_a_cmd_collector_is_told_the_address_the_inventory_reaches_the_host_on()
     have to guess it from the host's own NICs, which on a multi-homed box picks the wrong one."""
     env = _collector_env(metric=_metric(), target=_target())
 
-    assert env["DB_OPS_TARGET_HOST"] == "192.0.2.119"
+    assert env["DBABRAIN_TARGET_HOST"] == "192.0.2.119"
 
 
 def test_cmd_access_host_wins_over_ip():
@@ -74,7 +74,7 @@ def test_cmd_access_host_wins_over_ip():
     through it. `ip` is inventory, which can be an address nothing listens on."""
     env = _collector_env(metric=_metric(), target=_target(ip="10.0.0.1", cmd_host="192.0.2.119"))
 
-    assert env["DB_OPS_TARGET_HOST"] == "192.0.2.119"
+    assert env["DBABRAIN_TARGET_HOST"] == "192.0.2.119"
 
 
 def test_a_target_may_still_override_the_probe_address():
@@ -82,10 +82,10 @@ def test_a_target_may_still_override_the_probe_address():
     without the collector growing a special case."""
     env = _collector_env(
         metric=_metric(),
-        target=_target(metrics_config={"collector_env": {"DB_OPS_TARGET_HOST": "10.9.9.9"}}),
+        target=_target(metrics_config={"collector_env": {"DBABRAIN_TARGET_HOST": "10.9.9.9"}}),
     )
 
-    assert env["DB_OPS_TARGET_HOST"] == "10.9.9.9"
+    assert env["DBABRAIN_TARGET_HOST"] == "10.9.9.9"
 
 
 def test_a_target_with_no_address_leaves_the_script_to_fall_back():
@@ -93,12 +93,12 @@ def test_a_target_with_no_address_leaves_the_script_to_fall_back():
     honest, where a guessed address would produce a confident CLOSED nobody can check."""
     env = _collector_env(metric=_metric(), target=_target(ip="", cmd_host=""))
 
-    assert env["DB_OPS_TARGET_HOST"] == ""
+    assert env["DBABRAIN_TARGET_HOST"] == ""
 
 
 @pytest.mark.parametrize("platform", ["windows", "linux"])
 def test_both_variants_prefer_the_inventory_address_over_loopback(scripts, platform):
-    assert "DB_OPS_TARGET_HOST" in scripts[platform]
+    assert "DBABRAIN_TARGET_HOST" in scripts[platform]
     assert "127.0.0.1" in scripts[platform], "loopback stays the fallback, not the default"
 
 

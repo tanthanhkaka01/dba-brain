@@ -9,7 +9,7 @@ came up as promised; four things did not:
   (1.31) was Oracle Free's only, and XE's template never mounted the script directory;
 * the MySQL ha-lab could not be built at all - `bitnami/mysql` has left Docker Hub - and the image
   check passed anyway, because it asked only about the single-mode image;
-* every generated compose file pointed its reader at `db_ops/sre/docker_db/models.py`, gone since
+* every generated compose file pointed its reader at `dbabrain/sre/docker_db/models.py`, gone since
   the provisioner moved to `common`.
 
 Two older bot behaviours went with them: a failed build left its password in the store, and a
@@ -24,9 +24,9 @@ import types
 import pytest
 
 from conftest import shipped_config
-from db_ops.common.docker_db import compose as compose_mod
-from db_ops.common.docker_db import provisioner, templates
-from db_ops.lib.docker_db_spec import VALID_ENGINES, DockerDbSpec
+from dbabrain.common.docker_db import compose as compose_mod
+from dbabrain.common.docker_db import provisioner, templates
+from dbabrain.lib.docker_db_spec import VALID_ENGINES, DockerDbSpec
 
 
 def _plan(**over):
@@ -115,7 +115,7 @@ def test_no_generated_file_points_at_a_module_that_is_gone():
 # What sre does around the build
 # --------------------------------------------------------------------------- #
 def test_an_unfilled_worker_host_placeholder_is_never_recorded():
-    from db_ops.sre.cli import _worker_host
+    from dbabrain.sre.cli import _worker_host
 
     assert _worker_host("{worker_host}") == ""
     assert _worker_host("192.0.2.10") == "192.0.2.10"
@@ -132,8 +132,8 @@ def config(tmp_path):
 
 
 def _create(config, monkeypatch, *, run, stored):
-    from db_ops.transport import common_cli
-    from db_ops.sre import cli as sre_cli
+    from dbabrain.transport import common_cli
+    from dbabrain.sre import cli as sre_cli
 
     monkeypatch.setattr(common_cli, "run", run)
     monkeypatch.setattr(sre_cli, "_assert_password_can_be_stored", lambda *a, **k: None)
@@ -144,7 +144,7 @@ def _create(config, monkeypatch, *, run, stored):
 
 
 def test_a_failed_build_stores_no_password(config, monkeypatch):
-    from db_ops.transport import common_cli
+    from dbabrain.transport import common_cli
 
     def run(*a, **k):
         raise common_cli.CommonCliError("create-db-docker failed: Image not found: postgres:99")

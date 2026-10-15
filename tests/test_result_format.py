@@ -18,7 +18,7 @@ import zipfile
 
 import pytest
 
-from db_ops.lib import result_format
+from dbabrain.lib import result_format
 
 
 def _result(**overrides):

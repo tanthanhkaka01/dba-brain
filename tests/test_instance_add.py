@@ -20,8 +20,8 @@ import json
 
 import pytest
 
-from db_ops.common import instance_admin
-from db_ops.lib import secret_text as _secret_text
+from dbabrain.common import instance_admin
+from dbabrain.lib import secret_text as _secret_text
 
 KEY = "test-passphrase"
 
@@ -245,7 +245,7 @@ def test_a_target_with_no_login_is_allowed_and_writes_no_credential(tmp_path):
 
 
 def test_the_command_is_registered_and_listed():
-    from db_ops.common import cli, instance_admin
+    from dbabrain.common import cli, instance_admin
 
     assert hasattr(cli, "_instance_add_command")
     # Listed in the command index too: a command nobody can discover is a command nobody runs.
@@ -369,12 +369,12 @@ def test_the_command_says_a_login_was_added_not_that_the_server_was_registered(t
                                                                               capsys):
     # "registered LAB-1" for a call that registered nothing reads as the inventory having changed;
     # and with replace, "replaced LAB-1" as the server's record having been overwritten.
-    from db_ops.common import cli
-    from db_ops.lib import data_sources
+    from dbabrain.common import cli
+    from dbabrain.lib import data_sources
 
     root = _registered(tmp_path)
     monkeypatch.setattr(data_sources, "DEFAULT_DATA_DIR", root)
-    monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("DBABRAIN_SECRET_KEY", raising=False)
     cli._instance_add_command([json.dumps(_second_login()), "--key", KEY])
     message = json.loads(capsys.readouterr().out)["message"]
     assert message.startswith("added login MSSQL_LAB_1_DBA on LAB-1, beside its default")

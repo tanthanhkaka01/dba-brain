@@ -17,8 +17,8 @@ import sqlite3
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram.command_processor import (
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram.command_processor import (
     process_one_command_message,
     process_pending_conversation_messages,
 )
@@ -84,7 +84,7 @@ class Chat:
         _write(tmp_path / "telegram_users.json", "telegram_users",
                [{"user_id": USER, "user_type": 2, "status": "active"}])
         _write(tmp_path / "telegram_groups.json", "telegram_groups", [])
-        self.store = DbOpsStore(self.sqlite_path)
+        self.store = DbaBrainStore(self.sqlite_path)
         self.next_id = 10
 
     def _post(self, text):

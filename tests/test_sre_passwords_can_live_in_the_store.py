@@ -22,15 +22,15 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import data_sources, secret_text
-from db_ops.sre.config import load_sre_operational_config, resolve_password_fields
+from dbabrain.lib import data_sources, secret_text
+from dbabrain.sre.config import load_sre_operational_config, resolve_password_fields
 
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     """A secret store of this test's own, holding the refs the tests name."""
     data = tmp_path / "data"
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "a key for this test only")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "a key for this test only")
     monkeypatch.setattr(data_sources, "DEFAULT_DATA_DIR", data)
     secret_text.set_secret_text(data, "LAB_SA_PASSWORD", "out-of-the-store")
     secret_text.set_secret_text(data, "LAB_ROOT_PASSWORD", "resolved-at-use")

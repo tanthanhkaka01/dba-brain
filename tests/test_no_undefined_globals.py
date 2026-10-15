@@ -25,16 +25,16 @@ from pathlib import Path
 import pytest
 
 
-DB_OPS_ROOT = Path(__file__).resolve().parents[1] / "db_ops"
+DBABRAIN_ROOT = Path(__file__).resolve().parents[1] / "dbabrain"
 BUILTINS = set(dir(builtins)) | {"__file__", "__name__", "__doc__", "__package__", "__spec__"}
 
 
 def _module_files() -> list[Path]:
-    return sorted(p for p in DB_OPS_ROOT.rglob("*.py") if "__pycache__" not in p.parts)
+    return sorted(p for p in DBABRAIN_ROOT.rglob("*.py") if "__pycache__" not in p.parts)
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(DB_OPS_ROOT).as_posix()
+    return path.relative_to(DBABRAIN_ROOT).as_posix()
 
 
 def _bound_names(node: ast.AST) -> set[str]:

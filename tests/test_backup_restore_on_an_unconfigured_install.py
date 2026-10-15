@@ -26,13 +26,13 @@ import json
 
 import pytest
 
-from db_ops.common import scaffold
-from db_ops.backup_restore import backup as backup_module
-from db_ops.backup_restore import config as config_module
-from db_ops.backup_restore import restore_script as script_module
-from db_ops.backup_restore.backup import load_backup_jobs
-from db_ops.backup_restore.config import load_restore_configs, parse_restore_config
-from db_ops.backup_restore.restore_script import load_script_restores
+from dbabrain.common import scaffold
+from dbabrain.backup_restore import backup as backup_module
+from dbabrain.backup_restore import config as config_module
+from dbabrain.backup_restore import restore_script as script_module
+from dbabrain.backup_restore.backup import load_backup_jobs
+from dbabrain.backup_restore.config import load_restore_configs, parse_restore_config
+from dbabrain.backup_restore.restore_script import load_script_restores
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ def test_every_field_read_by_subscript_is_declared_required():
     import inspect
     import re
 
-    from db_ops.backup_restore import config as config_module
+    from dbabrain.backup_restore import config as config_module
 
     source = inspect.getsource(config_module.parse_restore_config)
     subscripted = set(re.findall(r'values\["([a-z_]+)"\]', source))
@@ -157,12 +157,12 @@ def test_a_manual_command_with_nothing_configured_says_so_rather_than_index_erro
     act on one restore has nothing to act on, and it reached `restore_configs[0]` - so the fix for
     `KeyError: 'prod_backup_share'` would have turned it into `IndexError: list index out of
     range`, equally silent about what is missing. It must fail, and name the file."""
-    from db_ops.backup_restore import cli
-    from db_ops.lib.config import DbOpsConfig
+    from dbabrain.backup_restore import cli
+    from dbabrain.lib.config import DbaBrainConfig
 
-    monkeypatch.setattr(cli, "load_config", lambda _path: DbOpsConfig(
+    monkeypatch.setattr(cli, "load_config", lambda _path: DbaBrainConfig(
         log_dir=empty_root / "logs", runtime_dir=empty_root / "runtime",
-        sqlite_path=empty_root / "runtime" / "db_ops.sqlite"))
+        sqlite_path=empty_root / "runtime" / "dbabrain.sqlite"))
     monkeypatch.setattr(cli, "patch_stdout", lambda *a, **k: None)
     monkeypatch.setattr(cli, "setup_app_logger", lambda *a, **k: None)
     monkeypatch.setattr(cli, "emit_backup_restore_event", lambda **_k: None)
@@ -210,7 +210,7 @@ def test_the_workflow_signature_matches_what_the_cli_passes():
     is a `TypeError` on the one path the daemon actually runs and no test exercised."""
     import inspect
 
-    from db_ops.backup_restore import cli, workflow
+    from dbabrain.backup_restore import cli, workflow
 
     accepted = set(inspect.signature(workflow.run_workflow).parameters)
     source = inspect.getsource(cli.main)
@@ -230,7 +230,7 @@ def test_run_workflow_passes_each_step_only_what_that_step_accepts(monkeypatch):
     non-default so none of them is skipped by being left out."""
     import inspect
 
-    from db_ops.backup_restore import workflow
+    from dbabrain.backup_restore import workflow
 
     def binding(real):
         signature = inspect.signature(real)

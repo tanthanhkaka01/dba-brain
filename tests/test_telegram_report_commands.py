@@ -26,9 +26,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram import command_processor
-from db_ops.telegram.command_processor import (
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram import command_processor
+from dbabrain.telegram.command_processor import (
     build_cli_argv,
     check_cli_background_tasks,
     process_one_command_message,
@@ -55,8 +55,8 @@ def write_report_command(path):
                 "need_file": 0,
                 "action_type": "cli_execute",
                 "action_config": {
-                    "working_dir": "tools/db_ops",
-                    "command_template": "python -m db_ops.reports.cli --config {config_path} force-hourly-report --target-ip {target_ip} --summary-limit {summary_limit} --dedupe-seconds {dedupe_seconds}",
+                    "working_dir": "tools/dbabrain",
+                    "command_template": "python -m dbabrain.reports.cli --config {config_path} force-hourly-report --target-ip {target_ip} --summary-limit {summary_limit} --dedupe-seconds {dedupe_seconds}",
                     "start_text": "Force hourly metrics report started for {target_ip}",
                     "success_text": "Force hourly metrics report completed for {target_ip}",
                     "failure_text": "Force hourly metrics report failed for {target_ip}\nExit code: {exit_code}\nError: {error_summary}",
@@ -81,7 +81,7 @@ def write_report_command(path):
 
 
 def insert_command_message(sqlite_path, text, *, user_id="100", username="admin"):
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     store.upsert_telegram_messages(
         [
             {
@@ -195,7 +195,7 @@ def test_report_force_hourly_cli_command_is_built_from_config_defaults(tmp_path,
     assert argv == [
         "python",
         "-m",
-        "db_ops.reports.cli",
+        "dbabrain.reports.cli",
         "--config",
         str(tmp_path / "config.json"),
         "force-hourly-report",
@@ -339,8 +339,8 @@ def _result_file_command_config():
     return {
         "action_type": "cli_execute",
         "action_config": {
-            "working_dir": "tools/db_ops",
-            "command_argv": ["{python}", "-m", "db_ops.sql_tasks.runner", "--config",
+            "working_dir": "tools/dbabrain",
+            "command_argv": ["{python}", "-m", "dbabrain.sql_tasks.runner", "--config",
                              "{config_path}", "run-sql-id", "--sql-id", "{sql_id}", "--force"],
             "start_text": "Export started.",
             "success_text": "Export completed. Preparing file...",
@@ -407,7 +407,7 @@ def test_cli_result_file_failure_queues_failure_not_completed(monkeypatch, tmp_p
         "user_id": "100",
         "raw_json": json.dumps({"from": {"id": 100, "username": "admin"}}),
     }
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "test-passphrase")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "test-passphrase")
     patch_telegram(monkeypatch, "run_configured_cli_command", lambda **_kwargs: {"stdout": "ok"})
 
     def fail_create_file(**_kwargs):
@@ -549,13 +549,13 @@ def test_sql_run_result_export_keeps_raw_file_when_json_validation_fails(tmp_pat
 def test_cli_failure_summary_ignores_normal_sql_task_logging_lines():
     stdout = "\n".join(
         [
-            "[db_ops.config] app=sql_tasks source=cli config=config.json",
+            "[dbabrain.config] app=sql_tasks source=cli config=config.json",
             "2026-06-30 13:09:18|LOGGING|sql_tasks|runner|sql_tasks.runner.start|scope=sql_tasks|mode=force|sql_id=14",
         ]
     )
     stderr = "\n".join(
         [
-            "[db_ops.config] app=sql_tasks source=cli config=config.json",
+            "[dbabrain.config] app=sql_tasks source=cli config=config.json",
             "SQL task scan failed tasks: 1",
         ]
     )
@@ -564,7 +564,7 @@ def test_cli_failure_summary_ignores_normal_sql_task_logging_lines():
 
     assert summary == "SQL task scan failed tasks: 1"
     assert "LOGGING" not in summary
-    assert "[db_ops.config]" not in summary
+    assert "[dbabrain.config]" not in summary
 
 
 def test_spbot_restore_cli_execute_builds_latest_and_pitr_argv():
@@ -590,7 +590,7 @@ def test_spbot_restore_cli_execute_builds_latest_and_pitr_argv():
 
 def _create_db_docker_config():
     import json
-    from db_ops.telegram.command_processor import DEFAULT_COMMANDS_PATH
+    from dbabrain.telegram.command_processor import DEFAULT_COMMANDS_PATH
     data = json.loads(DEFAULT_COMMANDS_PATH.read_text(encoding="utf-8-sig"))
     cmd = next(c for c in data["telegram_support_commands"] if c["command_text"] == "spbot_create_db_docker")
     return cmd["action_config"]
@@ -607,7 +607,7 @@ def test_spbot_restore_uses_generic_background_cli_checker(tmp_path, monkeypatch
         "/spbot_restore ACME_TO_SQLSERVER_198_51_100_31 LATEST",
     )
     launches = []
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "test-passphrase")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "test-passphrase")
 
     class FakePopen:
         pid = 43210
@@ -671,7 +671,7 @@ def test_spbot_restore_fails_loudly_when_secret_key_missing(tmp_path, monkeypatc
         sqlite_path,
         "/spbot_restore ACME_TO_SQLSERVER_198_51_100_31 LATEST",
     )
-    monkeypatch.delenv("DB_OPS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("DBABRAIN_SECRET_KEY", raising=False)
 
     def fail_popen(*args, **kwargs):
         if args and "queue-telegram-message" in args[0]:
@@ -706,7 +706,7 @@ def test_spbot_restore_reports_immediate_crash(tmp_path, monkeypatch):
         sqlite_path,
         "/spbot_restore ACME_TO_SQLSERVER_198_51_100_31 LATEST",
     )
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "test-passphrase")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "test-passphrase")
 
     class CrashPopen:
         pid = 51515

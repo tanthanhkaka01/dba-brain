@@ -5,8 +5,6 @@ Fifteen components - ten apps and five shared layers - with the rules about who 
 a test beside it, which is the only reason a stated architecture is worth reading — a diagram
 describes what someone intended, a guard test describes what is true this morning.
 
-> **Naming, while the project is being renamed.** Module paths are still `db_ops.*`.
-> <!-- TODO(rename): update the module paths on this page once the rename lands. -->
 
 ---
 
@@ -14,33 +12,33 @@ describes what someone intended, a guard test describes what is true this mornin
 
 Ten apps (ORD 03-12) and five shared layers (`db` 01, `logging_ops` 02, `common` 13, `lib` 14,
 `transport` 15) - the kinds are listed in [`rules.md`](./rules.md#the-components). Each app is one
-directory under `db_ops/` with its own `cli.py`; every component has exactly one reference page under `docs/`.
+directory under `dbabrain/` with its own `cli.py`; every component has exactly one reference page under `docs/`.
 
 | ORD | Component | Package | What it is |
 | :---: | --- | --- | --- |
-| [01](./01_runtime_store.md) | Runtime store | `db_ops/db` | The database the toolkit keeps its own data in: job runs, measurements, reports, the delivery queue, restore history, and the configuration mirror. Also holds the row shapes the store persists. |
-| [02](./02_logging_engine.md) | Logging engine | `db_ops/logging_ops` | One logger per app: files under `logs/`, rows in `job_runs`, and the notify level that decides which chat hears about it. |
-| [03](./03_app_command_daemon.md) | App command daemon | `db_ops/jobs` (run as `db-ops daemon`) | The scheduler. Reads `app_commands.json` and runs every other app on its own interval, forwarding the secret passphrase to each child process. |
-| [04](./04_metrics_engine.md) | Metrics engine | `db_ops/metrics` | Collects every metric from every enabled target and writes the results. Reports and SLA both read what it produces. |
-| [05](./05_sql_task_runner.md) | SQL task runner | `db_ops/sql_tasks` | Runs the scheduled SQL scripts against their configured targets and delivers the output. |
-| [06](./06_reports_app.md) | Reports | `db_ops/reports` | Turns collected measurements into the scheduled reports and the inventory pages. |
-| [07](./07_telegram_app.md) | Telegram | `db_ops/telegram` | Delivers the outgoing queue one message at a time, and executes the commands people send back. |
-| [08](./08_backup_restore_app.md) | Backup / restore | `db_ops/backup_restore` | Runs backups, proves them by restoring, and records what was verified and when. |
-| [09](./09_sla_slo_compliance_app.md) | SLA / SLO compliance | `db_ops/sla` | Validates the objectives against collected measurements and reports the error budget left on each. |
-| [10](./10_sre_app.md) | SRE | `db_ops/sre` | Provisions and moves the disposable lab databases that drills and rehearsals run against. |
-| [11](./11_control_app.md) | Control | `db_ops/control` | Builds and deploys the toolkit to another node, and watches the toolkit itself. |
-| [12](./12_webhost_app.md) | Web host | `db_ops/webhost` | Serves the rendered reports over HTTP and hosts the console. |
-| [13](./13_common.md) | **Common** — shared operations | `db_ops/common` | Reaching a host, running SQL, moving a file, handling a secret. Invoked as a CLI, never imported. |
-| [14](./14_lib.md) | **Lib** — shared rules | `db_ops/lib` | Values and rules that are pure functions of their arguments. Imported everywhere, runs nothing. |
-| [15](./15_transport.md) | **Transport** — the one client | `db_ops/transport` | Starts `common.cli` and `db.cli` for every component: `lib` builds the command and reads the answer, this runs the process between them. Imports only `lib`. |
+| [01](./01_runtime_store.md) | Runtime store | `dbabrain/db` | The database the toolkit keeps its own data in: job runs, measurements, reports, the delivery queue, restore history, and the configuration mirror. Also holds the row shapes the store persists. |
+| [02](./02_logging_engine.md) | Logging engine | `dbabrain/logging_ops` | One logger per app: files under `logs/`, rows in `job_runs`, and the notify level that decides which chat hears about it. |
+| [03](./03_app_command_daemon.md) | App command daemon | `dbabrain/jobs` (run as `dbabrain daemon`) | The scheduler. Reads `app_commands.json` and runs every other app on its own interval, forwarding the secret passphrase to each child process. |
+| [04](./04_metrics_engine.md) | Metrics engine | `dbabrain/metrics` | Collects every metric from every enabled target and writes the results. Reports and SLA both read what it produces. |
+| [05](./05_sql_task_runner.md) | SQL task runner | `dbabrain/sql_tasks` | Runs the scheduled SQL scripts against their configured targets and delivers the output. |
+| [06](./06_reports_app.md) | Reports | `dbabrain/reports` | Turns collected measurements into the scheduled reports and the inventory pages. |
+| [07](./07_telegram_app.md) | Telegram | `dbabrain/telegram` | Delivers the outgoing queue one message at a time, and executes the commands people send back. |
+| [08](./08_backup_restore_app.md) | Backup / restore | `dbabrain/backup_restore` | Runs backups, proves them by restoring, and records what was verified and when. |
+| [09](./09_sla_slo_compliance_app.md) | SLA / SLO compliance | `dbabrain/sla` | Validates the objectives against collected measurements and reports the error budget left on each. |
+| [10](./10_sre_app.md) | SRE | `dbabrain/sre` | Provisions and moves the disposable lab databases that drills and rehearsals run against. |
+| [11](./11_control_app.md) | Control | `dbabrain/control` | Builds and deploys the toolkit to another node, and watches the toolkit itself. |
+| [12](./12_webhost_app.md) | Web host | `dbabrain/webhost` | Serves the rendered reports over HTTP and hosts the console. |
+| [13](./13_common.md) | **Common** — shared operations | `dbabrain/common` | Reaching a host, running SQL, moving a file, handling a secret. Invoked as a CLI, never imported. |
+| [14](./14_lib.md) | **Lib** — shared rules | `dbabrain/lib` | Values and rules that are pure functions of their arguments. Imported everywhere, runs nothing. |
+| [15](./15_transport.md) | **Transport** — the one client | `dbabrain/transport` | Starts `common.cli` and `db.cli` for every component: `lib` builds the command and reads the answer, this runs the process between them. Imports only `lib`. |
 
-The root package `db_ops` is **not** a component and holds nothing of its own (R41): `db_ops/cli.py`
-is the `db-ops` / `dbabrain` entry point and only dispatches - `db-ops <component> ...` to that
+The root package `dbabrain` is **not** a component and holds nothing of its own (R41): `dbabrain/cli.py`
+is the `dbabrain` entry point and only dispatches - `dbabrain <component> ...` to that
 component's CLI, and `init`, `guide`, `encrypt-secret`, `export-data`, `import-data` to the
-`common.cli` commands of those names (its `db_ops.config` alias of `db_ops.lib.config` was deleted in 0.25.0);
-`db_ops/__init__.py` re-exports the version from `lib/version.py`. The last command the root
+`common.cli` commands of those names (its `dbabrain.config` alias of `dbabrain.lib.config` was deleted in 0.25.0);
+`dbabrain/__init__.py` re-exports the version from `lib/version.py`. The last command the root
 answered itself, `check-credentials`, is a `common.cli` command since 0.24.0 - the target loader and
-the Telegram resolver it asks moved to `lib.data_sources` - and `db-ops check-credentials` is an
+the Telegram resolver it asks moved to `lib.data_sources` - and `dbabrain check-credentials` is an
 alias of it.
 
 **The list is closed.** Anything new is one of the fifteen or it is a sixteenth ORD with its own
@@ -65,7 +63,7 @@ directory, its own CLI and its own doc. There is no component that quietly is ne
 ```
   app ──import──▶ transport ──import──▶ lib ◀──import── common
    │                  │ starts                            ▲
-   │                  └──── python -m db_ops.common.cli ──┘   (JSON on stdin, envelope back)
+   │                  └──── python -m dbabrain.common.cli ──┘   (JSON on stdin, envelope back)
    └──import──▶ lib, db
 ```
 
@@ -122,7 +120,7 @@ one deletes an allowance whose module is gone, one deletes an allowance nobody u
 
 `tests/test_app_common_imports.py::test_an_app_imports_no_common_module_outside_the_baseline`
 
-It runs `python -m db_ops.common.cli <command> '<json>'` instead. The baseline is a shrinking
+It runs `python -m dbabrain.common.cli <command> '<json>'` instead. The baseline is a shrinking
 allow-list with a per-entry reason, and a second test fails when an entry stops being used, so the
 list can only get smaller.
 
@@ -137,7 +135,7 @@ Three exceptions are named at the guard rather than left to be discovered:
 
 ### `common` starts no processes
 
-`tests/test_import_boundaries.py::test_common_never_launches_a_db_ops_cli`
+`tests/test_import_boundaries.py::test_common_never_launches_a_dbabrain_cli`
 
 A shared library that shells out to a CLI has taken a dependency on everything that CLI imports —
 invisible to an import checker and just as binding. Notification routing is the worked example: the
@@ -151,9 +149,9 @@ Everything it needs arrives in the request. A lookup inside the operations layer
 behaviour depend on files the caller cannot see — and it is what would stop the same call working
 against a machine that is in no inventory, which is exactly the machine you need it for at 3am.
 
-### `lib` imports nothing from `db_ops`, and runs no CLI
+### `lib` imports nothing from `dbabrain`, and runs no CLI
 
-`tests/test_lib_is_pure.py::test_a_lib_module_imports_nothing_from_db_ops`
+`tests/test_lib_is_pure.py::test_a_lib_module_imports_nothing_from_dbabrain`
 `tests/test_lib_is_pure.py::test_a_lib_module_does_not_run_a_cli`
 
 The failure mode is undramatic: someone needs one helper, adds one import, and the layer every
@@ -161,7 +159,7 @@ component imports in-process quietly starts pulling configuration, a store conne
 behind it. Then "apps do not import `common`" has been routed around rather than kept.
 
 One exception, named at the guard: `notify` reads the notify-level vocabulary from
-`db_ops.lib.config`, lazily and failing open, because that vocabulary is data an operator adds by
+`dbabrain.lib.config`, lazily and failing open, because that vocabulary is data an operator adds by
 registering a chat. The parser is `lib`'s own, so this does not point the layer at anything above
 it. Any *second*
 exception should be argued as hard as this one was.
@@ -175,7 +173,7 @@ exception should be argued as hard as this one was.
 ORD 01 owns it, it is the toolkit's own bookkeeping, and its connection is declared in
 `data/store_config.json` rather than resolved from an inventory — so there is nothing for the
 operations layer to resolve and nothing an operator could point at the wrong host. An app imports
-`db_ops.db`, calls a store method or writes SQL against it, and does not go through a CLI to do so.
+`dbabrain.db`, calls a store method or writes SQL against it, and does not go through a CLI to do so.
 
 The rule that matters is about the *monitored* estate: a customer database, a host over SSH, a
 messaging endpoint. Those an app never reaches itself.
@@ -277,7 +275,7 @@ the port, the protocol or the parameter binding wrong.
 ## 7. How a run actually flows
 
 ```text
-scheduler (db_ops/jobs) — reads data/app_commands.json
+scheduler (dbabrain/jobs) — reads data/app_commands.json
   ├─ metrics.cli collect
   │     resolves targets from data/db_instances.json + users.json
   │     runs common.cli for each measurement           → writes metric_results
@@ -305,7 +303,7 @@ Two boundaries in that picture are load-bearing:
 
 ## 8. Where the configuration comes from
 
-Not from where the code sits. `DB_OPS_HOME`, then the working directory if it holds `data/` or
+Not from where the code sits. `DBABRAIN_HOME`, then the working directory if it holds `data/` or
 `config.json`, then the package location — guarded by `tests/test_tool_root_resolution.py`, with
 `tests/test_no_self_derived_project_root.py` refusing the `Path(__file__).parents[n]` idiom
 everywhere except the one module allowed to ask where its own code lives.

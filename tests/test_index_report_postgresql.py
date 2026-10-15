@@ -19,12 +19,12 @@ a way to put a wrong instruction in a report:
   outright, so "review, then DROP" is an instruction that errors when run.
 
 The messages below are real output from `assets/metrics/postgresql/072_postgresql_index_usage.sql`
-against the `db_ops` store on 2026-08-17.
+against the `dbabrain` store on 2026-08-17.
 """
 
 import pytest
 
-from db_ops.reports.index_report import collect_index_rows, format_index_report
+from dbabrain.reports.index_report import collect_index_rows, format_index_report
 
 
 class _FakeMetricStore:
@@ -45,7 +45,7 @@ class _FakeMetricStore:
 @pytest.fixture(autouse=True)
 def _fake_store(monkeypatch):
     holder: dict[str, list] = {"rows": []}
-    monkeypatch.setattr("db_ops.reports.index_report.MetricStore",
+    monkeypatch.setattr("dbabrain.reports.index_report.MetricStore",
                         lambda _source: _FakeMetricStore(holder["rows"]))
     return holder
 
@@ -62,11 +62,11 @@ SUMMARY = _row(
     "indexes_total=65, used=43, unused=22, cold=0, disabled=0, disabled_clustered=0, "
     "droppable=22, missing_suggestions=0, database=db_ops, counters_since=never reset "
     "| counters have never been reset: idx_scan covers the whole life of the statistics "
-    "| scope=db_ops only")
+    "| scope=dbabrain only")
 
 UNUSED = _row(
-    "db_ops.db_ops.backup_restore_history.ix_backup_restore_history_db_created", "0", "idx_scan",
-    "UNUSED: db=db_ops, schema=db_ops, table=backup_restore_history, "
+    "dbabrain.dbabrain.backup_restore_history.ix_backup_restore_history_db_created", "0", "idx_scan",
+    "UNUSED: db=dbabrain, schema=db_ops, table=backup_restore_history, "
     "index_name=ix_backup_restore_history_db_created, index_id=25353, type_desc=btree, "
     "is_unique=0, is_primary_key=0, is_unique_constraint=0, is_disabled=0, has_filter=0, "
     "idx_scan=0, idx_tup_read=0, idx_tup_fetch=0, user_seeks=0, user_scans=0, user_lookups=0, "
@@ -76,8 +76,8 @@ UNUSED = _row(
     "action=review, then DROP INDEX")
 
 PRIMARY_KEY = _row(
-    "db_ops.db_ops.backup_restore_history.backup_restore_history_pkey", "252", "idx_scan",
-    "USED: db=db_ops, schema=db_ops, table=backup_restore_history, "
+    "dbabrain.dbabrain.backup_restore_history.backup_restore_history_pkey", "252", "idx_scan",
+    "USED: db=dbabrain, schema=db_ops, table=backup_restore_history, "
     "index_name=backup_restore_history_pkey, index_id=18584, type_desc=btree, is_unique=1, "
     "is_primary_key=1, is_unique_constraint=0, is_disabled=0, has_filter=0, idx_scan=252, "
     "idx_tup_read=256, idx_tup_fetch=254, user_seeks=252, user_scans=0, user_lookups=0, "
@@ -98,7 +98,7 @@ def test_an_unread_btree_index_is_a_drop_candidate(_fake_store):
 
     assert entry["engine"] == "postgresql"
     assert [row["item"] for row in entry["droppable"]] == [
-        "db_ops.db_ops.backup_restore_history.ix_backup_restore_history_db_created"]
+        "dbabrain.dbabrain.backup_restore_history.ix_backup_restore_history_db_created"]
     assert entry["totals"]["droppable"] == 22
 
 
@@ -124,7 +124,7 @@ def test_the_page_renders_and_names_the_database_it_covered(_fake_store):
 
     assert "Index Usage Report" in text
     assert "ix_backup_restore_history_db_created" in text
-    assert "db_ops" in text
+    assert "dbabrain" in text
 
 
 def test_an_invalid_index_is_dropped_and_recreated_never_rebuilt(_fake_store):
@@ -132,8 +132,8 @@ def test_an_invalid_index_is_dropped_and_recreated_never_rebuilt(_fake_store):
     index while every write still maintains it, which is all of the cost and none of the benefit.
     It is also not the "table is inaccessible" incident a disabled clustered index is."""
     invalid = _row(
-        "db_ops.db_ops.metric_results.ix_broken", "0", "idx_scan",
-        "COLD: db=db_ops, schema=db_ops, table=metric_results, index_name=ix_broken, "
+        "dbabrain.dbabrain.metric_results.ix_broken", "0", "idx_scan",
+        "COLD: db=dbabrain, schema=db_ops, table=metric_results, index_name=ix_broken, "
         "index_id=99, type_desc=btree, is_unique=0, is_primary_key=0, is_unique_constraint=0, "
         "is_disabled=1, has_filter=0, idx_scan=0, user_seeks=0, user_scans=0, user_lookups=0, "
         "user_updates=10, size_mb=1.00, last_read=never, last_stats_update=never "
@@ -172,9 +172,9 @@ def test_a_sqlserver_report_is_unchanged_by_any_of_this(_fake_store):
     assert [row["item"] for row in entry["droppable"]] == ["SALESDB.dbo.Orders.IX_Orders_Cold"]
 
 
-DB_OPS_SUMMARY = _row(
-    "db_ops :: index_usage summary", "65", "summary",
-    "db=db_ops, indexes_total=65, used=43, unused=22, cold=0, disabled=0, disabled_clustered=0, "
+DBABRAIN_SUMMARY = _row(
+    "dbabrain :: index_usage summary", "65", "summary",
+    "db=dbabrain, indexes_total=65, used=43, unused=22, cold=0, disabled=0, disabled_clustered=0, "
     "droppable=22, tables=19, total_size_mb=1815.61, droppable_size_mb=157.65, "
     "counters_since=never reset | scope=this database only")
 
@@ -191,7 +191,7 @@ def test_a_servers_totals_are_the_sum_of_its_databases(_fake_store):
     would be written once per database under the same metric_item. On the PGLAB cluster that was
     three rows each claiming to be the server total, of which the parser keeps whichever arrived
     last — which is how a server with 66 indexes came to report 1."""
-    entry = _entry(_fake_store, DB_OPS_SUMMARY, TEST01_SUMMARY, UNUSED)
+    entry = _entry(_fake_store, DBABRAIN_SUMMARY, TEST01_SUMMARY, UNUSED)
 
     assert entry["totals"]["indexes_total"] == 66
     assert entry["totals"]["used"] == 43

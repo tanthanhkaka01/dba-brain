@@ -1,7 +1,7 @@
 # App Command Daemon
 
-The package is `jobs` (`db_ops/jobs`); the command is `daemon` - `db-ops daemon`, or
-`python -m db_ops.jobs.daemon`. Two names for one app: `db-ops --help` lists it as
+The package is `jobs` (`dbabrain/jobs`); the command is `daemon` - `dbabrain daemon`, or
+`python -m dbabrain.jobs.daemon`. Two names for one app: `dbabrain --help` lists it as
 `daemon (the jobs app)`, the component lists as `jobs`.
 
 ## Purpose
@@ -12,7 +12,7 @@ The App Command Daemon scans active app commands, checks `time_window` repeat in
 
 A command runs for one of **two** reasons: it is due on its schedule, or somebody asked for it.
 The second is a row in `app_command_requests`, written by the web console's "Run now" button or by
-`python -m db_ops.db.cli run-app`; the daemon consults the queue on every scan and starts the
+`python -m dbabrain.db.cli run-app`; the daemon consults the queue on every scan and starts the
 command exactly the way the schedule would have.
 
 A request deliberately **overrides both scheduling gates** — the allowed-hours window and the
@@ -33,7 +33,7 @@ See [01_runtime_store.md](01_runtime_store.md) for the table and
 
 ## Package / Files
 
-- `db_ops/jobs/`
+- `dbabrain/jobs/`
 - `data/app_commands.json`
 - `config.json`
 - `logs/jobs.log`
@@ -48,9 +48,9 @@ See [01_runtime_store.md](01_runtime_store.md) for the table and
 
 `data/app_commands.json` is the source of truth. Important fields are `app_command_id`, `app_code`, `app_name`, `display_name`, `log_scope`, `working_dir`, `command_text`, `time_window`, and `active`.
 
-`time_window.repeat_interval` and `time_window.timeout` are in seconds by default. `repeat_interval` is measured from the previous run's `started_at`, not from `finished_at` — and that is true of **every** app that carries a `time_window`, not only this one: the rule, the anchor column and the explanation all live in `db_ops/lib/time_window.py` (`due_from_row`, `run_anchor`, `explain_due`), and [`configuration.md` §5](./configuration.md) is the field reference. For example, if an app has `repeat_interval: 10` and the previous run started at `00:00:00` then finished at `00:00:09`, the app becomes due again at `00:00:10` — at `00:00:09.5` in fact, because a run may start up to `min(interval × 5%, 30s)` early so a scan boundary does not cost a whole cycle. If that same `app_command_id` is still running when it becomes due, the daemon skips it until the running process exits or times out. Date/time bounds use `from_*` and `to_*` names, for example `from_day`, `to_day`, `from_hour`, and `to_hour`.
+`time_window.repeat_interval` and `time_window.timeout` are in seconds by default. `repeat_interval` is measured from the previous run's `started_at`, not from `finished_at` — and that is true of **every** app that carries a `time_window`, not only this one: the rule, the anchor column and the explanation all live in `dbabrain/lib/time_window.py` (`due_from_row`, `run_anchor`, `explain_due`), and [`configuration.md` §5](./configuration.md) is the field reference. For example, if an app has `repeat_interval: 10` and the previous run started at `00:00:00` then finished at `00:00:09`, the app becomes due again at `00:00:10` — at `00:00:09.5` in fact, because a run may start up to `min(interval × 5%, 30s)` early so a scan boundary does not cost a whole cycle. If that same `app_command_id` is still running when it becomes due, the daemon skips it until the running process exits or times out. Date/time bounds use `from_*` and `to_*` names, for example `from_day`, `to_day`, `from_hour`, and `to_hour`.
 
-**Special `0` values (shared convention).** `repeat_interval`, `retry_interval`, and `timeout` accept `0`, which is interpreted consistently everywhere a `time_window` drives scheduling — app commands (`job_due`), SQL tasks, metrics, and reports (all via `db_ops/lib/time_window.py`):
+**Special `0` values (shared convention).** `repeat_interval`, `retry_interval`, and `timeout` accept `0`, which is interpreted consistently everywhere a `time_window` drives scheduling — app commands (`job_due`), SQL tasks, metrics, and reports (all via `dbabrain/lib/time_window.py`):
 
 - `repeat_interval: 0` — **run once**: due only when it has never run yet; it is *not* repeated after a successful run (a failed run is still retried after `retry_interval`, and a stale `running` row is recovered). This is the careful fix for the old "repeat every 0 seconds" trap.
 - `timeout: 0` — **no timeout-kill**: the daemon never terminates the process for running too long. Use this for long-running services.
@@ -65,7 +65,7 @@ node's app command there, keeping its schedule.
 
 ## Data Flow
 
-`data/app_commands.json` -> active command filter -> local `time_window` check -> duplicate-running check by `app_command_id` -> latest `job_runs.started_at` interval check -> subprocess start with `DB_OPS_LOG_SCOPE` and, for a command with a timeout, `DB_OPS_APP_TIMEOUT_SECONDS` in its environment -> runtime log files -> final `job_runs` update.
+`data/app_commands.json` -> active command filter -> local `time_window` check -> duplicate-running check by `app_command_id` -> latest `job_runs.started_at` interval check -> subprocess start with `DBABRAIN_LOG_SCOPE` and, for a command with a timeout, `DBABRAIN_APP_TIMEOUT_SECONDS` in its environment -> runtime log files -> final `job_runs` update.
 
 The `time_window` check uses the **configured timezone** (`config.json` → `timezone`), so `from_hour: 1` means 01:00 in that zone on every node regardless of the host clock. `job_runs` timestamps are stored in **UTC (+00)** and are unaffected by it — see "Timezone convention" in [`docs/13_common.md`](./13_common.md).
 
@@ -93,14 +93,14 @@ reading.
 Run forever with a 1-second scan interval:
 
 ```powershell
-# python -m db_ops.jobs.cli [daemon|status] is an equivalent alias (uniform <app>.cli convention)
-python -m db_ops.jobs.daemon --config config.json --delay-seconds 1
+# python -m dbabrain.jobs.cli [daemon|status] is an equivalent alias (uniform <app>.cli convention)
+python -m dbabrain.jobs.daemon --config config.json --delay-seconds 1
 ```
 
 Run one scan and wait for started commands to finish:
 
 ```powershell
-python -m db_ops.jobs.daemon --config config.json --once
+python -m dbabrain.jobs.daemon --config config.json --once
 ```
 
 **`--once` waits for the jobs it started, and does not start a service.** A command with
@@ -109,14 +109,14 @@ never completes by design — so a single pass skips it and logs
 `app.daemon.command.skip_service reason=long_running_service_not_run_by_once`. Until 2026-09-11 it
 started it and then waited for ever; that is why the web host shipped `active: false` from v0.4.0,
 a flag hiding the defect instead of fixing it. Every shipped command is active now, and on a fresh
-`db-ops init` root one `--once` pass finishes every job `status=done` in a few seconds —
+`dbabrain init` root one `--once` pass finishes every job `status=done` in a few seconds —
 `tests/test_every_app_command_runs_on_an_unconfigured_install.py` holds it to that. A service is
 proved by starting the daemon normally, not by `--once`.
 
 Use a different data directory:
 
 ```powershell
-python -m db_ops.jobs.daemon --config config.json --data-dir data --once
+python -m dbabrain.jobs.daemon --config config.json --data-dir data --once
 ```
 
 ## Useful Manual Queries
@@ -234,7 +234,7 @@ Together these two paths ensure that a crashed or long-gone subprocess never per
 answer, and that is a loop: a task that legitimately outran its timeout had its row closed, and the
 next scan started a second copy on top of the first. Every `running` row now records the pid and
 host that own it, and the reaper asks whether that process is still there
-(`db_ops/lib/run_claim.py`):
+(`dbabrain/lib/run_claim.py`):
 
 | The row | Answer |
 | --- | --- |
@@ -261,8 +261,8 @@ under a new one on every recreate, and read its predecessor's open rows as "anot
 2026-09-30 the upgrade to 0.25.0 held the production engine task's first target that way until the
 row was closed by hand. The tool root now has an identity of its own, `runtime/node_identity` - a
 random id written once, kept on the host across a recreate, never in a config bundle
-(`db_ops/lib/node_identity.py`). The daemon reads it at start and hands it to every child in
-`DB_OPS_NODE_IDENTITY`; each claim records it as `claim_node`. A row carrying this node's identity
+(`dbabrain/lib/node_identity.py`). The daemon reads it at start and hands it to every child in
+`DBABRAIN_NODE_IDENTITY`; each claim records it as `claim_node`. A row carrying this node's identity
 under a different host name is freed at once, **without asking about its pid** - the new
 container's pids start from 1 again, and the old number may be alive there as something else. A
 process started by hand has no identity, and its rows and reaps are judged exactly as before.
@@ -282,19 +282,19 @@ target. The order is now status first, interval second, which is what the daemon
 - A command is not starting: check `active` and `time_window.repeat_interval` plus `from_*`/`to_*` bounds.
 - A command is skipped as already running: the daemon keeps one live subprocess per `app_command_id`.
 - A command starts again soon after finishing: `repeat_interval` is counted from the last `started_at`. A run that lasts most of its interval may be due shortly after it exits.
-- A command is not starting and nothing says why: the `app.daemon.command.not_due` log line carries `reason=` and `next_retry_at=`, both taken from the verdict that made the decision. The same answer without the daemon is `python -m db_ops.common.cli due-check '<json>'`.
+- A command is not starting and nothing says why: the `app.daemon.command.not_due` log line carries `reason=` and `next_retry_at=`, both taken from the verdict that made the decision. The same answer without the daemon is `python -m dbabrain.common.cli due-check '<json>'`.
 - A command exits with `error`: inspect `metadata_json`, `error_text`, and the matching `{log_scope}_runtime.log`.
 - A command times out: increase `time_window.timeout` only after checking whether the child app is stuck.
-- **The store goes away for a moment**: a failure the store classifies as transient — the PostgreSQL SQLSTATEs `08xxx` (connection), `57P01`–`57P03` (shutting down / starting up), `53300` (too many connections) and, since 0.24.0, `53000`/`53100`/`53200` (the store out of disk or memory), plus a socket that never reached the server (since 0.27.0 including pg8000's *Can't create a connection to host …*, the one sentence it raises for every refused or timed-out connect: on 2026-10-06 a ten-second connect timeout ended the 0.27.0 soak's daemon at hour 1.5) — is waited out rather than raised, 2 s then 4, 8, 16 and 30, for at most **6 hours per outage** (10 minutes until 0.24.0: on 2026-09-27 a full disk under the store raised `53100`, the daemon exited, and the store was back 62 minutes later without it). Every wait is logged as `app.daemon.store_outage` with the code and the budget left, so the gap in `job_runs` carries its own explanation. Past the budget, or for any other error, the daemon exits as it always did. Before this, a two-second restart of the store's container ended the process on `FATAL 57P03` and nothing restarted it — nineteen hours of silence, and candidate 0.18.0 abandoned at hour 21.8. The rule is `db_ops/lib/store_outage.py`; SQLite's `database is locked` keeps its own older backoff beside it.
+- **The store goes away for a moment**: a failure the store classifies as transient — the PostgreSQL SQLSTATEs `08xxx` (connection), `57P01`–`57P03` (shutting down / starting up), `53300` (too many connections) and, since 0.24.0, `53000`/`53100`/`53200` (the store out of disk or memory), plus a socket that never reached the server (since 0.27.0 including pg8000's *Can't create a connection to host …*, the one sentence it raises for every refused or timed-out connect: on 2026-10-06 a ten-second connect timeout ended the 0.27.0 soak's daemon at hour 1.5) — is waited out rather than raised, 2 s then 4, 8, 16 and 30, for at most **6 hours per outage** (10 minutes until 0.24.0: on 2026-09-27 a full disk under the store raised `53100`, the daemon exited, and the store was back 62 minutes later without it). Every wait is logged as `app.daemon.store_outage` with the code and the budget left, so the gap in `job_runs` carries its own explanation. Past the budget, or for any other error, the daemon exits as it always did. Before this, a two-second restart of the store's container ended the process on `FATAL 57P03` and nothing restarted it — nineteen hours of silence, and candidate 0.18.0 abandoned at hour 21.8. The rule is `dbabrain/lib/store_outage.py`; SQLite's `database is locked` keeps its own older backoff beside it.
 - A command appears stuck in `running` after a daemon restart: `recover_stale_running_jobs` should resolve this at next startup. If the row is still `running` after restart, check that the daemon started without error.
-- **The daemon starts and runs nothing at all**, logging `app.daemon.nothing_scheduled`: every command is declared for a `node_role` this process does not have. A process that was not told otherwise is `master`, and an estate exported from a worker declares `worker` on all of them. Set `DB_OPS_NODE_ROLE=worker` on the process, or `node_role: "all"` in `data/app_commands.json`. This is the first thing to check on a machine that has just imported an estate — see [`docs/configuration.md` §9](./configuration.md#9-moving-a-whole-estate-to-another-machine).
+- **The daemon starts and runs nothing at all**, logging `app.daemon.nothing_scheduled`: every command is declared for a `node_role` this process does not have. A process that was not told otherwise is `master`, and an estate exported from a worker declares `worker` on all of them. Set `DBABRAIN_NODE_ROLE=worker` on the process, or `node_role: "all"` in `data/app_commands.json`. This is the first thing to check on a machine that has just imported an estate — see [`docs/configuration.md` §9](./configuration.md#9-moving-a-whole-estate-to-another-machine).
 
 ## Config Priority
 
 The daemon resolves its config file using this chain:
 
 1. `--config <path>` CLI argument.
-2. `DB_OPS_JOBS_CONFIG` environment variable.
+2. `DBABRAIN_JOBS_CONFIG` environment variable.
 3. `config.jobs.json` next to `config.json`, or in the current working directory.
 4. `config.json` shared fallback.
 
@@ -310,18 +310,18 @@ App-specific config file: `config.jobs.json`
 
 Required config keys: `log_dir`, `runtime_dir`, plus a resolvable runtime store (`store_config_file`, an inline `store` block, or `sqlite_path`).
 
-## `working_dir` and the `tools/db_ops` alias
+## `working_dir` and the `tools/dbabrain` alias
 
-Every entry in `app_commands.json` carries `"working_dir": "tools/db_ops"`. That is **not** a
-folder in this repository — `db_ops` is a standalone repository with `db_ops/`, `data/`, and
-`assets/` at its root. The daemon treats the exact string `tools/db_ops` as a **logical alias
+Every entry in `app_commands.json` carries `"working_dir": "tools/dbabrain"`. That is **not** a
+folder in this repository — `dbabrain` is a standalone repository with `dbabrain/`, `data/`, and
+`assets/` at its root. The daemon treats the exact string `tools/dbabrain` as a **logical alias
 for the tool root** and resolves it to `TOOL_ROOT`, wherever the project physically lives
-(`resolve_working_dir` in `db_ops/jobs/daemon.py`):
+(`resolve_working_dir` in `dbabrain/jobs/daemon.py`):
 
-| Where it runs | `tools/db_ops` resolves to |
+| Where it runs | `tools/dbabrain` resolves to |
 | --- | --- |
-| Local checkout on the master | the repository root (e.g. `D:\Projects\db_ops`) |
-| `db_ops_daemon` container on the worker | `/app/tools/db_ops` (the image's fixed layout) |
+| Local checkout on the master | the repository root (e.g. `D:\Projects\dbabrain`) |
+| `dbabrain_daemon` container on the worker | `/app/tools/dbabrain` (the image's fixed layout) |
 
 This is why the same `app_commands.json` is deployed to both sides unchanged. Any other
 relative `working_dir` is tried against `REPO_ROOT`, `TOOL_ROOT`, then `data_dir`, and must

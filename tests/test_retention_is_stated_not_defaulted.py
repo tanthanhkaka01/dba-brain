@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore.config import (
+from dbabrain.backup_restore.config import (
     DEFAULT_CLEANUP_RETENTION,
     parse_cleanup_retention,
 )
@@ -100,7 +100,7 @@ def test_every_backup_job_in_this_estate_states_its_retention():
 
 
 def test_a_backup_job_without_retention_is_refused(tmp_path):
-    from db_ops.backup_restore.backup import load_backup_jobs
+    from dbabrain.backup_restore.backup import load_backup_jobs
 
     config = {"backup_restore": {"backups": [{
         "backup_id": "B1", "db_type": "sqlserver", "server_id": "S1", "active": True,
@@ -116,7 +116,7 @@ def test_a_backup_job_without_retention_is_refused(tmp_path):
 
 def test_delete_backup_offers_a_dry_run():
     """The engine has always accepted `dry_run`; only the flag was missing."""
-    from db_ops.backup_restore import cli
+    from dbabrain.backup_restore import cli
 
     args = cli.parse_args(["delete-backup", "--retention-seconds", "691200", "--dry-run"])
     assert args.dry_run is True
@@ -130,7 +130,7 @@ def test_the_delete_override_is_in_seconds_and_the_hours_form_is_converted_in_th
     less than an hour became an hour and nothing in the output said so. A setting the tool quietly
     replaces is worse than one it refuses.
     """
-    from db_ops.backup_restore.cli import _retention_override
+    from dbabrain.backup_restore.cli import _retention_override
 
     assert _retention_override(1800, None) == 1800
     assert _retention_override(None, 48) == 48 * 3600
@@ -142,7 +142,7 @@ def test_the_delete_override_is_in_seconds_and_the_hours_form_is_converted_in_th
 
 def test_one_field_name_and_one_unit_for_both_halves():
     """The backup job and the restore entry read the same key through the same parser."""
-    from db_ops.lib import cleanup_retention
+    from dbabrain.lib import cleanup_retention
 
     assert cleanup_retention.FIELD == "cleanup_retention"
     assert cleanup_retention.parse({"cleanup_retention": 3600}, context="x") == 3600
@@ -157,7 +157,7 @@ def test_a_backup_job_states_its_retention_in_seconds_and_days_are_derived():
     day-based planner. It is not a second setting: nothing writes it and nothing parses it."""
     import dataclasses
 
-    from db_ops.backup_restore.backup import BackupJob
+    from dbabrain.backup_restore.backup import BackupJob
 
     assert "retention_days" not in {f.name for f in dataclasses.fields(BackupJob)}
 
@@ -170,7 +170,7 @@ def test_the_cleanup_phase_announces_itself_to_the_store():
     """
     import inspect
 
-    from db_ops.backup_restore import cli
+    from dbabrain.backup_restore import cli
 
     source = inspect.getsource(cli)
     assert '_say("DELETE_START"' in source

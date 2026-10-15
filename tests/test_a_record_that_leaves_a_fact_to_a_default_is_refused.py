@@ -19,13 +19,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.backup_restore import config as restore_config_module
-from db_ops.backup_restore import restore_by_id, restore_script
-from db_ops.common import instance_admin, remote_credential_admin
-from db_ops.lib import errors, shared_objects
-from db_ops.lib.data_sources import collection_targets, request_fill
-from db_ops.lib.stated_facts import FALLBACK_KIND, FactNotStated, fallbacks
-from db_ops.metrics import executor
+from dbabrain.backup_restore import config as restore_config_module
+from dbabrain.backup_restore import restore_by_id, restore_script
+from dbabrain.common import instance_admin, remote_credential_admin
+from dbabrain.lib import errors, shared_objects
+from dbabrain.lib.data_sources import collection_targets, request_fill
+from dbabrain.lib.stated_facts import FALLBACK_KIND, FactNotStated, fallbacks
+from dbabrain.metrics import executor
 
 SSH = {"enabled": True, "method": "ssh", "host": "192.0.2.10", "port": 22, "credential_name": "os"}
 COMPLETE = {"server_id": "PG-1", "db_type": "postgresql", "ip": "192.0.2.10", "port": 5432,
@@ -309,7 +309,7 @@ def test_a_restore_plan_never_logs_in_as_sa_on_its_own():
 def test_the_shipped_examples_state_every_fact(tmp_path, example, live_name):
     """An install starts from these. Phase 1 read only a node's own data/, and both examples carried
     an active record it would have reported - copied as shipped, 0.27.0 would refuse them."""
-    from db_ops.lib.paths import resolve_tool_path
+    from dbabrain.lib.paths import resolve_tool_path
 
     (tmp_path / live_name).write_bytes(resolve_tool_path(f"data/{example}").read_bytes())
 

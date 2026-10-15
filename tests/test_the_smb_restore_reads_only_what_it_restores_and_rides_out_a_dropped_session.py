@@ -26,10 +26,10 @@ import pytest
 
 from conftest import patch_restore
 
-from db_ops.backup_restore import copy_backup, restore_database
-from db_ops.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
-from db_ops.common import sqlcmd_run
-from db_ops.lib.remote_host import RemoteError, RemoteHost
+from dbabrain.backup_restore import copy_backup, restore_database
+from dbabrain.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
+from dbabrain.common import sqlcmd_run
+from dbabrain.lib.remote_host import RemoteError, RemoteHost
 
 
 def _config(share: Path, tmp_path: Path, **overrides) -> BackupRestoreConfig:
@@ -73,7 +73,7 @@ def test_an_entry_that_maps_no_database_still_takes_everything_it_finds(tmp_path
 
 
 def test_the_share_listing_asks_for_each_mapped_folder_and_never_the_whole_share(tmp_path, monkeypatch):
-    from db_ops.backup_restore import share as share_module
+    from dbabrain.backup_restore import share as share_module
 
     asked: list[str] = []
 
@@ -90,7 +90,7 @@ def test_the_share_listing_asks_for_each_mapped_folder_and_never_the_whole_share
 
 
 def test_a_share_that_stopped_being_written_is_named_as_such(tmp_path, monkeypatch):
-    from db_ops.backup_restore import share as share_module
+    from dbabrain.backup_restore import share as share_module
 
     eight_days = time.time() - 8 * 86400
     monkeypatch.setattr(share_module, "list_files", lambda unc, **_kw: [
@@ -103,7 +103,7 @@ def test_a_share_that_stopped_being_written_is_named_as_such(tmp_path, monkeypat
 
 
 def test_the_hint_never_replaces_the_error_it_explains(tmp_path, monkeypatch):
-    from db_ops.backup_restore import share as share_module
+    from dbabrain.backup_restore import share as share_module
 
     def broken(unc, **_kw):
         raise share_module.ShareError("NT_STATUS_LOGON_FAILURE")

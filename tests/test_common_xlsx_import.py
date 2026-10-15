@@ -26,7 +26,7 @@ import zipfile
 
 import pytest
 
-from db_ops.lib import xlsx_export, xlsx_import
+from dbabrain.lib import xlsx_export, xlsx_import
 
 
 # --------------------------------------------------------------------------- #

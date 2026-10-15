@@ -11,26 +11,26 @@ are different claims and rarely deserve the same level.
 
 The phase has to be carried by the raiser, not guessed from the message: pyodbc says "Login
 timeout expired" for an unreachable host while Oracle says "ORA-12541", and message keywords are
-exactly how error_type classification went wrong before (see db_ops/metrics/collector.py).
+exactly how error_type classification went wrong before (see dbabrain/metrics/collector.py).
 """
 
 import json
 
 import pytest
 
-from db_ops.lib.event_policy import PHASE_CONNECT, PHASE_EXECUTE, resolve_failure_phase
-from db_ops.common import remote_exec
+from dbabrain.lib.event_policy import PHASE_CONNECT, PHASE_EXECUTE, resolve_failure_phase
+from dbabrain.common import remote_exec
 # Which half of a remote attempt broke is read off remote_exec's exception classes, which only
 # `common` knows - so since 0.24.0 it is decided there, inside `metric-batch`.
-from db_ops.common.metric_batch import _remote_failure_phase
-from db_ops.metrics.collector import (
+from dbabrain.common.metric_batch import _remote_failure_phase
+from dbabrain.metrics.collector import (
     MetricCommandError,
     _collect_one_metric,
 )
 from conftest import shipped_config
-from db_ops.metrics.definitions import load_metric_definitions
-from db_ops.metrics.executor import MetricConnectionError, MetricExecutionError
-from db_ops.metrics.models import MetricDefinition, MetricTarget
+from dbabrain.metrics.definitions import load_metric_definitions
+from dbabrain.metrics.executor import MetricConnectionError, MetricExecutionError
+from dbabrain.metrics.models import MetricDefinition, MetricTarget
 
 
 def _definition(**overrides):
@@ -65,7 +65,7 @@ def _collect_failing_with(exc, metric, monkeypatch, target=None):
     def fail(**_kwargs):
         raise exc
 
-    monkeypatch.setattr("db_ops.metrics.collector._run_sql_file", fail)
+    monkeypatch.setattr("dbabrain.metrics.collector._run_sql_file", fail)
     results = _collect_one_metric(
         metric=metric,
         target=target or _target(),
@@ -164,7 +164,7 @@ def test_a_command_metric_that_exited_non_zero_is_graded_as_an_execution_failure
     def fail(**_kwargs):
         raise MetricCommandError("Command exited with code 1.", exit_code=1)
 
-    monkeypatch.setattr("db_ops.metrics.collector._run_command_file", fail)
+    monkeypatch.setattr("dbabrain.metrics.collector._run_command_file", fail)
     results = _collect_one_metric(
         metric=metric,
         target=_target(platform="linux", cmd_access={"enabled": True, "method": "ssh", "host": "10.0.0.1"}),

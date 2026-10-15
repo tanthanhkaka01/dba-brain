@@ -30,7 +30,7 @@ KEY_ERRORS = ("[typeddict-item]", "[typeddict-unknown-key]")
 def test_no_answer_is_read_under_a_key_it_does_not_carry(tmp_path):
     pytest.importorskip("mypy")
     result = subprocess.run(
-        [sys.executable, "-m", "mypy", "db_ops", "--ignore-missing-imports", "--check-untyped-defs",
+        [sys.executable, "-m", "mypy", "dbabrain", "--ignore-missing-imports", "--check-untyped-defs",
          "--no-error-summary", "--cache-dir", str(tmp_path / "mypy_cache")],
         cwd=REPO, capture_output=True, text=True, timeout=600)
     misread = [line for line in result.stdout.splitlines() if line.endswith(KEY_ERRORS)]
@@ -42,7 +42,7 @@ def test_the_check_would_name_the_0_22_0_defect(tmp_path):
     pytest.importorskip("mypy")
     probe = tmp_path / "probe.py"
     probe.write_text(
-        "from db_ops.transport import common_cli\n\n\n"
+        "from dbabrain.transport import common_cli\n\n\n"
         "def summary() -> str:\n"
         "    return str(common_cli.run('restore-full', {})['engine'])\n", encoding="utf-8")
     result = subprocess.run(

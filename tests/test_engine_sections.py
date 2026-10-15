@@ -7,7 +7,7 @@ the next because two pages spelled ``postgres`` differently.
 
 from __future__ import annotations
 
-from db_ops.lib import engine_sections
+from dbabrain.lib import engine_sections
 
 
 def test_every_spelling_of_an_engine_lands_in_one_section():

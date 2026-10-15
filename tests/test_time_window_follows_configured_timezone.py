@@ -6,7 +6,7 @@ whatever clock the machine was set to, and the two nodes agreed only because `do
 pinned `TZ: Asia/Ho_Chi_Minh` into the image. Anyone running the published image without that line
 had every overnight window seven hours out and nothing said so.
 
-`db_ops/lib/time_window.py` was never the bug — it takes `current` and compares it. The bug was in
+`dbabrain/lib/time_window.py` was never the bug — it takes `current` and compares it. The bug was in
 the six callers, and a seventh added later reading the wrong clock would be just as silent. So this
 pins one instant and one window and holds all of them to it together:
 
@@ -16,7 +16,7 @@ pins one instant and one window and holds all of them to it together:
 At `+07` every caller must say OPEN. At `UTC` every caller must say CLOSED. A caller that does not
 flip is one still reading a clock nobody configured.
 
-The freeze is applied to `db_ops.lib.timezone.datetime` alone, on purpose: that is the single point
+The freeze is applied to `dbabrain.lib.timezone.datetime` alone, on purpose: that is the single point
 every caller is supposed to go through, so a caller that bypasses it keeps reading the real wall
 clock and fails here instead of passing by luck.
 """
@@ -26,8 +26,8 @@ from unittest.mock import patch
 
 import pytest
 
-from db_ops.lib import timezone as tz
-from db_ops.lib.time_window import TimeWindow
+from dbabrain.lib import timezone as tz
+from dbabrain.lib.time_window import TimeWindow
 
 
 #: 09:30 at +07, 02:30 at +00 — inside the window on one clock and outside it on the other.
@@ -52,13 +52,13 @@ def _restore_zone():
 def _open_at(zone: str) -> dict[str, bool]:
     """Ask every `time_window` caller whether the window is open, with `zone` configured."""
     tz.bind_display_timezone(zone)
-    with patch("db_ops.lib.timezone.datetime", _FrozenDateTime):
-        from db_ops.backup_restore import schedule
-        from db_ops.common import evidence, host_ops
-        from db_ops.jobs import daemon
-        from db_ops.metrics import collector
-        from db_ops.reports import metrics_reports
-        from db_ops.sql_tasks import runner
+    with patch("dbabrain.lib.timezone.datetime", _FrozenDateTime):
+        from dbabrain.backup_restore import schedule
+        from dbabrain.common import evidence, host_ops
+        from dbabrain.jobs import daemon
+        from dbabrain.metrics import collector
+        from dbabrain.reports import metrics_reports
+        from dbabrain.sql_tasks import runner
 
         command = daemon.AppCommand(
             app_command_id="probe", app_code="probe", app_name="probe", display_name="probe",
@@ -110,11 +110,11 @@ def test_setting_the_zone_to_utc_really_moves_the_schedule_to_utc():
     02:00-03:00 and outside 09:00-10:00, which is the opposite of what it is at +07.
     """
     tz.bind_display_timezone("UTC")
-    with patch("db_ops.lib.timezone.datetime", _FrozenDateTime):
+    with patch("dbabrain.lib.timezone.datetime", _FrozenDateTime):
         now_utc = tz.display_now()
     assert now_utc.hour == 2 and now_utc.utcoffset() == dt.timedelta(0)
 
-    from db_ops.lib.time_window import is_time_window_open
+    from dbabrain.lib.time_window import is_time_window_open
 
     assert is_time_window_open(TimeWindow(from_hour=2, to_hour=3), now_utc)
     assert not is_time_window_open(TimeWindow(from_hour=9, to_hour=10), now_utc)
@@ -124,8 +124,8 @@ def test_the_skip_reason_names_the_hour_on_the_configured_clock():
     """The message an operator reads when a report does not run has to name an hour they can
     recognise. "outside allowed hour window: 2" is only useful if 2 is the hour on their clock."""
     tz.bind_display_timezone("UTC")
-    with patch("db_ops.lib.timezone.datetime", _FrozenDateTime):
-        from db_ops.reports import metrics_reports
+    with patch("dbabrain.lib.timezone.datetime", _FrozenDateTime):
+        from dbabrain.reports import metrics_reports
         reason = metrics_reports._schedule_skip_reason(
             report_config={"active": True, "time_window": WINDOW_JSON},
             evaluated_at=MOMENT, last_sent_at="")
@@ -139,7 +139,7 @@ def test_elapsed_time_is_not_affected_by_the_display_zone():
     offset-safe and are done in UTC against stored timestamps — a schedule must not fire an hour
     early because someone changed which clock the reports are printed on.
     """
-    from db_ops.lib.time_window import repeat_due
+    from dbabrain.lib.time_window import repeat_due
 
     last_run = MOMENT - dt.timedelta(seconds=200)
     for zone in ("UTC", "+07:00", "America/New_York"):
@@ -159,17 +159,17 @@ def test_the_timezone_command_writes_the_zone_into_config_json(tmp_path):
     """
     import json
 
-    from db_ops.db.cli import _write_config_timezone
+    from dbabrain.db.cli import _write_config_timezone
 
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"app_name": "db_ops", "timezone": "Europe/Berlin",
+    path.write_text(json.dumps({"app_name": "dbabrain", "timezone": "Europe/Berlin",
                                 "log_dir": "logs"}), encoding="utf-8")
 
     _write_config_timezone(path, "UTC")
 
     document = json.loads(path.read_text(encoding="utf-8"))
     assert document["timezone"] == "UTC"
-    assert document["app_name"] == "db_ops" and document["log_dir"] == "logs", (
+    assert document["app_name"] == "dbabrain" and document["log_dir"] == "logs", (
         "the rest of the config survives")
 
 
@@ -180,7 +180,7 @@ def test_a_zone_no_clock_answers_to_is_refused(tmp_path):
 
     import pytest
 
-    from db_ops.db.cli import _write_config_timezone
+    from dbabrain.db.cli import _write_config_timezone
 
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"timezone": "UTC"}), encoding="utf-8")

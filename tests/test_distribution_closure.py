@@ -6,7 +6,7 @@ seven packages were withheld: 88 of 246 modules, and not one edge from the kept 
 excluded one. Only `control` is withheld now, and the property is the same one.
 
 **A property that holds today and is checked by nothing will stop holding.** One `from
-db_ops.reports import ...` inside `db_ops/metrics/` would make the wheel unimportable, and it would
+dbabrain.reports import ...` inside `dbabrain/metrics/` would make the wheel unimportable, and it would
 not fail here, in this repository, where every package is present — it would fail for a stranger,
 after `pip install`, on a machine nobody can look at. That is the failure this file exists to move
 forward in time.
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib.distribution import (
+from dbabrain.lib.distribution import (
     PRIVATE_PACKAGES,
     PUBLIC_PACKAGES,
     is_public,
@@ -30,7 +30,7 @@ from db_ops.lib.distribution import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_ROOT = REPO_ROOT / "db_ops"
+PACKAGE_ROOT = REPO_ROOT / "dbabrain"
 
 
 def _module_name(path: Path) -> str:
@@ -41,15 +41,15 @@ def _module_name(path: Path) -> str:
 
 
 def _imports(path: Path) -> set[str]:
-    """Every ``db_ops.*`` module this file names, without importing anything."""
+    """Every ``dbabrain.*`` module this file names, without importing anything."""
     found: set[str] = set()
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            if node.module.startswith("db_ops"):
+            if node.module.startswith("dbabrain"):
                 found.add(node.module)
         elif isinstance(node, ast.Import):
-            found.update(alias.name for alias in node.names if alias.name.startswith("db_ops"))
+            found.update(alias.name for alias in node.names if alias.name.startswith("dbabrain"))
     return found
 
 
@@ -115,7 +115,7 @@ def test_every_package_in_the_tree_has_a_verdict() -> None:
 
     Whichever way it defaulted would be wrong: defaulting to public ships something nobody reviewed,
     and defaulting to private makes the public tree quietly lose a capability. So it fails here
-    until somebody writes the package down in `db_ops/lib/distribution.py`.
+    until somebody writes the package down in `dbabrain/lib/distribution.py`.
     """
     on_disk = {
         path.name
@@ -138,10 +138,10 @@ def test_the_packaging_globs_match_the_declared_set() -> None:
     """The globs this module derives are the packages it declares."""
     globs = public_package_globs()
 
-    assert globs[0] == "db_ops", "the root package must ship, or nothing imports"
-    assert set(globs[1:]) == {f"db_ops.{name}*" for name in PUBLIC_PACKAGES}
+    assert globs[0] == "dbabrain", "the root package must ship, or nothing imports"
+    assert set(globs[1:]) == {f"dbabrain.{name}*" for name in PUBLIC_PACKAGES}
     for name in PRIVATE_PACKAGES:
-        assert f"db_ops.{name}*" not in globs
+        assert f"dbabrain.{name}*" not in globs
 
 
 def test_pyproject_ships_what_this_module_declares() -> None:

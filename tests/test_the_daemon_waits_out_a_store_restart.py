@@ -5,7 +5,7 @@ later. The daemon did not: the scan raised ``FATAL 57P03`` — *the database sys
 the loop let it out, ``main`` logged one line and returned 1, and nothing restarted the process.
 Nineteen hours of silence followed and candidate 0.18.0 was abandoned at hour 21.8.
 
-The rule now lives in :mod:`db_ops.lib.store_outage`: a failure the store itself classifies as
+The rule now lives in :mod:`dbabrain.lib.store_outage`: a failure the store itself classifies as
 transient is waited out, on a bounded budget, and everything else leaves the loop exactly as before.
 These tests are that distinction — the codes, the budget, and the two things that must not change:
 a real error still reaches a person, and an outage longer than the budget still ends the process.
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.lib import store_outage
+from dbabrain.lib import store_outage
 
 
 class FakePgError(Exception):
@@ -146,7 +146,7 @@ def test_the_budget_is_per_outage_and_a_good_pass_restores_it():
 # The daemon's half: the wait is logged, because a silent wait reads as a stopped daemon
 # --------------------------------------------------------------------------- #
 def test_the_daemon_logs_every_wait_with_the_code_and_the_budget_left(capsys):
-    from db_ops.jobs.daemon import wait_out_store_outage
+    from dbabrain.jobs.daemon import wait_out_store_outage
 
     logged: list[dict] = []
 
@@ -167,7 +167,7 @@ def test_the_daemon_logs_every_wait_with_the_code_and_the_budget_left(capsys):
 
 
 def test_the_daemon_lets_a_real_error_out_untouched():
-    from db_ops.jobs.daemon import wait_out_store_outage
+    from dbabrain.jobs.daemon import wait_out_store_outage
 
     assert wait_out_store_outage(
         FakePgError("42P01", 'relation "job_runs" does not exist'),
@@ -179,7 +179,7 @@ def test_the_scan_loop_consults_the_waiter_and_reraises_what_it_will_not_wait_fo
     test above while changing nothing."""
     import inspect
 
-    from db_ops.jobs import daemon
+    from dbabrain.jobs import daemon
 
     source = inspect.getsource(daemon.main)
 

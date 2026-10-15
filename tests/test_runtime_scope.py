@@ -1,7 +1,7 @@
 import pytest
 
-from db_ops.lib.time_window import TimeWindow
-from db_ops.sql_tasks import runner
+from dbabrain.lib.time_window import TimeWindow
+from dbabrain.sql_tasks import runner
 
 
 def command(sql_id, code):

@@ -14,8 +14,8 @@ import json
 
 import pytest
 
-from db_ops.lib import errors
-from db_ops.telegram.command_permissions import set_command_level, warn_low_level
+from dbabrain.lib import errors
+from dbabrain.telegram.command_permissions import set_command_level, warn_low_level
 
 
 def _files(tmp_path, node_levels, shipped_levels):

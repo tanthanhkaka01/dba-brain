@@ -12,7 +12,7 @@ import datetime as dt
 
 import pytest
 
-from db_ops.backup_restore.cli import point_in_time_window_start
+from dbabrain.backup_restore.cli import point_in_time_window_start
 
 POINT = dt.datetime(2026, 9, 30, 12, 0, tzinfo=dt.timezone.utc)
 

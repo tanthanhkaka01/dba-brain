@@ -7,7 +7,7 @@ far from the install that could have prevented it.
 
 So the message carries the fix. `pyodbc is required to connect to SQL Server` tells a DBA what is
 missing and leaves them to work out which project provides it and under what name; the extras in
-`pyproject.toml` mean there is an exact answer — `pip install 'db_ops[mssql]'` — and printing it
+`pyproject.toml` mean there is an exact answer — `pip install 'dbabrain[mssql]'` — and printing it
 turns a dead end into one command.
 
 The guard below is the part that keeps being true: extras get renamed and added, and a message
@@ -22,7 +22,7 @@ import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = REPO_ROOT / "db_ops"
+PACKAGE = REPO_ROOT / "dbabrain"
 
 #: Every extra a message is allowed to name.
 DECLARED_EXTRAS = set(
@@ -30,14 +30,14 @@ DECLARED_EXTRAS = set(
     ["project"]["optional-dependencies"]
 )
 
-EXTRA_IN_MESSAGE = re.compile(r"""db_ops\[([a-z]+)\]|install_hint\(["']([a-z]+)["']\)""")
+EXTRA_IN_MESSAGE = re.compile(r"""dbabrain\[([a-z]+)\]|install_hint\(["']([a-z]+)["']\)""")
 
 
 def _offers_an_install(text: str) -> bool:
     """Does this message tell the reader the command that fixes it?
 
-    The command used to be a literal. It is built by `db_ops.lib.packaging.install_hint` now,
-    because the distribution is named `db_ops` here and `dbabrain` where it is published, and a
+    The command used to be a literal. It is built by `dbabrain.lib.packaging.install_hint` now,
+    because the distribution is named `dbabrain` here and `dbabrain` where it is published, and a
     hard-coded literal was wrong for everyone reading the published one. So the thing to look for
     is either form: the text, or the call that produces it.
     """
@@ -58,7 +58,7 @@ def _messages() -> list[tuple[str, int, str]]:
 
 def test_every_extra_a_message_names_is_one_that_exists() -> None:
     unknown = [
-        f"{name}:{number} names db_ops[{extra}]"
+        f"{name}:{number} names dbabrain[{extra}]"
         for name, number, extra in _messages()
         if extra not in DECLARED_EXTRAS
     ]

@@ -6,11 +6,11 @@ The SQL Task Runner runs scheduled SQL task workflows against configured targets
 
 ## Package / Files
 
-- `db_ops/sql_tasks/` - the runner is `runner.py` (the CLI, the scheduler scan, the forced-run gate, and `run_one_sql_task`) over four modules split out of it on 2026-10-03, in import order: `runner_plan.py` (the execution plan, the progress line, the notify rule), `runner_parameters.py` (named, positional and legacy DEFINE values, bound into the SQL), `runner_output.py` (the result formatted, trimmed for the store, written to a file, queued to Telegram) and `runner_execute.py` (the SQL files resolved, the login stated, the text checked, the run bounded by its deadline, a failed connect diagnosed). `runner` re-exports every name; a test replaces a collaborator with `conftest.patch_sql_runner`, which reaches every module that binds it
+- `dbabrain/sql_tasks/` - the runner is `runner.py` (the CLI, the scheduler scan, the forced-run gate, and `run_one_sql_task`) over four modules split out of it on 2026-10-03, in import order: `runner_plan.py` (the execution plan, the progress line, the notify rule), `runner_parameters.py` (named, positional and legacy DEFINE values, bound into the SQL), `runner_output.py` (the result formatted, trimmed for the store, written to a file, queued to Telegram) and `runner_execute.py` (the SQL files resolved, the login stated, the text checked, the run bounded by its deadline, a failed connect diagnosed). `runner` re-exports every name; a test replaces a collaborator with `conftest.patch_sql_runner`, which reaches every module that binds it
 - `data/sql_commands.json`
 - `data/sql_targets.json`
 - `assets/tasks/` — the SQL, and `assets/tasks/python/` for a task fed by a program
-- the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/db_ops.sqlite` when the backend is `sqlite`)
+- the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/dbabrain.sqlite` when the backend is `sqlite`)
 
 ## Runtime Tables
 
@@ -99,7 +99,7 @@ for the contract in full. Its four rules:
    partial pull — the case this feature invites, because a fetcher that gives up on half its pages
    and still prints what it got produces a load that looks exactly like a complete one.
 
-**The program is never handed the passphrase.** `DB_OPS_SECRET_KEY`, `DB_OPS_KEY_BASE64` and
+**The program is never handed the passphrase.** `DBABRAIN_SECRET_KEY`, `DBABRAIN_KEY_BASE64` and
 `SQLCMDPASSWORD` are taken out of its environment (review 0.25.0, F4.2): a fetcher is an HTTP client
 or vendor code and never needs the key to every credential. A program that does the database work
 itself - SQLSERVER-030, `calculate_working_hour_queue.py`, which runs a stored procedure per queue
@@ -160,7 +160,7 @@ configuration that can run any file on the machine).
 
 SQL command config + target config + credentials + SQL files -> due/time-window check -> SQL execution -> `sql_runs` row -> optional Telegram queue row for logging or error alerts.
 
-**The SQL itself runs in `python -m db_ops.common.cli run-sql`** (2026-08-16), one request object
+**The SQL itself runs in `python -m dbabrain.common.cli run-sql`** (2026-08-16), one request object
 per task target, not on a connection this app opens. It used to open one — and therefore carried
 its own opinion on driver choice, the ODBC→pymssql fallback, batch splitting and which transport
 an Oracle 8i target uses. `execute_on_target` now states the run and reads the answer:
@@ -174,7 +174,7 @@ an Oracle 8i target uses. `execute_on_target` now states the run and reads the a
 | what a parameter means here | `prelude` + `params` (bound) on SQL Server; `named_params` (bound, `:name`) and on Oracle `define` (`&name`) on a direct Oracle or PostgreSQL connection; `define` (SQL*Plus substitution) on an 8i one, which binds nothing |
 | which transport | `sql_access`, straight off the target - and for an 8i bridge its signing secret in `secrets`, read here (`request_fill.bridge_secrets`) because `run-sql` opens no store |
 
-The request carries a password, so it goes on `run-sql`'s stdin (`db_ops.transport` does that).
+The request carries a password, so it goes on `run-sql`'s stdin (`dbabrain.transport` does that).
 Every result set is asked for and the first **five** are stored, as they always were; the rows of
 the rest are still counted into the run's `row_count`, so a task never reports fewer rows than it
 read. Before the switch both resolvers were run over all 12 configured task targets and agreed on
@@ -195,11 +195,11 @@ Normal SQL task runtime output is written to `logs/sql_tasks_runtime.log`. Teleg
 ## How to Run
 
 ```powershell
-# `db_ops.sql_tasks.cli` is an equivalent alias (uniform <app>.cli convention)
-python -m db_ops.sql_tasks.runner --config config.json
-python -m db_ops.sql_tasks.runner --config config.json --dry-run
-python -m db_ops.sql_tasks.runner --config config.json run-sql-id --sql-id 9 --force
-python -m db_ops.sql_tasks.runner --config config.json --dry-run run-sql-id --sql-id 9 --force
+# `dbabrain.sql_tasks.cli` is an equivalent alias (uniform <app>.cli convention)
+python -m dbabrain.sql_tasks.runner --config config.json
+python -m dbabrain.sql_tasks.runner --config config.json --dry-run
+python -m dbabrain.sql_tasks.runner --config config.json run-sql-id --sql-id 9 --force
+python -m dbabrain.sql_tasks.runner --config config.json --dry-run run-sql-id --sql-id 9 --force
 ```
 
 `--dry-run` is a **top-level** flag: it goes before `run-sql-id`, not after. Placed after the
@@ -219,7 +219,7 @@ the configuration if it must not be written to at all.
 
 `--force` is *intent* — it says the caller means to skip the schedule. It is not *presence*, so
 since 2026-09-04 the forced path asks, through the same gate as `/spbot_kill_spid`
-(`db_ops.common.confirm`, operation `run-sql-task` at level 50 in
+(`dbabrain.common.confirm`, operation `run-sql-task` at level 50 in
 [`data/emergency_operations.json`](../data/emergency_operations.example.json)):
 
 ```text
@@ -242,7 +242,7 @@ Three ways to answer, and the gate records which one was used:
 | genuinely unattended | `--assume-yes`, an explicit waiver, recorded as *no human was prompted* |
 
 What a forced run costs is this node's `data/emergency_operations.json` entry for `run-sql-task`.
-The runner reads it (`db_ops.lib.data_sources.request_fill`) and sends it to `common.cli authorize`
+The runner reads it (`dbabrain.lib.data_sources.request_fill`) and sends it to `common.cli authorize`
 as the request's `rules`, since `common.cli` reads no configuration (rules R09, 0.24.0).
 
 A **rehearsal is never asked** (`--dry-run`), and neither is the scheduled scan: a schedule was
@@ -321,8 +321,8 @@ error naming what it takes, never a silent drop.
 Values come in on the run:
 
 ```bash
-python -m db_ops.sql_tasks.runner --config config.json run-sql-id --sql-id 12 --force     --param spid=505 --param db=SALESDB
-python -m db_ops.sql_tasks.runner --config config.json run-sql-id --sql-id 12 --force     --params "spid=505 db=SALESDB"
+python -m dbabrain.sql_tasks.runner --config config.json run-sql-id --sql-id 12 --force     --param spid=505 --param db=SALESDB
+python -m dbabrain.sql_tasks.runner --config config.json run-sql-id --sql-id 12 --force     --params "spid=505 db=SALESDB"
 ```
 
 `/spbot_run_sql_task 12 spid=505 db=SALESDB` from Telegram. Two spellings because a shell repeats a
@@ -378,7 +378,7 @@ Until 0.24.0 an Oracle task with parameters failed at its first run on a direct 
 ### A SQL task and a `common` command may answer the same question
 
 `sql_id` 18 (`trace_open_transactions`) returns much the same rows as
-`python -m db_ops.common.cli trace-session`. Compared side by side on 2026-08-12 against
+`python -m dbabrain.common.cli trace-session`. Compared side by side on 2026-08-12 against
 192.0.2.115 they agreed exactly: 33 transactions each, same SPIDs, same application users.
 
 **Keep both.** They are not two implementations of one thing; they are the same question asked from
@@ -392,7 +392,7 @@ two layers, and the difference is *where estate-specific knowledge is allowed to
 | Leaves behind | JSON on stdout | a row in `sql_runs`, a Telegram message, an xlsx |
 | Changed by | a code change and a release | editing a `.sql` file and a JSON entry |
 
-db_ops does not only serve the ERP. A capability that hard-codes one ERP's tables into the shared
+dbabrain does not only serve the ERP. A capability that hard-codes one ERP's tables into the shared
 layer is the thing to avoid; a SQL task that does so in `assets/` and `data/` is exactly where that
 belongs. So the general command stays general, and anything specific to SALESDB goes in the task.
 
@@ -434,16 +434,16 @@ ORDER BY latest_run DESC;
 ### Reading the history back
 
 `list-tasks` answers *what tasks exist*. The other question — *what ran, and how did it end* — is
-`db-ops db sql-run-history`, a JSON-object command like every other:
+`dbabrain db sql-run-history`, a JSON-object command like every other:
 
 ```bash
-python -m db_ops.db.cli sql-run-history '{"limit": 10}'
-python -m db_ops.db.cli sql-run-history '{"limit": 20, "sql_id": 28}'
+python -m dbabrain.db.cli sql-run-history '{"limit": 10}'
+python -m dbabrain.db.cli sql-run-history '{"limit": 20, "sql_id": 28}'
 ```
 
 It lives in `db.cli` rather than here for the reason `restore-drill-status` does: the question is
 asked **by** operators and reports, not by the app that performs the work. `sql_tasks` runs tasks
-and records them in `sql_runs`; `db_ops.db.sql_run_history` reads that record, and the two never
+and records them in `sql_runs`; `dbabrain.db.sql_run_history` reads that record, and the two never
 import each other. `/spbot_list_sql_runs` is the same command from Telegram.
 
 The output is lines rather than JSON because its first reader is a person who has just been paged.
@@ -545,7 +545,7 @@ following cycle.
 The message carries **two** times, because a reap is reported on the next scan and can be hours
 after the fact: the run's own `started at ...`, and a `time:` line for the moment the message was
 written. Both are rendered by `lib.text_format.format_message_time`, in UTC unless
-`DB_OPS_MESSAGE_UTC_OFFSET_HOURS` says otherwise (`7` for UTC+07:00, `5.5` for UTC+05:30), and both
+`DBABRAIN_MESSAGE_UTC_OFFSET_HOURS` says otherwise (`7` for UTC+07:00, `5.5` for UTC+05:30), and both
 always name their offset — a bare local time cannot be compared with `sql_runs.started_at`. The
 same `time:` line is on every SQL task message, not only the error ones.
 
@@ -554,7 +554,7 @@ same `time:` line is on every SQL task message, not only the error ones.
 The SQL task runner resolves its config file using this chain:
 
 1. `--config <path>` CLI argument.
-2. `DB_OPS_SQL_TASKS_CONFIG` environment variable.
+2. `DBABRAIN_SQL_TASKS_CONFIG` environment variable.
 3. `config.sql_tasks.json` next to `config.json`, or in the current working directory.
 4. `config.json` shared fallback.
 
@@ -590,19 +590,19 @@ nothing else, so a killed run was silent in Telegram no matter what the target a
 
 The legacy boolean form (`logging_on_run: true`) is still accepted and behaves as `{enabled: true, telegram_chat: "logging"}` (and `alert_on_error: true` → `error`). When the resolved chat_id is empty (unmapped level and no override), no row is written. If the Telegram app is not running, the queued row remains pending until it is processed. The runner does not import or call the Telegram app directly.
 
-Use `python -m db_ops.telegram.cli groups` to print the whole level -> chat_id map, or `python -m db_ops.telegram.cli route <level>` for one level's `{enabled, alert, chat_id}`. Routing is the Telegram app's, so it answers; `common` reads no Telegram settings.
+Use `python -m dbabrain.telegram.cli groups` to print the whole level -> chat_id map, or `python -m dbabrain.telegram.cli route <level>` for one level's `{enabled, alert, chat_id}`. Routing is the Telegram app's, so it answers; `common` reads no Telegram settings.
 
 ## EXE Packaging Notes
 
-- Credentials come from `data/encrypted_secret_text.json` (decrypted with the `--key_base64`/`--key` passphrase or `DB_OPS_SECRET_KEY`) and targets from `data/db_instances.json`, both resolved through `db_ops/lib/data_sources/`. Provide the `data/` directory and supply the key, or tasks will run without credentials.
+- Credentials come from `data/encrypted_secret_text.json` (decrypted with the `--key_base64`/`--key` passphrase or `DBABRAIN_SECRET_KEY`) and targets from `data/db_instances.json`, both resolved through `dbabrain/lib/data_sources/`. Provide the `data/` directory and supply the key, or tasks will run without credentials.
 - SQL file paths in `sql_commands.json` are resolved relative to `TOOL_ROOT` and `REPO_ROOT`. Use absolute paths when packaging as EXE.
 
 ## Adding a SQL task at runtime (add-sql admin)
 
-`python -m db_ops.common.cli add-sql` registers a new single-script SQL task **and enables it**
-without a redeploy. The engine is `db_ops/common/config_admin.py`; this app does not import it,
+`python -m dbabrain.common.cli add-sql` registers a new single-script SQL task **and enables it**
+without a redeploy. The engine is `dbabrain/common/config_admin.py`; this app does not import it,
 it is one of the command's two callers (the other is the `/spbot_add_sql` conversation). A
-`db_ops.sql_tasks.config_admin` shim used to offer a second name for the same command and was
+`dbabrain.sql_tasks.config_admin` shim used to offer a second name for the same command and was
 deleted on 2026-08-15.
 
 It performs three atomic writes, in dependency order:
@@ -620,7 +620,7 @@ auto-increments from the current max; `sql_code` is derived as `<DBTYPE>-<NNN>-<
 CLI — a JSON object, like every other `common` command:
 
 ```bash
-python -m db_ops.common.cli add-sql '{"db_type": "sqlserver",
+python -m dbabrain.common.cli add-sql '{"db_type": "sqlserver",
   "server_id": "ACME-192-0-2-250", "instance_name": "APPDB",
   "display_name": "Nightly cleanup", "from_hour": 20, "to_hour": 23,
   "repeat_interval": 3600, "timeout": 600, "sql_file": "./cleanup.sql"}'
@@ -657,8 +657,8 @@ instead:
 | A **second** target | it writes one, under a new `sql_id` |
 
 ```bash
-python -m db_ops.common.cli sql-command-add @<request>.json   # WHAT runs
-python -m db_ops.common.cli sql-target-add  @<request>.json   # WHERE it runs, one call per server
+python -m dbabrain.common.cli sql-command-add @<request>.json   # WHAT runs
+python -m dbabrain.common.cli sql-target-add  @<request>.json   # WHERE it runs, one call per server
 ```
 
 Full reference in [`13_common.md`](./13_common.md). The command half takes `script_path` (a file
@@ -698,14 +698,14 @@ due. An outer interval longer than a task's own rounds that task up to it.
 whose task takes 240 seconds runs again about 60 seconds after it finishes, not 300. Until
 2026-09-19 this app measured from `finished_at` — so that same target ran every 540 seconds
 while its config said 300, and it was the only app in the estate that did. The anchor is now
-the shared `db_ops.lib.time_window.run_anchor`; see [`configuration.md` §5](./configuration.md).
+the shared `dbabrain.lib.time_window.run_anchor`; see [`configuration.md` §5](./configuration.md).
 
 ### `list-tasks` — what tasks exist, as JSON
 
 ```bash
-python -m db_ops.sql_tasks.cli list-tasks              # every runnable task
-python -m db_ops.sql_tasks.cli list-tasks --sql-id 19  # one, even if inactive
-python -m db_ops.sql_tasks.cli list-tasks --all        # include inactive
+python -m dbabrain.sql_tasks.cli list-tasks              # every runnable task
+python -m dbabrain.sql_tasks.cli list-tasks --sql-id 19  # one, even if inactive
+python -m dbabrain.sql_tasks.cli list-tasks --all        # include inactive
 ```
 
 Prints one JSON object: `sql_tasks[]` with each task's `parameters` / `parameter_names` /
@@ -725,7 +725,7 @@ running the task would do.
 ### `close-run` — release one run left `running` by hand
 
 ```bash
-python -m db_ops.sql_tasks.cli close-run --sql-run-id 92697 --reason "killed by the worker upgrade" --confirm yes
+python -m dbabrain.sql_tasks.cli close-run --sql-run-id 92697 --reason "killed by the worker upgrade" --confirm yes
 ```
 
 For the row the sweep will not close yet - another host's, inside its timeout plus an hour - when
@@ -741,7 +741,7 @@ nothing was closed. Until 0.26.0 this was a script calling `update_sql_run` (202
 
 A target whose db_instance declares `sql_access.method` = `api`/`subprocess` does not get a
 database connection: its SQL goes through the legacy Oracle tool
-(see [`docs/13_common.md`](./13_common.md) → `oracle_bridge`), because no driver db_ops can
+(see [`docs/13_common.md`](./13_common.md) → `oracle_bridge`), because no driver dbabrain can
 install speaks to 8.1.7. The runner reads the block from
 `db_instances.json` **by server_id** — the transport belongs to the server, so one entry covers
 every task on it — and a `sql_targets` entry may override it.
@@ -761,7 +761,7 @@ already had, one `job_no` parameter, schema `LTR`, xlsx out.
 A target whose `time_window.repeat_interval` is **`-1`** is never picked up by the scheduler. It
 runs only when someone forces it — `run-sql-id --force`, i.e. `/spbot_run_sql_task`.
 
-`-1` (`MANUAL_ONLY` in `db_ops/lib/time_window.py`) is a shared scheduling value like
+`-1` (`MANUAL_ONLY` in `dbabrain/lib/time_window.py`) is a shared scheduling value like
 `0` (`RUN_ONCE`), so it lives in the target's own `time_window` rather than in a separate
 `manual_only` key. One place says when a task runs, and a `manual_only: true` sitting next to a
 `repeat_interval: 3600` can never disagree with itself.
@@ -795,7 +795,7 @@ What a finished run does with its rows is a property of the **target**:
 | `format` | What the run delivers |
 | --- | --- |
 | `xlsx` `csv` `txt` `xml` `json` | The result sets are written to `runtime/output/sql_tasks/sql_<NNN>_<task>_<stamp>.<format>` and queued as **one Telegram document** message. The inline table is suppressed — it would only repeat the attachment. `txt`, `csv` and `json` hold every shape the script returned; `xlsx` and `xml` hold one table, and the run notes any set left out. |
-| `plain` | The rows are rendered as a markdown table inside the run message. **Every fetched row is shown** — a body past Telegram's 4096-char limit is split across messages by `db_ops.lib.telegram_text.split_telegram_message` rather than clipped, because the rows that used to fall off the end were the ones somebody ran the task to see. Still clipped to 8 columns × 24 characters per cell, so a row stays on one phone-width line. How many rows are fetched is `output.max_rows` — see below. |
+| `plain` | The rows are rendered as a markdown table inside the run message. **Every fetched row is shown** — a body past Telegram's 4096-char limit is split across messages by `dbabrain.lib.telegram_text.split_telegram_message` rather than clipped, because the rows that used to fall off the end were the ones somebody ran the task to see. Still clipped to 8 columns × 24 characters per cell, so a row stays on one phone-width line. How many rows are fetched is `output.max_rows` — see below. |
 
 **Result sets with the same columns are one table.** A task that runs its SQL once per batch
 returns one small set per batch — 69 one-row sets for one run of a ten-day load. Consecutive sets
@@ -891,9 +891,9 @@ operator nothing); the run still reports its own success. A failure to *write* t
 fails the task — the SQL already ran and committed, so the run is recorded as done with an
 `output_note` in its metadata.
 
-The workbook writer is `db_ops/lib/xlsx_export.py`, shared with `/spbot_sql_to_xlsx`, so a
+The workbook writer is `dbabrain/lib/xlsx_export.py`, shared with `/spbot_sql_to_xlsx`, so a
 task-produced file and an ad-hoc one are the same artifact. The other file formats go through
-`db_ops/lib/result_format.py`, the same renderer `run-sql`'s `"format"` uses — so a scheduled
+`dbabrain/lib/result_format.py`, the same renderer `run-sql`'s `"format"` uses — so a scheduled
 export and an ad-hoc one cannot drift into two different-looking files. In `csv` a SQL NULL is an
 empty **unquoted** field and `""` is the empty string (PostgreSQL's `COPY ... WITH CSV`
 convention); in `txt` and `xml` it is spelled out. Which set of formats writes a file is
@@ -921,7 +921,7 @@ The **schedule** step accepts `manual` (written as `repeat_interval: -1`), `defa
 The final SQL-body step accepts the SQL **inline** (paste as one message) **or as a
 `.sql` file attachment** (the `sql_text` parameter is flagged `accept_file`; the worker downloads
 the document via `getFile`, decoding UTF-8/BOM). It then runs
-**`python -m db_ops.common.cli add-sql`** with the collected values as one JSON object and replies
+**`python -m dbabrain.common.cli add-sql`** with the collected values as one JSON object and replies
 with the assigned `sql_id`, `sql_code`, and written path. The write engine lives in `common` (not
 in the `sql_tasks` app) precisely so both this Telegram action and an operator at a shell reach it
 **without one app importing another** — and since 2026-08-15 the bot reaches it the same way the
@@ -938,7 +938,7 @@ read-write `assets/` mount; sync it back to the master with `control worker-pull
 
 ## Which engines a task can run on
 
-`sqlserver`, `oracle` and `postgresql`, named once in `db_ops/lib/sql_access.py` as
+`sqlserver`, `oracle` and `postgresql`, named once in `dbabrain/lib/sql_access.py` as
 `SQL_TASK_DB_TYPES` and read by both the runner's dispatch and the two registration commands.
 
 It is deliberately narrower than `KNOWN_DB_TYPES`, which is the config vocabulary for the whole

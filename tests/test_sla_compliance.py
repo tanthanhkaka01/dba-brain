@@ -1,14 +1,14 @@
 import json
 
-from db_ops.metrics.models import MetricResult
-from db_ops.metrics.storage import MetricStore
-from db_ops.sla.compliance import validate_sla_policies
-from db_ops.sla.models import SlaPolicy
-from db_ops.sla.policies import parse_sla_policy
+from dbabrain.metrics.models import MetricResult
+from dbabrain.metrics.storage import MetricStore
+from dbabrain.sla.compliance import validate_sla_policies
+from dbabrain.sla.models import SlaPolicy
+from dbabrain.sla.policies import parse_sla_policy
 
 
 def test_validate_sla_policy_passes_when_actual_meets_objective(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.insert_results(
         run_id=1,
         results=[
@@ -28,7 +28,7 @@ def test_validate_sla_policy_passes_when_actual_meets_objective(tmp_path):
     )
 
     summary = validate_sla_policies(
-        sqlite_path=tmp_path / "db_ops.sqlite",
+        sqlite_path=tmp_path / "dbabrain.sqlite",
         policies=[policy],
         window_end="2026-05-28T04:00:00Z",
     )
@@ -39,7 +39,7 @@ def test_validate_sla_policy_passes_when_actual_meets_objective(tmp_path):
 
 
 def test_validate_sla_policy_fails_when_actual_is_below_objective(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.insert_results(
         run_id=1,
         results=[
@@ -57,7 +57,7 @@ def test_validate_sla_policy_fails_when_actual_is_below_objective(tmp_path):
     )
 
     summary = validate_sla_policies(
-        sqlite_path=tmp_path / "db_ops.sqlite",
+        sqlite_path=tmp_path / "dbabrain.sqlite",
         policies=[policy],
         window_end="2026-05-28T04:00:00Z",
         data_dir=_configured_data_dir(tmp_path),
@@ -97,7 +97,7 @@ def test_validate_sla_policy_reports_no_data(tmp_path):
     )
 
     summary = validate_sla_policies(
-        sqlite_path=tmp_path / "db_ops.sqlite",
+        sqlite_path=tmp_path / "dbabrain.sqlite",
         policies=[policy],
         window_end="2026-05-28T04:00:00Z",
         data_dir=_configured_data_dir(tmp_path),

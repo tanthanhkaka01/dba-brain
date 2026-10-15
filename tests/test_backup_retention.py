@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.lib.backupfiles_retention import (
+from dbabrain.lib.backupfiles_retention import (
     AGE,
     DEFAULT_RETENTION_DAYS,
     OBSOLETE,

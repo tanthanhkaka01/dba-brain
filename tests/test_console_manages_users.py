@@ -26,11 +26,11 @@ import pytest
 
 from conftest import write_catalogued_data
 
-from db_ops.db import config_sync
-from db_ops.db.config_store import ConfigStore
-from db_ops.db.web_auth_store import WebAuthStore
-from db_ops.lib import web_auth
-from db_ops.webhost.app import Request, WebApp, WebSettings
+from dbabrain.db import config_sync
+from dbabrain.db.config_store import ConfigStore
+from dbabrain.db.web_auth_store import WebAuthStore
+from dbabrain.lib import web_auth
+from dbabrain.webhost.app import Request, WebApp, WebSettings
 
 PASSWORD = "console-password-1"
 
@@ -59,7 +59,7 @@ def _template(tmp_path_factory):
 
 @pytest.fixture()
 def console(tmp_path: Path, _template) -> WebApp:
-    store_path = tmp_path / "db_ops.sqlite"
+    store_path = tmp_path / "dbabrain.sqlite"
     shutil.copy(_template[0], store_path)
     data = tmp_path / "data"
     shutil.copytree(_template[1], data)
@@ -80,7 +80,7 @@ def _get(path: str, cookie: str = "") -> Request:
 
 def sign_in(console: WebApp, username: str) -> str:
     response = console.handle(Request(
-        method="POST", path="/db_ops/login",
+        method="POST", path="/dbabrain/login",
         body=urlencode({"username": username, "password": PASSWORD}).encode("utf-8"),
         headers={"content-type": "application/x-www-form-urlencoded"}, client_ip="10.0.0.5"))
     assert response.status == 303
@@ -94,7 +94,7 @@ def csrf(console: WebApp, cookie: str) -> str:
 def act(console: WebApp, cookie: str, path: str, **fields: str):
     fields.setdefault("csrf", csrf(console, cookie))
     fields.setdefault("confirm_password", PASSWORD)
-    return console.handle(_post(f"/db_ops/users{path}", fields, cookie))
+    return console.handle(_post(f"/dbabrain/users{path}", fields, cookie))
 
 
 def level_of(console: WebApp, name: str) -> int | None:
@@ -104,8 +104,8 @@ def level_of(console: WebApp, name: str) -> int | None:
 
 # --------------------------------------------------------------------------- #
 def test_only_an_admin_opens_the_users_page(console):
-    assert console.handle(_get("/db_ops/users", sign_in(console, "editor"))).status == 403
-    page = console.handle(_get("/db_ops/users", sign_in(console, "admin")))
+    assert console.handle(_get("/dbabrain/users", sign_in(console, "editor"))).status == 403
+    page = console.handle(_get("/dbabrain/users", sign_in(console, "admin")))
     assert page.status == 200
     body = page.body.decode("utf-8")
     assert "owner" in body and "editor" in body
@@ -113,10 +113,10 @@ def test_only_an_admin_opens_the_users_page(console):
 
 
 def test_the_sidebar_offers_users_to_an_admin_only(console):
-    admin = console.handle(_get("/db_ops/", sign_in(console, "admin"))).body.decode("utf-8")
-    viewer = console.handle(_get("/db_ops/", sign_in(console, "viewer"))).body.decode("utf-8")
-    assert "/db_ops/users" in admin
-    assert "/db_ops/users" not in viewer
+    admin = console.handle(_get("/dbabrain/", sign_in(console, "admin"))).body.decode("utf-8")
+    viewer = console.handle(_get("/dbabrain/", sign_in(console, "viewer"))).body.decode("utf-8")
+    assert "/dbabrain/users" in admin
+    assert "/dbabrain/users" not in viewer
 
 
 def test_a_new_user_is_created_with_its_role_and_must_change_its_password(console):
@@ -168,9 +168,9 @@ def test_nobody_lowers_or_disables_their_own_account_here(console):
 
 def test_a_level_change_applies_at_the_next_request(console):
     editor = sign_in(console, "editor")
-    assert console.handle(_get("/db_ops/users", editor)).status == 403
+    assert console.handle(_get("/dbabrain/users", editor)).status == 403
     assert act(console, sign_in(console, "owner"), "/editor/level", role="Admin").status == 303
-    assert console.handle(_get("/db_ops/users", editor)).status == 200, "the same session, promoted"
+    assert console.handle(_get("/dbabrain/users", editor)).status == 200, "the same session, promoted"
 
 
 def test_a_password_reset_ends_the_targets_sessions(console):
@@ -178,21 +178,21 @@ def test_a_password_reset_ends_the_targets_sessions(console):
     response = act(console, sign_in(console, "admin"), "/editor/password",
                    password="reset-pass-123", password_again="reset-pass-123", must_change="1")
     assert response.status == 303
-    assert console.handle(_get("/db_ops/", editor)).status == 303, "back to the login form"
+    assert console.handle(_get("/dbabrain/", editor)).status == 303, "back to the login form"
     assert int(console.auth.get_user("editor")["must_change_password"]) == 1
 
 
 def test_signing_someone_out_everywhere_ends_their_sessions(console):
     editor = sign_in(console, "editor")
     assert act(console, sign_in(console, "admin"), "/editor/signout").status == 303
-    assert console.handle(_get("/db_ops/", editor)).status == 303
+    assert console.handle(_get("/dbabrain/", editor)).status == 303
 
 
 def test_disabling_an_account_signs_it_out_and_frees_its_name(console):
     editor = sign_in(console, "editor")
     assert act(console, sign_in(console, "admin"), "/editor/disable", note="left").status == 303
     assert console.auth.get_user("editor") is None
-    assert console.handle(_get("/db_ops/", editor)).status == 303
+    assert console.handle(_get("/dbabrain/", editor)).status == 303
     console.auth.create_user(username="editor", password=PASSWORD, level=1)
 
 
@@ -205,12 +205,12 @@ def test_a_bad_value_is_said_on_the_page_not_as_a_server_error(console):
 
 
 def test_the_sign_in_page_follows_the_common_card_layout_and_says_one_thing_for_every_failure(console):
-    page = console.handle(_get("/db_ops/login")).body.decode("utf-8")
+    page = console.handle(_get("/dbabrain/login")).body.decode("utf-8")
     assert 'class="auth-card login"' in page and ">Show</button>" in page
     wrong_user = console.handle(Request(
-        method="POST", path="/db_ops/login", body=urlencode({"username": "nobody", "password": "x"}).encode(),
+        method="POST", path="/dbabrain/login", body=urlencode({"username": "nobody", "password": "x"}).encode(),
         headers={"content-type": "application/x-www-form-urlencoded"}, client_ip="10.0.0.9")).body.decode()
     wrong_password = console.handle(Request(
-        method="POST", path="/db_ops/login", body=urlencode({"username": "viewer", "password": "x"}).encode(),
+        method="POST", path="/dbabrain/login", body=urlencode({"username": "viewer", "password": "x"}).encode(),
         headers={"content-type": "application/x-www-form-urlencoded"}, client_ip="10.0.0.9")).body.decode()
     assert "Wrong username or password." in wrong_user and "Wrong username or password." in wrong_password

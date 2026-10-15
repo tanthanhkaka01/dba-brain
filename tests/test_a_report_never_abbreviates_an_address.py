@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.reports.inventory_report import _ip_tag, build_models, build_triage
+from dbabrain.reports.inventory_report import _ip_tag, build_models, build_triage
 
 #: The shape the leak took: two numbers joined by a hyphen, which is what an address looks like
 #: after somebody has made it "fit".
@@ -83,7 +83,7 @@ def test_no_renderer_slices_an_address_for_display() -> None:
     slice is the shape that made `100-108`.
     """
     offenders: list[str] = []
-    for path in sorted(Path("db_ops").rglob("*.py")):
+    for path in sorted(Path("dbabrain").rglob("*.py")):
         if "__pycache__" in path.parts:
             continue
         text = path.read_text(encoding="utf-8")

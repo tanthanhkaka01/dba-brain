@@ -3,8 +3,8 @@
 0.22.0 turned the first-run note into the whole operating guide for an agent (Codex, Claude, ...)
 standing in a tool root after `pip install dbabrain`. An agent follows a document literally: a
 subcommand that does not exist is not a typo it steps around, it is an error it will try to "fix".
-`test_the_shipped_guide_is_true.py` already holds the first word of every `db-ops <app>`; this holds
-the second - `db-ops common describe-object`, `db-ops db ops-status` - against each app's own
+`test_the_shipped_guide_is_true.py` already holds the first word of every `dbabrain <app>`; this holds
+the second - `dbabrain common describe-object`, `dbabrain db ops-status` - against each app's own
 `--help`, so a renamed or removed command fails here instead of in an agent's session.
 
 It also holds the two properties the operator asked for (2026-09-23): the guide is short enough to
@@ -22,20 +22,20 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import scaffold
+from dbabrain.common import scaffold
 
 GUIDE = scaffold.AGENTS_GUIDE
 
-#: Words after `db-ops <app>` that are options or values, not subcommands.
+#: Words after `dbabrain <app>` that are options or values, not subcommands.
 _NOT_A_COMMAND = re.compile(r"^(-|@|'|\"|<|\{)")
 
 
 @lru_cache(maxsize=None)
 def _help(app: str) -> str:
-    """What `db-ops <app>` answers to - its --help, plus the JSON-command tables some print bare."""
+    """What `dbabrain <app>` answers to - its --help, plus the JSON-command tables some print bare."""
     outputs = []
     for argv in ([app, "--help"], [app]):
-        result = subprocess.run([sys.executable, "-m", "db_ops.cli", *argv],
+        result = subprocess.run([sys.executable, "-m", "dbabrain.cli", *argv],
                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=120)
         outputs.append(result.stdout + result.stderr)
@@ -45,7 +45,7 @@ def _help(app: str) -> str:
 def _commands_named() -> set[tuple[str, str]]:
     pairs = set()
     for line in GUIDE.splitlines():
-        for match in re.finditer(r"db-ops ([a-z][a-z0-9-]+)((?: --config \S+)?) ([a-z][a-z0-9-]+)", line):
+        for match in re.finditer(r"dbabrain ([a-z][a-z0-9-]+)((?: --config \S+)?) ([a-z][a-z0-9-]+)", line):
             app, _, sub = match.groups()
             # `restore-*` names a family; the regex stops at the star and would test "restore-".
             if not _NOT_A_COMMAND.match(sub) and not sub.endswith("-"):
@@ -60,18 +60,18 @@ def test_the_guide_names_subcommands_at_all():
 
 @pytest.mark.parametrize("app,sub", sorted(_commands_named()))
 def test_every_subcommand_the_guide_names_exists(app, sub):
-    from db_ops import cli
+    from dbabrain import cli
 
     if app not in cli.APPS:
         pytest.skip(f"{app} is a top-level verb, held by test_the_shipped_guide_is_true.py")
     # ops-status and self-status are JSON commands db.cli matches before argparse, so they are in
     # its dispatch table rather than in the argparse listing.
     if app == "db":
-        from db_ops.db import cli as db_cli
+        from dbabrain.db import cli as db_cli
         if sub in db_cli._JSON_COMMANDS:
             return
     assert re.search(rf"(?<![a-z-]){re.escape(sub)}(?![a-z-])", _help(app)), (
-        f"AGENTS.md tells an agent to run `db-ops {app} {sub}`, and `db-ops {app} --help` does not "
+        f"AGENTS.md tells an agent to run `dbabrain {app} {sub}`, and `dbabrain {app} --help` does not "
         "list it.")
 
 
@@ -83,7 +83,7 @@ def test_the_guide_is_short_enough_to_be_read_whole():
 def test_the_guide_never_teaches_a_secret_on_the_command_line():
     """secret-set reads stdin only; a guide showing it inline teaches the leak it exists to stop."""
     for line in GUIDE.splitlines():
-        if "secret-set" in line and "db-ops common secret-set" in line:
+        if "secret-set" in line and "dbabrain common secret-set" in line:
             assert line.rstrip().endswith("secret-set -"), line
 
 
@@ -153,7 +153,7 @@ def test_this_builds_guide_is_left_alone_and_nothing_is_saved(tmp_path):
 
 def test_guide_write_puts_it_here_before_init(tmp_path, monkeypatch, capsys):
     """Before `init` there is no root; an agent opened in this directory still needs the file."""
-    from db_ops import cli
+    from dbabrain import cli
 
     monkeypatch.chdir(tmp_path)
     # A JSON key since 0.24.0, when `guide` became a `common.cli` command (rules R41).
@@ -175,7 +175,7 @@ def test_the_guide_writes_no_retired_field_name():
     """0.22.0 renamed the configuration and 0.23.0 kept going; a guide that shows an agent
     `"sql_name":` or `"ord":` teaches it the name every check now reports as deprecated. The
     guide may NAME an old spelling - its own table says what replaced what - but never write one."""
-    from db_ops.lib import field_names
+    from dbabrain.lib import field_names
 
     retired = ({old for renames in field_names.RENAMES.values() for old in renames}
                | {old for moved in field_names.MOVED_ONLY.values() for old in moved})

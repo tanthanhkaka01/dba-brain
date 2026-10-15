@@ -3,13 +3,13 @@ import sys
 
 import pytest
 
-from db_ops.lib.sql_access import is_legacy as sql_access_is_legacy
-from db_ops.lib.time_window import TimeWindow
-from db_ops.common import sql_execution
-from db_ops.lib import data_sources
-from db_ops.sql_tasks import runner
-from db_ops.lib import sql_task_catalog
-from db_ops.sql_tasks.runner import parse_args, run_sql_id_tasks
+from dbabrain.lib.sql_access import is_legacy as sql_access_is_legacy
+from dbabrain.lib.time_window import TimeWindow
+from dbabrain.common import sql_execution
+from dbabrain.lib import data_sources
+from dbabrain.sql_tasks import runner
+from dbabrain.lib import sql_task_catalog
+from dbabrain.sql_tasks.runner import parse_args, run_sql_id_tasks
 
 from conftest import patch_sql_runner
 
@@ -772,7 +772,7 @@ def test_a_folder_task_reports_each_file_as_it_finishes():
 
     The counter is the point: `[2/6]` says both that file 2 finished and that four remain.
     """
-    from db_ops.sql_tasks.runner import SqlCommand
+    from dbabrain.sql_tasks.runner import SqlCommand
 
     command = SqlCommand(
         sql_id=1, sql_code="T", sql_name="t", db_type="sqlserver", script_type="folder",
@@ -786,7 +786,7 @@ def test_a_folder_task_reports_each_file_as_it_finishes():
 
 def test_a_single_file_task_does_not_announce_its_one_file():
     """start + "[1/1] done" + finished is three messages saying one thing."""
-    from db_ops.sql_tasks.runner import SqlCommand
+    from dbabrain.sql_tasks.runner import SqlCommand
 
     command = SqlCommand(
         sql_id=1, sql_code="T", sql_name="t", db_type="sqlserver", script_type="single",
@@ -798,7 +798,7 @@ def test_a_single_file_task_does_not_announce_its_one_file():
 
 def test_progress_per_file_can_be_forced_either_way_in_config():
     """`config is data`: a noisy folder task can switch it off, a slow single file can switch on."""
-    from db_ops.sql_tasks.runner import load_sql_commands
+    from dbabrain.sql_tasks.runner import load_sql_commands
     import json
     import tempfile
     from pathlib import Path

@@ -1,0 +1,633 @@
+"""``upgrade-config`` — carry an existing ``data/`` forward after dbabrain is upgraded.
+
+A new version can rename a field or move one; every reader then takes both the old and the new
+shape, and every writer writes the new one. That leaves an estate's own files - written by hand, by
+the bot, by an older version's registrars - in the old shape, readable but reported ``deprecated``
+by ``check-objects`` and invisible to anything that only knows the new name. This command is the
+one step an operator runs after ``pip install --upgrade dbabrain`` to close that gap, instead of
+learning which migrations each release carried.
+
+**Every step is idempotent.** A file already in the new shape plans nothing, so the command can be
+run after every upgrade without knowing which version the files came from.
+
+**A plan first.** ``dry_run`` defaults to true. A write keeps a copy of every file it changes under
+``runtime/config_upgrade/<UTC stamp>/`` beside ``data/`` - ``runtime/`` is generated and never
+shipped - so an upgrade that went wrong is one copy back.
+
+**A value is never chosen.** Where a record carries two spellings that disagree, the step reports a
+conflict and leaves that file whole. Where a moved value is itself wrong - a restore's ``target.id``
+that names no instance - it is moved as it is and ``check-references`` names it afterwards: fixing a
+label is a decision about the estate, not about a file format.
+"""
+
+from __future__ import annotations
+
+import functools
+import json
+import re
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from dbabrain.common import field_migration
+from dbabrain.lib import config_references, earlier_defaults, package_rename, shared_objects
+from dbabrain.lib.json_io import atomic_write_text, indent_of
+from dbabrain.lib.moved_commands import MOVED_COMMANDS
+from dbabrain.lib.paths import PACKAGED_CATALOGUE
+from dbabrain.lib.time_window import window_of
+
+USAGE = """\
+Usage: python -m dbabrain.common.cli upgrade-config '<json>'|@file|-
+
+Run after upgrading dbabrain: move this node's data/*.json from the shapes an older version wrote
+to the ones this version writes. Every reader already takes both; this moves the files.
+
+  {}                                  // PLAN ONLY - nothing is written
+  {"dry_run": false}                  // write it; each changed file is copied first to
+                                      //   runtime/config_upgrade/<UTC stamp>/
+  {"data_dir": "D:/other/data"}       // another root
+  {"steps": ["field-names"]}          // only some steps
+
+Steps, in order (each one idempotent - a file already moved plans nothing):
+  reference-files     data/shared_config_objects.json and data/config_references.json replaced by
+                      this version's copies. They are reference, identical on every node - an
+                      older copy does not know the new names and reports every moved field
+  package-rename      0.29.0 renamed the package: every module path, path into the package, the
+                      tools/ alias and the name of an environment variable this version reads are
+                      pointed at the new name. A value that only looks like one - the store's
+                      schema and tables, a host folder, an id, a secret ref - is left as it is
+                      (the rules: dbabrain/lib/package_rename.py)
+  field-names         enabled->active, env->environment, ord/app_ord/menu_order->sort_order,
+                      database/db_name->database_name, sql_name->display_name, a restore's
+                      databases->database_mappings, ... (the table: dbabrain/lib/field_names.py);
+                      config_catalog.json's label_field / key_fields follow the same renames
+  restore-machine-ids a restore's source.id / target.id -> server_id / target_server_id on the entry
+  earlier-defaults    0.29.0 renamed a default: the name of the certificate a SQL Server backup is
+                      encrypted with. A backup job or a restore that named none has been running
+                      on the earlier name, so that name is written into the record - env
+                      BACKUP_CERT_NAME, or source.backup_certificate.name - and the record does
+                      what it did. A record that states a name keeps it. The same for the file
+                      that marks a restore's staging folder: an entry with a target_backup_dir
+                      and no staging_marker is told the name its folder already carries. And the
+                      two folders lab databases live in, which were constants in the code and
+                      are a node's to state since 0.29.0: written into sre_config.json
+                      (sre.docker_db) where it states none
+                      (the rules: dbabrain/lib/earlier_defaults.py)
+  telegram-active    a Telegram group's or user's status "active" -> active true (anything else ->
+                      false), the switch every other record carries
+  inventory-into-reports  APP-REPORTS-INVENTORY-WORKFLOW becomes the report rp_inventory_health in
+                      reports_config.json, with this node's own active and time_window; its timeout
+                      is added to APP-REPORTS-CREATE's, whose pass now builds it; the app command
+                      and the console's reference to it are removed
+  moved-commands      a command line naming a command that moved to another CLI is pointed at it:
+                      "dbabrain.common.cli", "self-status" -> "dbabrain.db.cli", "self-status" (the
+                      last-run column is read from the store, which only db.cli opens)
+  console-apps        an app this version's console lists and webhost_config.json does not is
+                      added to it. Only added: an entry the file already holds is left as it is
+
+A record whose two spellings DISAGREE is a conflict: its file is not written, and the answer names
+the record. After a write, check-objects and check-references are run and their counts reported -
+a moved value that names nothing (an old target.id label) is theirs to name, not this command's
+to guess at.
+
+data: {"dry_run", "steps": [{"step", "files": [...], "records_changed", "conflicts"}],
+       "backup_dir", "check_objects", "check_references"}
+Exit code 1 when a conflict left a file unwritten.
+"""
+
+STEPS = ("reference-files", "package-rename", "field-names", "restore-machine-ids", "earlier-defaults",
+         "telegram-active", "inventory-into-reports", "moved-commands", "console-apps")
+
+
+#: The app command that was a report (0.22.0), and the report it becomes.
+INVENTORY_APP = "APP-REPORTS-INVENTORY-WORKFLOW"
+INVENTORY_REPORT = "rp_inventory_health"
+REPORTS_APP = "APP-REPORTS-CREATE"
+
+
+def _inventory_into_reports(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """The inventory is a report, not an app: move the app command into reports_config.json.
+
+    Idempotent - a node with no such app command plans nothing. A reports_config that already
+    carries the report keeps its own entry; the app command still goes, because two schedulers
+    for one build is the double run this step exists to prevent.
+    """
+    commands_path, reports_path = root / "app_commands.json", root / "reports_config.json"
+    if not commands_path.is_file() or not reports_path.is_file():
+        return {"files": []}
+    commands = json.loads(commands_path.read_bytes().decode("utf-8-sig"))
+    rows = commands.get("app_commands") or []
+    app = next((r for r in rows if isinstance(r, dict) and r.get("app_code") == INVENTORY_APP), None)
+    if app is None:
+        return {"files": []}
+    reports = json.loads(reports_path.read_bytes().decode("utf-8-sig"))
+    entries = reports.setdefault("reports", [])
+    days = re.search(r"--days\s+(\d+)", str(app.get("command_text") or ""))
+    window = dict(app.get("time_window") or {})
+    files: list[dict[str, Any]] = []
+    if not any(isinstance(e, dict) and e.get("report_code") == INVENTORY_REPORT for e in entries):
+        entries.append({
+            "report_code": INVENTORY_REPORT,
+            "display_name": "Inventory health + summary",
+            "metric_max_age_seconds": int(days.group(1) if days else 2) * 86400,
+            "active": bool(app.get("active", True)),
+            "time_window": window,
+            "note": "Moved from the app command " + INVENTORY_APP + " by upgrade-config (0.22.0): the "
+                    "inventory is a report, built by the reports app's own pass.",
+        })
+        files.append({"file": reports_path.name, "records_changed": 1, "conflicts": [],
+                      "changes": [{"field": "reports[]", "to": INVENTORY_REPORT, "action": "added"}]})
+    reports_app = next((r for r in rows if isinstance(r, dict) and r.get("app_code") == REPORTS_APP), None)
+    changes = [{"field": INVENTORY_APP, "to": "reports_config.json:" + INVENTORY_REPORT, "action": "removed"}]
+    # Both timeouts as the scheduler reads them (rules R20): a legacy spelling of either still adds.
+    moved = window_of(app, context=INVENTORY_APP)
+    if reports_app is not None and moved is not None and moved.timeout:
+        # The reports pass now builds the inventory too, and a timeout is the budget for the WHOLE
+        # pass: kept as it was, the first inventory build would be killed at the old limit.
+        own = dict(reports_app.get("time_window") or {})
+        current = window_of(reports_app, context=REPORTS_APP)
+        before = (current.timeout if current is not None else None) or 0
+        own["timeout"] = before + moved.timeout
+        reports_app["time_window"] = own
+        changes.append({"field": REPORTS_APP + ".time_window.timeout", "to": own["timeout"],
+                        "action": f"raised from {before}"})
+    commands["app_commands"] = [r for r in rows if r is not app]
+    files.append({"file": commands_path.name, "records_changed": 1, "conflicts": [], "changes": changes})
+    web_path = root / "webhost_config.json"
+    web = json.loads(web_path.read_bytes().decode("utf-8-sig")) if web_path.is_file() else None
+    web_changed = False
+    for block in (web or {}).get("apps") or []:
+        ids = block.get("app_command_ids") if isinstance(block, dict) else None
+        if isinstance(ids, list) and INVENTORY_APP in ids:
+            block["app_command_ids"] = [i for i in ids if i != INVENTORY_APP]
+            web_changed = True
+    if web_changed:
+        files.append({"file": web_path.name, "records_changed": 1, "conflicts": [],
+                      "changes": [{"field": "apps[].app_command_ids", "to": "-", "action": "removed " + INVENTORY_APP}]})
+    if not dry_run:
+        written = [(reports_path, reports)] if files[0]["file"] == reports_path.name else []
+        written += [(commands_path, commands)] + ([(web_path, web)] if web_changed else [])
+        for path, document in written:
+            before_write(path)
+            atomic_write_text(path, json.dumps(document, ensure_ascii=False, indent=indent_of(path)) + "\n")
+    for item in files:
+        item["written"] = not dry_run
+    return {"files": files}
+
+#: The files whose records switched on with a STRING status, and the list each keeps them in.
+_STATUS_FILES = (("telegram_groups.json", "telegram_groups"), ("telegram_users.json", "telegram_users"))
+
+
+def _telegram_active(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """``status: "active"`` -> ``active: true``, in place; a record carrying both is left alone
+    when they disagree, because which one the operator meant is not a format question."""
+    from dbabrain.lib.target_flags import is_record_active
+
+    files: list[dict[str, Any]] = []
+    for base, list_key in _STATUS_FILES:
+        for name in (base, base.replace(".json", ".example.json")):
+            path = root / name
+            if not path.is_file():
+                continue
+            document = json.loads(path.read_bytes().decode("utf-8-sig"))
+            records = document.get(list_key) if isinstance(document, dict) else None
+            if not isinstance(records, list):
+                continue
+            changes: list[dict[str, Any]] = []
+            conflicts: list[dict[str, Any]] = []
+            for index, record in enumerate(records):
+                if not isinstance(record, dict) or "status" not in record:
+                    continue
+                where = f"{list_key}[{index}]"
+                as_bool = str(record["status"]).strip().lower() == "active"
+                if "active" in record and is_record_active({"active": record["active"]}) != as_bool:
+                    conflicts.append({"where": where, "standard": "active",
+                                      "values": {"status": record["status"],
+                                                 "active": record["active"]}})
+                    continue
+                records[index] = {("active" if key == "status" else key):
+                                  (as_bool if key == "status" else value)
+                                  for key, value in record.items() if not (
+                                      key == "active" and "status" in record)}
+                changes.append({"where": where, "field": "status", "to": "active",
+                                "value": as_bool})
+            written = bool(changes) and not conflicts and not dry_run
+            if written:
+                before_write(path)
+                # The file's own text first, so a hand-formatted example keeps its layout; trusted
+                # only when it parses to exactly the migrated document.
+                raw = path.read_bytes().decode("utf-8-sig")
+                text = re.sub(r'"status"(\s*):(\s*)"active"', r'"active"\1:\2true', raw)
+                if json.loads(text) != document:
+                    text = json.dumps(document, ensure_ascii=False,
+                                      indent=indent_of(path, default=2)) + "\n"
+                atomic_write_text(path, text)
+            files.append({"file": name, "records_changed": len(changes), "changes": changes,
+                          "conflicts": conflicts, "written": written})
+    return {"files": files}
+
+def _moved_commands(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Point every command line that names a moved command at the CLI that has it now.
+
+    Only the argv form - ``["{python}", "-m", "dbabrain.common.cli", "self-status", ...]`` - which is
+    how a bot command and an app command state what they run. The rewrite is on the file's own
+    text, so its layout survives, and it is trusted only when the result parses to exactly the
+    document the same rewrite gives structurally.
+    """
+    files: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.json")):
+        if path.name in REFERENCE_FILES:
+            continue
+        raw = path.read_bytes().decode("utf-8-sig")
+        if not any(f'"{module}"' in raw for module, _command in MOVED_COMMANDS):
+            continue
+        try:
+            document = json.loads(raw)
+        except ValueError:
+            continue
+        changes: list[dict[str, Any]] = []
+
+        def walk(value: Any, where: str) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    walk(item, f"{where}.{key}" if where else str(key))
+            elif isinstance(value, list):
+                for index in range(len(value) - 1):
+                    new_module = (MOVED_COMMANDS.get((value[index], value[index + 1]))
+                                  if isinstance(value[index], str) and isinstance(value[index + 1], str)
+                                  else None)
+                    if new_module:
+                        changes.append({"where": f"{where}[{index}]", "command": value[index + 1],
+                                        "from": value[index], "to": new_module})
+                        value[index] = new_module
+                for index, item in enumerate(value):
+                    walk(item, f"{where}[{index}]")
+
+        walk(document, "")
+        written = bool(changes) and not dry_run
+        if written:
+            before_write(path)
+            text = raw
+            for (module, command), new_module in MOVED_COMMANDS.items():
+                text = re.sub(rf'"{re.escape(module)}"(\s*,\s*)"{re.escape(command)}"',
+                              lambda match, new=new_module, cmd=command: f'"{new}"{match.group(1)}"{cmd}"',
+                              text)
+            if json.loads(text) != document:
+                text = json.dumps(document, ensure_ascii=False, indent=indent_of(path, default=2)) + "\n"
+            atomic_write_text(path, text)
+        if changes:
+            files.append({"file": path.name, "records_changed": len(changes), "changes": changes,
+                          "conflicts": [], "written": written})
+    return {"files": files}
+
+
+@functools.lru_cache(maxsize=1)
+def _env_names() -> frozenset[str]:
+    """The environment variables this version reads - read off its own source, every file of it.
+
+    A list kept by hand would be one more place to forget a variable; the package is the authority
+    on what it reads, and it is installed beside this module.
+    """
+    names: set[str] = set()
+    package = Path(package_rename.__file__).resolve().parents[1]
+    for path in package.rglob("*"):
+        if path.suffix in (".py", ".sh", ".ps1", ".sql", ".json") and path.is_file():
+            names |= package_rename.env_names_in(path.read_text(encoding="utf-8", errors="replace"))
+    return frozenset(names)
+
+
+def _package_rename(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Point what a node's ``data/`` says about the code at the package's 0.29.0 name.
+
+    Every string in every file is offered to :func:`package_rename.renamed`; a file changes only
+    where the rules say. The rewrite is on the file's own text, so its layout survives, and it is
+    trusted only when the result parses to exactly the document the same rewrite gives value by
+    value - otherwise the document is written out whole.
+    """
+    env_names = _env_names()
+    files: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.json")):
+        if path.name in REFERENCE_FILES:
+            continue
+        raw = path.read_bytes().decode("utf-8-sig")
+        if package_rename.OLD_PACKAGE not in raw and package_rename.OLD_ENV_PREFIX not in raw:
+            continue
+        try:
+            document = json.loads(raw)
+        except ValueError:
+            continue
+        changes: list[dict[str, Any]] = []
+
+        def walk(value: Any, where: str) -> Any:
+            if isinstance(value, dict):
+                moved = {}
+                for key, item in value.items():
+                    new_key = package_rename.renamed(key, env_names) if isinstance(key, str) else key
+                    if new_key != key:
+                        changes.append({"where": f"{where}.{key}" if where else key, "from": key, "to": new_key})
+                    moved[new_key] = walk(item, f"{where}.{new_key}" if where else str(new_key))
+                return moved
+            if isinstance(value, list):
+                return [walk(item, f"{where}[{index}]") for index, item in enumerate(value)]
+            if isinstance(value, str):
+                new = package_rename.renamed(value, env_names)
+                if new != value:
+                    changes.append({"where": where, "from": value, "to": new})
+                return new
+            return value
+
+        document = walk(document, "")
+        written = bool(changes) and not dry_run
+        if written:
+            before_write(path)
+            text = package_rename.renamed(raw, env_names)
+            try:
+                same = json.loads(text) == document
+            except ValueError:
+                same = False
+            if not same:
+                text = json.dumps(document, ensure_ascii=False, indent=indent_of(path, default=2)) + "\n"
+            atomic_write_text(path, text)
+        if changes:
+            files.append({"file": path.name, "records_changed": len(changes), "changes": changes,
+                          "conflicts": [], "written": written})
+    return {"files": files}
+
+
+#: The console's layout file, and the list in it that grows when a version adds a component.
+CONSOLE_FILE = "webhost_config.json"
+
+
+def _console_apps(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Add the console apps this version ships and this node's ``webhost_config.json`` lacks.
+
+    `init` writes the file once, from the package. A node carried forward - by `pip install
+    --upgrade`, or filled from another node's bundle - keeps the list it had, so a component a
+    later version added is never offered: the 0.26 soak node, filled by bundle, had no `transport`
+    app, which 0.24.0 introduced (the 0.26 sheet, section 6, C2).
+
+    **Only added, never changed.** An entry the file already holds is the operator's - renamed,
+    re-ordered, its app commands edited - and stays as it is; an entry is new by its `app_code`
+    alone. The bot's commands are deliberately not treated this way: a command has no off switch
+    but its level, so adding one widens what the bot does - that file is the operator's to edit
+    (`telegram.cli command-level`).
+    """
+    from dbabrain.common import scaffold
+
+    shipped = scaffold.packaged_default("data/" + CONSOLE_FILE)
+    path = root / CONSOLE_FILE
+    if not isinstance(shipped, dict) or not path.is_file():
+        return {"files": []}
+    document = json.loads(path.read_bytes().decode("utf-8-sig"))
+    apps = document.get("apps") if isinstance(document, dict) else None
+    if not isinstance(apps, list):
+        return {"files": []}
+    held = {str(item.get("app_code")) for item in apps if isinstance(item, dict)}
+    missing = [item for item in shipped.get("apps") or []
+               if isinstance(item, dict) and item.get("app_code")
+               and str(item["app_code"]) not in held]
+    written = bool(missing) and not dry_run
+    if written:
+        before_write(path)
+        apps.extend(json.loads(json.dumps(item)) for item in missing)
+        atomic_write_text(path, json.dumps(document, ensure_ascii=False,
+                                           indent=indent_of(path)) + "\n")
+    return {"files": [{"file": CONSOLE_FILE, "records_changed": len(missing), "conflicts": [],
+                       "changes": [{"field": "apps[]", "to": str(item["app_code"]),
+                                    "action": "added"} for item in missing],
+                       "written": written}]}
+
+
+#: The files this version ships as REFERENCE rather than configuration: nobody edits them, every node
+#: holds the same bytes, and the other steps are checked against them. They go first, because an
+#: older copy calls every field the next step moves an unknown one.
+REFERENCE_FILES = ("shared_config_objects.json", "config_references.json")
+
+
+def _same_reference(path: Path, shipped: Path) -> bool:
+    """Whether a node's reference file says what this version ships.
+
+    Compared as documents, not bytes: `init` writes these through `json.dumps` in text mode, so a
+    root this version created on Windows holds the same reference with CRLF and a different indent,
+    and a byte comparison called it an older version's on the day it was written - the 0.22.0 soak
+    node's `init` announced three records to move, two of them these. A file that does not parse is
+    not the shipped one.
+    """
+    try:
+        return (json.loads(path.read_bytes().decode("utf-8-sig"))
+                == json.loads(shipped.read_bytes().decode("utf-8-sig")))
+    except (OSError, ValueError):
+        return False
+
+
+def _reference_files(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    files: list[dict[str, Any]] = []
+    for name in REFERENCE_FILES:
+        shipped = PACKAGED_CATALOGUE / name
+        for candidate in (name, name.replace(".json", ".example.json")):
+            path = root / candidate
+            if not path.is_file() or not shipped.is_file():
+                continue
+            if _same_reference(path, shipped):
+                continue
+            written = not dry_run
+            if written:
+                before_write(path)
+                atomic_write_text(path, shipped.read_bytes().decode("utf-8"))
+            files.append({"file": candidate, "records_changed": 1,
+                          "changes": [{"field": "(whole file)", "to": f"this version's {name}"}],
+                          "conflicts": [], "written": written})
+    return {"files": files}
+
+#: Where a restore entry's machines live since 0.22.0, and the legacy key inside each block.
+_RESTORE_IDS = (("source", "server_id"), ("target", "target_server_id"))
+
+
+def _restore_machine_ids(root: Path, *, dry_run: bool,
+                         before_write: Any) -> dict[str, Any]:
+    """Move ``source.id`` / ``target.id`` onto the restore entry as ``server_id`` / ``target_server_id``."""
+    files: list[dict[str, Any]] = []
+    for name in ("restore_config.json", "restore_config.example.json"):
+        path = root / name
+        if not path.is_file():
+            continue
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        changes: list[dict[str, Any]] = []
+        conflicts: list[dict[str, Any]] = []
+        records = 0
+        for label, entry in shared_objects.walk_records(document, "backup_restore.restores[]"):
+            if not isinstance(entry, dict):
+                continue
+            moves = []
+            for block_name, standard in _RESTORE_IDS:
+                block = entry.get(block_name)
+                if not isinstance(block, dict) or "id" not in block:
+                    continue
+                if standard in entry and entry[standard] != block["id"]:
+                    conflicts.append({"where": label, "standard": standard,
+                                      "values": {f"{block_name}.id": block["id"],
+                                                 standard: entry[standard]}})
+                    continue
+                moves.append((block_name, standard))
+            if not moves:
+                continue
+            records += 1
+            rebuilt: dict[str, Any] = {}
+            for key, value in entry.items():
+                if key in {block for block, _ in moves}:
+                    value = {k: v for k, v in value.items() if k != "id"}
+                rebuilt[key] = value
+                if key == "restore_id":
+                    for block_name, standard in moves:
+                        rebuilt[standard] = entry.get(standard, entry[block_name]["id"])
+            for block_name, standard in moves:
+                rebuilt.setdefault(standard, entry[block_name]["id"])
+                changes.append({"where": label, "field": f"{block_name}.id", "to": standard,
+                                "value": entry[block_name]["id"]})
+            entry.clear()
+            entry.update(rebuilt)
+        written = bool(changes) and not conflicts and not dry_run
+        if written:
+            before_write(path)
+            atomic_write_text(path, json.dumps(document, ensure_ascii=False,
+                                               indent=indent_of(path)) + "\n")
+        files.append({"file": name, "records_changed": records, "changes": changes,
+                      "conflicts": conflicts, "written": written})
+    return {"files": files}
+
+
+def _earlier_defaults(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """State, in each record, the value it has been leaving to a default this version renamed.
+
+    After the steps that move a record's shape, so it reads ``db_type``, ``jobs`` and ``env`` where
+    this version keeps them. The example file is not touched: it is the shipped one's copy, and
+    nothing runs from it.
+    """
+    files: list[dict[str, Any]] = []
+
+    def stated(path: Path, document: Any, changes: list[dict[str, str]]) -> None:
+        written = bool(changes) and not dry_run
+        if written:
+            if path.is_file():
+                before_write(path)
+            atomic_write_text(path, json.dumps(document, ensure_ascii=False,
+                                               indent=indent_of(path) if path.is_file() else 2) + "\n")
+        files.append({"file": path.name, "records_changed": len({item["where"] for item in changes}),
+                      "changes": changes, "conflicts": [], "written": written})
+
+    path = root / "restore_config.json"
+    if path.is_file():
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        stated(path, document, earlier_defaults.state_backup_certificate(document)
+               + earlier_defaults.state_staging_marker(document))
+
+    # The lab folders were constants in the code, so every node ran on them. The code holds none
+    # now and refuses a lab command that finds none stated: each node is told the two it used. A
+    # node with no sre_config.json is given the shipped one, which states them - a file holding
+    # that block alone would not be a sre_config.json anything else could read.
+    path = root / "sre_config.json"
+    if path.is_file():
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        stated(path, document, earlier_defaults.state_lab_folders(document))
+    else:
+        shipped = Path(earlier_defaults.__file__).resolve().parents[1] / "sre" / "catalogue" / path.name
+        if shipped.is_file():
+            if not dry_run:
+                atomic_write_text(path, shipped.read_bytes().decode("utf-8-sig"))
+            files.append({"file": path.name, "records_changed": 1, "conflicts": [], "written": not dry_run,
+                          "changes": [{"where": path.name, "field": "(the file)",
+                                       "value": "created from the shipped one, which states sre.docker_db"}]})
+    return {"files": files}
+
+
+def upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    root = shared_objects.data_root(request.get("data_dir") or None)
+    dry_run = request.get("dry_run", True) is not False
+    wanted = request.get("steps") or list(STEPS)
+    unknown = [step for step in wanted if step not in STEPS]
+    if unknown:
+        raise ValueError(f"unknown step(s) {unknown}; the steps are {list(STEPS)}.")
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_dir = root.parent / "runtime" / "config_upgrade" / stamp
+    backed_up: list[str] = []
+
+    def before_write(path: Path) -> None:
+        # One copy per file per run, of the file as it was before THIS run touched it.
+        if path.name in backed_up:
+            return
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, backup_dir / path.name)
+        backed_up.append(path.name)
+
+    results: list[dict[str, Any]] = []
+    for step in STEPS:
+        if step not in wanted:
+            continue
+        if step == "reference-files":
+            files = _reference_files(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "package-rename":
+            files = _package_rename(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "field-names":
+            if not dry_run:
+                # Back up what the step is about to write, before it writes.
+                _, plan = field_migration.standardize({"data_dir": str(root)})
+                for item in plan["files"]:
+                    if item["changes"] and not item["conflicts"]:
+                        before_write(root / item["file"])
+            _, data = field_migration.standardize({"data_dir": str(root), "dry_run": dry_run})
+            files = data["files"]
+        elif step == "restore-machine-ids":
+            files = _restore_machine_ids(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "earlier-defaults":
+            files = _earlier_defaults(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "telegram-active":
+            files = _telegram_active(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "moved-commands":
+            files = _moved_commands(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "console-apps":
+            files = _console_apps(root, dry_run=dry_run, before_write=before_write)["files"]
+        else:
+            files = _inventory_into_reports(root, dry_run=dry_run, before_write=before_write)["files"]
+        results.append({
+            "step": step, "files": [item for item in files if item["changes"] or item["conflicts"]],
+            "records_changed": sum(item["records_changed"] for item in files),
+            "conflicts": sum(len(item["conflicts"]) for item in files)})
+
+    records = sum(item["records_changed"] for item in results)
+    conflicts = sum(item["conflicts"] for item in results)
+    # The checks read the node's own reference. While that is still an older version's copy - a
+    # plan, or a run without the reference-files step - their answer would be about the version
+    # being left, so they wait for it.
+    stale_reference = any(
+        (root / name).is_file() and (PACKAGED_CATALOGUE / name).is_file()
+        and not _same_reference(root / name, PACKAGED_CATALOGUE / name)
+        for name in REFERENCE_FILES)
+    checks: dict[str, Any] = {"check_objects": None, "check_references": None}
+    if not stale_reference:
+        objects = shared_objects.check_data_dir(root)
+        references = config_references.check(root)
+        checks = {
+            "check_objects": {"violations": len(objects["violations"]),
+                              "deprecated": len(objects["deprecated"])},
+            "check_references": {"dangling": len(references["dangling"]),
+                                 "dangling_values": [f"{item['where']} -> {item['value']}"
+                                                     for item in references["dangling"]]},
+        }
+    verb = "would change" if dry_run else "changed"
+    message = (f"{verb} {records} record(s)"
+               + (f"; {conflicts} CONFLICT(S) - those files were not written" if conflicts else "")
+               + (f"; backup in {backup_dir}" if backed_up else "")
+               + ("; dry run, nothing written - pass dry_run false to write" if dry_run else ""))
+    if stale_reference:
+        message += (". check-objects / check-references not run: this node's reference files are "
+                    "an older version's - the reference-files step replaces them")
+    else:
+        message += (f". check-objects: {checks['check_objects']['violations']} violation(s), "
+                    f"{checks['check_objects']['deprecated']} deprecated; check-references: "
+                    f"{checks['check_references']['dangling']} dangling")
+    return message, {"dry_run": dry_run, "data_dir": str(root), "steps": results,
+                     "records_changed": records, "conflicts": conflicts,
+                     "backup_dir": str(backup_dir) if backed_up else None,
+                     "backed_up": backed_up, **checks}

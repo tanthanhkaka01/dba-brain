@@ -1,0 +1,837 @@
+"""dbabrain control app — master-side operations (deploy, versioning, inventory).
+
+Runs on the master (PC). The worker host defaults to the first ``worker`` node in
+config.json, so most commands only need ``--user`` (and a password prompt).
+
+    python -m dbabrain.control.cli deploy --user <user>
+    python -m dbabrain.control.cli bump-version --part minor
+    python -m dbabrain.control.cli inventory-health --user <user>
+    python -m dbabrain.common.cli inventory-summary '{}'     # the summary is common's (rules R43)
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from dbabrain.lib.secret_text import encrypt_secret_text_file, resolve_cli_key, resolve_key
+from dbabrain.control import deploy as deploy_ops, config_gate
+from dbabrain.control import inventory as inventory_ops
+from dbabrain.control import version as version_ops
+from dbabrain.control import worker_exec as worker_exec_ops
+from dbabrain.control import worker_status as worker_status_ops
+from dbabrain.control._support import (
+    DBABRAIN_ROOT,
+    DEFAULT_CONTAINER,
+    DEFAULT_REMOTE_DIR,
+    default_worker_host,
+    default_worker_password_ref,
+    default_worker_user,
+    resolve_password,
+)
+
+# Encrypt-secret-text defaults: read the gitignored plaintext source that now lives inside
+# the tool (dbabrain/secrets/) and write the committed encrypted store under dbabrain/data/.
+DEFAULT_PLAINTEXT_SECRET = DBABRAIN_ROOT / "secrets" / "secret_text.json"
+DEFAULT_ENCRYPTED_SECRET = DBABRAIN_ROOT / "data" / "encrypted_secret_text.json"
+
+
+def _secret_key_from_env() -> str | None:
+    """Passphrase fallback for commands that can run without an explicit ``--key``.
+
+    This was a hard-coded base64 constant until 2026-08-06. Base64 is encoding, not
+    protection: a tracked default put the live store's passphrase into every checkout,
+    every clone and every image layer built from this source, so anyone with read access
+    to the repository could decrypt ``data/encrypted_secret_text.json``. The environment
+    variable is the same one the daemon already exports to every child process, so an
+    operator who can run a deploy already has it set.
+    """
+    return resolve_key(None).strip() or None
+
+
+def _add_target(parser, *, require_user: bool = True) -> None:
+    default_user = default_worker_user()
+    parser.add_argument("--host", "--ip", dest="host", default=None,
+                        help="Worker host (default: first worker in config.json).")
+    # --user defaults to the worker's user in config.json; only required when none is set there.
+    parser.add_argument("--user", default=default_user, required=require_user and not default_user,
+                        help="SSH username (default: worker 'user' in config.json).")
+    parser.add_argument("--password", default=None,
+                        help="SSH password. If omitted, resolved from the secret store via the worker "
+                             "'password_ref' + --key/--key-base64, else prompted.")
+    parser.add_argument("--port", type=int, default=22, help="SSH port (default 22).")
+    parser.add_argument("--key-base64", dest="key_base64", default=None,
+                        help="Base64 secret passphrase (decrypts the SSH password ref and, for the "
+                             "daemon, the runtime secrets).")
+    parser.add_argument("--key", default=None, help="Secret passphrase (plaintext alternative to --key-base64).")
+
+
+def _resolve_host(args) -> str:
+    host = args.host or default_worker_host()
+    if not host:
+        raise SystemExit("No --host given and no worker node in config.json.")
+    return host
+
+
+def _add_drift_argument(parser) -> None:
+    """How this run answers config drift between the store and ``data/``.
+
+    A flag rather than only a prompt because a deploy runs from CI as well as from a keyboard, and
+    an unattended run must be able to *declare* which side it trusts. What it may not do is
+    proceed without saying — see :mod:`dbabrain.control.config_gate`.
+    """
+    parser.add_argument(
+        "--on-config-drift", dest="on_config_drift", default="ask",
+        choices=list(config_gate.DRIFT_CHOICES),
+        help="What to do when the runtime store and this master's data/ disagree: "
+             "ask (default, needs a terminal), adopt (rebuild data/ from the store), "
+             "keep (ship data/ and re-sync the store from it), abort.")
+
+
+def _gate_config_drift(args, *, files: tuple[str, ...] | list[str] = (),
+                       report_only: bool = False) -> None:
+    """Stop a deploy that would silently revert what the web console changed.
+
+    Skipped only when the store cannot be opened at all — a master with no access to the runtime
+    store has no drift to detect, and refusing to deploy from it would be a new failure rather
+    than a caught one. That case is reported, never swallowed.
+
+    ``files`` scopes the gate to a partial push's own files. It still asks — that is the whole
+    point of the gate, and a push is exactly as capable of reverting a console edit as a deploy
+    is — but it asks about what is being shipped rather than about every catalogued file.
+
+    ``report_only`` is for ``--dry-run``: the drift is printed and nothing is decided. A plan that
+    rewrote ``data/`` or the store on its way to changing nothing would be a plan that lies.
+    """
+    try:
+        from dbabrain.lib.config import load_config
+        from dbabrain.db.config_store import ConfigStore
+        from dbabrain.lib import secret_text
+
+        secret_text.set_key_env(getattr(args, "key", None), getattr(args, "key_base64", None))
+        store = ConfigStore.from_config(load_config())
+    except Exception as exc:  # noqa: BLE001 - see docstring.
+        print(f"NOTE: config drift not checked ({exc}); the deploy will ship data/ as it is.",
+              file=sys.stderr)
+        return
+    if report_only:
+        drifted = config_gate.check(store, files=files)
+        if drifted:
+            print(config_gate.describe(drifted), file=sys.stderr)
+            print("  --dry-run: not resolved. A real push asks this before it uploads.",
+                  file=sys.stderr)
+        return
+    config_gate.resolve(store, decision=getattr(args, "on_config_drift", "ask"),
+                        files=files, actor="deploy-gate")
+
+
+def _refresh_encrypted_secret_store(*, key: str | None, key_base64: str | None) -> None:
+    """Re-encrypt the plaintext secret source into the committed store before a deploy.
+
+    A deploy always ships ``data/encrypted_secret_text.json``, so refresh it from the
+    plaintext source first — that way ``deploy`` alone picks up secret edits without a
+    separate ``encrypt-secret-text`` run. Falls back to ``DBABRAIN_SECRET_KEY`` when no
+    ``--key``/``--key-base64`` is given. Skipped (with a notice) when the plaintext source
+    is absent, e.g. a tree that only carries the already-encrypted store.
+    """
+    resolved = resolve_cli_key(key, key_base64) if (key or key_base64) else _secret_key_from_env()
+    if not resolved:
+        # Say so rather than skipping quietly: without a key the deploy still ships the
+        # encrypted store, so a secret edited in the plaintext source would reach the
+        # worker as its previous value and the failure would only surface at connect time.
+        print("NOTE: no --key/--key-base64 and no DBABRAIN_SECRET_KEY; "
+              "shipping the existing encrypted store without refreshing it.")
+        return
+    if not DEFAULT_PLAINTEXT_SECRET.exists():
+        print(f"NOTE: plaintext secret source not found ({DEFAULT_PLAINTEXT_SECRET}); "
+              "shipping the existing encrypted store as-is.")
+        return
+    count = encrypt_secret_text_file(DEFAULT_PLAINTEXT_SECRET, DEFAULT_ENCRYPTED_SECRET, resolved)
+    print(f"Refreshed encrypted secret store: {count} secrets -> {DEFAULT_ENCRYPTED_SECRET}")
+
+
+def _pull_node_config_command(args) -> int:
+    """The carry-back for a node that is a directory rather than the worker container.
+
+    `dbabrain` is the origin for code and for deliberate configuration, but the bot and the console
+    *create* config on whichever node runs the estate, and that is the one flow that has to come
+    back here. Over SSH `worker-pull-data-config` does it; the estate now runs from an ordinary
+    directory on a PC, where nothing did — so it was being done by hand.
+    """
+    from dbabrain.control import worker_data
+
+    try:
+        changes = worker_data.merge_node_config(
+            from_node_path=args.from_node_path, dry_run=args.dry_run)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except worker_data.WorkerConfigUnreadable as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    if args.merge_secrets:
+        try:
+            key = resolve_cli_key(args.key, args.key_base64) or _secret_key_from_env()
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        if not key:
+            print("ERROR: --merge-secrets needs --key/--key-base64 or DBABRAIN_SECRET_KEY: both "
+                  "stores have to be decrypted to be unioned.", file=sys.stderr)
+            return 2
+        try:
+            status = worker_data.merge_node_secrets(
+                from_node_path=args.from_node_path, key=key, dry_run=args.dry_run)
+        except worker_data.SecretMergeConflict as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(f"secret store: {status}")
+
+    print(f"\nNot carried back, by design: {', '.join(worker_data.NEVER_CARRIED_BACK)} - "
+          "a node's own store declaration and its getUpdates cursor are per-node state, and "
+          "copying either one back breaks the node it came from or the one it lands on.")
+    return 0
+
+
+def _push_command(args) -> int:
+    """``deploy --type ...`` — upload named config/assets and nothing else.
+
+    Everything a full deploy does that a push does not is a deliberate omission, documented at
+    :func:`dbabrain.control.deploy.push_selected`. What a push keeps is the **drift gate**: the
+    store is shared with the worker and the web console writes to it, so a push of
+    ``sql_targets.json`` can revert a console edit exactly as a deploy can. It is asked scoped to
+    the files being pushed — a question about files this run does not carry is one it cannot
+    answer.
+    """
+    from dbabrain.lib import deploy_selection
+    from dbabrain.lib.data_files import DataFileError
+
+    if args.merge_worker:
+        print("ERROR: --merge and --type are different operations. --merge pulls the worker's own "
+              "config back before rebuilding everything; --type ships named files one way. Run "
+              "the full deploy with --merge first if the bot has registered something.",
+              file=sys.stderr)
+        return 2
+    try:
+        selected = deploy_selection.select_push_files(
+            tool_root=DBABRAIN_ROOT, push_type=args.push_type, names=args.file_names,
+            # Explicit, so the tree being read and the manifest deciding what may leave it are
+            # never two different trees.
+            data_dir=DBABRAIN_ROOT / "data")
+    except (deploy_selection.PushSelectionError, DataFileError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    # Catalogued config is `data/<name>.json`; `data/ssh_keys/<key>` is estate material with no
+    # store record, so it is not part of the drift question.
+    config_names = [Path(item.relative).name for item in selected
+                    if item.relative.startswith("data/") and item.relative.count("/") == 1]
+    if config_names:
+        _gate_config_drift(args, files=config_names, report_only=args.dry_run)
+        if DEFAULT_ENCRYPTED_SECRET.name in config_names and not args.dry_run:
+            _refresh_encrypted_secret_store(key=args.key, key_base64=args.key_base64)
+    else:
+        print("No data/*.json in this push, so the store/data drift gate does not apply to it.")
+
+    if args.dry_run:
+        deploy_ops.push_selected(host="", user="", password="", remote_dir=args.remote_dir,
+                                 files=selected, dry_run=True)
+        return 0
+    host = _resolve_host(args)
+    password = resolve_password(args.password, host=host, user=args.user,
+                                key_base64=args.key_base64, key=args.key,
+                                password_ref=default_worker_password_ref())
+    deploy_ops.push_selected(host=host, user=args.user, password=password, port=args.port,
+                             remote_dir=args.remote_dir, files=selected, dry_run=False)
+    return 0
+
+
+def _request_types_command(args) -> int:
+    """The static types of every common.cli request and answer, rendered from the reference.
+
+    Master-side tooling, like ``bump-version``: the two files are part of the source tree, so the
+    command that writes them runs where the source is. Without ``--write`` it only says whether they
+    are current - the guard in ``tests/test_cli_types_match_the_reference.py`` asks the same question.
+    It reads the packaged copy of the reference (R18 holds the three copies equal), so the answer
+    does not depend on the directory it is run from.
+    """
+    from dbabrain.lib import request_types, shared_objects
+
+    package = Path(__file__).resolve().parents[1]
+    reference = shared_objects.load(package / "common" / "catalogue")
+    targets = {
+        package / "lib" / "cli_types.py": request_types.render(reference),
+        package / "transport" / "common_cli.pyi": request_types.render_transport_stub(reference),
+    }
+    stale = [path for path, text in targets.items()
+             if not path.exists() or path.read_text(encoding="utf-8") != text]
+    for path in stale:
+        if args.write:
+            path.write_text(targets[path], encoding="utf-8")
+            print(f"wrote {path.relative_to(package.parent)}")
+        else:
+            print(f"stale: {path.relative_to(package.parent)} - run request-types --write")
+    if not stale:
+        print("request types are current")
+    return 1 if stale and not args.write else 0
+
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    bump = sub.add_parser("bump-version", help="Bump dbabrain/lib/version.py __version__.")
+    bump.add_argument("--part", choices=["major", "minor", "patch"], default="patch")
+    bump.add_argument("--set", dest="set_to", default=None, help="Set the version explicitly.")
+    bump.add_argument("--dry-run", action="store_true")
+
+    types = sub.add_parser(
+        "request-types",
+        help="Check that lib/cli_types.py and transport/common_cli.pyi match the reference; "
+             "--write rewrites them.")
+    types.add_argument("--write", action="store_true",
+                       help="Rewrite the two generated files from the reference.")
+
+    build = sub.add_parser("build-image", help="Build the image + deploy bundle locally.")
+    build.add_argument("--platform", default="linux/amd64")
+    build.add_argument("--no-cache", action="store_true")
+    build.add_argument("--skip-build", action="store_true")
+    # The drift gate opens the runtime store, which on this tree is PostgreSQL behind a secret.
+    # Without these, build-image could only check drift when the passphrase happened to be in the
+    # environment — and would quietly skip the check when it was not.
+    build.add_argument("--key-base64", dest="key_base64", default=None,
+                       help="Base64 secret passphrase, for the config-drift check.")
+    build.add_argument("--key", default=None,
+                       help="Secret passphrase (plaintext alternative to --key-base64).")
+    _add_drift_argument(build)
+
+    copy = sub.add_parser("copy", help="Copy the deploy bundle to the worker over SFTP.")
+    _add_target(copy)
+    copy.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
+
+    start = sub.add_parser("start-daemon", help="Load the image and (re)start the worker daemon.")
+    _add_target(start)
+    start.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
+    start.add_argument("--container", default=DEFAULT_CONTAINER)
+    start.add_argument("--node-role", default="worker", choices=["master", "worker"])
+
+    dc = sub.add_parser("deploy-code",
+                        help="Ship the code only: build the image here, load it on the worker, point its "
+                             "compose file at it, run upgrade-config and sync-config in it, start. The "
+                             "worker keeps its own data/, assets/ and config.json. A plan unless --apply.")
+    _add_target(dc)
+    dc.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
+    dc.add_argument("--container", default=DEFAULT_CONTAINER)
+    dc.add_argument("--platform", default="linux/amd64")
+    dc.add_argument("--skip-build", action="store_true", help="Use the image already built here.")
+    dc.add_argument("--apply", action="store_true",
+                    help="Do it. Without it the worker is read and the plan printed; nothing is built or changed.")
+
+    dep = sub.add_parser("deploy", help="build-image -> copy -> start-daemon in one shot.")
+    _add_target(dep)
+    dep.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
+    dep.add_argument("--container", default=DEFAULT_CONTAINER)
+    dep.add_argument("--node-role", default="worker", choices=["master", "worker"])
+    dep.add_argument("--platform", default="linux/amd64")
+    dep.add_argument("--no-cache", action="store_true")
+    dep.add_argument("--skip-build", action="store_true")
+    _add_drift_argument(dep)
+    # Default changed on 2026-08-11: the master is the source of truth, and a deploy ships it.
+    #
+    # It was the other way round from 2.24.00, after a deploy destroyed config registered through
+    # the bot. That merge also made the
+    # master un-editable for the fields the worker owns: `metrics.metric_overrides` is
+    # worker-owned, so editing a severity map on the master and deploying silently restored the
+    # worker's copy — over the master's file, before the build, so the edit was lost on both
+    # sides. Making a deliberate master-side change required knowing that and working around it.
+    #
+    # The old failure is now the operator's to avoid by passing --merge; the new one is not
+    # avoidable at all. deploy() prints what will be overwritten either way.
+    dep.add_argument("--merge", dest="merge_worker", action="store_true",
+                     help="Merge worker-added config (SQL tasks/targets, Telegram groups/users, "
+                          "docker db connections) and .sql scripts back into the master BEFORE "
+                          "building. Use it when the bot has registered things on the worker since "
+                          "the last deploy. Without it the deploy is master -> worker and DELETES "
+                          "anything registered through the bot since the last deploy.")
+    dep.add_argument("--no-merge-worker", dest="merge_worker", action="store_false",
+                     help="Deprecated no-op kept so existing runbook lines keep working; this is "
+                          "now the default.")
+    dep.set_defaults(merge_worker=False)
+    # The fast path. A config edit or a new .sql needs neither an image nor a restart — data/ and
+    # assets/ are bind mounts on the worker and the scheduler re-reads its commands every scan —
+    # so `deploy --type ...` uploads exactly what is named and stops there. Same command as the
+    # full deploy on purpose: the operator's question is "ship this", and the answer should not be
+    # a different verb depending on what "this" is.
+    dep.add_argument("--type", dest="push_type", default=None,
+                     help="Push only part of the tree instead of building and restarting: "
+                          "'config' (the catalogued data/*.json), 'assets', a subtree such as "
+                          "'assets/tasks' (backslashes are fine), or 'data/ssh_keys'.")
+    # --file_name too: it is what the runbook line says, and an operator who typed the underscore
+    # form should not get 'unrecognized arguments' for a spelling.
+    dep.add_argument("--file-name", "--file_name", dest="file_names", action="append", default=[],
+                     metavar="NAME",
+                     help="With --type, push only the files matching NAME: a filename, a path "
+                          "under the type, or a glob ('sql_targets.json', 'oracle/*.sql'). "
+                          "Repeatable. A NAME that matches nothing is an error, never an empty "
+                          "push reported as success.")
+    dep.add_argument("--dry-run", dest="dry_run", action="store_true",
+                     help="With --type, list what would be uploaded and change nothing.")
+
+    pull = sub.add_parser(
+        "pull-node-config",
+        help="Carry back what a LOCAL node registered (bot/console) into this master's data/.")
+    pull.add_argument("--from", dest="from_node_path", required=True, metavar="PATH",
+                      help="The node's data/ directory, e.g. D:/Projects/dbabrain_soak_20260909/data")
+    pull.add_argument("--merge-secrets", action="store_true",
+                      help="Also union the node's encrypted secret store. Needs --key/--key-base64; "
+                           "a ref differing on both sides refuses and writes nothing.")
+    pull.add_argument("--key-base64", dest="key_base64", default=None,
+                      help="Base64 secret passphrase, for --merge-secrets.")
+    pull.add_argument("--key", default=None, help="Secret passphrase (plaintext alternative).")
+    pull.add_argument("--dry-run", action="store_true",
+                      help="Report what would be carried back and write nothing.")
+
+    exp = sub.add_parser(
+        "export-public",
+        help="Write the filtered public tree: what dba-brain receives, and nothing else.")
+    exp.add_argument("target", help="Directory to write. Must be empty.")
+    exp.add_argument("--plan-only", action="store_true",
+                     help="Report what would be written and change nothing.")
+    exp.add_argument("--force", action="store_true",
+                     help="Empty the target first. Without it a non-empty target is refused.")
+    exp.add_argument("--allow-binary", action="append", default=[], metavar="PATH",
+                     help="Ship one non-text file, by repo-relative path. Repeatable.")
+    exp.add_argument("--allow-inside-git", action="store_true",
+                     help="Write into a repository that has a remote. Refused by default: a public "
+                          "tree in a checkout that can push is one command from an early release. "
+                          "Use it deliberately when updating a repository that is already public.")
+    exp.add_argument("--skip-scan", action="store_true",
+                     help="Do not run check-identifiers over the result. For debugging only.")
+
+    inv = sub.add_parser("inventory-health", help="Build health overlay on the worker, fetch, merge canonical JSON.")
+    _add_target(inv)
+    inv.add_argument("--container", default=DEFAULT_CONTAINER)
+    inv.add_argument("--days", type=int, default=2)
+    inv.add_argument("--date", default=None)
+    inv.add_argument("--inventory", default=str(inventory_ops.DEFAULT_INVENTORY))
+    inv.add_argument("--snapshot-dir", default=str(inventory_ops.DEFAULT_SNAPSHOT_DIR))
+    inv.add_argument("--container-runtime", default=inventory_ops.DEFAULT_CONTAINER_RUNTIME)
+    inv.add_argument("--host-runtime", default=inventory_ops.DEFAULT_HOST_RUNTIME)
+    inv.add_argument("--dry-run", action="store_true")
+
+    enc = sub.add_parser("encrypt-secret-text",
+                         help="Encrypt the plaintext secret source (dbabrain/secrets/secret_text.json) into "
+                              "the committed dbabrain/data/encrypted_secret_text.json store.")
+    enc.add_argument("--source", default=str(DEFAULT_PLAINTEXT_SECRET),
+                     help=f"Plaintext secrets JSON (default {DEFAULT_PLAINTEXT_SECRET}).")
+    enc.add_argument("--dest", default=str(DEFAULT_ENCRYPTED_SECRET),
+                     help=f"Encrypted output JSON (default {DEFAULT_ENCRYPTED_SECRET}).")
+    enc.add_argument("--key", default=None, help="Encryption passphrase (plaintext alternative to --key-base64).")
+    enc.add_argument("--key-base64", "--key_base64", dest="key_base64", default=None,
+                     help="Base64-encoded UTF-8 encryption passphrase. Defaults to the built-in project key.")
+
+    # `inventory-summary` and `inventory-workflow` were here until 0.24.0 - each did a job another
+    # command does (rules R43; the operator chose): the summary is `common.cli inventory-summary`,
+    # the workflow is the worker's `reports.cli inventory-workflow`, run here with `worker-run`.
+
+    ws = sub.add_parser("worker-status",
+                        help="Check the worker daemon: container up?, version, and per-app last-run "
+                             "status/due + metric freshness (read-only).")
+    _add_target(ws)
+    ws.add_argument("--container", default=DEFAULT_CONTAINER)
+    ws.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR,
+                    help="Worker bundle dir (host). Reports are read from <remote-dir>/runtime/reports.")
+    ws.add_argument("--json", dest="as_json", action="store_true", help="Emit the in-container status as JSON.")
+    ws.add_argument("--no-metrics", dest="no_metrics", action="store_true", help="Skip the metric-freshness section.")
+
+    wr = sub.add_parser("worker-run",
+                        help="Run an arbitrary command inside the worker container, e.g. "
+                             "worker-run --key-base64 K -- python -m dbabrain.reports.cli inventory-workflow --days 7 --beauty 1")
+    _add_target(wr)
+    wr.add_argument("--container", default=DEFAULT_CONTAINER)
+    wr.add_argument("--on-host", dest="on_host", action="store_true",
+                    help="Run on the worker HOST, not in the container (compose, docker pull, "
+                         "bind mounts). One quoted argument is run as a shell line.")
+    wr.add_argument("--sudo", action="store_true",
+                    help="With --on-host: run under sudo, fed the SSH password.")
+    wr.add_argument("cmd", nargs=argparse.REMAINDER,
+                    help="The command to run in the worker container (put it after `--`).")
+
+    from dbabrain.control import worker_data as _wd
+    pp = sub.add_parser("worker-pull-data-config",
+                        help="Copy updated data/ config files from the worker back to the master.")
+    _add_target(pp)
+    pp.add_argument("--from-worker-path", dest="from_worker_path", default=_wd.DEFAULT_WORKER_DATA_PATH,
+                    help=f"Worker data dir on the host (default {_wd.DEFAULT_WORKER_DATA_PATH}).")
+    pp.add_argument("--to-master-path", dest="to_master_path", default=_wd.DEFAULT_MASTER_DATA_PATH,
+                    help="Master data dir to copy into (default the repo's data/).")
+    pp.add_argument("--files", nargs="+", default=None,
+                    help="Specific file names to pull (default: the docker-db connection registry).")
+    pp.add_argument("--all-json", dest="all_json", action="store_true",
+                    help="Pull every *.json in the worker data dir (excludes the secret store).")
+    pp.add_argument("--include-secrets", dest="include_secrets", action="store_true",
+                    help="Also pull the encrypted secret store (off by default). On its own this "
+                         "OVERWRITES the master's store with the worker's — see --merge-secrets.")
+    pp.add_argument("--merge-secrets", dest="merge_secrets", action="store_true",
+                    help="Merge the worker's secret store into the master's instead of overwriting "
+                         "it, then synchronize the merged refs into the master's plaintext source: "
+                         "master-only refs are kept, and a ref whose value differs between stores "
+                         "is reported as a conflict and nothing is written. "
+                         "Needs --key/--key-base64 to decrypt both stores.")
+    pp.add_argument("--plaintext-secret-path", dest="plaintext_secret_path",
+                    default=_wd.DEFAULT_PLAINTEXT_SECRET_PATH,
+                    help="Plaintext secret source synchronized by --merge-secrets "
+                         f"(default {_wd.DEFAULT_PLAINTEXT_SECRET_PATH}).")
+    pp.add_argument("--overwrite", action="store_true", help="Overwrite files that already exist on the master.")
+    pp.add_argument("--writeback-config", dest="writeback_config", action="store_true",
+                    help="Preset: pull the worker-owned config files (sql_commands.json, sql_targets.json, "
+                         "app_commands.json) with overwrite so the master picks up runtime edits.")
+    pp.add_argument("--include-sql", dest="include_sql", action="store_true",
+                    help="Also mirror the worker's sql/ tree (*.sql task scripts) back to the master.")
+    pp.add_argument("--dry-run", action="store_true", help="Print what would be copied without copying.")
+
+    wc = sub.add_parser("worker-create-db-docker",
+                        help="Build a lab database on the worker's host (common.cli create-db-docker "
+                             "over SSH) and register it here; the worker has it after the next deploy.")
+    _add_target(wc)
+    # Both kept only to answer an old command line: the build no longer runs in the worker
+    # container, and the record is written here, so there is nothing to run in and nothing to pull.
+    wc.add_argument("--container", default=DEFAULT_CONTAINER, help=argparse.SUPPRESS)
+    wc.add_argument("--name", required=True)
+    wc.add_argument("--engine", required=True)
+    wc.add_argument("--version", required=True)
+    wc.add_argument("--mode", default="single")
+    wc.add_argument("--replicas", type=int, default=None)
+    wc.add_argument("--host-port", dest="host_port", type=int, default=None,
+                    help="Default: the engine's own port (postgres 5432, mysql 3306, mssql 1433).")
+    wc.add_argument("--password-ref", "--password-env", dest="password_env", default=None,
+                    help="Secret ref for the password. Default: <NAME>_PASSWORD.")
+    wc.add_argument("--password-text", dest="password_text", default=None,
+                    help="Password value to store under --password-ref in the encrypted secret "
+                         "store before provisioning (visible in the process list while it runs).")
+    wc.add_argument("--containers-dir", dest="containers_dir", default=None)
+    wc.add_argument("--network-subnet", dest="network_subnet", default=None,
+                    help="CIDR for the lab's compose network. Default: a /24 derived from --name "
+                         "inside 172.30.0.0/16, so it can never land on a range the estate routes.")
+    wc.add_argument("--worker-host", dest="worker_host", default=None,
+                    help="The address to record, when clients reach the worker by another one "
+                         "than --host. Default: --host.")
+    wc.add_argument("--install-docker", dest="install_docker", action="store_true",
+                    help="Prepare the host first: install Docker if missing, put the SSH user in the "
+                         "docker group and give it the containers folder (sudo, with the SSH password).")
+    wc.add_argument("--overwrite-secret", dest="overwrite_secret", action="store_true",
+                    help="Replace a different value already stored under the password ref.")
+    wc.add_argument("--force", action="store_true")
+    wc.add_argument("--dry-run", action="store_true")
+    wc.add_argument("--no-register", dest="register", action="store_false")
+    wc.add_argument("--pull-config", dest="pull_config", action="store_true", help=argparse.SUPPRESS)
+
+    return parser.parse_args(argv)
+
+
+def _export_public_command(args) -> int:
+    """``export-public`` — produce the tree that becomes `dba-brain`.
+
+    The last gate before something becomes permanent, so it is loud and it refuses easily. Two
+    things it will not do: write over a non-empty directory, because an export written over a
+    previous run ships whatever survived from it; and finish quietly on a tree that still names a
+    real host, because the identifier scan runs against the **copy** rather than against the source
+    it came from.
+    """
+    from pathlib import Path
+
+    from dbabrain.control import export_public
+    from dbabrain.lib.paths import TOOL_ROOT
+
+    root = Path(TOOL_ROOT)
+    target = Path(args.target).expanduser().resolve()
+
+    unplanned = export_public.unplanned_paths(root)
+    if unplanned:
+        print(
+            "These top-level paths are in neither PUBLIC_PATHS nor PRIVATE_PATHS, so nobody has "
+            "decided about them. They will NOT be exported:",
+            file=sys.stderr,
+        )
+        for name in unplanned:
+            print(f"  {name}", file=sys.stderr)
+        print("Add each to dbabrain/lib/distribution.py.", file=sys.stderr)
+        print("", file=sys.stderr)
+
+    try:
+        if args.plan_only:
+            plan = export_public.build_plan(root, allow_binaries=frozenset(args.allow_binary))
+        else:
+            plan = export_public.export(
+                root, target, allow_binaries=frozenset(args.allow_binary), force=args.force,
+                allow_inside_git=args.allow_inside_git,
+            )
+    except export_public.ExportError as exc:
+        print("export refused:", file=sys.stderr)
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    verb = "would write" if args.plan_only else "wrote"
+    where = "" if args.plan_only else f" to {target}"
+    print(f"{verb} {plan.file_count} file(s){where}")
+    print(f"  packages left behind: {', '.join(sorted(plan.skipped_packages)) or 'none'}")
+    print(f"  component docs left behind: {len(plan.skipped_docs)}")
+    print(f"  tests for those packages left behind: {len(plan.skipped_tests)}")
+
+    # Uncommitted files are the export's sharpest edge. It copies the working tree, so anything
+    # another session happens to be part-way through goes out with whatever change is exported
+    # next — which is how five half-written modules reached the public repository on 2026-08-24,
+    # caught only by a duplicate-definition guard in CI. A file nobody has committed is a file
+    # nobody has said is finished. Loud, and not fatal: shipping a work in progress on purpose is
+    # the operator's call to make, not this command's.
+    if plan.uncommitted:
+        print("")
+        print(f"  !! {len(plan.uncommitted)} file(s) in this copy are NOT COMMITTED in the source:")
+        for relative in plan.uncommitted[:15]:
+            print(f"       {relative}")
+        if len(plan.uncommitted) > 15:
+            print(f"       ... and {len(plan.uncommitted) - 15} more")
+        print("     Commit them, or stash them, before publishing this tree. If another session is")
+        print("     mid-edit, what ships is whatever they had saved at this instant.")
+
+    if args.plan_only or args.skip_scan:
+        return 0
+
+    # No inventory means no search terms, and the scanner refuses rather than reporting a tree
+    # clean on the strength of having looked for nothing. That refusal is right, and in the public
+    # tree it is also the *normal* case — there are no real instances there to derive terms from.
+    # Since `control` started shipping in v0.3.2, a reader running this in their own checkout met
+    # it as a traceback after a successful copy, which reads as a failed export. It is neither a
+    # pass nor a failure: the check did not run, and saying so is the honest report.
+    try:
+        outcome = export_public.scan_exported_tree(target)
+    except export_public.ScanRefused as exc:
+        print("")
+        print(f"identifier scan SKIPPED: {exc}")
+        print(
+            "The copy is written. Nothing has been verified about it - run the scan from a "
+            "checkout whose data/db_instances.json names the machines you need kept out."
+        )
+        return 0
+    print("")
+    print(
+        f"identifier scan of the exported tree: {outcome['hits']} hit(s) in "
+        f"{outcome['files_with_findings']} file(s)"
+    )
+    if outcome["hits"]:
+        for item in outcome["files"][:20]:
+            total = item["certain"] + item["likely"]
+            print(f"  {total:4}  {item['file']}   {', '.join(item['terms'][:4])}")
+        export_public.discard(target)
+        print("", file=sys.stderr)
+        print(
+            "This tree names real machines and must not be published. G-02 is not met.",
+            file=sys.stderr,
+        )
+        print(f"{target} was removed: a refused tree must not be left on disk.", file=sys.stderr)
+        return 1
+    print("clean - no configured identifier appears in the exported tree.")
+    _print_review_tier(outcome)
+    return 0
+
+
+def _print_review_tier(outcome: dict) -> None:
+    """Say what the scan matched but did not refuse over.
+
+    `review` is the tier for a configured name that is also an ordinary word - this estate has
+    databases whose names are English nouns - and it is excluded from `hits` on purpose, because a
+    gate that refuses over the word "inventory" in `inventory_report.py` is a gate people route
+    around. It was excluded from the *printout* too, which is different and was wrong: on
+    2026-09-05 a customer database name shipped in the published package while this line said
+    "clean", and the scan had matched it all along.
+
+    So it prints, and it does not refuse: a number and the files, for a person to read once.
+    """
+    unknown = outcome.get("unrecognised_addresses") or {}
+    if unknown:
+        print(f"  plus {len(unknown)} address(es) no configuration names - the category the "
+              "inventory-derived half cannot find, so nothing else will report them:")
+        for literal, files in list(unknown.items())[:10]:
+            print(f"    {literal}  ({len(files)} file(s), e.g. {files[0]})")
+        if len(unknown) > 10:
+            print(f"    ... and {len(unknown) - 10} more")
+    review = int(outcome.get("review") or 0)
+    if not review:
+        return
+    files = outcome.get("review_only_files") or []
+    print(f"  plus {review} review-tier match(es) in {len(files)} file(s) - configured names that "
+          "are also ordinary words. Not a refusal; read them once:")
+    for name in files[:10]:
+        print(f"    {name}")
+    if len(files) > 10:
+        print(f"    ... and {len(files) - 10} more")
+
+
+def main(argv=None) -> int:
+    try:
+        return _run(parse_args(argv if argv is not None else sys.argv[1:]))
+    except config_gate.ConfigDriftAbort as exc:
+        # A refusal, not a crash: the operator is being told what to decide, and a traceback
+        # would bury the three words that matter under a stack.
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        return 3
+
+
+def _run(args) -> int:
+
+    if args.command == "export-public":
+        return _export_public_command(args)
+
+    if args.command == "pull-node-config":
+        return _pull_node_config_command(args)
+
+    if args.command == "bump-version":
+        version_ops.bump_version(part=args.part, set_to=args.set_to, dry_run=args.dry_run)
+        return 0
+    if args.command == "request-types":
+        return _request_types_command(args)
+    if args.command == "build-image":
+        # Before the bundle is staged, not after: the bundle is a copy of data/, so a check that
+        # ran later would be checking something already committed to.
+        _gate_config_drift(args)
+        deploy_ops.build_image(platform=args.platform, no_cache=args.no_cache, skip_build=args.skip_build)
+        return 0
+    if args.command == "encrypt-secret-text":
+        try:
+            key = resolve_cli_key(args.key, args.key_base64)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        key = key or _secret_key_from_env()
+        if not key:
+            # Refuse rather than guess. Encrypting with the wrong passphrase produces a
+            # store that decrypts nowhere, and the round-trip check inside
+            # encrypt_secret_text_file cannot catch it — it verifies against the same key.
+            print("ERROR: no passphrase. Pass --key/--key-base64 or set DBABRAIN_SECRET_KEY.",
+                  file=sys.stderr)
+            return 2
+        try:
+            count = encrypt_secret_text_file(args.source, args.dest, key)
+        except Exception as exc:  # noqa: BLE001 - CLI failure path.
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(f"Encrypted {count} secrets -> {args.dest}")
+        return 0
+
+    if args.command == "deploy" and args.push_type:
+        # Before the host and password are resolved, because a --dry-run must not need either:
+        # resolve_password() falls back to an interactive prompt, so a plan run without a key
+        # would sit waiting for a password it is never going to use.
+        return _push_command(args)
+    if args.command == "deploy" and (args.dry_run or args.file_names):
+        # Both belong to --type. Ignoring them would turn "let me see the plan first" into a
+        # full build, upload and container restart, which is the one misreading that costs
+        # something.
+        stray = "--dry-run" if args.dry_run else "--file-name"
+        print(f"ERROR: {stray} applies to a push; add --type (config, assets, assets/tasks, "
+              "data/ssh_keys). A full deploy has no plan mode.", file=sys.stderr)
+        return 2
+
+    # remaining commands need the worker host + password. The password is taken from
+    # --password, else decrypted from the secret store via the worker password_ref +
+    # --key/--key-base64, else prompted.
+    host = _resolve_host(args)
+    password = resolve_password(args.password, host=host, user=args.user,
+                                key_base64=args.key_base64, key=args.key,
+                                password_ref=default_worker_password_ref())
+
+    if args.command == "copy":
+        deploy_ops.copy_bundle(host=host, user=args.user, password=password, port=args.port,
+                               remote_dir=args.remote_dir)
+    elif args.command == "start-daemon":
+        deploy_ops.start_daemon(host=host, user=args.user, password=password, port=args.port,
+                                remote_dir=args.remote_dir, container=args.container,
+                                key_base64=args.key_base64, key=args.key, node_role=args.node_role)
+    elif args.command == "deploy-code":
+        from dbabrain.control import deploy_code as deploy_code_ops
+        secret_key = (deploy_ops._daemon_secret_key(args.key_base64, args.key) if args.apply else "")
+        deploy_code_ops.deploy_code(host=host, user=args.user, password=password, port=args.port,
+                                    secret_key=secret_key, remote_dir=args.remote_dir,
+                                    container=args.container, apply=args.apply,
+                                    skip_build=args.skip_build, platform=args.platform)
+    elif args.command == "deploy":
+        # Refresh the encrypted secret store from the plaintext source, then deploy. So
+        # `deploy --key-base64 ...` ships the latest secrets without a separate encrypt step.
+        _gate_config_drift(args)
+        _refresh_encrypted_secret_store(key=args.key, key_base64=args.key_base64)
+        deploy_ops.deploy(host=host, user=args.user, password=password, port=args.port,
+                          remote_dir=args.remote_dir, container=args.container,
+                          key_base64=args.key_base64, key=args.key, node_role=args.node_role,
+                          platform=args.platform, no_cache=args.no_cache, skip_build=args.skip_build,
+                          merge_worker=args.merge_worker)
+    elif args.command == "inventory-health":
+        inventory_ops.run_inventory_health(host=host, user=args.user, password=password, port=args.port,
+                                           container=args.container, days=args.days, date=args.date,
+                                           container_runtime=args.container_runtime, host_runtime=args.host_runtime,
+                                           inventory=args.inventory, snapshot_dir=args.snapshot_dir,
+                                           dry_run=args.dry_run)
+    elif args.command == "worker-status":
+        return worker_status_ops.run_worker_status(host=host, user=args.user, password=password, port=args.port,
+                                                   container=args.container, remote_dir=args.remote_dir,
+                                                   as_json=args.as_json, no_metrics=args.no_metrics,
+                                                   key_base64=args.key_base64, key=args.key)
+    elif args.command == "worker-run":
+        return worker_exec_ops.run_worker_command(host=host, user=args.user, password=password, port=args.port,
+                                                  container=args.container, command=args.cmd,
+                                                  on_host=args.on_host, sudo=args.sudo)
+    elif args.command == "worker-pull-data-config":
+        from dbabrain.control import worker_data
+        files = args.files
+        all_json = args.all_json
+        overwrite = args.overwrite
+        if args.writeback_config:
+            # Preset: pull exactly the worker-owned config files, overwriting the master copy.
+            files = list(files or []) + [f for f in worker_data.WORKER_OWNED_CONFIG_FILES if f not in (files or [])]
+            all_json = False
+            overwrite = True
+        # Merging a store means reading it: without the passphrase the master cannot decrypt its
+        # own file, so say that up front instead of failing halfway through the pull.
+        include_secrets = args.include_secrets or args.merge_secrets
+        secret_key = resolve_cli_key(args.key, args.key_base64) if args.merge_secrets else None
+        if args.merge_secrets and not secret_key:
+            print("ERROR: --merge-secrets needs --key or --key-base64 to decrypt both stores.",
+                  file=sys.stderr)
+            return 2
+        try:
+            rc = worker_data.pull_data_config(
+                host=host, user=args.user, password=password, port=args.port,
+                from_worker_path=args.from_worker_path, to_master_path=args.to_master_path,
+                files=files, all_json=all_json, include_secrets=include_secrets,
+                merge_secrets=args.merge_secrets, secret_key=secret_key,
+                plaintext_secret_path=args.plaintext_secret_path,
+                overwrite=overwrite, dry_run=args.dry_run)
+        except worker_data.SecretMergeConflict as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 3
+        if rc == 0 and args.include_sql:
+            print("\n=== worker-pull-sql-tree ===", flush=True)
+            rc = worker_data.pull_sql_tree(
+                host=host, user=args.user, password=password, port=args.port,
+                overwrite=overwrite or args.writeback_config, dry_run=args.dry_run)
+        return rc
+    elif args.command == "worker-create-db-docker":
+        from dbabrain.control import worker_data
+        if args.pull_config:
+            print("Note: --pull-config has nothing to pull since 0.24.0 - the record is written "
+                  "here, on this node.", flush=True)
+        return worker_data.create_db_docker_on_worker(
+            host=host, user=args.user, password=password, port=args.port,
+            name=args.name, engine=args.engine, version=args.version, mode=args.mode,
+            replicas=args.replicas, host_port=args.host_port, password_ref=args.password_env,
+            password_text=args.password_text, containers_dir=args.containers_dir,
+            network_subnet=args.network_subnet, worker_host=args.worker_host,
+            install_docker=args.install_docker, overwrite_secret=args.overwrite_secret,
+            force=args.force, dry_run=args.dry_run, register=args.register,
+            key=args.key, key_base64=args.key_base64)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -11,8 +11,8 @@ import json
 
 import pytest
 
-from db_ops.telegram import cli as telegram_cli
-from db_ops.telegram import workflow
+from dbabrain.telegram import cli as telegram_cli
+from dbabrain.telegram import workflow
 
 
 def test_the_offset_is_saved_even_when_a_later_step_fails(monkeypatch):

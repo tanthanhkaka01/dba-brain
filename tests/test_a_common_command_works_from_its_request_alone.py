@@ -116,13 +116,13 @@ def _make_root(base: Path, kind: str) -> Path:
 
 
 def _run(root: Path, command: str, request: dict, *, key: str = "") -> dict:
-    env = {name: value for name, value in os.environ.items() if not name.startswith("DB_OPS")}
-    env.update(DB_OPS_HOME=str(root), DB_OPS_DATA_DIR=str(root / "data"), PYTHONPATH=str(REPO),
+    env = {name: value for name, value in os.environ.items() if not name.startswith("DBABRAIN")}
+    env.update(DBABRAIN_HOME=str(root), DBABRAIN_DATA_DIR=str(root / "data"), PYTHONPATH=str(REPO),
                PYTHONIOENCODING="utf-8")
     if key:
-        env["DB_OPS_SECRET_KEY"] = key
+        env["DBABRAIN_SECRET_KEY"] = key
     process = subprocess.run(
-        [sys.executable, "-m", "db_ops.common.cli", command, "-"], input=json.dumps(request),
+        [sys.executable, "-m", "dbabrain.common.cli", command, "-"], input=json.dumps(request),
         capture_output=True, text=True, encoding="utf-8", cwd=root, env=env, timeout=120)
     try:
         body = json.loads(process.stdout)
@@ -152,6 +152,8 @@ def _cases(work: Path) -> dict[str, tuple[str, dict, str]]:
         "create-db-docker": ("create-db-docker", {
             "name": "LAB_GUARD", "engine": "postgres", "version": "18", "mode": "single",
             "host": "192.0.2.10", "ssh_user": "u", "ssh_password": "p", "password": "x",
+            # A complete request states the folder: the command assumes none (0.29.0).
+            "containers_dir": "/opt/guard/containers",
             "dry_run": True}, "ok"),
         "run-sql": ("run-sql", {
             "connection": {"db_type": "postgresql", "host": "127.0.0.1", "port": 1, "username": "u",
@@ -264,7 +266,7 @@ _SSH_REACHED = "reached:SSH connection to 127.0.0.1:1"
 def _stated_cases(work: Path) -> dict[str, tuple[str, dict, str]]:
     """The 22 commands that looked a fact up until 0.24.0, each with the request its app now sends."""
     sheet = work / "rows.csv"
-    shipped = json.loads((REPO / "db_ops" / "common" / "catalogue" / "sqlserver_instance_policy.json")
+    shipped = json.loads((REPO / "dbabrain" / "common" / "catalogue" / "sqlserver_instance_policy.json")
                          .read_text(encoding="utf-8"))
     policy = shipped.get("sqlserver_instance_policy", shipped)
     emergency = {"target": "LAB", "connection": _SQL, "rules": _RULES, **_CONFIRMED}
@@ -536,7 +538,7 @@ def _answered_with_a_fake_server() -> frozenset[str]:
 
 
 def _answer_fields() -> dict[str, set[str]]:
-    reference = json.loads((REPO / "db_ops" / "common" / "catalogue" / "shared_config_objects.json")
+    reference = json.loads((REPO / "dbabrain" / "common" / "catalogue" / "shared_config_objects.json")
                            .read_text(encoding="utf-8"))
     return {command: {field["field"] for field in entry["fields"]}
             for entry in reference["shared_config_objects"] if entry.get("kind") == "output"

@@ -27,9 +27,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import scaffold
-from db_ops.lib.secret_text import load_secret_text_file
-from db_ops.telegram.updates import set_user_level
+from dbabrain.common import scaffold
+from dbabrain.lib.secret_text import load_secret_text_file
+from dbabrain.telegram.updates import set_user_level
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 KEY = "user-level-and-secret-set-passphrase"
@@ -49,7 +49,7 @@ OTHER = {"user_id": "700000001", "username": "operator_two", "user_type": 0, "st
 # ----------------------------------------------------------------------------------- user-level --
 
 def test_a_user_is_cleared_by_id_and_the_permission_check_reads_it(tmp_path):
-    from db_ops.telegram.command_processor import telegram_user_type
+    from dbabrain.telegram.command_processor import telegram_user_type
 
     path = _users(tmp_path, dict(OPERATOR), dict(OTHER))
 
@@ -90,7 +90,7 @@ def test_a_node_nobody_has_messaged_says_how_users_get_there(tmp_path):
 
 
 def test_the_cli_routes_user_level_to_the_function():
-    from db_ops.telegram import cli
+    from dbabrain.telegram import cli
 
     args = cli.parse_args(["user-level", "--user", "@operator_one", "--level", "100"])
 
@@ -106,10 +106,10 @@ def test_init_ships_alerts_on_and_a_fresh_root_routes_nothing(tmp_path):
     config = json.loads((tmp_path / "data" / "telegram_config.json").read_text(encoding="utf-8"))
     assert config["enabled"] is True
 
-    env = dict(os.environ, DB_OPS_HOME=str(tmp_path), PYTHONIOENCODING="utf-8",
+    env = dict(os.environ, DBABRAIN_HOME=str(tmp_path), PYTHONIOENCODING="utf-8",
                PYTHONPATH=str(REPO_ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""))
     for level in ("logging", "warning", "error", "critical"):
-        answer = subprocess.run([sys.executable, "-m", "db_ops.telegram.cli", "--config", "config.json",
+        answer = subprocess.run([sys.executable, "-m", "dbabrain.telegram.cli", "--config", "config.json",
                                  "route", level], cwd=tmp_path, env=env, capture_output=True,
                                 text=True, encoding="utf-8", timeout=60)
         route = json.loads(answer.stdout)
@@ -125,10 +125,10 @@ def node(tmp_path):
 
 
 def _secret_set(node: Path, payload, *, source: str = "-"):
-    env = dict(os.environ, DB_OPS_HOME=str(node), DB_OPS_SECRET_KEY=KEY, PYTHONIOENCODING="utf-8",
+    env = dict(os.environ, DBABRAIN_HOME=str(node), DBABRAIN_SECRET_KEY=KEY, PYTHONIOENCODING="utf-8",
                PYTHONPATH=str(REPO_ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""))
     text = payload if isinstance(payload, str) else json.dumps(payload)
-    return subprocess.run([sys.executable, "-m", "db_ops.common.cli", "secret-set", source],
+    return subprocess.run([sys.executable, "-m", "dbabrain.common.cli", "secret-set", source],
                           input=text if source == "-" else None, cwd=node, env=env,
                           capture_output=True, text=True, encoding="utf-8", timeout=60)
 
@@ -217,7 +217,7 @@ def test_a_level_can_be_set_before_that_person_has_ever_messaged(tmp_path):
 
 
 def test_the_pending_level_is_adopted_the_moment_they_first_speak(tmp_path):
-    from db_ops.telegram.updates import adopt_pending_user, build_user_record
+    from dbabrain.telegram.updates import adopt_pending_user, build_user_record
 
     path = _users(tmp_path)
     set_user_level(user="@newcomer", level=100, users_path=path, pending=True)
@@ -234,7 +234,7 @@ def test_the_pending_level_is_adopted_the_moment_they_first_speak(tmp_path):
 
 
 def test_a_pending_record_matches_the_username_case_insensitively(tmp_path):
-    from db_ops.telegram.updates import adopt_pending_user, build_user_record
+    from dbabrain.telegram.updates import adopt_pending_user, build_user_record
 
     path = _users(tmp_path)
     set_user_level(user="@NewComer", level=50, users_path=path, pending=True)
@@ -246,7 +246,7 @@ def test_a_pending_record_matches_the_username_case_insensitively(tmp_path):
 
 
 def test_somebody_else_speaking_does_not_consume_the_pending_record(tmp_path):
-    from db_ops.telegram.updates import adopt_pending_user, build_user_record
+    from dbabrain.telegram.updates import adopt_pending_user, build_user_record
 
     path = _users(tmp_path)
     set_user_level(user="@newcomer", level=100, users_path=path, pending=True)

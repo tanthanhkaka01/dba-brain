@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.telegram.command_processor import load_support_commands
+from dbabrain.telegram.command_processor import load_support_commands
 from conftest import shipped_config
 
 COMMANDS_PATH = shipped_config("telegram_support_commands.json")
@@ -33,7 +33,7 @@ def test_it_invokes_the_runner_the_way_the_cli_demands(command):
     """`run-sql-id` raises without `--force`, so the argv cannot omit it."""
     argv = command.action_config["command_argv"]
 
-    assert argv[:3] == ["{python}", "-m", "db_ops.sql_tasks.runner"]
+    assert argv[:3] == ["{python}", "-m", "dbabrain.sql_tasks.runner"]
     assert "run-sql-id" in argv
     assert "--sql-id" in argv and "{sql_id}" in argv
     assert "--force" in argv
@@ -100,7 +100,7 @@ def test_the_forced_run_is_confirmed_and_the_answer_reaches_the_cli(command):
 
     Raising this command to 50 put it beside `/spbot_kill_spid` in *who* may run it while it still
     cost nothing to run — a forced run of an UPDATE task needed no answer at all. The confirmation
-    is the CLI's (`db_ops.common.confirm`, keyed on `emergency_operation`), so the argv has to
+    is the CLI's (`dbabrain.common.confirm`, keyed on `emergency_operation`), so the argv has to
     carry the answer: a prompt the bot asks and then drops is theatre.
     """
     config = command.action_config
@@ -149,7 +149,7 @@ def test_the_answer_never_lands_inside_the_task_s_parameters(args, confirm, task
     where a confirmation that steals a parameter — or a parameter that reads as a confirmation —
     shows up. Anything else is an opinion about a JSON file.
     """
-    from db_ops.telegram.command_processor import cli_action_values
+    from dbabrain.telegram.command_processor import cli_action_values
 
     found = [c for c in load_support_commands(COMMANDS_PATH) if c.command_text == "spbot_run_sql_task"]
     values = cli_action_values(command=found[0], args=list(args), config_path=str(tmp_path / "config.json"))
@@ -164,7 +164,7 @@ def test_a_run_that_skips_the_confirmation_is_refused_before_it_starts(tmp_path)
     The value in the confirmation's slot is a date, not `yes`, so the regex refuses it — and the
     error names the way out rather than repeating the rule.
     """
-    from db_ops.telegram.command_processor import TelegramCommandError, cli_action_values
+    from dbabrain.telegram.command_processor import TelegramCommandError, cli_action_values
 
     found = [c for c in load_support_commands(COMMANDS_PATH) if c.command_text == "spbot_run_sql_task"]
     with pytest.raises(TelegramCommandError) as refused:

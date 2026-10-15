@@ -11,7 +11,7 @@ Every earlier misclassification in these tests is a real one, from the 2026-08-0
 
 import pytest
 
-from db_ops.common import secret_check as sc
+from dbabrain.common import secret_check as sc
 
 
 # ---------------------------------------------------------------------------

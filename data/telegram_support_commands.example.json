@@ -40,11 +40,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.common.cli",
+                    "dbabrain.common.cli",
                     "self-status",
                     "{\"format\": \"txt\"}",
                     "--config",
@@ -89,11 +89,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.db.cli",
+                    "dbabrain.db.cli",
                     "telegram-command-history",
                     "{\"user_id\": \"{user_id}\", \"limit\": 10, \"exclude\": [\"{command_text}\"], \"format\": \"txt\"}",
                     "--config",
@@ -159,11 +159,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.backup_restore.cli",
+                    "dbabrain.backup_restore.cli",
                     "list-backups",
                     "--config",
                     "{config_path}"
@@ -190,11 +190,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.backup_restore.cli",
+                    "dbabrain.backup_restore.cli",
                     "list-restores",
                     "--config",
                     "{config_path}"
@@ -239,11 +239,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.db.cli",
+                    "dbabrain.db.cli",
                     "sql-run-history",
                     "{\"sql_id\": {sql_id}, \"limit\": {limit}, \"format\": \"txt\"}",
                     "--config",
@@ -290,11 +290,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.reports.cli",
+                    "dbabrain.reports.cli",
                     "--config",
                     "{config_path}",
                     "inventory-workflow",
@@ -330,11 +330,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.reports.cli",
+                    "dbabrain.reports.cli",
                     "--config",
                     "{config_path}",
                     "force-hourly-report",
@@ -388,11 +388,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.reports.cli",
+                    "dbabrain.reports.cli",
                     "--config",
                     "{config_path}",
                     "metric-history-report",
@@ -575,7 +575,7 @@
             "is_private": 1,
             "need_file": 1,
             "action_type": "create_table_from_xlsx",
-            "_note": "Attach an .xlsx or a delimited text file (.txt/.csv/.tsv, incl. a block pasted out of Excel) and get a queryable table; the format is detected from the file's bytes, not its name. Private-only (is_private 1 / is_group 0): it writes to a real database, and a group chat is the wrong place for a command whose effect nobody else in the room can see. if_exists stays at the module default of 'error' rather than being pinned to 'drop' here - a Telegram user must not be able to destroy an existing table by re-sending a file. table_name is not prompted for; blank means temp_<random>, and the generated name is in the reply. Pass a 5th word to choose one. Every column is NVARCHAR(4000) - see db_ops/common/table_load.py for why.",
+            "_note": "Attach an .xlsx or a delimited text file (.txt/.csv/.tsv, incl. a block pasted out of Excel) and get a queryable table; the format is detected from the file's bytes, not its name. Private-only (is_private 1 / is_group 0): it writes to a real database, and a group chat is the wrong place for a command whose effect nobody else in the room can see. if_exists stays at the module default of 'error' rather than being pinned to 'drop' here - a Telegram user must not be able to destroy an existing table by re-sending a file. table_name is not prompted for; blank means temp_<random>, and the generated name is in the reply. Pass a 5th word to choose one. Every column is NVARCHAR(4000) - see dbabrain/common/table_load.py for why.",
             "action_config": {
                 "parameters": [
                     {
@@ -696,12 +696,12 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "emergency_operation": "run-sql-task",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.sql_tasks.runner",
+                    "dbabrain.sql_tasks.runner",
                     "--config",
                     "{config_path}",
                     "run-sql-id",
@@ -775,7 +775,7 @@
             "sort_order": 20.0,
             "command_text": "spbot_metric_toggle",
             "reply_default": 1,
-            "reply_text": "Metric toggle {result_state} {result_scope} on {result_server_id}: {result_status}\n{result_detail}\nSync master: python -m db_ops.control.cli worker-pull-data-config --key-base64 <KEY> --all-json --overwrite",
+            "reply_text": "Metric toggle {result_state} {result_scope} on {result_server_id}: {result_status}\n{result_detail}\nSync master: python -m dbabrain.control.cli worker-pull-data-config --key-base64 <KEY> --all-json --overwrite",
             "reply_parse_mode": "",
             "reply_with_name": 0,
             "command_type": 10,
@@ -845,11 +845,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.backup_restore.cli",
+                    "dbabrain.backup_restore.cli",
                     "backup",
                     "--config",
                     "{config_path}",
@@ -940,11 +940,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.backup_restore.cli",
+                    "dbabrain.backup_restore.cli",
                     "restore-workflow",
                     "--config",
                     "{config_path}",
@@ -1016,11 +1016,11 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.sre.cli",
+                    "dbabrain.sre.cli",
                     "--config",
                     "{config_path}",
                     "create-db-docker",
@@ -1058,7 +1058,7 @@
                         "not_equals": "-",
                         "argv": [
                             "--password-text-env",
-                            "DB_OPS_NEW_DB_PASSWORD"
+                            "DBABRAIN_NEW_DB_PASSWORD"
                         ]
                     },
                     {
@@ -1084,7 +1084,7 @@
                         "not_equals": "-",
                         "argv": [
                             "--remote-password-env",
-                            "DB_OPS_REMOTE_SSH_PASSWORD"
+                            "DBABRAIN_REMOTE_SSH_PASSWORD"
                         ]
                     },
                     {
@@ -1121,8 +1121,8 @@
                     }
                 ],
                 "env_from_parameters": {
-                    "DB_OPS_NEW_DB_PASSWORD": "password_text",
-                    "DB_OPS_REMOTE_SSH_PASSWORD": "remote_password_text"
+                    "DBABRAIN_NEW_DB_PASSWORD": "password_text",
+                    "DBABRAIN_REMOTE_SSH_PASSWORD": "remote_password_text"
                 },
                 "background": true,
                 "detached": true,
@@ -1130,7 +1130,7 @@
                 "startup_grace_seconds": 3,
                 "timeout_seconds": 3600,
                 "start_text": "Creating {engine} {version} lab instance '{name}' (mode={mode}). Pulling the image and waiting for it to become healthy — this takes a few minutes...",
-                "success_text": "Lab database '{name}' is up: {engine} {version}, mode={mode}.\nThe password was stored in the encrypted secret store and the connection was registered in data/docker_db_connections.json.\nPull it back to the master with:\npython -m db_ops.control.cli worker-pull-data-config --key-base64 <KEY> --all-json --merge-secrets --overwrite",
+                "success_text": "Lab database '{name}' is up: {engine} {version}, mode={mode}.\nThe password was stored in the encrypted secret store and the connection was registered in data/docker_db_connections.json.\nPull it back to the master with:\npython -m dbabrain.control.cli worker-pull-data-config --key-base64 <KEY> --all-json --merge-secrets --overwrite",
                 "failure_text": "Creating lab database '{name}' failed.\nExit code: {exit_code}\nError: {error_summary}",
                 "timeout_text": "Creating lab database '{name}' timed out after {timeout_seconds}s. Check the container on the worker.",
                 "parameters": [
@@ -1306,7 +1306,7 @@
                         "validator": "regex",
                         "pattern": "secret_ref|password|key_file",
                         "validation_error": "choose one of: secret_ref, password, key_file",
-                        "prompt_text": "How does db_ops authenticate to that host?\nSecret ref = a credential already in the encrypted secret store (nothing more to type).\nPassword = type it here once.\nSSH key file = a private key already in data/ssh_keys/ on this node."
+                        "prompt_text": "How does dbabrain authenticate to that host?\nSecret ref = a credential already in the encrypted secret store (nothing more to type).\nPassword = type it here once.\nSSH key file = a private key already in data/ssh_keys/ on this node."
                     },
                     {
                         "name": "remote_password_ref",
@@ -1443,12 +1443,12 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "emergency_operation": "shrink-log",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.common.cli",
+                    "dbabrain.common.cli",
                     "shrink-log",
                     "{\"target\":\"{server_id}\",\"database\":\"{database}\",\"size_mb\":{size_mb},\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
                     "--config",
@@ -1518,12 +1518,12 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "emergency_operation": "start-job",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.common.cli",
+                    "dbabrain.common.cli",
                     "start-job",
                     "{\"target\":\"{server_id}\",\"job_name\":\"{job_name}\",\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
                     "--config",
@@ -1584,12 +1584,12 @@
             "action_type": "cli_execute",
             "_note": "Switch a scheduled job off, on SQL Server (Agent), Oracle (DBMS_SCHEDULER or the older DBMS_JOB) or PostgreSQL (pg_cron). Private-only and clearance 50, like its siblings: it changes a live system. Disable only - there is deliberately no drop-job, because a dropped Agent job takes its schedule, steps and history with it and no prompt makes that recoverable. The job_name prompt lists the jobs that are actually ENABLED on the server just named, so the operator picks from what can be acted on rather than recalling an exact name; the listing fails open, so an unreachable instance still gets the bare prompt. Note that disabling does NOT stop a run already in progress - the reply says so every time.",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "emergency_operation": "disable-job",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.common.cli",
+                    "dbabrain.common.cli",
                     "disable-job",
                     "{\"target\":\"{server_id}\",\"job_name\":\"{job_name}\",\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
                     "--config",
@@ -1659,11 +1659,11 @@
             "action_type": "cli_execute",
             "action_config": {
                 "_note": "Who is holding an open transaction on a given database. Reads only - it runs through common.cli trace-session, which goes through sql_run and logs like any other task. The server and database are arguments: this command describes an operation, not a machine.",
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.common.cli",
+                    "dbabrain.common.cli",
                     "trace-session",
                     "{\"target\":\"{server_id}\",\"database\":\"{database}\",\"session_id\":{session_id},\"min_tran_seconds\":{min_tran_seconds}}"
                 ],
@@ -1719,12 +1719,12 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "emergency_operation": "kill-spid",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.common.cli",
+                    "dbabrain.common.cli",
                     "kill-spid",
                     "{\"target\":\"{server_id}\",\"spid\":{spid},\"confirm\":\"{confirm}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
                     "--config",
@@ -1785,12 +1785,12 @@
             "need_file": 0,
             "action_type": "cli_execute",
             "action_config": {
-                "working_dir": "tools/db_ops",
+                "working_dir": "tools/dbabrain",
                 "emergency_operation": "host-restart",
                 "command_argv": [
                     "{python}",
                     "-m",
-                    "db_ops.common.cli",
+                    "dbabrain.common.cli",
                     "host-restart",
                     "{\"target\":\"{server_id}\",\"confirm\":\"{confirm}\",\"confirm_target\":\"{confirm_target}\",\"reason\":\"telegram\",\"authorized_by\":{\"channel\":\"telegram\"}}",
                     "--config",

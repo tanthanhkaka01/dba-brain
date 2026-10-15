@@ -23,14 +23,14 @@ import pytest
 
 from conftest import patch_telegram
 
-from db_ops.lib.common_cli import common_invocation
-from db_ops.telegram import command_processor
+from dbabrain.lib.common_cli import common_invocation
+from dbabrain.telegram import command_processor
 
 REPO = Path(__file__).resolve().parents[1]
 
 
 def _shipped_action(command_text: str) -> dict:
-    document = json.loads((REPO / "db_ops" / "telegram" / "catalogue" / "telegram_support_commands.json")
+    document = json.loads((REPO / "dbabrain" / "telegram" / "catalogue" / "telegram_support_commands.json")
                           .read_text(encoding="utf-8"))
     records = document["telegram_support_commands"] if isinstance(document, dict) else document
     return next(dict(item["action_config"]) for item in records if item.get("command_text") == command_text)
@@ -40,7 +40,7 @@ def _shipped_action(command_text: str) -> dict:
 # Recognising a common.cli action in a configured argv
 # --------------------------------------------------------------------------- #
 def test_a_rendered_common_action_yields_its_command_and_request():
-    argv = [sys.executable, "-m", "db_ops.common.cli", "kill-spid", '{"target": "LAB", "spid": 55}',
+    argv = [sys.executable, "-m", "dbabrain.common.cli", "kill-spid", '{"target": "LAB", "spid": 55}',
             "--config", "config.json"]
 
     invocation = common_invocation(argv)
@@ -52,11 +52,11 @@ def test_a_rendered_common_action_yields_its_command_and_request():
 @pytest.mark.parametrize("request_arg", ["-", "@data/request.json", "not json", "[1, 2]"])
 def test_a_request_that_is_not_an_inline_object_is_not_one_to_finish(request_arg):
     """Stdin or a file is already how a password travels; a non-object is common.cli's to refuse."""
-    assert common_invocation([sys.executable, "-m", "db_ops.common.cli", "kill-spid", request_arg]) is None
+    assert common_invocation([sys.executable, "-m", "dbabrain.common.cli", "kill-spid", request_arg]) is None
 
 
 def test_a_line_that_runs_another_module_is_left_alone():
-    assert common_invocation([sys.executable, "-m", "db_ops.reports.cli", "build", '{"a": 1}']) is None
+    assert common_invocation([sys.executable, "-m", "dbabrain.reports.cli", "build", '{"a": 1}']) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -102,7 +102,7 @@ class _Popen:
 def restart(monkeypatch, tmp_path):
     """Run the shipped `spbot_restart_server` action once, with the filler and the start faked."""
     _Popen.started = []
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "test-passphrase")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "test-passphrase")
     monkeypatch.setattr(command_processor.subprocess, "Popen", _Popen)
     finished_for: list[tuple[str, dict]] = []
 
@@ -148,7 +148,7 @@ def test_the_request_argument_becomes_a_dash_so_the_command_reads_stdin(restart)
     command_at = argv.index("host-restart")
 
     assert argv[command_at + 1] == "-"
-    assert argv[:3] == [sys.executable, "-m", "db_ops.telegram.detached_exit"]
+    assert argv[:3] == [sys.executable, "-m", "dbabrain.telegram.detached_exit"]
 
 
 def test_a_restart_still_running_is_handed_to_the_poller(restart):
@@ -158,7 +158,7 @@ def test_a_restart_still_running_is_handed_to_the_poller(restart):
 
 def test_a_server_the_node_cannot_finish_is_refused_before_anything_starts(monkeypatch, tmp_path):
     _Popen.started = []
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "test-passphrase")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "test-passphrase")
     monkeypatch.setattr(command_processor.subprocess, "Popen", _Popen)
 
     def cannot(command, request, **_kwargs):

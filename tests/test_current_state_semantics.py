@@ -22,19 +22,19 @@ from __future__ import annotations
 
 import datetime
 
-from db_ops.lib import backup_policy
-from db_ops.lib import health_model
-from db_ops.db.metric_store import MetricStore
-from db_ops.db.metric_results import MetricResult
-from db_ops.reports.inventory_health import (
+from dbabrain.lib import backup_policy
+from dbabrain.lib import health_model
+from dbabrain.db.metric_store import MetricStore
+from dbabrain.db.metric_results import MetricResult
+from dbabrain.reports.inventory_health import (
     build_metric_problems,
     build_performance_health,
     index_by_server,
 )
-from db_ops.reports.inventory_report import _build_backup, _metric_problem_cards, _monitoring_gap_cards
-from db_ops.reports.server_report import build_areas, build_freshness
+from dbabrain.reports.inventory_report import _build_backup, _metric_problem_cards, _monitoring_gap_cards
+from dbabrain.reports.server_report import build_areas, build_freshness
 
-from db_ops.lib import data_sources
+from dbabrain.lib import data_sources
 from conftest import shipped_config
 
 # `evaluate_backup_policy` no longer reads data/backup_policy.json itself (2026-08-15):
@@ -64,7 +64,7 @@ def _result(**over) -> MetricResult:
 
 
 def _store(tmp_path, results):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     run = store.start_run(started_at="2026-08-01T00:00:00Z")
     store.insert_results(run_id=run, results=results)
@@ -341,7 +341,7 @@ def test_a_metric_whose_newest_run_failed_reports_failed_and_carries_the_error()
     freshness = build_freshness([
         _fresh_row("DATABASE_STATUS", attempt="2026-08-01T07:37:00Z",
                    success="2026-08-01T05:37:00Z", status="ERROR",
-                   message="Login failed for user 'db_ops'."),
+                   message="Login failed for user 'dbabrain'."),
     ], now=NOW, days=7)
 
     entry = freshness["metrics"][0]
@@ -389,7 +389,7 @@ def test_a_warning_from_a_broken_credential_is_not_counted_as_a_success(tmp_path
         # than re-deriving the classification from message text in SQL.
         _result(metric_code="DATABASE_CONFIG", metric_item=None, metric_value=None,
                 status="WARNING", message="sqlserver connect to 192.0.2.250:1433 failed: "
-                                          "Login failed for user 'db_ops'.",
+                                          "Login failed for user 'dbabrain'.",
                 error_type="AUTH_FAILED", collected_at="2026-07-31T18:05:00Z"),
     ])
 
@@ -419,7 +419,7 @@ def test_a_collector_failure_card_says_what_failed():
     problems = build_metric_problems([
         _row("DATABASE_CHECKDB", None, None, status="WARNING",
              message="sqlserver connect to 192.0.2.250:1433 failed: Login failed for user "
-                     "'db_ops'. (18456) (SQLDriverConnect)"),
+                     "'dbabrain'. (18456) (SQLDriverConnect)"),
     ])
 
     assert "Login failed" in problems[0]["headline"] or "connect to" in problems[0]["headline"]
@@ -448,7 +448,7 @@ def test_a_collector_failure_survives_the_minimum_sample_rule(tmp_path):
     """A failure row is not a series and never will be, so the "needs 3 samples to be charted"
     rule must not drop it. A daily metric that fails twice would otherwise vanish, and its health
     area go back to reading "not collected" instead of naming the credential that broke it."""
-    from db_ops.reports.server_report import build_areas, load_server_series
+    from dbabrain.reports.server_report import build_areas, load_server_series
 
     store = _store(tmp_path, [
         _result(metric_code="SECURITY_FAILED_LOGINS", metric_item=None, metric_value=None,
@@ -467,7 +467,7 @@ def test_a_collector_failure_survives_the_minimum_sample_rule(tmp_path):
 def test_an_empty_result_ok_row_is_not_charted_as_a_collector_error(tmp_path):
     """"SQL returned no rows" is the condition clearing, not a failure. It clears its items
     through the snapshot rule and must not also appear as a series of its own."""
-    from db_ops.reports.server_report import load_server_series
+    from dbabrain.reports.server_report import load_server_series
 
     store = _store(tmp_path, [
         _result(metric_item=None, metric_value=None, status="OK",
@@ -488,7 +488,7 @@ def test_a_collector_failure_that_has_since_recovered_is_not_current(tmp_path):
     cleared failure was the newest thing the metric had, so 192.0.2.250 reported four-hour-old
     auth failures as present long after the metric had recovered.
     """
-    from db_ops.reports.server_report import load_server_series
+    from dbabrain.reports.server_report import load_server_series
 
     store = _store(tmp_path, [
         _result(metric_code="LOCK_TRANSACTION_HOLDERS", metric_item=None, metric_value=None,

@@ -26,8 +26,8 @@ import base64
 
 import pytest
 
-from db_ops.common import table_load
-from db_ops.lib import delimited_import
+from dbabrain.common import table_load
+from dbabrain.lib import delimited_import
 
 
 # --------------------------------------------------------------------------- #
@@ -222,7 +222,7 @@ def test_an_explicit_delimiter_overrides_the_guess():
 def test_a_zip_goes_to_the_workbook_reader_and_anything_else_to_the_text_one(tmp_path):
     """The file name is the least reliable thing about an attachment: a `.txt` that is really
     tab-separated data and a `.xlsx` that somebody renamed are both routine."""
-    from db_ops.lib import xlsx_export
+    from dbabrain.lib import xlsx_export
 
     path = tmp_path / "book.xlsx"
     xlsx_export.write_result_set_xlsx(path, columns=["a"], rows=[["1"]])

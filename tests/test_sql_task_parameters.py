@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common.sql_execution import (
+from dbabrain.common.sql_execution import (
     SQL_PARAMETER_TYPES,
     SqlParameterError,
     build_parameter_prelude,
 )
-from db_ops.common.sql_run import execute_capture
-from db_ops.sql_tasks import runner
+from dbabrain.common.sql_run import execute_capture
+from dbabrain.sql_tasks import runner
 
 
 class _Cursor:

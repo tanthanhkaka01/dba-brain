@@ -24,9 +24,9 @@ from typing import Any
 
 import pytest
 
-from db_ops.common import db_connect, oracle_bridge, remote_exec
-from db_ops.metrics import collector
-from db_ops.metrics.models import MetricDefinition, MetricTarget, MetricVariant
+from dbabrain.common import db_connect, oracle_bridge, remote_exec
+from dbabrain.metrics import collector
+from dbabrain.metrics.models import MetricDefinition, MetricTarget, MetricVariant
 
 SECRETS = {"PW_REF": "pw", "ENC_REF": "enc-pass"}
 STARTED = datetime(2026, 9, 26, 3, 0, tzinfo=timezone.utc)

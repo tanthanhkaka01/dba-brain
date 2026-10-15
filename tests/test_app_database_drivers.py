@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 
 
-DB_OPS_ROOT = Path(__file__).resolve().parents[1] / "db_ops"
+DBABRAIN_ROOT = Path(__file__).resolve().parents[1] / "dbabrain"
 
 APPS = frozenset({
     "backup_restore", "control", "jobs", "metrics", "reports",
@@ -49,18 +49,18 @@ DATABASE_DRIVERS = frozenset({
 
 def _module_files() -> list[Path]:
     return sorted(
-        path for path in DB_OPS_ROOT.rglob("*.py")
+        path for path in DBABRAIN_ROOT.rglob("*.py")
         if "__pycache__" not in path.parts and _owner_of(path) in APPS
     )
 
 
 def _owner_of(path: Path) -> str:
-    parts = path.relative_to(DB_OPS_ROOT).parts
+    parts = path.relative_to(DBABRAIN_ROOT).parts
     return parts[0] if len(parts) > 1 else ""
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(DB_OPS_ROOT).as_posix()
+    return path.relative_to(DBABRAIN_ROOT).as_posix()
 
 
 def _imported_drivers(path: Path) -> list[str]:
@@ -85,8 +85,8 @@ def test_an_app_never_imports_a_database_driver(path: Path) -> None:
     offenders = _imported_drivers(path)
     assert not offenders, (
         f"{_relative(path)} imports a database driver: {offenders}. "
-        "Connecting to a database belongs to db_ops/common/db_connect.py (connect_engine), and "
-        "running SQL on one target belongs to db_ops/common/sql_run.py (run_sql). An app that "
+        "Connecting to a database belongs to dbabrain/common/db_connect.py (connect_engine), and "
+        "running SQL on one target belongs to dbabrain/common/sql_run.py (run_sql). An app that "
         "opens its own connection re-decides the driver, the default port and database, and both "
         "timeouts — and drifts from every other caller without anyone noticing."
     )
@@ -100,7 +100,7 @@ def test_the_owner_of_database_connections_is_still_the_one_module() -> None:
     exists to prevent, one floor lower.
     """
     connectors = sorted(
-        _relative(path) for path in (DB_OPS_ROOT / "common").rglob("*.py")
+        _relative(path) for path in (DBABRAIN_ROOT / "common").rglob("*.py")
         if "__pycache__" not in path.parts and _imported_drivers(path)
     )
 

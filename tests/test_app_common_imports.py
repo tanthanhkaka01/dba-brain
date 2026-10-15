@@ -20,7 +20,7 @@ No app is exempt any more. Three were, each with its reason, and each has gone:
   batch rather than a call per metric is kept at :data:`EXEMPT_APPS`.
 
 Anything that is a **value** rather than an operation is not in ``common`` at all any more — it is
-in ``db_ops/lib/`` (pure helpers, imported freely) or ``db_ops/db/`` (row shapes, next to the
+in ``dbabrain/lib/`` (pure helpers, imported freely) or ``dbabrain/db/`` (row shapes, next to the
 store that writes them). That split is what makes this rule achievable: a class cannot come back
 from a subprocess, so the modules holding classes had to stop being ``common``'s problem before
 ``common`` could be import-free.
@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 
 
-DB_OPS_ROOT = Path(__file__).resolve().parents[1] / "db_ops"
+DBABRAIN_ROOT = Path(__file__).resolve().parents[1] / "dbabrain"
 
 #: Apps the rule applies to - every app. `control` joined on 2026-09-26 (the module docstring);
 #: `db` on 2026-09-28 (the operator: R03 covers `db` too) - its CLI answers from the store, and the
@@ -85,7 +85,7 @@ EXEMPT_APPS: dict[str, frozenset[str]] = {}
 #:
 #: Closed since: `result_format`, `xlsx_export`, `delimited_import` (with `xlsx_import`) — all
 #: four turned out to import nothing but stdlib. They are format converters, not operations, so
-#: they moved to `db_ops/lib/` rather than growing a CLI command apiece.
+#: they moved to `dbabrain/lib/` rather than growing a CLI command apiece.
 #:
 #: Then `backup_policy` and `capacity_forecast`, which were one module doing two jobs: reading a
 #: policy file and judging against it. The read went to `data_sources` (the one reader), the
@@ -107,7 +107,7 @@ EXEMPT_APPS: dict[str, frozenset[str]] = {}
 #: Then the first real CLI conversion, and the one the design was already shaped for:
 #: `backup_restore` called `restorekey`, `restorestep`, `verifyrestore`, `backupfiles` and
 #: `deletefiles` in-process, and every one of them already had a `common` CLI command with the
-#: same name. `db_ops/lib/common_cli.py` is now that transport (stdin, no deadline, a failed
+#: same name. `dbabrain/lib/common_cli.py` is now that transport (stdin, no deadline, a failed
 #: command raises), and `plan_retention` — arithmetic over the listing, not an operation — went
 #: to `lib`.
 #:
@@ -119,7 +119,7 @@ EXEMPT_APPS: dict[str, frozenset[str]] = {}
 #:
 #: Then `common/restore/` split along the line its own docstring already drew: `spec`, `pitr`
 #: and `plan` — what a restore *is*, decided without touching anything — went to
-#: `db_ops/lib/restore/`, because `spec_builder.py` builds and validates a spec long before
+#: `dbabrain/lib/restore/`, because `spec_builder.py` builds and validates a spec long before
 #: there is anything to restore to. The SQL Server runner stayed.
 #:
 #: Then `common.backup`: running a backup went to the `backup-database` CLI, and the app kept
@@ -132,7 +132,7 @@ EXEMPT_APPS: dict[str, frozenset[str]] = {}
 #: Then `table_load`: the Telegram handler already built the exact JSON the
 #: `create-table-from-xlsx` command takes, so the conversion was the call itself. The transport
 #: was briefly copied into five app folders on the `queue_message.py` precedent and then
-#: collapsed into one — `db_ops/lib/common_cli.py` imports nothing from `db_ops`, so nothing
+#: collapsed into one — `dbabrain/lib/common_cli.py` imports nothing from `dbabrain`, so nothing
 #: forced the copies. Down to 35 / 9.
 #:
 #: Then `config_admin`, which was five statements doing three different things and needed all
@@ -143,7 +143,7 @@ EXEMPT_APPS: dict[str, frozenset[str]] = {}
 #: `metric-toggle` calls. Those two commands had to start answering in the response envelope
 #: first: they printed a bare dict on success and an `ERROR:` line on **stderr** with exit 2 on
 #: failure, so a caller with only stdout could not tell a rejected task from a crashed process.
-#: `db_ops/sql_tasks/config_admin.py`, a re-export shim over the same engine, was deleted rather
+#: `dbabrain/sql_tasks/config_admin.py`, a re-export shim over the same engine, was deleted rather
 #: than repointed. Down to 30 / 8.
 #:
 #: Then `sqlserver_instance`, which was already called across the CLI for the two operations that
@@ -213,34 +213,34 @@ REMAINING: dict[str, frozenset[str]] = {}
 
 def _app_files() -> list[Path]:
     return sorted(
-        p for p in DB_OPS_ROOT.rglob("*.py")
+        p for p in DBABRAIN_ROOT.rglob("*.py")
         if "__pycache__" not in p.parts
-        and len(p.relative_to(DB_OPS_ROOT).parts) > 1
-        and p.relative_to(DB_OPS_ROOT).parts[0] in APPS
+        and len(p.relative_to(DBABRAIN_ROOT).parts) > 1
+        and p.relative_to(DBABRAIN_ROOT).parts[0] in APPS
     )
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(DB_OPS_ROOT).as_posix()
+    return path.relative_to(DBABRAIN_ROOT).as_posix()
 
 
 def _common_submodules(path: Path) -> set[str]:
-    """Which ``db_ops.common.<x>`` this file reaches, by either import form."""
+    """Which ``dbabrain.common.<x>`` this file reaches, by either import form."""
     found: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 parts = alias.name.split(".")
-                if parts[:2] == ["db_ops", "common"] and len(parts) > 2:
+                if parts[:2] == ["dbabrain", "common"] and len(parts) > 2:
                     found.add(parts[2])
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             parts = node.module.split(".")
-            if parts[:2] != ["db_ops", "common"]:
+            if parts[:2] != ["dbabrain", "common"]:
                 continue
             if len(parts) > 2:
                 found.add(parts[2])
             else:
-                # `from db_ops.common import a, b` — the names are the submodules.
+                # `from dbabrain.common import a, b` — the names are the submodules.
                 found |= {alias.name for alias in node.names}
     return found - set(EXEMPT_MODULES)
 
@@ -252,15 +252,15 @@ def _allowed(app: str, module: str) -> bool:
 
 @pytest.mark.parametrize("path", _app_files(), ids=_relative)
 def test_an_app_imports_no_common_module_outside_the_baseline(path: Path) -> None:
-    app = path.relative_to(DB_OPS_ROOT).parts[0]
+    app = path.relative_to(DBABRAIN_ROOT).parts[0]
     offenders = sorted(
         module for module in _common_submodules(path) if not _allowed(app, module)
     )
     assert not offenders, (
-        f"{_relative(path)} imports db_ops.common.{offenders} — an app calls the `common` CLI, "
+        f"{_relative(path)} imports dbabrain.common.{offenders} — an app calls the `common` CLI, "
         "it does not import it. If this is a value rather than an operation it belongs in "
-        "db_ops/lib/ (pure) or db_ops/db/ (a row shape); if it is an operation, call it through "
-        "`python -m db_ops.common.cli <command> '<json>'`. Do not add it to REMAINING: that list "
+        "dbabrain/lib/ (pure) or dbabrain/db/ (a row shape); if it is an operation, call it through "
+        "`python -m dbabrain.common.cli <command> '<json>'`. Do not add it to REMAINING: that list "
         "is a baseline that shrinks."
     )
 
@@ -273,7 +273,7 @@ def test_the_baseline_has_no_stale_entries() -> None:
     """
     actual: dict[str, set[str]] = {}
     for path in _app_files():
-        app = path.relative_to(DB_OPS_ROOT).parts[0]
+        app = path.relative_to(DBABRAIN_ROOT).parts[0]
         for module in _common_submodules(path):
             actual.setdefault(module, set()).add(app)
 
@@ -281,7 +281,7 @@ def test_the_baseline_has_no_stale_entries() -> None:
     # an entry naming one of the other seven is not stale there — it is describing software that
     # was left out, and reading it as a finished migration would delete a line still doing work in
     # the repository this baseline belongs to.
-    present = {path.relative_to(DB_OPS_ROOT).parts[0] for path in _app_files()}
+    present = {path.relative_to(DBABRAIN_ROOT).parts[0] for path in _app_files()}
     stale = sorted(
         f"{module}: {sorted((apps & present) - actual.get(module, set()))}"
         for module, apps in REMAINING.items()
@@ -303,7 +303,7 @@ def test_an_exemption_that_stopped_being_used_is_not_an_exemption() -> None:
     """
     used: dict[str, set[str]] = {}
     for path in _app_files():
-        app = path.relative_to(DB_OPS_ROOT).parts[0]
+        app = path.relative_to(DBABRAIN_ROOT).parts[0]
         used.setdefault(app, set()).update(_common_submodules(path))
 
     stale = sorted(

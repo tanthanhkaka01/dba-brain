@@ -13,7 +13,7 @@ run's.
 
 from __future__ import annotations
 
-from db_ops.db.web_auth_store import BOOTSTRAP_PASSWORD, BOOTSTRAP_USERNAME, WebAuthStore
+from dbabrain.db.web_auth_store import BOOTSTRAP_PASSWORD, BOOTSTRAP_USERNAME, WebAuthStore
 
 
 def _store(tmp_path) -> WebAuthStore:
@@ -59,7 +59,7 @@ def test_an_existing_admin_is_never_reset(tmp_path):
 
 
 def test_the_command_is_offered_by_the_webhost_cli():
-    from db_ops.webhost import cli
+    from dbabrain.webhost import cli
 
     args = cli.parse_args(["bootstrap-admin"])
 

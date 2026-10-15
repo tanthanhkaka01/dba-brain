@@ -18,8 +18,8 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from db_ops.common.docker_db import templates as t
-from db_ops.lib.docker_db_spec import DockerDbSpec
+from dbabrain.common.docker_db import templates as t
+from dbabrain.lib.docker_db_spec import DockerDbSpec
 
 MOUNT = "/opt/db_ops/backup"
 
@@ -97,7 +97,7 @@ def test_without_a_mount_nothing_of_this_is_rendered(engine, version, mode, repl
 
 
 def test_the_summary_names_the_backup_folder():
-    from db_ops.common.docker_db import compose, provisioner
+    from dbabrain.common.docker_db import compose, provisioner
 
     spec, _ = _compose("postgres")
     plan = compose.build_plan(spec, containers_dir="/opt/db_ops/containers", password="x", worker_host="192.0.2.249")

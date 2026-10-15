@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore import config as restore_config
-from db_ops.backup_restore.config import BackupRestoreConfig, validate_restore_target_is_not_source
+from dbabrain.backup_restore import config as restore_config
+from dbabrain.backup_restore.config import BackupRestoreConfig, validate_restore_target_is_not_source
 
 ADDRESSES = {
     "prodsql": "192.0.2.50",

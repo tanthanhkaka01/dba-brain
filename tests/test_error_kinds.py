@@ -14,8 +14,8 @@ import json
 
 import pytest
 
-from db_ops.common import cli
-from db_ops.lib import common_cli, errors, response
+from dbabrain.common import cli
+from dbabrain.lib import common_cli, errors, response
 
 
 def test_each_kind_is_still_the_built_in_it_replaces():
@@ -91,7 +91,7 @@ def test_an_answer_from_before_the_kind_existed_is_failed():
 import ast  # noqa: E402 - the guards below read the source; the tests above do not
 from pathlib import Path  # noqa: E402
 
-DB_OPS = Path(__file__).resolve().parents[1] / "db_ops"
+DBABRAIN = Path(__file__).resolve().parents[1] / "dbabrain"
 
 #: Exception classes that are deliberately not an error kind: the console's HTTP refusal is control
 #: flow carrying a status code, and the daemon's stop signal is a BaseException so nothing catches it.
@@ -99,12 +99,12 @@ NOT_A_KIND = {("webhost/app.py", "Refused"), ("jobs/daemon.py", "_DaemonStopped"
 
 
 def _exception_classes():
-    for path in DB_OPS.rglob("*.py"):
+    for path in DBABRAIN.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in tree.body:
             if isinstance(node, ast.ClassDef):
                 bases = [ast.unparse(base) for base in node.bases]
-                yield path.relative_to(DB_OPS).as_posix(), node.name, bases
+                yield path.relative_to(DBABRAIN).as_posix(), node.name, bases
 
 
 def test_every_exception_class_has_a_kind():
@@ -118,8 +118,8 @@ def test_every_exception_class_has_a_kind():
 
 def test_no_bare_runtime_error_is_raised():
     """191 were, until 2026-10-02. A bare RuntimeError answers `internal` whatever it meant."""
-    sites = [f"{path.relative_to(DB_OPS).as_posix()}:{number}"
-             for path in DB_OPS.rglob("*.py")
+    sites = [f"{path.relative_to(DBABRAIN).as_posix()}:{number}"
+             for path in DBABRAIN.rglob("*.py")
              for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
              if "raise RuntimeError(" in line]
     assert not sites, "raise the kind it is (lib.errors) instead: " + ", ".join(sites)
@@ -128,10 +128,10 @@ def test_no_bare_runtime_error_is_raised():
 def test_a_module_error_keeps_the_built_in_it_was():
     """Re-parenting must not add an ancestor: an `except ValueError` that did not catch it before
     must not start to, and the other way round."""
-    from db_ops.backup_restore.registration import RegistrationError
-    from db_ops.common.remote_exec import RemoteCommandTimeoutError, RemoteConnectError
-    from db_ops.lib.remote_host import RemoteError
-    from db_ops.lib.shared_objects import SharedObjectError
+    from dbabrain.backup_restore.registration import RegistrationError
+    from dbabrain.common.remote_exec import RemoteCommandTimeoutError, RemoteConnectError
+    from dbabrain.lib.remote_host import RemoteError
+    from dbabrain.lib.shared_objects import SharedObjectError
 
     assert issubclass(RegistrationError, RuntimeError) and not issubclass(RegistrationError, ValueError)
     assert RegistrationError.kind == errors.KIND_REQUEST

@@ -19,11 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore import backup as backup_module
-from db_ops.backup_restore import restore_script
-from db_ops.backup_restore import server_metadata as sm
-from db_ops.backup_restore.server_metadata import ServerMetadataPlan, instance_bundle_dir
-from db_ops.lib.time_window import TimeWindow
+from dbabrain.backup_restore import backup as backup_module
+from dbabrain.backup_restore import restore_script
+from dbabrain.backup_restore import server_metadata as sm
+from dbabrain.backup_restore.server_metadata import ServerMetadataPlan, instance_bundle_dir
+from dbabrain.lib.time_window import TimeWindow
 
 
 SOURCE = "CLOUD-203-0-113-188-MSSQL-1433"
@@ -49,7 +49,7 @@ def _restore(tmp_path, *, plan=None, phases=("pre-database", "post-database")):
 def bundle(tmp_path, monkeypatch):
     """A bundle exported for the source instance, where the restore will look for it."""
     root = tmp_path / "instance_bundles"
-    monkeypatch.setattr("db_ops.backup_restore.server_metadata.BUNDLE_ROOT", root)
+    monkeypatch.setattr("dbabrain.backup_restore.server_metadata.BUNDLE_ROOT", root)
     (root / SOURCE / "server").mkdir(parents=True)
     return root / SOURCE
 
@@ -191,7 +191,7 @@ def test_a_missing_bundle_names_the_backup_entry_that_should_have_written_it(tmp
     "bundle not found" would send an operator looking at the restore, which is the half that is
     correct; asking only for `server_metadata.enabled` sent them to a setting already set."""
     root = tmp_path / "instance_bundles"
-    monkeypatch.setattr("db_ops.backup_restore.server_metadata.BUNDLE_ROOT", root)
+    monkeypatch.setattr("dbabrain.backup_restore.server_metadata.BUNDLE_ROOT", root)
 
     line, summary = restore_script.replay_metadata_phase(
         _restore(tmp_path), phase="pre-database",
@@ -239,7 +239,7 @@ def test_the_bundle_is_keyed_on_the_source_instance(tmp_path, monkeypatch):
     """This is what lets the backup and the restore meet without a third config field naming a
     path: the restore's `server_id` IS the instance the backup exported from."""
     root = tmp_path / "instance_bundles"
-    monkeypatch.setattr("db_ops.backup_restore.server_metadata.BUNDLE_ROOT", root)
+    monkeypatch.setattr("dbabrain.backup_restore.server_metadata.BUNDLE_ROOT", root)
 
     assert instance_bundle_dir(SOURCE) == root / SOURCE
 
@@ -265,7 +265,7 @@ def test_metadata_is_exported_only_after_a_backup_that_worked(
             exported.append({"server_id": server_id, "bundle_dir": str(bundle_dir)})
             or {"ok": True, "status": "OK"},
     )
-    monkeypatch.setattr(backup_module, "DbOpsStore", _FakeStore)
+    monkeypatch.setattr(backup_module, "DbaBrainStore", _FakeStore)
     monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: None)
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
@@ -402,7 +402,7 @@ def test_two_instances_on_one_ip_is_refused_not_guessed(monkeypatch):
 def test_both_paths_call_the_same_shared_function(tmp_path, bundle, monkeypatch):
     """The point of the extraction, pinned: patching the shared entry point silences BOTH paths.
     If either grew its own copy, one of these two would still fire."""
-    from db_ops.backup_restore import workflow as wf
+    from dbabrain.backup_restore import workflow as wf
 
     seen: list[str] = []
     monkeypatch.setattr(sm, "replay_phase",
@@ -435,7 +435,7 @@ def test_the_cli_restore_workflow_replays_metadata_too():
     import ast
     import pathlib as _p
 
-    from db_ops.backup_restore import workflow as wf
+    from dbabrain.backup_restore import workflow as wf
 
     source = (_p.Path(wf.__file__).parent / "cli.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -453,7 +453,7 @@ def test_both_phases_run_and_the_post_phase_comes_after_the_restore():
     must already exist."""
     import pathlib as _p
 
-    from db_ops.backup_restore import workflow as wf
+    from dbabrain.backup_restore import workflow as wf
 
     source = (_p.Path(wf.__file__).parent / "cli.py").read_text(encoding="utf-8")
     body = source[source.index('elif args.command == "restore-workflow":'):]

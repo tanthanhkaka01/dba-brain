@@ -1,4 +1,4 @@
-"""Operating on a host: db_ops.common.host_ops.
+"""Operating on a host: dbabrain.common.host_ops.
 
 The restart-and-wait, service-wait and host-facts logic used to live inside one single-purpose
 patch script, where a task that only needed a restart could not reach it. These tests pin the
@@ -17,9 +17,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.common import host_ops
-from db_ops.common.evidence import FAIL, OK, WARN
-from db_ops.common.remote_exec import RemoteResult
+from dbabrain.common import host_ops
+from dbabrain.common.evidence import FAIL, OK, WARN
+from dbabrain.common.remote_exec import RemoteResult
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ def _windows_facts(services=(), pending=0):
 def _filled(command, request, data_dir):
     """The request as the app sends it: common.cli reads no configuration (rules R09), so the
     caller states the host's login, policy and rules - here from the fixture's data folder."""
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     return request_fill.fill_request(command, request, data_dir=data_dir, secrets={"PW_REF": "hunter2"})
 
@@ -298,7 +298,7 @@ def test_the_app_finds_a_host_by_server_id_or_by_ip_and_common_takes_what_it_sta
 
 
 def test_a_host_without_cmd_access_says_so_instead_of_failing_later(data_dir):
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     with pytest.raises(request_fill.RequestFillError) as excinfo:
         _filled("host-facts", {"target": "TEST-NO-ACCESS"}, data_dir)
@@ -334,7 +334,7 @@ def test_policy_layers_request_over_file_over_builtin(data_dir):
         encoding="utf-8",
     )
 
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     # The file's layers are the app's to read; the command layers the request over its defaults.
     policy = host_ops.maintenance_policy(
@@ -353,7 +353,7 @@ def test_policy_layers_request_over_file_over_builtin(data_dir):
 def test_the_maintenance_window_gate_reads_the_change_request_form():
     from datetime import datetime
 
-    from db_ops.common.evidence import GateReport
+    from dbabrain.common.evidence import GateReport
 
     inside = GateReport("restart")
     host_ops.check_maintenance_window(
@@ -374,7 +374,7 @@ def test_the_maintenance_window_gate_reads_the_change_request_form():
 def test_ignoring_the_window_records_the_breach_instead_of_hiding_it():
     from datetime import datetime
 
-    from db_ops.common.evidence import GateReport
+    from dbabrain.common.evidence import GateReport
 
     report = GateReport("restart")
     host_ops.check_maintenance_window(
@@ -390,7 +390,7 @@ def test_a_recurring_window_is_evaluated_by_the_shared_time_window_rules():
     """`time_window` stays the only authority on from_*/to_* comparisons, including wrapping."""
     from datetime import datetime
 
-    from db_ops.common.evidence import GateReport
+    from dbabrain.common.evidence import GateReport
 
     report = GateReport("restart")
     host_ops.check_maintenance_window(
@@ -620,8 +620,8 @@ def test_a_dollar_name_is_quoted_on_linux():
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("path", ["/backup/../etc/shadow", "/backup/./x.bak", "D:\\\\SQL\\\\..\\\\Windows\\\\x"])
 def test_a_path_with_dot_segments_is_refused(path):
-    from db_ops.common import deletefiles
-    from db_ops.common.hostcmd import parse_host
+    from dbabrain.common import deletefiles
+    from dbabrain.common.hostcmd import parse_host
 
     host = parse_host({"runtime": "windows" if ":" in path else "linux", "host": "h"})
     with pytest.raises(deletefiles.DeleteFileError, match="'.' or '..'"):

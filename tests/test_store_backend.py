@@ -1,4 +1,4 @@
-"""Tests for the store backend adapter (db_ops/db/backend.py).
+"""Tests for the store backend adapter (dbabrain/db/backend.py).
 
 The adapter's job is to let the store classes run on SQLite or PostgreSQL without branching at
 their 73 ``with self.connect()`` blocks and 335 ``row["column"]`` accesses. Two things are worth
@@ -17,8 +17,8 @@ import sqlite3
 
 import pytest
 
-from db_ops.db import backend
-from db_ops.db.backend import POSTGRES_UTC_NOW, Row, split_statements, translate_statement
+from dbabrain.db import backend
+from dbabrain.db.backend import POSTGRES_UTC_NOW, Row, split_statements, translate_statement
 
 
 # --------------------------------------------------------------------------- #
@@ -26,7 +26,7 @@ from db_ops.db.backend import POSTGRES_UTC_NOW, Row, split_statements, translate
 # --------------------------------------------------------------------------- #
 def test_sqlite_backend_returns_a_real_sqlite3_connection(tmp_path):
     """No wrapper on the default path: the store keeps its exact previous behaviour."""
-    conn = backend.open_sqlite_connection(tmp_path / "db_ops.sqlite")
+    conn = backend.open_sqlite_connection(tmp_path / "dbabrain.sqlite")
     try:
         assert isinstance(conn, sqlite3.Connection)
         assert conn.row_factory is sqlite3.Row
@@ -35,7 +35,7 @@ def test_sqlite_backend_returns_a_real_sqlite3_connection(tmp_path):
 
 
 def test_sqlite_backend_applies_the_store_pragmas(tmp_path):
-    conn = backend.open_sqlite_connection(tmp_path / "db_ops.sqlite")
+    conn = backend.open_sqlite_connection(tmp_path / "dbabrain.sqlite")
     try:
         assert conn.execute("PRAGMA journal_mode;").fetchone()[0].lower() == "wal"
         assert conn.execute("PRAGMA foreign_keys;").fetchone()[0] == 1
@@ -44,7 +44,7 @@ def test_sqlite_backend_applies_the_store_pragmas(tmp_path):
 
 
 def test_sqlite_backend_creates_the_parent_directory(tmp_path):
-    target = tmp_path / "nested" / "deeper" / "db_ops.sqlite"
+    target = tmp_path / "nested" / "deeper" / "dbabrain.sqlite"
     conn = backend.open_sqlite_connection(target)
     try:
         assert target.parent.is_dir()
@@ -53,7 +53,7 @@ def test_sqlite_backend_creates_the_parent_directory(tmp_path):
 
 
 def test_open_connection_routes_on_the_declared_backend(tmp_path):
-    from db_ops.lib.config import SqliteStoreConfig, StoreConfig
+    from dbabrain.lib.config import SqliteStoreConfig, StoreConfig
 
     store = StoreConfig(backend="sqlite", sqlite=SqliteStoreConfig(path=tmp_path / "s.sqlite"))
     conn = backend.open_connection(store)
@@ -64,7 +64,7 @@ def test_open_connection_routes_on_the_declared_backend(tmp_path):
 
 
 def test_unknown_backend_is_refused(tmp_path):
-    from db_ops.lib.config import StoreConfig
+    from dbabrain.lib.config import StoreConfig
 
     with pytest.raises(backend.StoreBackendError, match="Unknown store backend"):
         backend.open_connection(StoreConfig(backend="mysql"))
@@ -240,9 +240,9 @@ def test_empty_script_yields_nothing():
 
 def test_real_store_schemas_split_into_plausible_statement_counts():
     """Guards the splitter against the actual schema scripts it has to handle."""
-    from db_ops.db.store import SCHEMA_SQL
-    from db_ops.metrics.storage import SCHEMA_SQL as METRIC_SQL
-    from db_ops.sla.storage import SCHEMA_SQL as SLA_SQL
+    from dbabrain.db.store import SCHEMA_SQL
+    from dbabrain.metrics.storage import SCHEMA_SQL as METRIC_SQL
+    from dbabrain.sla.storage import SCHEMA_SQL as SLA_SQL
 
     for script in (SCHEMA_SQL, METRIC_SQL, SLA_SQL):
         statements = split_statements(script)
@@ -256,9 +256,9 @@ def test_real_store_schemas_split_into_plausible_statement_counts():
 
 def test_every_real_schema_statement_translates():
     """No statement in the shipped schemas may fail translation."""
-    from db_ops.db.store import SCHEMA_SQL
-    from db_ops.metrics.storage import SCHEMA_SQL as METRIC_SQL
-    from db_ops.sla.storage import SCHEMA_SQL as SLA_SQL
+    from dbabrain.db.store import SCHEMA_SQL
+    from dbabrain.metrics.storage import SCHEMA_SQL as METRIC_SQL
+    from dbabrain.sla.storage import SCHEMA_SQL as SLA_SQL
 
     for script in (SCHEMA_SQL, METRIC_SQL, SLA_SQL):
         for statement in split_statements(script):
@@ -274,16 +274,16 @@ def test_every_real_schema_statement_translates():
 def test_a_bare_path_always_means_sqlite(tmp_path):
     """35 call sites and the whole test suite pass a path. That must never reach PostgreSQL,
     whatever data/store_config.json happens to say."""
-    from db_ops.db.backend import StoreTarget
+    from dbabrain.db.backend import StoreTarget
 
-    target = StoreTarget.coerce(tmp_path / "db_ops.sqlite")
+    target = StoreTarget.coerce(tmp_path / "dbabrain.sqlite")
     assert target.is_sqlite
-    assert target.sqlite_path == tmp_path / "db_ops.sqlite"
+    assert target.sqlite_path == tmp_path / "dbabrain.sqlite"
 
 
 def test_from_config_follows_the_declared_backend(tmp_path):
-    from db_ops.lib.config import PostgresStoreConfig, StoreConfig
-    from db_ops.db.backend import StoreTarget
+    from dbabrain.lib.config import PostgresStoreConfig, StoreConfig
+    from dbabrain.db.backend import StoreTarget
 
     store = StoreConfig(
         backend="postgresql",
@@ -295,18 +295,18 @@ def test_from_config_follows_the_declared_backend(tmp_path):
 
 
 def test_from_config_rejects_something_that_is_not_a_config():
-    from db_ops.db.backend import StoreTarget
+    from dbabrain.db.backend import StoreTarget
 
-    with pytest.raises(backend.StoreBackendError, match="expects a DbOpsConfig or StoreConfig"):
+    with pytest.raises(backend.StoreBackendError, match="expects a DbaBrainConfig or StoreConfig"):
         StoreTarget.from_config("not-a-config")
 
 
 def test_prepare_creates_the_directory_only_for_sqlite(tmp_path):
     """PostgreSQL needs no directory; creating one would leave a stray runtime/ folder behind."""
-    from db_ops.lib.config import PostgresStoreConfig, StoreConfig
-    from db_ops.db.backend import StoreTarget
+    from dbabrain.lib.config import PostgresStoreConfig, StoreConfig
+    from dbabrain.db.backend import StoreTarget
 
-    sqlite_target = StoreTarget.coerce(tmp_path / "nested" / "db_ops.sqlite")
+    sqlite_target = StoreTarget.coerce(tmp_path / "nested" / "dbabrain.sqlite")
     sqlite_target.prepare()
     assert (tmp_path / "nested").is_dir()
 
@@ -320,13 +320,13 @@ def test_prepare_creates_the_directory_only_for_sqlite(tmp_path):
 @pytest.mark.parametrize(
     "store_class_path",
     [
-        ("db_ops.db.store", "DbOpsStore"),
-        ("db_ops.metrics.storage", "MetricStore"),
-        ("db_ops.sla.storage", "SlaStore"),
-        ("db_ops.backup_restore.history", "BackupRestoreHistory"),
-        ("db_ops.db.config_store", "ConfigStore"),
-        ("db_ops.db.web_auth_store", "WebAuthStore"),
-        ("db_ops.db.run_requests", "RunRequestStore"),
+        ("dbabrain.db.store", "DbaBrainStore"),
+        ("dbabrain.metrics.storage", "MetricStore"),
+        ("dbabrain.sla.storage", "SlaStore"),
+        ("dbabrain.backup_restore.history", "BackupRestoreHistory"),
+        ("dbabrain.db.config_store", "ConfigStore"),
+        ("dbabrain.db.web_auth_store", "WebAuthStore"),
+        ("dbabrain.db.run_requests", "RunRequestStore"),
     ],
 )
 def test_every_store_class_takes_a_path_and_reports_sqlite(tmp_path, store_class_path):
@@ -335,21 +335,21 @@ def test_every_store_class_takes_a_path_and_reports_sqlite(tmp_path, store_class
 
     module_name, class_name = store_class_path
     store_class = getattr(importlib.import_module(module_name), class_name)
-    store = store_class(tmp_path / "db_ops.sqlite")
+    store = store_class(tmp_path / "dbabrain.sqlite")
     assert store.backend == "sqlite"
-    assert store.sqlite_path == tmp_path / "db_ops.sqlite"
+    assert store.sqlite_path == tmp_path / "dbabrain.sqlite"
 
 
 @pytest.mark.parametrize(
     "store_class_path",
     [
-        ("db_ops.db.store", "DbOpsStore"),
-        ("db_ops.metrics.storage", "MetricStore"),
-        ("db_ops.sla.storage", "SlaStore"),
-        ("db_ops.backup_restore.history", "BackupRestoreHistory"),
-        ("db_ops.db.config_store", "ConfigStore"),
-        ("db_ops.db.web_auth_store", "WebAuthStore"),
-        ("db_ops.db.run_requests", "RunRequestStore"),
+        ("dbabrain.db.store", "DbaBrainStore"),
+        ("dbabrain.metrics.storage", "MetricStore"),
+        ("dbabrain.sla.storage", "SlaStore"),
+        ("dbabrain.backup_restore.history", "BackupRestoreHistory"),
+        ("dbabrain.db.config_store", "ConfigStore"),
+        ("dbabrain.db.web_auth_store", "WebAuthStore"),
+        ("dbabrain.db.run_requests", "RunRequestStore"),
     ],
 )
 def test_every_store_class_has_from_config(store_class_path):
@@ -380,7 +380,7 @@ def test_cutoff_text_is_in_the_store_timestamp_format():
     writes, or it silently matches nothing."""
     import re as _re
 
-    from db_ops.metrics.storage import cutoff_text
+    from dbabrain.metrics.storage import cutoff_text
 
     assert _re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", cutoff_text(7))
     assert cutoff_text(0) > cutoff_text(7)
@@ -391,26 +391,26 @@ def test_cutoff_text_is_in_the_store_timestamp_format():
 # --------------------------------------------------------------------------- #
 def test_explicit_sqlite_path_keeps_the_store_declaration_in_sync(tmp_path):
     """Two settable fields for one destination drift. parse_config derives them together, but a
-    directly-constructed DbOpsConfig defaulted them independently - so DbOpsStore.from_config()
+    directly-constructed DbaBrainConfig defaulted them independently - so DbaBrainStore.from_config()
     silently opened the tool's default database instead of the path the caller asked for. That is
     exactly how the first PostgreSQL cutover ended up still writing to SQLite."""
-    from db_ops.lib.config import DbOpsConfig
-    from db_ops.db import DbOpsStore
+    from dbabrain.lib.config import DbaBrainConfig
+    from dbabrain.db import DbaBrainStore
 
-    target = tmp_path / "custom" / "db_ops.sqlite"
-    config = DbOpsConfig(sqlite_path=target)
+    target = tmp_path / "custom" / "dbabrain.sqlite"
+    config = DbaBrainConfig(sqlite_path=target)
     assert config.store.sqlite.path == target
-    assert DbOpsStore.from_config(config).sqlite_path == target
-    assert DbOpsStore(config.sqlite_path).sqlite_path == target
+    assert DbaBrainStore.from_config(config).sqlite_path == target
+    assert DbaBrainStore(config.sqlite_path).sqlite_path == target
 
 
 def test_a_postgres_declaration_is_not_overwritten_by_the_path(tmp_path):
     """On a PostgreSQL store the path is informational, so it must not clobber the declaration."""
-    from db_ops.lib.config import DbOpsConfig, PostgresStoreConfig, StoreConfig
+    from dbabrain.lib.config import DbaBrainConfig, PostgresStoreConfig, StoreConfig
 
     store = StoreConfig(backend="postgresql",
                         postgresql=PostgresStoreConfig(host="h", database="db_ops", username="u"))
-    config = DbOpsConfig(sqlite_path=tmp_path / "ignored.sqlite", store=store)
+    config = DbaBrainConfig(sqlite_path=tmp_path / "ignored.sqlite", store=store)
     assert config.store.backend == "postgresql"
     assert config.store.postgresql.host == "h"
 
@@ -418,24 +418,24 @@ def test_a_postgres_declaration_is_not_overwritten_by_the_path(tmp_path):
 @pytest.mark.parametrize(
     "store_class_path",
     [
-        ("db_ops.db.store", "DbOpsStore"),
-        ("db_ops.metrics.storage", "MetricStore"),
-        ("db_ops.sla.storage", "SlaStore"),
-        ("db_ops.backup_restore.history", "BackupRestoreHistory"),
-        ("db_ops.db.config_store", "ConfigStore"),
-        ("db_ops.db.web_auth_store", "WebAuthStore"),
-        ("db_ops.db.run_requests", "RunRequestStore"),
+        ("dbabrain.db.store", "DbaBrainStore"),
+        ("dbabrain.metrics.storage", "MetricStore"),
+        ("dbabrain.sla.storage", "SlaStore"),
+        ("dbabrain.backup_restore.history", "BackupRestoreHistory"),
+        ("dbabrain.db.config_store", "ConfigStore"),
+        ("dbabrain.db.web_auth_store", "WebAuthStore"),
+        ("dbabrain.db.run_requests", "RunRequestStore"),
     ],
 )
 def test_from_config_follows_a_postgres_declaration(store_class_path):
     """The flip is only real if the store classes act on it."""
     import importlib
 
-    from db_ops.lib.config import DbOpsConfig, PostgresStoreConfig, StoreConfig
+    from dbabrain.lib.config import DbaBrainConfig, PostgresStoreConfig, StoreConfig
 
     module_name, class_name = store_class_path
     store_class = getattr(importlib.import_module(module_name), class_name)
-    config = DbOpsConfig(store=StoreConfig(
+    config = DbaBrainConfig(store=StoreConfig(
         backend="postgresql",
         postgresql=PostgresStoreConfig(host="h", database="db_ops", username="u")))
     assert store_class.from_config(config).backend == "postgresql"
@@ -444,12 +444,12 @@ def test_from_config_follows_a_postgres_declaration(store_class_path):
 def test_a_helper_handed_the_store_declaration_uses_it():
     """The reports/telegram CLIs inject `sqlite_path` into any helper that names it. Those helpers
     pass it straight to a store class, so handing them config.store must select PostgreSQL."""
-    from db_ops.lib.config import PostgresStoreConfig, StoreConfig
-    from db_ops.db import DbOpsStore
+    from dbabrain.lib.config import PostgresStoreConfig, StoreConfig
+    from dbabrain.db import DbaBrainStore
 
     store = StoreConfig(backend="postgresql",
                         postgresql=PostgresStoreConfig(host="h", database="db_ops", username="u"))
-    assert DbOpsStore(store).backend == "postgresql"
+    assert DbaBrainStore(store).backend == "postgresql"
 
 
 def test_no_app_module_constructs_a_store_from_config_sqlite_path():
@@ -462,9 +462,9 @@ def test_no_app_module_constructs_a_store_from_config_sqlite_path():
     import ast
     import pathlib
 
-    store_names = {"DbOpsStore", "MetricStore", "SlaStore", "BackupRestoreHistory",
+    store_names = {"DbaBrainStore", "MetricStore", "SlaStore", "BackupRestoreHistory",
                    "ConfigStore", "WebAuthStore", "RunRequestStore"}
-    root = pathlib.Path(__file__).resolve().parents[1] / "db_ops"
+    root = pathlib.Path(__file__).resolve().parents[1] / "dbabrain"
     offenders = []
     for path in root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -496,7 +496,7 @@ def test_no_store_sql_uses_an_untranslatable_strftime_form():
     import pathlib
     import re
 
-    root = pathlib.Path(__file__).resolve().parents[1] / "db_ops"
+    root = pathlib.Path(__file__).resolve().parents[1] / "dbabrain"
     # db/store.py was split by table family on 2026-10-03; its SQL lives in the store_* modules.
     store_modules = [
         *sorted((root / "db").glob("store*.py")),
@@ -538,7 +538,7 @@ def test_no_store_sql_calls_a_sqlite_date_function_on_a_column():
     import pathlib
     import re
 
-    root = pathlib.Path(__file__).resolve().parents[1] / "db_ops"
+    root = pathlib.Path(__file__).resolve().parents[1] / "dbabrain"
     store_modules = [
         *sorted((root / "db").glob("store*.py")),
         root / "db" / "metric_store.py",
@@ -595,7 +595,7 @@ def test_no_pg8000_call_site_uses_format_placeholders():
     import pathlib
     import re
 
-    root = pathlib.Path(__file__).resolve().parents[1] / "db_ops"
+    root = pathlib.Path(__file__).resolve().parents[1] / "dbabrain"
     # Modules that talk to pg8000 directly.
     suspects = [
         root / "metrics" / "executor.py",
@@ -621,7 +621,7 @@ def test_no_pg8000_call_site_uses_format_placeholders():
 
 def test_paramstyle_is_pinned_where_connections_are_made():
     """One place decides it, so the two subsystems cannot disagree."""
-    from db_ops.db import postgres_store
+    from dbabrain.db import postgres_store
 
     source = __import__("inspect").getsource(postgres_store._dbapi)
     assert 'paramstyle = "qmark"' in source

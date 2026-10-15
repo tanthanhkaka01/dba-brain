@@ -17,7 +17,7 @@ import base64
 
 import pytest
 
-from db_ops.common.hostcmd import DOCKER, K8S, LINUX, WINDOWS, HostCommandError, parse_host, wrap
+from dbabrain.common.hostcmd import DOCKER, K8S, LINUX, WINDOWS, HostCommandError, parse_host, wrap
 
 
 def test_a_linux_host_runs_the_command_unchanged():
@@ -56,7 +56,7 @@ def test_the_sudo_fallback_runs_as_a_real_shell_would_read_it():
     sh = shutil.which("sh")
     if not sh:
         pytest.skip("no POSIX shell here")
-    from db_ops.lib.shell import docker_cli
+    from dbabrain.lib.shell import docker_cli
 
     out = subprocess.run([sh, "-c", f"docker() {{ return 0; }}; echo {docker_cli(True)}"],
                          capture_output=True, text=True).stdout.strip()
@@ -175,7 +175,7 @@ class _Session:
         self.access, self.captured = access, captured
 
     def run_script(self, script, *, env=None, timeout_seconds=None):
-        from db_ops.common import remote_exec
+        from dbabrain.common import remote_exec
 
         self.captured.update({"access": self.access, "script": script, "env": env})
         return remote_exec.RemoteResult(method=self.access["method"], host=self.access.get("host", ""),
@@ -187,7 +187,7 @@ class _Session:
 
 
 def _record(monkeypatch):
-    from db_ops.common import remote_exec
+    from dbabrain.common import remote_exec
 
     captured: dict = {}
     monkeypatch.setattr(remote_exec, "open_session", lambda access: _Session(access, captured))
@@ -198,7 +198,7 @@ def test_winrm_delegates_to_remote_exec_rather_than_speaking_it_here(monkeypatch
     """A second WinRM client would be a second set of quoting bugs to find, on the machines where
     being wrong means a production SQL Server. remote_exec has run against these same hosts on
     every metrics cycle for months."""
-    from db_ops.common import hostcmd
+    from dbabrain.common import hostcmd
 
     captured = _record(monkeypatch)
 
@@ -224,7 +224,7 @@ def test_every_script_runs_through_remote_exec_the_one_executor(monkeypatch):
     file upload - a second executor beside ``remote_exec`` (0.25.0, the operator: one way to run
     anything on a host). It names the host now and hands the script over whole; ``remote_exec``
     writes it to a private file there and runs it with stdin closed."""
-    from db_ops.common import hostcmd
+    from dbabrain.common import hostcmd
 
     captured = _record(monkeypatch)
 
@@ -249,7 +249,7 @@ def test_a_windows_script_over_ssh_is_powershell_and_never_stdin(monkeypatch):
     base64 against a 32767-character Windows command line. ``remote_exec`` places it as a ``.ps1``
     and runs it with ``-File`` (``test_common_remote_exec.py``).
     """
-    from db_ops.common import hostcmd
+    from dbabrain.common import hostcmd
 
     captured = _record(monkeypatch)
 
@@ -263,7 +263,7 @@ def test_a_windows_script_over_ssh_is_powershell_and_never_stdin(monkeypatch):
 
 
 @pytest.mark.parametrize("reported,expected", [
-    ("/C:/Users/appdbadmin/db_ops_abc.ps1", r"C:\Users\appdbadmin\db_ops_abc.ps1"),
+    ("/C:/Users/appdbadmin/dbabrain_abc.ps1", r"C:\Users\appdbadmin\dbabrain_abc.ps1"),
     ("/D:/temp/x.ps1", r"D:\temp\x.ps1"),
     ("C:/already/windows.ps1", r"C:\already\windows.ps1"),
 ])
@@ -271,6 +271,6 @@ def test_an_sftp_path_is_translated_for_powershell(reported, expected):
     """Windows OpenSSH's SFTP speaks POSIX: `normalize()` answers `/C:/Users/x/y.ps1`, and `-File`
     on that fails with "The given path's format is not supported" - a message that reads like a
     permissions or quoting problem and is neither."""
-    from db_ops.common.remote_exec import windows_path
+    from dbabrain.common.remote_exec import windows_path
 
     assert windows_path(reported) == expected

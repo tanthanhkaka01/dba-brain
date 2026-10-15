@@ -1,7 +1,7 @@
 """Some rows do not start in a database, and the task that loads them should still be a SQL task.
 
 An HTTP API, a vendor export, a device that speaks only its own protocol. Until 2026-09-14 the
-answer was a script outside db_ops that opened its own connection, held its own copy of the
+answer was a script outside dbabrain that opened its own connection, held its own copy of the
 credential and was scheduled by something else — the shape this tool exists to replace. Asked for
 on 2026-09-14 (translated): *"the SQL task calls Python code, the Python code returns JSON, then
 SQL takes that JSON and pushes it into SQL"*.
@@ -23,8 +23,8 @@ import json
 
 import pytest
 
-from db_ops.sql_tasks import python_source as ps
-from db_ops.sql_tasks.runner import (INPUT_TYPES, build_execution_plan, load_input_definition,
+from dbabrain.sql_tasks import python_source as ps
+from dbabrain.sql_tasks.runner import (INPUT_TYPES, build_execution_plan, load_input_definition,
                                      load_sql_script_definition)
 
 FETCHER = (
@@ -347,11 +347,11 @@ def test_a_task_with_no_python_input_plans_exactly_as_it_always_did():
 
 
 def test_the_fetcher_never_sees_the_master_passphrase(root, monkeypatch):
-    """The daemon puts DB_OPS_SECRET_KEY in every app's environment; a fetcher is an HTTP client or
+    """The daemon puts DBABRAIN_SECRET_KEY in every app's environment; a fetcher is an HTTP client or
     vendor code and must not inherit the key to every credential (review 0.25.0, F4.2)."""
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "the-master-key")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "the-master-key")
     monkeypatch.setenv("SOMETHING_ELSE", "kept")
-    body = ("import json, os; print(json.dumps({'data': [{'key': os.environ.get('DB_OPS_SECRET_KEY', ''),"
+    body = ("import json, os; print(json.dumps({'data': [{'key': os.environ.get('DBABRAIN_SECRET_KEY', ''),"
             " 'other': os.environ.get('SOMETHING_ELSE', '')}]}))")
     source = ps.PythonSource(script_path=write(root, "env.py", body))
 
@@ -366,7 +366,7 @@ CONNECTION = {"server_id": "ACME-192-0-2-111", "db_type": "sqlserver", "host": "
 READS_STDIN = ("import json, os, sys\n"
                "document = json.loads(sys.stdin.read() or 'null')\n"
                "print(json.dumps({'data': [{'stdin': document,\n"
-               "                            'key': os.environ.get('DB_OPS_SECRET_KEY', ''),\n"
+               "                            'key': os.environ.get('DBABRAIN_SECRET_KEY', ''),\n"
                "                            'argv': sys.argv[1:]}]}))\n")
 
 
@@ -375,7 +375,7 @@ def test_a_program_that_reaches_the_database_itself_reads_its_connection_on_stdi
     withheld the passphrase and gave it nothing instead: every run on the worker failed with "No
     decryption key provided" (2026-10-05). It now gets the one login it needs - never the key to
     all of them, never on its command line, never in the environment its children inherit."""
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "the-master-key")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "the-master-key")
     source = ps.PythonSource(script_path=write(root, "drain.py", READS_STDIN), target_connection=True)
 
     row = ps.run(source, tool_root=root, connection=CONNECTION).rows[0]
@@ -427,7 +427,7 @@ def test_the_runner_hands_over_the_login_it_resolved_and_only_when_asked(tmp_pat
     from test_sql_task_claims import (RecordingSqlRunStore, inventory_and_credentials, sql_command,
                                       sql_target)
 
-    from db_ops.sql_tasks import runner
+    from dbabrain.sql_tasks import runner
 
     data_dir = tmp_path / "data"
     (data_dir / "sql").mkdir(parents=True)

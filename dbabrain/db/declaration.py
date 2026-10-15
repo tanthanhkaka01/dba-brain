@@ -1,0 +1,249 @@
+"""The store, stated as data so it can travel in a request.
+
+``common`` is the layer that performs work and reads nothing. That holds for SQL against a target
+database already — a ``run-sql`` request carries the host, the login and the password — but the
+*runtime store* was the exception: a caller could only say "config.json" and let the other side go
+and read it. So the one thing every app writes through was also the one thing ``common`` had to
+look up.
+
+This closes that. The store describes itself here — backend, host, database, schema, user, and the
+**already-resolved** password — and the description travels in the request like any other value.
+``common`` connects with what it was handed and resolves nothing.
+
+Two consequences worth stating, because both were problems before:
+
+* **A caller can name a store that is not the node's own.** The in-process path could hand over a
+  live store object; a subprocess could not, so tests that write to a temp store had no way to
+  point the CLI at it. A declaration is something a test can build.
+* **The password is in the payload.** That is why every consumer takes the request on **stdin**
+  and never as an argv word: argv is world-readable in the process table, stdin is not.
+  :func:`describe` is the only place that resolves it, and :func:`redact` exists for logging.
+"""
+
+from __future__ import annotations
+
+from dbabrain.lib import errors
+from pathlib import Path
+from typing import Any
+
+from dbabrain.db.backend import StoreTarget
+
+
+class StoreDeclarationError(errors.ConfigError):
+    """The store block cannot be honoured as written."""
+
+
+def describe(config: Any, *, key: str | None = None, password: str | None = None) -> dict[str, Any]:
+    """Serialise a :class:`~dbabrain.lib.config.StoreConfig` (or a ``DbaBrainConfig``) into a request block.
+
+    ``password`` overrides the lookup; otherwise a PostgreSQL store resolves its own
+    ``password_ref`` here, on the app side, so the other end never touches the secret store.
+    """
+    from dbabrain.lib.config import StoreConfig
+
+    store = getattr(config, "store", config)
+    if not isinstance(store, StoreConfig):
+        raise StoreDeclarationError(
+            f"describe expects a DbaBrainConfig or StoreConfig, got {type(config).__name__}.")
+
+    if store.is_sqlite:
+        return {"backend": "sqlite", "sqlite": {"path": str(store.sqlite.path)}}
+
+    pg = store.postgresql
+    secret = password if password is not None else pg.resolved_password(key)
+    return {
+        "backend": "postgresql",
+        "postgresql": {
+            "host": pg.host, "port": int(pg.port), "database_name": pg.database,
+            "schema": pg.schema, "username": pg.username, "password": secret,
+            "sslmode": pg.sslmode, "connect_timeout_seconds": int(pg.connect_timeout_seconds),
+            "application_name": pg.application_name,
+        },
+    }
+
+
+def describe_store(store: Any) -> dict[str, Any]:
+    """Describe a **live** store — the one a caller already holds and is already connected with.
+
+    The point of the model is that the store states its own connection, so a caller that has a
+    store should not have to go back to a config file to say what it is. The daemon is the case
+    that forced this: its notify helper deliberately takes no config (holding Telegram settings of
+    its own is exactly how it drifted from every other app), so a store object is all it has.
+
+    The password comes from the target when it carries one — ``StoreTarget`` already accepts a
+    resolved password — and is otherwise resolved the same way :func:`describe` does it.
+    """
+    target = getattr(store, "target", None)
+    if target is None:
+        raise StoreDeclarationError(
+            f"describe_store expects a DbaBrainStore, got {type(store).__name__}.")
+    return describe(target.store, key=getattr(target, "key", None),
+                    password=(getattr(target, "password", None) or None))
+
+
+def parse(raw: Any) -> StoreTarget:
+    """Build a :class:`StoreTarget` from a request block. Reads no config and no secret store."""
+    if not isinstance(raw, dict):
+        raise StoreDeclarationError("store must be an object.")
+    backend = str(raw.get("backend") or "").strip().lower()
+
+    if backend == "sqlite":
+        path = str((raw.get("sqlite") or {}).get("path") or "").strip()
+        if not path:
+            raise StoreDeclarationError("store.sqlite.path is required for a sqlite store.")
+        return StoreTarget.for_sqlite(path)
+
+    if backend in {"postgresql", "postgres"}:
+        from dbabrain.lib.config import PostgresStoreConfig, StoreConfig
+
+        block = raw.get("postgresql") or {}
+        # `database_name` since 0.22.0, the name the store file uses; a block sent by an older
+        # node says `database`, and is read the same.
+        database = str(block.get("database_name") or block.get("database") or "").strip()
+        for required, value in (("host", block.get("host")), ("database_name", database),
+                                ("username", block.get("username"))):
+            if not str(value or "").strip():
+                raise StoreDeclarationError(f"store.postgresql.{required} is required.")
+        pg = PostgresStoreConfig(
+            host=str(block["host"]), port=int(block.get("port") or 5432),
+            database=database, schema=str(block.get("schema") or ""),
+            username=str(block["username"]), sslmode=str(block.get("sslmode") or "prefer"),
+            connect_timeout_seconds=int(block.get("connect_timeout_seconds") or 10),
+            application_name=str(block.get("application_name") or "dbabrain"),
+        )
+        # The password rides beside the declaration rather than inside it: StoreTarget already
+        # takes it as an override, which is what keeps `password_ref` (a lookup) out of here.
+        return StoreTarget(StoreConfig(backend="postgresql", postgresql=pg),
+                           password=str(block.get("password") or ""))
+
+    raise StoreDeclarationError(
+        f"store.backend must be sqlite or postgresql; got {backend or '<missing>'}.")
+
+
+def redact(raw: Any) -> dict[str, Any]:
+    """The same block with the password replaced, for logging and error messages."""
+    if not isinstance(raw, dict):
+        return {}
+    safe = {k: (dict(v) if isinstance(v, dict) else v) for k, v in raw.items()}
+    if isinstance(safe.get("postgresql"), dict) and safe["postgresql"].get("password"):
+        safe["postgresql"]["password"] = "***"
+    return safe
+
+
+def for_path(sqlite_path: str | Path) -> dict[str, Any]:
+    """A sqlite declaration, for tests and for callers that already hold a path."""
+    return {"backend": "sqlite", "sqlite": {"path": str(sqlite_path)}}
+
+
+#: The backends a declaration may name, in the spelling the file uses.
+SWITCHABLE_BACKENDS: tuple[str, ...] = ("sqlite", "postgresql")
+
+
+#: The ``postgresql`` fields ``use-store`` may set, and the CLI flag each one takes. Anything not
+#: named here is left exactly as the declaration has it — this command re-points a node, it does
+#: not rewrite its store block.
+POSTGRES_TARGET_FIELDS: dict[str, str] = {
+    "host": "--host", "port": "--port", "database_name": "--database-name", "schema": "--schema",
+    "username": "--username", "password_ref": "--password-ref",
+}
+
+
+def _repoint_postgres(section: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """Apply the given postgres fields, and rebuild ``connection_string`` if any of them moved.
+
+    **The rebuild is the whole reason this is not a dict update.** ``connection_string`` is
+    authoritative when non-empty — ``config.py`` returns it verbatim and never looks at the fields
+    beside it — so setting ``schema`` on a declaration that carries one changes the human-readable
+    breakdown and *nothing about where the node writes*. A node moved that way reports the new
+    schema in ``store-info``'s breakdown and goes on writing to the old one, which is the single
+    worst failure this file can produce: two nodes silently sharing a store while both believe
+    they are separate.
+    """
+    updated = dict(section)
+    changed = {name: value for name, value in overrides.items()
+               if value is not None and str(updated.get(name) or "") != str(value)}
+    if not changed:
+        return updated
+    updated.update(changed)
+    if "database_name" in changed:
+        # The standard name was written; an old `database` beside it would be the same value under
+        # two names, and the stale one is what an older reader would take.
+        updated.pop("database", None)
+    if str(updated.get("connection_string") or "").strip():
+        from dbabrain.lib.config import PostgresStoreConfig
+
+        updated["connection_string"] = PostgresStoreConfig(
+            host=str(updated.get("host") or ""), port=int(updated.get("port") or 5432),
+            database=str(updated.get("database_name") or updated.get("database") or ""),
+            schema=str(updated.get("schema") or ""),
+            username=str(updated.get("username") or ""),
+            sslmode=str(updated.get("sslmode") or "prefer"),
+            connect_timeout_seconds=int(updated.get("connect_timeout_seconds") or 10),
+            application_name=str(updated.get("application_name") or "dbabrain"),
+        ).connection_string
+    return updated
+
+
+def switch_backend(raw: dict[str, Any], backend: str, *,
+                   sqlite_path: str | Path | None = None,
+                   postgres: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return the declaration with ``backend`` selected, or say why it cannot be.
+
+    Editing this by hand was the **only** hand-edit left in moving an estate onto a new node, and
+    it is the one that matters most: ``store_config.json`` travels inside a config bundle, so an
+    import faithfully points a machine that has never run at the store every other node shares.
+    The procedure said "change backend to sqlite afterwards" and there was no command for it — a
+    step in prose, on the path where forgetting it writes an unproven build's rows into the shared
+    record.
+
+    **The other section is left exactly as it was.** Switching to sqlite must not discard the
+    postgresql block: the usual reason to switch is to prove a node on its own file *before*
+    pointing it back at the shared store, and a switch that erased the way back would make that
+    round trip a retyping exercise.
+
+    Refuses a backend whose section cannot stand on its own, because the failure it prevents is
+    silent: a declaration naming ``postgresql`` with no host resolves at *connect* time, inside
+    whichever app command happens to touch the store first.
+
+    ``postgres`` re-points the postgresql block at a different host, database or **schema** in the
+    same call. Until 2026-09-14 the backend flag was all this could set, so moving a node onto a
+    named store — a soak node onto its own schema on the shared server, say — was still the hand
+    edit this function was written to remove, and one with a trap in it: see
+    :func:`_repoint_postgres`.
+    """
+    if not isinstance(raw, dict):
+        raise StoreDeclarationError("store_config.json does not hold an object.")
+    wanted = str(backend or "").strip().lower()
+    if wanted == "postgres":
+        wanted = "postgresql"
+    if wanted not in SWITCHABLE_BACKENDS:
+        raise StoreDeclarationError(
+            f"backend must be one of {', '.join(SWITCHABLE_BACKENDS)}; got {backend!r}.")
+
+    updated = {k: (dict(v) if isinstance(v, dict) else v) for k, v in raw.items()}
+    if wanted == "sqlite":
+        section = dict(updated.get("sqlite") or {})
+        if sqlite_path is not None:
+            section["path"] = str(sqlite_path)
+        if not str(section.get("path") or "").strip():
+            raise StoreDeclarationError(
+                "the sqlite section names no path, and none was given. Pass a path, or fill in "
+                "sqlite.path in store_config.json.")
+        updated["sqlite"] = section
+    else:
+        updated["postgresql"] = _repoint_postgres(
+            dict(updated.get("postgresql") or {}), postgres or {})
+
+    updated["backend"] = wanted
+    # Completeness is whatever `parse` requires, asked by calling it rather than by keeping a
+    # second list of required fields here - two lists is how the checker and the reader come to
+    # disagree, and the half that matters is the reader's. A declaration this build cannot read is
+    # never written, and the refusal names the field instead of arriving at connect time inside
+    # whichever app command touches the store first.
+    try:
+        parse(updated)
+    except StoreDeclarationError as exc:
+        raise StoreDeclarationError(
+            f"switching to {wanted} would leave a declaration that cannot be read: {exc} "
+            "Fill that section in first.") from exc
+    return updated

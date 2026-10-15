@@ -14,10 +14,10 @@ import json
 
 import pytest
 
-from db_ops.control import worker_data
-from db_ops.lib import docker_db_registry as registry
-from db_ops.lib.secret_text import set_secret_text
-from db_ops.transport import common_cli
+from dbabrain.control import worker_data
+from dbabrain.lib import docker_db_registry as registry
+from dbabrain.lib.secret_text import set_secret_text
+from dbabrain.transport import common_cli
 
 KEY = "a-throwaway-passphrase-for-this-test-only"
 
@@ -34,7 +34,7 @@ def built(monkeypatch):
                 "status": "running", "summary": "built", "plan_text": "plan"}
 
     monkeypatch.setattr(common_cli, "run", fake_run)
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", KEY)
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", KEY)
     _isolate_the_password_variable(monkeypatch)
     return sent
 
@@ -72,14 +72,14 @@ def test_the_record_is_written_here_and_says_control_made_it(tmp_path, built):
 
 def test_a_new_password_is_stored_here_after_the_build(tmp_path, built):
     _create(tmp_path, password_text="db-pw")
-    from db_ops.lib import data_sources
+    from dbabrain.lib import data_sources
 
     assert data_sources.load_secret_text(tmp_path, key=KEY)["PG_LAB_01_PASSWORD"] == "db-pw"
 
 
 def test_a_failed_build_stores_no_password_and_registers_nothing(tmp_path, monkeypatch):
     """A wrong image tag used to leave its password in the store under a ref no lab uses."""
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", KEY)
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", KEY)
     _isolate_the_password_variable(monkeypatch)
 
     def fail(command, request, **_kwargs):
@@ -88,7 +88,7 @@ def test_a_failed_build_stores_no_password_and_registers_nothing(tmp_path, monke
     monkeypatch.setattr(common_cli, "run", fail)
     assert _create(tmp_path, password_text="db-pw") == 1
     assert not registry.default_registry_path(tmp_path).exists()
-    from db_ops.lib import data_sources
+    from dbabrain.lib import data_sources
 
     assert "PG_LAB_01_PASSWORD" not in (data_sources.load_secret_text(tmp_path, key=KEY) or {})
 
@@ -123,4 +123,4 @@ def test_nothing_in_control_runs_sre_s_cli():
     from pathlib import Path
 
     source = Path(worker_data.__file__).read_text(encoding="utf-8")
-    assert "db_ops.sre" not in source
+    assert "dbabrain.sre" not in source

@@ -22,7 +22,7 @@ Three things about this data are easy to get wrong, and each has a test below:
   they are listed — and the host-level ratio is withheld rather than computed from a partial sum.
 """
 
-from db_ops.reports.server_report import build_volumes
+from dbabrain.reports.server_report import build_volumes
 
 
 def _os(item, value, message, status="OK"):

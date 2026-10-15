@@ -1,7 +1,7 @@
 """Was a restore actually PROVEN lately — the one question backups cannot answer.
 
 "There is a backup" and "we can restore" are different claims, and only one of them can be
-tested. db_ops.backup_restore already runs the drills and records every one; nothing turned that
+tested. dbabrain.backup_restore already runs the drills and records every one; nothing turned that
 into a health signal, so the reports carried static restore evidence from June while the table
 held APPDB_STG_DOCKER whose newest success was 43 days old and nobody said so.
 
@@ -11,7 +11,7 @@ would flatten.
 
 from datetime import datetime, timedelta, timezone
 
-from db_ops.db import restore_drill as rd
+from dbabrain.db import restore_drill as rd
 
 NOW = datetime(2026, 8, 3, 12, 0, 0, tzinfo=timezone.utc)
 

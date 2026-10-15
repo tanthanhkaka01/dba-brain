@@ -5,7 +5,7 @@ On 2026-09-29 a node met a backlog in six chats. One chat at a time, a pass sent
 bot reads its commands once per pass, so the reply to `/spbot_self_status` took a minute. The
 operator: send the chats side by side, ten at a time (`send_threads`), and drop the pass's own 180 s
 budget. That budget came back, measured rather than fixed: half of the Telegram workflow's own
-`time_window.timeout`, which the daemon states in `DB_OPS_APP_TIMEOUT_SECONDS` - without a margin the
+`time_window.timeout`, which the daemon states in `DBABRAIN_APP_TIMEOUT_SECONDS` - without a margin the
 daemon killed the pass mid-row and the row stayed in flight for good.
 
 What must not change with it: a chat's rows go one after another, oldest first (a conversation read
@@ -20,8 +20,8 @@ import threading
 
 import pytest
 
-from db_ops.lib.config import load_config
-from db_ops.telegram import send_queue
+from dbabrain.lib.config import load_config
+from dbabrain.telegram import send_queue
 
 
 class _Queue:
@@ -49,7 +49,7 @@ def recorder(monkeypatch):
     lock = threading.Lock()
 
     def install(rows, send_one=None):
-        monkeypatch.setattr(send_queue, "DbOpsStore", lambda path: _Queue(rows))
+        monkeypatch.setattr(send_queue, "DbaBrainStore", lambda path: _Queue(rows))
         chat_of = {number: chat for chat, number in rows}
 
         def default(**kwargs):
@@ -195,7 +195,7 @@ def test_without_a_budget_every_row_is_sent(recorder):
 
 
 def test_the_budget_is_half_of_the_timeout_the_daemon_states(monkeypatch):
-    from db_ops.lib import app_timeout
+    from dbabrain.lib import app_timeout
 
     monkeypatch.setenv(app_timeout.APP_TIMEOUT_ENV_VAR, "300")
     assert app_timeout.budget_seconds(send_queue.SEND_BUDGET_RATIO) == 150.0
@@ -227,11 +227,11 @@ def test_one_chat_failing_keeps_the_others_counts_and_the_pauses(recorder, tmp_p
 
 def test_rows_left_in_flight_are_put_back_before_the_pass_reads(monkeypatch):
     queue = _Queue([])
-    monkeypatch.setattr(send_queue, "DbOpsStore", lambda path: queue)
-    monkeypatch.delenv("DB_OPS_APP_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(send_queue, "DbaBrainStore", lambda path: queue)
+    monkeypatch.delenv("DBABRAIN_APP_TIMEOUT_SECONDS", raising=False)
 
     send_queue.send_pending_messages(sqlite_path="x", bot_token="t")
-    monkeypatch.setenv("DB_OPS_APP_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("DBABRAIN_APP_TIMEOUT_SECONDS", "1800")
     send_queue.send_pending_messages(sqlite_path="x", bot_token="t")
 
     # The floor, then twice a timeout long enough to exceed it.

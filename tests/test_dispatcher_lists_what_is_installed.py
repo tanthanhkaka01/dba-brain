@@ -1,9 +1,9 @@
-"""`db-ops` must advertise only the apps this build actually has.
+"""`dbabrain` must advertise only the apps this build actually has.
 
 The public `v0.1.0` ships seven of the fourteen components, so the app table is a promise the
 distribution cannot keep. Measured on 2026-08-22 rather than predicted: the first thin wheel listed
 all twelve apps and could run five. A reader who types the line the help text just offered them
-gets `ModuleNotFoundError: db_ops.sre.cli`, which reads as a broken install — and the next thing
+gets `ModuleNotFoundError: dbabrain.sre.cli`, which reads as a broken install — and the next thing
 they do is reinstall, which does not help.
 
 Detected rather than hardcoded, so one code path is correct in both trees: a full checkout lists
@@ -26,7 +26,7 @@ import importlib.util
 
 import pytest
 
-from db_ops import cli
+from dbabrain import cli
 
 
 def test_every_app_whose_package_exists_is_reachable() -> None:
@@ -36,7 +36,7 @@ def test_every_app_whose_package_exists_is_reachable() -> None:
     so the test that proves the filtering works could not itself run in the tree the filtering
     exists for. Stated against what is on disk, it holds in both.
     """
-    from db_ops.lib.paths import PACKAGE_DIR
+    from dbabrain.lib.paths import PACKAGE_DIR
 
     expected = {
         name: module for name, module in cli.APPS.items()
@@ -48,7 +48,7 @@ def test_every_app_whose_package_exists_is_reachable() -> None:
 
 def test_a_missing_app_is_not_listed(monkeypatch) -> None:
     """The thin distribution's case, forced: `sre` is absent, so it must not be offered."""
-    monkeypatch.setattr(importlib.util, "find_spec", _absent({"db_ops.sre.cli"}))
+    monkeypatch.setattr(importlib.util, "find_spec", _absent({"dbabrain.sre.cli"}))
 
     present = cli.installed_apps()
 
@@ -58,7 +58,7 @@ def test_a_missing_app_is_not_listed(monkeypatch) -> None:
 
 def test_the_help_text_lists_only_what_is_installed(monkeypatch) -> None:
     monkeypatch.setattr(importlib.util, "find_spec",
-                        _absent({"db_ops.sre.cli", "db_ops.reports.cli"}))
+                        _absent({"dbabrain.sre.cli", "dbabrain.reports.cli"}))
 
     usage = cli._usage()
 
@@ -68,7 +68,7 @@ def test_the_help_text_lists_only_what_is_installed(monkeypatch) -> None:
 
 def test_running_a_missing_app_explains_instead_of_raising(monkeypatch, capsys) -> None:
     """A sentence, not a traceback — the difference decides what the reader does next."""
-    monkeypatch.setattr(importlib.util, "find_spec", _absent({"db_ops.sre.cli"}))
+    monkeypatch.setattr(importlib.util, "find_spec", _absent({"dbabrain.sre.cli"}))
 
     code = cli.main(["sre", "--help"])
 
@@ -87,8 +87,8 @@ def test_a_parent_package_that_is_absent_does_not_escape_as_an_error(monkeypatch
     so a full checkout could never have shown it.
     """
     def raising(name: str, *args, **kwargs):
-        if name.startswith("db_ops.sre"):
-            raise ModuleNotFoundError("No module named 'db_ops.sre'")
+        if name.startswith("dbabrain.sre"):
+            raise ModuleNotFoundError("No module named 'dbabrain.sre'")
         return object()
 
     monkeypatch.setattr(importlib.util, "find_spec", raising)

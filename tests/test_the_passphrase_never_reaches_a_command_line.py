@@ -3,7 +3,7 @@
 Review 0.25.0: B2.4 - the daemon appended `--key`/`--key-base64 <value>` to every child's command
 line, readable by any user on the host (`ps`, /proc/<pid>/cmdline), and with commands starting
 every second it was in the process table almost permanently. F6.1 - `control deploy` started the
-worker as `db_ops daemon --key_base64 <base64>`, in the container's command for its whole life.
+worker as `dbabrain daemon --key_base64 <base64>`, in the container's command for its whole life.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import pytest
 
 from types import SimpleNamespace
 
-from db_ops.control.deploy import daemon_start_script
+from dbabrain.control.deploy import daemon_start_script
 
 SECRET = "pass phrase with 'quotes' and $dollars"
 
@@ -30,19 +30,19 @@ def test_the_deploy_script_exports_the_key_and_never_passes_it_as_an_argument(tm
     (fake_bin / "docker").write_text(
         "#!/usr/bin/env bash\n"
         f'printf "%s\\n" "$*" > {seen}.argv\n'
-        f'printf "%s" "$DB_OPS_SECRET_KEY" > {seen}.env\n', encoding="utf-8")
+        f'printf "%s" "$DBABRAIN_SECRET_KEY" > {seen}.env\n', encoding="utf-8")
     (fake_bin / "docker").chmod(0o755)
     remote = tmp_path / "remote"
     remote.mkdir()
 
-    script = daemon_start_script(remote_dir=str(remote), node_role="worker", container="db_ops_daemon",
+    script = daemon_start_script(remote_dir=str(remote), node_role="worker", container="dbabrain_daemon",
                                  secret_key=SECRET)
     subprocess.run(["bash", "-s"], input=script, text=True, check=True,
                    env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"})
 
     argv = (tmp_path / "seen.argv").read_text(encoding="utf-8")
     assert (tmp_path / "seen.env").read_text(encoding="utf-8") == SECRET
-    assert "-e DB_OPS_SECRET_KEY " in argv and "daemon" in argv
+    assert "-e DBABRAIN_SECRET_KEY " in argv and "daemon" in argv
     assert "--key" not in argv and "pass phrase" not in argv
     assert "pass phrase" not in script, "only an encoded form travels, and only on stdin"
 
@@ -51,7 +51,7 @@ def test_the_deploy_script_exports_the_key_and_never_passes_it_as_an_argument(tm
 # F11.2 - the SQL login's password is never sqlcmd's argument
 # --------------------------------------------------------------------------- #
 def test_a_local_sqlcmd_gets_its_password_in_the_environment(monkeypatch):
-    from db_ops.common import remote_exec, sqlcmd_run
+    from dbabrain.common import remote_exec, sqlcmd_run
 
     seen = {}
 
@@ -76,7 +76,7 @@ def test_a_local_sqlcmd_gets_its_password_in_the_environment(monkeypatch):
 
 
 def test_a_windows_sqlcmd_gets_its_password_from_the_script_body():
-    from db_ops.common import sqlcmd_run
+    from dbabrain.common import sqlcmd_run
 
     script = sqlcmd_run.winrm_script({"sql": "SELECT 1", "instance": "localhost", "username": "sa",
                                       "password": "it's"})
@@ -90,7 +90,7 @@ def test_a_windows_sqlcmd_gets_its_password_from_the_script_body():
 # --------------------------------------------------------------------------- #
 from pathlib import Path  # noqa: E402 - grouped with the scripts it reads
 
-_ROOT = Path(__file__).resolve().parents[1] / "db_ops" / "common"
+_ROOT = Path(__file__).resolve().parents[1] / "dbabrain" / "common"
 _SCRIPTS = [_ROOT / "backup_scripts" / "sqlserver" / "mssql_backup_database.sh",
             _ROOT / "restore_scripts" / "sqlserver" / "mssql_restore.sh",
             _ROOT / "backup_scripts" / "sqlserver" / "mssql_backup_database.ps1"]
@@ -131,7 +131,7 @@ def test_the_shell_scripts_still_parse(script):
 # --------------------------------------------------------------------------- #
 @pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="runs the generated POSIX shell")
 def test_a_script_for_a_node_reaches_it_on_the_hops_stdin(tmp_path, monkeypatch):
-    from db_ops.sre import service
+    from dbabrain.sre import service
 
     config = SimpleNamespace(guest_user=lambda: "tuser", bastion_host=lambda: "10.0.0.1",
                              ssh_identity_file=lambda: "")
@@ -159,8 +159,8 @@ def test_user_password_show_bypasses_the_runtime_log(tmp_path, monkeypatch, caps
     import io
     import sys
 
-    from db_ops.logging_ops.runtime_stdout import patch_stdout
-    from db_ops.webhost import cli as webhost_cli
+    from dbabrain.logging_ops.runtime_stdout import patch_stdout
+    from dbabrain.webhost import cli as webhost_cli
 
     log = tmp_path / "webhost_runtime.log"
     real = io.StringIO()
@@ -169,7 +169,7 @@ def test_user_password_show_bypasses_the_runtime_log(tmp_path, monkeypatch, caps
     patch_stdout(log, app_name="webhost")
     try:
         monkeypatch.setattr(webhost_cli, "_stores", lambda args: (None, SimpleNamespace(get_user=lambda name: {}), None, None))
-        monkeypatch.setattr("db_ops.db.web_auth_store.recall_password", lambda name, key=None: "Hunter2!x")
+        monkeypatch.setattr("dbabrain.db.web_auth_store.recall_password", lambda name, key=None: "Hunter2!x")
         code = webhost_cli._handle_user_password_show(SimpleNamespace(username="thanh"), None, None)
         sys.stdout.flush()
     finally:

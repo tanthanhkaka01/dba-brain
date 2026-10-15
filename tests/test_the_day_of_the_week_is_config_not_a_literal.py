@@ -19,9 +19,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.common import config_admin
-from db_ops.lib import time_window
-from db_ops.lib.time_window import (
+from dbabrain.common import config_admin
+from dbabrain.lib import time_window
+from dbabrain.lib.time_window import (
     INT_FIELDS, NEW_FIELDS, TimeWindow, WEEKDAYS_FIELD,
     parse_time_window_config, time_window_closed_reason)
 
@@ -42,7 +42,7 @@ def test_a_window_that_says_nothing_about_weekdays_runs_on_any_day():
 
 
 def test_sunday_is_seven_because_that_is_what_the_rest_of_the_estate_calls_it():
-    """ISO, not cron. `isoweekday()`, `date +%u` and `DB_OPS_WEEKDAY` all say 7 for Sunday, and a
+    """ISO, not cron. `isoweekday()`, `date +%u` and `DBABRAIN_WEEKDAY` all say 7 for Sunday, and a
     second numbering would put back the disagreement this field was added to remove."""
     weekly = window(weekdays=[7], from_hour=1, to_hour=5)
 

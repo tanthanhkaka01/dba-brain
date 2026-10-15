@@ -17,7 +17,7 @@ fields with ` | ` and their list members with `,`, and the shared message parser
 the next comma. Every bug this file covers was found rendering the real 192.0.2.248 rows.
 """
 
-from db_ops.reports.server_report import build_access
+from dbabrain.reports.server_report import build_access
 
 
 def _login(name, message, value="SQL_LOGIN"):

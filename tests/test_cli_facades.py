@@ -1,4 +1,4 @@
-"""Every app (and the shared common layer) exposes a ``python -m db_ops.<app>.cli``
+"""Every app (and the shared common layer) exposes a ``python -m dbabrain.<app>.cli``
 entrypoint. These tests pin the facade contracts: they dispatch to the real
 implementations and never duplicate logic."""
 
@@ -8,7 +8,7 @@ from conftest import patch_sql_runner
 
 
 def test_common_cli_usage_and_delegation():
-    from db_ops.common import cli
+    from dbabrain.common import cli
 
     # No args -> usage + exit 2 (not a crash).
     assert cli.main([]) == 2
@@ -22,14 +22,14 @@ def test_common_cli_usage_and_delegation():
 
 
 def test_common_cli_list_targets_prints(capsys):
-    from db_ops.common import cli
+    from dbabrain.common import cli
 
     assert cli.main(["list-targets"]) == 0
     assert capsys.readouterr().out.strip()
 
 
 def test_jobs_cli_dispatches_daemon_and_status(monkeypatch):
-    from db_ops.jobs import cli, daemon, status
+    from dbabrain.jobs import cli, daemon, status
 
     calls = {}
     monkeypatch.setattr(daemon, "main", lambda argv: calls.update(daemon=argv) or 0)
@@ -44,7 +44,7 @@ def test_jobs_cli_dispatches_daemon_and_status(monkeypatch):
 
 
 def test_sql_tasks_cli_delegates_to_runner(monkeypatch):
-    from db_ops.sql_tasks import cli, runner
+    from dbabrain.sql_tasks import cli, runner
 
     seen = {}
     patch_sql_runner(monkeypatch, "main", lambda argv: seen.update(argv=argv) or 0)

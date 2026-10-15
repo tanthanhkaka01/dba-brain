@@ -1,6 +1,6 @@
 # 15. Transport (the one client of `common.cli` and `db.cli`)
 
-`db_ops/transport/` is **the one place that starts `common.cli` or `db.cli`** and hands back what it
+`dbabrain/transport/` is **the one place that starts `common.cli` or `db.cli`** and hands back what it
 answered. It decides nothing and performs no operation of its own: the command is built in `lib`,
 the answer is read in `lib`, and `transport` runs the process between the two.
 
@@ -20,7 +20,7 @@ Until 0.24.0 the two clients every app uses to reach another component - `lib/co
 the process themselves. `lib` is the layer everything imports and it holds values and rules; a
 module there that starts processes is an operation hiding in it (R07). The operator's direction:
 *`lib` does not need to run a CLI - the app runs it, and imports `lib`.* And, on the same day:
-*a `db_ops` CLI is not something to run casually - what components share goes into `lib` or
+*a `dbabrain` CLI is not something to run casually - what components share goes into `lib` or
 `common`* (R41, R42). So `transport` starts exactly two things, the two CLIs every component is
 meant to reach: `common.cli` (operations) and `db.cli` (the runtime store's commands).
 
@@ -40,7 +40,7 @@ only `lib`, and nothing below it may import it.
 ## Where it sits
 
 ```
-          python -m db_ops.common.cli | db_ops.db.cli   (JSON on stdin, envelope on stdout)
+          python -m dbabrain.common.cli | dbabrain.db.cli   (JSON on stdin, envelope on stdout)
                                    ▲
                                    │ starts
   app ──import──▶ transport ──import──▶ lib ◀──import── common

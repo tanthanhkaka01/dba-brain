@@ -4,7 +4,7 @@ The mechanism: `PRIVATE_SUBPATHS` keeps one *file* out of the export while the p
 ships. `PRIVATE_PATHS` cannot express this — it matches a top-level name, which is right for
 `audits/` or `data/` and cannot say "this file, three levels down".
 
-It existed for `db_ops/sre/data_folder/`, which held the captured record of one real lab install —
+It existed for `dbabrain/sre/data_folder/`, which held the captured record of one real lab install —
 three lab hosts, a workstation name, a Windows account, an SSH key path — inside a shipped package,
 because the script that read those files lived there too. Withholding the folder took the script
 out with it; withholding the two files by name kept the code shipping.
@@ -22,24 +22,24 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from db_ops.lib.distribution import PRIVATE_SUBPATHS, is_private_subpath
+from dbabrain.lib.distribution import PRIVATE_SUBPATHS, is_private_subpath
 
 REPO = Path(__file__).resolve().parent.parent
-DATA_FOLDER = REPO / "db_ops" / "sre" / "data_folder"
+DATA_FOLDER = REPO / "dbabrain" / "sre" / "data_folder"
 
 
 def test_the_mechanism_still_withholds_a_named_file():
     """Empty today; it has to work the day somebody needs it."""
-    assert is_private_subpath("db_ops/anything/secret.json") is None
+    assert is_private_subpath("dbabrain/anything/secret.json") is None
     reason = "invented for this test"
     try:
-        PRIVATE_SUBPATHS["db_ops/anything/secret.json"] = reason
-        assert is_private_subpath("db_ops/anything/secret.json") == reason
-        assert is_private_subpath(r"db_ops\anything\secret.json") == reason, (
+        PRIVATE_SUBPATHS["dbabrain/anything/secret.json"] = reason
+        assert is_private_subpath("dbabrain/anything/secret.json") == reason
+        assert is_private_subpath(r"dbabrain\anything\secret.json") == reason, (
             "the export walks Windows paths; a backslash must match too")
-        assert is_private_subpath("db_ops/anything/other.json") is None
+        assert is_private_subpath("dbabrain/anything/other.json") is None
     finally:
-        PRIVATE_SUBPATHS.pop("db_ops/anything/secret.json", None)
+        PRIVATE_SUBPATHS.pop("dbabrain/anything/secret.json", None)
 
 
 def test_every_withheld_subpath_states_why_and_exists():

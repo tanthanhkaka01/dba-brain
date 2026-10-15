@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import db_catalog, job_control
+from dbabrain.common import db_catalog, job_control
 
 
 def _jobs(*rows):

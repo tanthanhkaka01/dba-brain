@@ -19,7 +19,7 @@ import json
 
 import pytest
 
-from db_ops.backup_restore.cli import main, parse_args
+from dbabrain.backup_restore.cli import main, parse_args
 
 
 # --------------------------------------------------------------------------- #
@@ -86,7 +86,7 @@ def test_restore_workflow_runs_a_script_driven_entry_on_demand(tmp_path, monkeyp
     entry and name a CLI command instead, so no PostgreSQL, Oracle or container SQL Server drill
     could be started from the bot (1.35, 2026-09-24). It runs it now, by the scheduler's runner,
     forced and whether or not the entry is active, and prints the line the bot looks for."""
-    import db_ops.backup_restore.workflow as workflow
+    import dbabrain.backup_restore.workflow as workflow
 
     config = _config_with_script_restore(tmp_path)
     seen = {}
@@ -105,7 +105,7 @@ def test_restore_workflow_runs_a_script_driven_entry_on_demand(tmp_path, monkeyp
 
 
 def test_a_script_driven_entry_that_fails_on_demand_exits_non_zero(tmp_path, monkeypatch, capsys):
-    import db_ops.backup_restore.workflow as workflow
+    import dbabrain.backup_restore.workflow as workflow
 
     config = _config_with_script_restore(tmp_path)
     monkeypatch.setattr(workflow, "run_scheduled_restores",

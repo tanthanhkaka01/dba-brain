@@ -17,7 +17,7 @@ says what that timestamp means, and says nothing about what `from_hour: 1` means
 
 from __future__ import annotations
 
-from db_ops.common.self_status import _timezone_line, collect, render
+from dbabrain.common.self_status import _timezone_line, collect, render
 
 
 def test_the_line_carries_the_zone_the_offset_and_the_abbreviation() -> None:

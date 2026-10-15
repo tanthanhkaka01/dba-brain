@@ -17,10 +17,10 @@ import sqlite3
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.db import cli as db_cli
-from db_ops.db.declaration import describe_store
-from db_ops.db.queue_message import queue_message
+from dbabrain.db import DbaBrainStore
+from dbabrain.db import cli as db_cli
+from dbabrain.db.declaration import describe_store
+from dbabrain.db.queue_message import queue_message
 
 #: What a row says about its message - everything but its own id and when it was written.
 _COLUMNS = ("tlgchat_id", "message_text", "reply_message_id", "note", "source_type", "source_id",
@@ -32,11 +32,11 @@ _REQUEST = {"chat_id": "-1001234567890", "text": "RESTORE FAILED on LAB", "level
 
 
 @pytest.fixture
-def store(tmp_path) -> DbOpsStore:
-    return DbOpsStore(tmp_path / "store.sqlite")
+def store(tmp_path) -> DbaBrainStore:
+    return DbaBrainStore(tmp_path / "store.sqlite")
 
 
-def _row(store: DbOpsStore, send_tlgmsg_id: int) -> dict:
+def _row(store: DbaBrainStore, send_tlgmsg_id: int) -> dict:
     with sqlite3.connect(store.target.sqlite_path) as connection:
         connection.row_factory = sqlite3.Row
         row = connection.execute("SELECT * FROM telegram_send_messages WHERE send_tlgmsg_id = ?",

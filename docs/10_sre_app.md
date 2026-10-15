@@ -1,10 +1,10 @@
-# DB Ops SRE
+# dbabrain SRE
 
 ## Overview
 
-`db_ops.sre` orchestrates the full lifecycle of a VMware Workstation lab: clone and provision VMs, deploy database clusters via Ansible, validate cluster health, and run ad-hoc commands through a bastion host.
+`dbabrain.sre` orchestrates the full lifecycle of a VMware Workstation lab: clone and provision VMs, deploy database clusters via Ansible, validate cluster health, and run ad-hoc commands through a bastion host.
 
-**Working directory for all commands:** the repository root (`db_ops`)
+**Working directory for all commands:** the repository root (`dbabrain`)
 
 ---
 
@@ -23,7 +23,7 @@ value in the store once and the config file stops being a place secrets live:
 
 ```bash
 # add LAB_SA to secrets/secret_text.json, then
-db-ops encrypt-secret --key-base64 <your passphrase, base64>
+dbabrain encrypt-secret --key-base64 <your passphrase, base64>
 ```
 
 The literal stays supported because it is genuinely defensible here: these values configure a
@@ -42,7 +42,7 @@ name of where the password is kept.
 
 ## Supported Lab Database Versions
 
-This SRE lab is opinionated: the database version, OS template, topology, ports, and verification target are part of the runbook. The active values below come from `data/sre_config.json`, Ansible `group_vars`, and the inventory files under `db_ops/sre/inventory`.
+This SRE lab is opinionated: the database version, OS template, topology, ports, and verification target are part of the runbook. The active values below come from `data/sre_config.json`, Ansible `group_vars`, and the inventory files under `dbabrain/sre/inventory`.
 
 | Stack | Version / package source | Nodes | Topology | Main ports | Verification |
 |---|---|---|---|---|---|
@@ -89,8 +89,8 @@ The playbook installs MySQL from the Oracle APT repo, deploys `/etc/mysql/conf.d
 ### Step 1 — Clone VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 01-clone-vms -- -Group shared
-python -m db_ops.sre.cli run-powershell 01-clone-vms -- -Group mysql
+python -m dbabrain.sre.cli run-powershell 01-clone-vms -- -Group shared
+python -m dbabrain.sre.cli run-powershell 01-clone-vms -- -Group mysql
 ```
 
 Clones bastion-01 (shared) and mysql-01/02/03 from the template snapshot. VMs are off after this step.
@@ -100,8 +100,8 @@ Clones bastion-01 (shared) and mysql-01/02/03 from the template snapshot. VMs ar
 ### Step 2 — Set CPU and Memory
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 02-set-vm-resources -- -Group shared -CpuCount 2 -MemoryGB 2
-python -m db_ops.sre.cli run-powershell 02-set-vm-resources -- -Group mysql  -CpuCount 2 -MemoryGB 4
+python -m dbabrain.sre.cli run-powershell 02-set-vm-resources -- -Group shared -CpuCount 2 -MemoryGB 2
+python -m dbabrain.sre.cli run-powershell 02-set-vm-resources -- -Group mysql  -CpuCount 2 -MemoryGB 4
 ```
 
 VMs must be off. Adjust CPU/RAM to match your host capacity.
@@ -111,8 +111,8 @@ VMs must be off. Adjust CPU/RAM to match your host capacity.
 ### Step 3 — Start VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group shared
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group mysql
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -Group shared
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -Group mysql
 ```
 
 ---
@@ -120,8 +120,8 @@ python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group mysql
 ### Step 4 — Fix Guest Identity
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group shared
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group mysql
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -Group shared
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -Group mysql
 ```
 
 Sets the correct hostname, regenerates machine-id, and assigns the static IP defined in `sre_config.json → sre.inventory`. VMs reboot automatically after this step.
@@ -131,7 +131,7 @@ Sets the correct hostname, regenerates machine-id, and assigns the static IP def
 ### Step 5 — Deploy Windows Host SSH Key to Bastion
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 08-deploy-host-ssh-key -- -Group shared
+python -m dbabrain.sre.cli run-powershell 08-deploy-host-ssh-key -- -Group shared
 ```
 
 Pushes the Windows host public key into `~/.ssh/authorized_keys` on **bastion-01 only** (and other shared VMs like mon-01 if present). MySQL nodes are **not** targeted here.
@@ -150,7 +150,7 @@ Every SSH call is a key login with no password prompt, so the Windows host needs
 ### Step 6a — Sync Repo and Deploy Bastion Key (VMware Tools)
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup mysql
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup mysql
 ```
 
 Runs via VMware Tools (no SSH from host required yet). Does three things:
@@ -163,7 +163,7 @@ Runs via VMware Tools (no SSH from host required yet). Does three things:
 ### Step 6b — Install Ansible on Bastion
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- mysql
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- mysql
 ```
 
 SSHes from Windows host to bastion-01 and runs `automation/bash/bootstrap-bastion-ansible.sh mysql`. This script:
@@ -183,7 +183,7 @@ Requires: Step 5 (host key on bastion) and Step 6a (repo on bastion, bastion key
 ### Step 7 — Deploy MySQL InnoDB Cluster
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/mysql-cluster.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/mysql-cluster.yml `
     -i inventory/mysql/hosts.yml
 ```
 
@@ -194,8 +194,8 @@ SSHes to bastion-01 and runs `ansible-playbook` from `/opt/db-sre/repo`. Require
 ### Step 8 — Verify
 
 ```powershell
-python -m db_ops.sre.cli check-shared-vms --vm-name bastion-01
-python -m db_ops.sre.cli check-mysql-cluster
+python -m dbabrain.sre.cli check-shared-vms --vm-name bastion-01
+python -m dbabrain.sre.cli check-mysql-cluster
 ```
 
 `check-shared-vms` verifies hostname, IP, and systemd state via SSH.
@@ -265,25 +265,25 @@ End-to-end sequence to bring up the PostgreSQL HA cluster (pg-01/02/03). bastion
 ### Step 1 — Clone VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 01-clone-vms -- -Group postgresql
+python -m dbabrain.sre.cli run-powershell 01-clone-vms -- -Group postgresql
 ```
 
 ### Step 2 — Set CPU and Memory
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 02-set-vm-resources -- -Group postgresql -CpuCount 2 -MemoryGB 4
+python -m dbabrain.sre.cli run-powershell 02-set-vm-resources -- -Group postgresql -CpuCount 2 -MemoryGB 4
 ```
 
 ### Step 3 — Start VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group postgresql
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -Group postgresql
 ```
 
 ### Step 4 — Fix Guest Identity
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group postgresql
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -Group postgresql
 ```
 
 Assigns static IPs (198.51.100.21–23), sets hostnames pg-01/02/03, reboots.
@@ -291,7 +291,7 @@ Assigns static IPs (198.51.100.21–23), sets hostnames pg-01/02/03, reboots.
 ### Step 5 — Sync Repo and Deploy Bastion Key
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup postgresql
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup postgresql
 ```
 
 Re-syncs the repo to bastion-01 and deploys bastion's ed25519 public key to pg-01/02/03.
@@ -299,7 +299,7 @@ Re-syncs the repo to bastion-01 and deploys bastion's ed25519 public key to pg-0
 ### Step 6 — Bootstrap Ansible on Bastion
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- postgresql
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- postgresql
 ```
 
 Installs Ansible (if not present), writes SSH config for pg-01/02/03, seeds known_hosts, configures NOPASSWD sudo on each PostgreSQL node, and validates `ansible -m ping`.
@@ -307,14 +307,14 @@ Installs Ansible (if not present), writes SSH config for pg-01/02/03, seeds know
 ### Step 7 — Deploy PostgreSQL HA
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/postgresql-ha.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/postgresql-ha.yml `
     -i inventory/postgresql/hosts.yml
 ```
 
 ### Step 8 — Verify
 
 ```powershell
-python -m db_ops.sre.cli check-postgresql-ha
+python -m dbabrain.sre.cli check-postgresql-ha
 ```
 
 Requires: 1 primary (not in recovery) + 2 streaming replicas.
@@ -328,14 +328,14 @@ Useful manual checks through the CLI:
 
 ```powershell
 # Primary should return f
-python -m db_ops.sre.cli ssh 198.51.100.21 -- "sudo -u postgres psql -tAc \"SELECT pg_is_in_recovery();\""
+python -m dbabrain.sre.cli ssh 198.51.100.21 -- "sudo -u postgres psql -tAc \"SELECT pg_is_in_recovery();\""
 
 # Primary should show both replicas as streaming
-python -m db_ops.sre.cli ssh 198.51.100.21 -- "sudo -u postgres psql -x -c \"SELECT application_name, client_addr, state, sync_state, replay_lag FROM pg_stat_replication;\""
+python -m dbabrain.sre.cli ssh 198.51.100.21 -- "sudo -u postgres psql -x -c \"SELECT application_name, client_addr, state, sync_state, replay_lag FROM pg_stat_replication;\""
 
 # Each replica should return t
-python -m db_ops.sre.cli ssh 198.51.100.22 -- "sudo -u postgres psql -tAc \"SELECT pg_is_in_recovery();\""
-python -m db_ops.sre.cli ssh 198.51.100.23 -- "sudo -u postgres psql -tAc \"SELECT pg_is_in_recovery();\""
+python -m dbabrain.sre.cli ssh 198.51.100.22 -- "sudo -u postgres psql -tAc \"SELECT pg_is_in_recovery();\""
+python -m dbabrain.sre.cli ssh 198.51.100.23 -- "sudo -u postgres psql -tAc \"SELECT pg_is_in_recovery();\""
 ```
 
 ---
@@ -365,13 +365,13 @@ This is a Linux SQL Server Always On lab without Windows Server Failover Cluster
 ### Step 1 — Clone VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 01-clone-vms -- -Group sqlserver
+python -m dbabrain.sre.cli run-powershell 01-clone-vms -- -Group sqlserver
 ```
 
 ### Step 2 — Set CPU and Memory
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 02-set-vm-resources -- -Group sqlserver -CpuCount 2 -MemoryGB 4
+python -m dbabrain.sre.cli run-powershell 02-set-vm-resources -- -Group sqlserver -CpuCount 2 -MemoryGB 4
 ```
 
 SQL Server requires at least 2 GB RAM per node. 4 GB is recommended.
@@ -379,13 +379,13 @@ SQL Server requires at least 2 GB RAM per node. 4 GB is recommended.
 ### Step 3 — Start VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group sqlserver
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -Group sqlserver
 ```
 
 ### Step 4 — Fix Guest Identity
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group sqlserver
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -Group sqlserver
 ```
 
 Assigns static IPs (198.51.100.31–33), sets hostnames mssql-01/02/03, reboots.
@@ -393,7 +393,7 @@ Assigns static IPs (198.51.100.31–33), sets hostnames mssql-01/02/03, reboots.
 ### Step 5 — Sync Repo and Deploy Bastion Key
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup sqlserver
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup sqlserver
 ```
 
 Re-syncs the repo to bastion-01 and deploys bastion's ed25519 public key to mssql-01/02/03.
@@ -401,7 +401,7 @@ Re-syncs the repo to bastion-01 and deploys bastion's ed25519 public key to mssq
 ### Step 6 — Bootstrap Ansible on Bastion
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- sqlserver
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- sqlserver
 ```
 
 Installs Ansible, writes SSH config for mssql-01/02/03, seeds known_hosts, configures NOPASSWD sudo on each SQL Server node, and validates `ansible -m ping`.
@@ -409,7 +409,7 @@ Installs Ansible, writes SSH config for mssql-01/02/03, seeds known_hosts, confi
 ### Step 7 — Deploy SQL Server 2025 AG
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/sqlserver-ag.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/sqlserver-ag.yml `
     -i inventory/sqlserver/hosts.yml
 ```
 
@@ -421,7 +421,7 @@ The playbook runs three plays in sequence:
 ### Step 8 — Verify
 
 ```powershell
-python -m db_ops.sre.cli ssh 198.51.100.31 -- "SQLCMDPASSWORD='ChangeMe_SA_123!' /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U SA -Q \"SELECT ag.name, ar.replica_server_name, ars.role_desc FROM sys.availability_groups ag JOIN sys.availability_replicas ar ON ag.group_id=ar.group_id LEFT JOIN sys.dm_hadr_availability_replica_states ars ON ar.replica_id=ars.replica_id;\""
+python -m dbabrain.sre.cli ssh 198.51.100.31 -- "SQLCMDPASSWORD='ChangeMe_SA_123!' /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U SA -Q \"SELECT ag.name, ar.replica_server_name, ars.role_desc FROM sys.availability_groups ag JOIN sys.availability_replicas ar ON ag.group_id=ar.group_id LEFT JOIN sys.dm_hadr_availability_replica_states ars ON ar.replica_id=ars.replica_id;\""
 ```
 
 Expected output: mssql-01 = PRIMARY, mssql-02 = SECONDARY, mssql-03 = SECONDARY.
@@ -439,7 +439,7 @@ End-to-end sequence to bring up a 2-node Oracle 23ai RAC on Oracle Linux R9U6 (r
 ### Step 1 — Clone VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 01-clone-vms -- -Group oracle_rac
+python -m dbabrain.sre.cli run-powershell 01-clone-vms -- -Group oracle_rac
 ```
 
 Clones rac01 and rac02 from the Oracle Linux template snapshot.
@@ -447,7 +447,7 @@ Clones rac01 and rac02 from the Oracle Linux template snapshot.
 ### Step 2 — Set CPU and Memory
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 02-set-vm-resources -- -Group oracle_rac -CpuCount 4 -MemoryGB 12
+python -m dbabrain.sre.cli run-powershell 02-set-vm-resources -- -Group oracle_rac -CpuCount 4 -MemoryGB 12
 ```
 
 Oracle 26ai RAC requires significant resources: 12 GB SGA + 4 GB PGA per node. 4 vCPU / 12 GB RAM per node is the recommended minimum for a 32 GB lab host (26 GB total for both nodes).
@@ -455,13 +455,13 @@ Oracle 26ai RAC requires significant resources: 12 GB SGA + 4 GB PGA per node. 4
 ### Step 3 — Start VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group oracle_rac
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -Group oracle_rac
 ```
 
 ### Step 4 — Fix Guest Identity
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group oracle_rac
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -Group oracle_rac
 ```
 
 Assigns static IPs (198.51.100.41–42), sets hostnames rac01/rac02, reboots.
@@ -471,8 +471,8 @@ Assigns static IPs (198.51.100.41–42), sets hostnames rac01/rac02, reboots.
 Oracle ASM requires multi-writer shared VMDKs that must be attached while VMs are off.
 
 ```powershell
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group oracle_rac
-python -m db_ops.sre.cli run-powershell add-oracle-shared-disks
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group oracle_rac
+python -m dbabrain.sre.cli run-powershell add-oracle-shared-disks
 ```
 
 Creates and attaches 5 shared VMDKs in `D:\VMs\oracle_rac_shared\`:
@@ -488,7 +488,7 @@ The disks are attached to SCSI controller 1 as `independent-persistent` (not sna
 ### Step 6 — Start VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group oracle_rac
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -Group oracle_rac
 ```
 
 Verify the 5 shared disks appear in the guest as `/dev/sdb` through `/dev/sdf` before running Ansible.
@@ -496,7 +496,7 @@ Verify the 5 shared disks appear in the guest as `/dev/sdb` through `/dev/sdf` b
 ### Step 7 — Sync Repo and Deploy Bastion Key
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup oracle_rac
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup oracle_rac
 ```
 
 Re-syncs the repo to bastion-01 and deploys bastion's ed25519 public key to rac01/rac02.
@@ -504,7 +504,7 @@ Re-syncs the repo to bastion-01 and deploys bastion's ed25519 public key to rac0
 ### Step 8 — Bootstrap Ansible on Bastion
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_rac
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_rac
 ```
 
 Installs Ansible, writes SSH config for rac01/rac02, seeds known_hosts, configures NOPASSWD sudo on each RAC node, and validates `ansible -m ping`. The next hint printed by the script will reference `oracle-rac-os-prep.yml` as the next playbook.
@@ -512,7 +512,7 @@ Installs Ansible, writes SSH config for rac01/rac02, seeds known_hosts, configur
 ### Step 9 — OS Preparation
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-os-prep.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-os-prep.yml `
     -i inventory/oracle/rac/hosts.yml
 ```
 
@@ -535,7 +535,7 @@ Before running this step, set the installer paths in `sre_config.json`:
 Then run:
 
 ```powershell
-python -m db_ops.sre.cli run-powershell stage-oracle-installer
+python -m dbabrain.sre.cli run-powershell stage-oracle-installer
 ```
 
 Transfer path: **Windows host → bastion-01 → rac01, rac02**
@@ -548,7 +548,7 @@ Transfer path: **Windows host → bastion-01 → rac01, rac02**
 ### Step 10b — Install Grid Infrastructure
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-grid.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-grid.yml `
     -i inventory/oracle/rac/hosts.yml
 ```
 
@@ -559,7 +559,7 @@ This play takes 20–40 minutes depending on storage speed.
 ### Step 10c — Install Oracle Database
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-db.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-db.yml `
     -i inventory/oracle/rac/hosts.yml
 ```
 
@@ -569,10 +569,10 @@ Installs the Oracle DB Home, creates the RAC database (`pridb`) via `dbca` in si
 
 ```powershell
 # Check ASM and CRS from rac01
-python -m db_ops.sre.cli ssh 198.51.100.41 -- "sudo -u grid /u01/app/23c/grid/bin/crsctl stat res -t"
+python -m dbabrain.sre.cli ssh 198.51.100.41 -- "sudo -u grid /u01/app/23c/grid/bin/crsctl stat res -t"
 
 # Check RAC instances
-python -m db_ops.sre.cli ssh 198.51.100.41 -- "sudo -u oracle /u01/app/product/db23c/bin/srvctl status database -d pridb"
+python -m dbabrain.sre.cli ssh 198.51.100.41 -- "sudo -u oracle /u01/app/product/db23c/bin/srvctl status database -d pridb"
 ```
 
 Expected: GI stack online, pridb running on both rac01 and rac02.
@@ -590,7 +590,7 @@ End-to-end sequence to bring up a 2-node Oracle 23ai DataGuard configuration (or
 ### Step 1 — Clone VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 01-clone-vms -- -Group oracle_dg
+python -m dbabrain.sre.cli run-powershell 01-clone-vms -- -Group oracle_dg
 ```
 
 Clones orapri and orastb from the Oracle Linux template snapshot.
@@ -598,7 +598,7 @@ Clones orapri and orastb from the Oracle Linux template snapshot.
 ### Step 2 — Set CPU and Memory
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 02-set-vm-resources -- -Group oracle_dg -CpuCount 2 -MemoryGB 8
+python -m dbabrain.sre.cli run-powershell 02-set-vm-resources -- -Group oracle_dg -CpuCount 2 -MemoryGB 8
 ```
 
 DG is lighter than RAC: SGA 4 GB + PGA 1 GB per node. 2 vCPU / 8 GB RAM is sufficient for a lab.
@@ -606,13 +606,13 @@ DG is lighter than RAC: SGA 4 GB + PGA 1 GB per node. 2 vCPU / 8 GB RAM is suffi
 ### Step 3 — Start VMs
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group oracle_dg
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -Group oracle_dg
 ```
 
 ### Step 4 — Fix Guest Identity
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group oracle_dg
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -Group oracle_dg
 ```
 
 Assigns static IPs (198.51.100.51 → orapri, 198.51.100.52 → orastb), sets hostnames, reboots.
@@ -620,7 +620,7 @@ Assigns static IPs (198.51.100.51 → orapri, 198.51.100.52 → orastb), sets ho
 ### Step 5 — Sync Repo and Deploy Bastion Key
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup oracle_dg
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup oracle_dg
 ```
 
 Re-syncs the repo to bastion-01 and deploys bastion's ed25519 public key to orapri/orastb.
@@ -628,7 +628,7 @@ Re-syncs the repo to bastion-01 and deploys bastion's ed25519 public key to orap
 ### Step 6 — Bootstrap Ansible on Bastion
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_dg
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_dg
 ```
 
 Installs Ansible (if not present), writes SSH config for orapri/orastb, seeds known_hosts, configures NOPASSWD sudo, and validates `ansible -m ping`.
@@ -636,7 +636,7 @@ Installs Ansible (if not present), writes SSH config for orapri/orastb, seeds kn
 ### Step 7 — OS Preparation
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-os-prep.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-os-prep.yml `
     -i inventory/oracle/dataguard/hosts.yml
 ```
 
@@ -657,7 +657,7 @@ Set the DB installer path in `sre_config.json` if not done already:
 Then run:
 
 ```powershell
-python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_dg
+python -m dbabrain.sre.cli run-powershell stage-oracle-installer -- -Group oracle_dg
 ```
 
 Transfer path: **Windows host → bastion-01 → orapri, orastb**
@@ -667,7 +667,7 @@ Only the DB Home ZIP is transferred. Ownership is set to `oracle:oinstall`. The 
 ### Step 9 — Install Oracle DB and Create Primary Database
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-primary.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-primary.yml `
     -i inventory/oracle/dataguard/hosts.yml
 ```
 
@@ -681,7 +681,7 @@ This play takes 20–40 minutes. An idempotency marker (`.db-sre-dg-primary-read
 ### Step 10 — Create Standby and Configure DG Broker
 
 ```powershell
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-standby.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-standby.yml `
     -i inventory/oracle/dataguard/hosts.yml
 ```
 
@@ -699,10 +699,10 @@ An idempotency marker (`.db-sre-dg-ready`) is written to skip re-configuration o
 
 ```powershell
 # Check DG broker status from primary
-python -m db_ops.sre.cli ssh 198.51.100.51 -- "sudo -u oracle ORACLE_HOME=/u01/app/product/db23c /u01/app/product/db23c/bin/dgmgrl / 'show configuration'"
+python -m dbabrain.sre.cli ssh 198.51.100.51 -- "sudo -u oracle ORACLE_HOME=/u01/app/product/db23c /u01/app/product/db23c/bin/dgmgrl / 'show configuration'"
 
 # Check apply lag on standby
-python -m db_ops.sre.cli ssh 198.51.100.52 -- "sudo -u oracle ORACLE_HOME=/u01/app/product/db23c /u01/app/product/db23c/bin/sqlplus -S / as sysdba <<'EOF'
+python -m dbabrain.sre.cli ssh 198.51.100.52 -- "sudo -u oracle ORACLE_HOME=/u01/app/product/db23c /u01/app/product/db23c/bin/sqlplus -S / as sysdba <<'EOF'
 SELECT DEST_ID, STATUS, TARGET, ARCHIVER, SCHEDULE, DESTINATION FROM V\$ARCHIVE_DEST WHERE TARGET='STANDBY';
 EOF"
 ```
@@ -713,10 +713,10 @@ Expected: `show configuration` returns `SUCCESS`, configuration protection mode 
 
 ## setup-sequence — Run a complete cluster setup with one command
 
-`setup-sequence` calls individual SRE sub-commands as child Python processes in sequence. It never invokes PowerShell or SSH directly — each step is a subprocess of `python -m db_ops.sre.cli`.
+`setup-sequence` calls individual SRE sub-commands as child Python processes in sequence. It never invokes PowerShell or SSH directly — each step is a subprocess of `python -m dbabrain.sre.cli`.
 
 ```powershell
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence <db_type> [options]
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence <db_type> [options]
 ```
 
 ### Supported db_type values
@@ -742,20 +742,20 @@ python -m db_ops.sre.cli --config data/sre_config.json setup-sequence <db_type> 
 
 ```powershell
 # Provision a full cluster from scratch
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence mssql
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence mysql
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence postgresql
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence oracle-rac
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence oracle-dg
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence mssql
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence mysql
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence postgresql
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence oracle-rac
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence oracle-dg
 
 # Preview all commands without executing
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence mssql --dry-run
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence mssql --dry-run
 
 # Resume from step 5 after a previous failure
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence oracle-rac --from-step 5
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence oracle-rac --from-step 5
 
 # Continue past failures instead of aborting
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence oracle-dg --continue-on-error
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence oracle-dg --continue-on-error
 ```
 
 ### Steps per db_type
@@ -875,11 +875,11 @@ Use this flow when the DB VMs already exist and are reachable on the network but
 
 ### SQL Server 2025 AG — Pre-Existing VMs
 
-**Orchestrator:** `python db_ops/sre/data_folder/deploy_sqlserver_ag.py`
+**Orchestrator:** `python dbabrain/sre/data_folder/deploy_sqlserver_ag.py`
 
 #### Input JSON
 
-Create `db_ops/sre/data_folder/<date>_install_sql_server.json`:
+Create `dbabrain/sre/data_folder/<date>_install_sql_server.json`:
 
 ```json
 {
@@ -909,10 +909,10 @@ Create `db_ops/sre/data_folder/<date>_install_sql_server.json`:
 ```powershell
 # from the repository root
 $env:PYTHONIOENCODING = "utf-8"
-.venv\Scripts\python.exe db_ops/sre/data_folder/deploy_sqlserver_ag.py
+.venv\Scripts\python.exe dbabrain/sre/data_folder/deploy_sqlserver_ag.py
 ```
 
-Results written to `db_ops/sre/data_folder/<date>_result_install_sql_server.json`.
+Results written to `dbabrain/sre/data_folder/<date>_result_install_sql_server.json`.
 
 #### Pipeline steps (in order)
 
@@ -922,7 +922,7 @@ Results written to `db_ops/sre/data_folder/<date>_result_install_sql_server.json
 | start-bastion | `run-powershell 03-start-vms -- -VmName bastion-01` (waits 30s) | bastion-01 only |
 | fix-bastion-identity | `run-powershell 04-fix-guest-identity -- -VmName bastion-01` (waits 40s) | bastion-01 only |
 | deploy-host-key-bastion | `run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01` | bastion-01 only |
-| repo-sync-bastion | Tarballs `db_ops/sre/`, SCPs to bastion `/opt/db-sre/repo/`, fixes CRLF | No |
+| repo-sync-bastion | Tarballs `dbabrain/sre/`, SCPs to bastion `/opt/db-sre/repo/`, fixes CRLF | No |
 | bastion-key-to-sql-nodes | SSH→bastion → `sshpass` pushes bastion pubkey to each SQL node | No |
 | bootstrap-bastion-ansible | `run-bastion-script bootstrap-bastion-ansible -- sqlserver` | No |
 | playbook-sqlserver-ag | `run-bastion-playbook sqlserver-ag.yml -i inventory/sqlserver/hosts.yml` | No |
@@ -932,56 +932,56 @@ Results written to `db_ops/sre/data_folder/<date>_result_install_sql_server.json
 
 ### MySQL InnoDB Cluster — Pre-Existing VMs
 
-Update `db_ops/sre/inventory/mysql/hosts.yml` to match your node IPs and names, then run:
+Update `dbabrain/sre/inventory/mysql/hosts.yml` to match your node IPs and names, then run:
 
 ```powershell
 # 1. Bastion only — vmrun
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -VmName bastion-01
 # Wait ~40s for bastion reboot
-python -m db_ops.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
 
 # 2. Install sshpass + generate bastion SSH key (SSH only — no vmrun)
-python -m db_ops.sre.cli ssh 198.51.100.3 -- "echo '123456' | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; [ ! -f ~/.ssh/id_ed25519 ] && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q || true"
+python -m dbabrain.sre.cli ssh 198.51.100.3 -- "echo '123456' | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; [ ! -f ~/.ssh/id_ed25519 ] && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q || true"
 
 # 3. Push bastion pubkey to MySQL nodes via sshpass (no vmrun)
-python -m db_ops.sre.cli ssh 198.51.100.3 -- "PUBKEY=\$(cat ~/.ssh/id_ed25519.pub); for IP in 198.51.100.11 198.51.100.12 198.51.100.13; do sshpass -p '123456' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dba_user@\$IP \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qxF \\\"\$PUBKEY\\\" ~/.ssh/authorized_keys || echo \\\"\$PUBKEY\\\" >> ~/.ssh/authorized_keys && echo \$IP: key deployed\"; done"
+python -m dbabrain.sre.cli ssh 198.51.100.3 -- "PUBKEY=\$(cat ~/.ssh/id_ed25519.pub); for IP in 198.51.100.11 198.51.100.12 198.51.100.13; do sshpass -p '123456' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dba_user@\$IP \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qxF \\\"\$PUBKEY\\\" ~/.ssh/authorized_keys || echo \\\"\$PUBKEY\\\" >> ~/.ssh/authorized_keys && echo \$IP: key deployed\"; done"
 
 # 4. Bootstrap Ansible + run playbook (SSH only)
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- mysql
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/mysql-cluster.yml `
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- mysql
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/mysql-cluster.yml `
     -i inventory/mysql/hosts.yml
 
 # 5. Verify
-python -m db_ops.sre.cli check-mysql-cluster
+python -m dbabrain.sre.cli check-mysql-cluster
 ```
 
 ---
 
 ### PostgreSQL HA — Pre-Existing VMs
 
-Update `db_ops/sre/inventory/postgresql/hosts.yml` to match your node IPs and names, then run:
+Update `dbabrain/sre/inventory/postgresql/hosts.yml` to match your node IPs and names, then run:
 
 ```powershell
 # 1. Bastion only — vmrun
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -VmName bastion-01
 # Wait ~40s for bastion reboot
-python -m db_ops.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
 
 # 2. Install sshpass + generate bastion SSH key (SSH only — no vmrun)
-python -m db_ops.sre.cli ssh 198.51.100.3 -- "echo '123456' | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; [ ! -f ~/.ssh/id_ed25519 ] && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q || true"
+python -m dbabrain.sre.cli ssh 198.51.100.3 -- "echo '123456' | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; [ ! -f ~/.ssh/id_ed25519 ] && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q || true"
 
 # 3. Push bastion pubkey to PostgreSQL nodes via sshpass (no vmrun)
-python -m db_ops.sre.cli ssh 198.51.100.3 -- "PUBKEY=\$(cat ~/.ssh/id_ed25519.pub); for IP in 198.51.100.21 198.51.100.22 198.51.100.23; do sshpass -p '123456' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dba_user@\$IP \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qxF \\\"\$PUBKEY\\\" ~/.ssh/authorized_keys || echo \\\"\$PUBKEY\\\" >> ~/.ssh/authorized_keys && echo \$IP: key deployed\"; done"
+python -m dbabrain.sre.cli ssh 198.51.100.3 -- "PUBKEY=\$(cat ~/.ssh/id_ed25519.pub); for IP in 198.51.100.21 198.51.100.22 198.51.100.23; do sshpass -p '123456' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dba_user@\$IP \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qxF \\\"\$PUBKEY\\\" ~/.ssh/authorized_keys || echo \\\"\$PUBKEY\\\" >> ~/.ssh/authorized_keys && echo \$IP: key deployed\"; done"
 
 # 4. Bootstrap Ansible + run playbook (SSH only)
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- postgresql
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/postgresql-ha.yml `
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- postgresql
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/postgresql-ha.yml `
     -i inventory/postgresql/hosts.yml
 
 # 5. Verify
-python -m db_ops.sre.cli check-postgresql-ha
+python -m dbabrain.sre.cli check-postgresql-ha
 ```
 
 ---
@@ -992,38 +992,38 @@ For pre-existing Oracle Linux nodes with shared ASM disks already attached. No `
 
 ```powershell
 # 1. Bastion only — vmrun
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -VmName bastion-01
 # Wait ~40s for bastion reboot
-python -m db_ops.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
 
 # 2. Install sshpass + generate bastion SSH key (SSH only — no vmrun)
-python -m db_ops.sre.cli ssh 198.51.100.3 -- "echo '123456' | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; [ ! -f ~/.ssh/id_ed25519 ] && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q || true"
+python -m dbabrain.sre.cli ssh 198.51.100.3 -- "echo '123456' | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; [ ! -f ~/.ssh/id_ed25519 ] && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q || true"
 
 # 3. Push bastion pubkey to RAC nodes via sshpass (Oracle Linux — no vmrun)
-python -m db_ops.sre.cli ssh 198.51.100.3 -- "PUBKEY=\$(cat ~/.ssh/id_ed25519.pub); for IP in 198.51.100.41 198.51.100.42; do sshpass -p '123456' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dba_user@\$IP \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qxF \\\"\$PUBKEY\\\" ~/.ssh/authorized_keys || echo \\\"\$PUBKEY\\\" >> ~/.ssh/authorized_keys && echo \$IP: key deployed\"; done"
+python -m dbabrain.sre.cli ssh 198.51.100.3 -- "PUBKEY=\$(cat ~/.ssh/id_ed25519.pub); for IP in 198.51.100.41 198.51.100.42; do sshpass -p '123456' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dba_user@\$IP \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qxF \\\"\$PUBKEY\\\" ~/.ssh/authorized_keys || echo \\\"\$PUBKEY\\\" >> ~/.ssh/authorized_keys && echo \$IP: key deployed\"; done"
 
 # 4. Bootstrap Ansible (SSH only)
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_rac
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_rac
 
 # 5. OS prep (SSH only)
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-os-prep.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-os-prep.yml `
     -i inventory/oracle/rac/hosts.yml
 
 # 6. Stage Oracle installers: Windows → bastion SCP → RAC nodes SCP (no vmrun)
-python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_rac
+python -m dbabrain.sre.cli run-powershell stage-oracle-installer -- -Group oracle_rac
 
 # 7. Install Grid Infrastructure (SSH only, 20–40 min)
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-grid.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-grid.yml `
     -i inventory/oracle/rac/hosts.yml
 
 # 8. Install Oracle Database (SSH only, 20–40 min)
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-db.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-db.yml `
     -i inventory/oracle/rac/hosts.yml
 
 # 9. Verify
-python -m db_ops.sre.cli ssh 198.51.100.41 -- "sudo -u grid /u01/app/23c/grid/bin/crsctl stat res -t"
-python -m db_ops.sre.cli ssh 198.51.100.41 -- "sudo -u oracle /u01/app/product/db23c/bin/srvctl status database -d pridb"
+python -m dbabrain.sre.cli ssh 198.51.100.41 -- "sudo -u grid /u01/app/23c/grid/bin/crsctl stat res -t"
+python -m dbabrain.sre.cli ssh 198.51.100.41 -- "sudo -u oracle /u01/app/product/db23c/bin/srvctl status database -d pridb"
 ```
 
 ---
@@ -1034,37 +1034,37 @@ For pre-existing Oracle Linux nodes. DB installer only — no Grid, no shared di
 
 ```powershell
 # 1. Bastion only — vmrun
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -VmName bastion-01
 # Wait ~40s for bastion reboot
-python -m db_ops.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
 
 # 2. Install sshpass + generate bastion SSH key (SSH only — no vmrun)
-python -m db_ops.sre.cli ssh 198.51.100.3 -- "echo '123456' | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; [ ! -f ~/.ssh/id_ed25519 ] && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q || true"
+python -m dbabrain.sre.cli ssh 198.51.100.3 -- "echo '123456' | sudo -S apt-get install -y -q sshpass 2>&1 | tail -3; [ ! -f ~/.ssh/id_ed25519 ] && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q || true"
 
 # 3. Push bastion pubkey to DG nodes via sshpass (Oracle Linux — no vmrun)
-python -m db_ops.sre.cli ssh 198.51.100.3 -- "PUBKEY=\$(cat ~/.ssh/id_ed25519.pub); for IP in 198.51.100.51 198.51.100.52; do sshpass -p '123456' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dba_user@\$IP \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qxF \\\"\$PUBKEY\\\" ~/.ssh/authorized_keys || echo \\\"\$PUBKEY\\\" >> ~/.ssh/authorized_keys && echo \$IP: key deployed\"; done"
+python -m dbabrain.sre.cli ssh 198.51.100.3 -- "PUBKEY=\$(cat ~/.ssh/id_ed25519.pub); for IP in 198.51.100.51 198.51.100.52; do sshpass -p '123456' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 dba_user@\$IP \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qxF \\\"\$PUBKEY\\\" ~/.ssh/authorized_keys || echo \\\"\$PUBKEY\\\" >> ~/.ssh/authorized_keys && echo \$IP: key deployed\"; done"
 
 # 4. Bootstrap Ansible (SSH only)
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_dg
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_dg
 
 # 5. OS prep (SSH only)
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-os-prep.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-os-prep.yml `
     -i inventory/oracle/dataguard/hosts.yml
 
 # 6. Stage DB installer: Windows → bastion SCP → DG nodes SCP (no vmrun)
-python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_dg
+python -m dbabrain.sre.cli run-powershell stage-oracle-installer -- -Group oracle_dg
 
 # 7. Install Oracle DB + create primary database (SSH only, 20–40 min)
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-primary.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-primary.yml `
     -i inventory/oracle/dataguard/hosts.yml
 
 # 8. Create standby + configure DG broker (SSH only, 20–40 min)
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-standby.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-standby.yml `
     -i inventory/oracle/dataguard/hosts.yml
 
 # 9. Verify
-python -m db_ops.sre.cli ssh 198.51.100.51 -- "sudo -u oracle ORACLE_HOME=/u01/app/product/db23c /u01/app/product/db23c/bin/dgmgrl / 'show configuration'"
+python -m dbabrain.sre.cli ssh 198.51.100.51 -- "sudo -u oracle ORACLE_HOME=/u01/app/product/db23c /u01/app/product/db23c/bin/dgmgrl / 'show configuration'"
 ```
 
 ---
@@ -1073,19 +1073,19 @@ python -m db_ops.sre.cli ssh 198.51.100.51 -- "sudo -u oracle ORACLE_HOME=/u01/a
 
 ```powershell
 # Stop a specific group (graceful soft stop → hard stop if timeout)
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group mysql
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group postgresql
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group sqlserver
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group oracle_rac
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group oracle_dg
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group shared
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group all
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group mysql
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group postgresql
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group sqlserver
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group oracle_rac
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group oracle_dg
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group shared
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group all
 
 # Stop specific VMs by name
-python -m db_ops.sre.cli run-powershell stop-vms -- -VmName mssql-01,mssql-02
+python -m dbabrain.sre.cli run-powershell stop-vms -- -VmName mssql-01,mssql-02
 
 # Stop all currently running VMs (no grace period)
-python -m db_ops.sre.cli run-powershell stop-all-running-vms
+python -m dbabrain.sre.cli run-powershell stop-all-running-vms
 ```
 
 `stop-vms` sends a soft (ACPI) shutdown first, waits up to 120 seconds, then force-stops any remaining VMs. Add `-SkipHardStop` to skip the force step.
@@ -1096,7 +1096,7 @@ python -m db_ops.sre.cli run-powershell stop-all-running-vms
 
 `tests/sre_e2e_runner.py` runs the full provisioning → verify → teardown sequence for each cluster group. Each group is a self-contained test case executed by the Python runner — no manual step-by-step needed.
 
-**Working directory:** the repository root (`db_ops`)
+**Working directory:** the repository root (`dbabrain`)
 
 ### Usage
 
@@ -1274,17 +1274,17 @@ Before cloning, the template VM must have SSH and open-vm-tools configured.
 
 ```powershell
 # Bootstrap all templates (ubuntu + oraclelinux + windows)
-python -m db_ops.sre.cli run-powershell 00-bootstrap-template-remote-access
+python -m dbabrain.sre.cli run-powershell 00-bootstrap-template-remote-access
 
 # Or a specific template
-python -m db_ops.sre.cli run-powershell 00-bootstrap-template-remote-access -- -Template ubuntu
-python -m db_ops.sre.cli run-powershell 00-bootstrap-template-remote-access -- -Template oraclelinux
+python -m dbabrain.sre.cli run-powershell 00-bootstrap-template-remote-access -- -Template ubuntu
+python -m dbabrain.sre.cli run-powershell 00-bootstrap-template-remote-access -- -Template oraclelinux
 ```
 
 After bootstrap, take a snapshot of the template so clones start from a clean state:
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 06-snapshot-vms -- -Group shared   # if template is in shared
+python -m dbabrain.sre.cli run-powershell 06-snapshot-vms -- -Group shared   # if template is in shared
 ```
 
 ---
@@ -1294,9 +1294,9 @@ python -m db_ops.sre.cli run-powershell 06-snapshot-vms -- -Group shared   # if 
 ### Read-Only
 
 ```powershell
-python -m db_ops.sre.cli list-workflows        # registered workflows
-python -m db_ops.sre.cli inventory-assets      # nodes from config (no SSH)
-python -m db_ops.sre.cli vmware-list           # available PowerShell wrapper scripts
+python -m dbabrain.sre.cli list-workflows        # registered workflows
+python -m dbabrain.sre.cli inventory-assets      # nodes from config (no SSH)
+python -m dbabrain.sre.cli vmware-list           # available PowerShell wrapper scripts
 ```
 
 ### VMware / PowerShell
@@ -1304,67 +1304,67 @@ python -m db_ops.sre.cli vmware-list           # available PowerShell wrapper sc
 All `run-powershell` commands pass the full SRE config to the script via `-DbSrePayloadJsonBase64`. Arguments after `--` are forwarded as-is to the PowerShell script.
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 00-bootstrap-template-remote-access
-python -m db_ops.sre.cli run-powershell 00-bootstrap-template-remote-access -- -Template ubuntu
+python -m dbabrain.sre.cli run-powershell 00-bootstrap-template-remote-access
+python -m dbabrain.sre.cli run-powershell 00-bootstrap-template-remote-access -- -Template ubuntu
 
-python -m db_ops.sre.cli run-powershell 01-clone-vms
-python -m db_ops.sre.cli run-powershell 01-clone-vms -- -Group mysql
-python -m db_ops.sre.cli run-powershell 01-clone-vms -- -VmName mysql-02
+python -m dbabrain.sre.cli run-powershell 01-clone-vms
+python -m dbabrain.sre.cli run-powershell 01-clone-vms -- -Group mysql
+python -m dbabrain.sre.cli run-powershell 01-clone-vms -- -VmName mysql-02
 
-python -m db_ops.sre.cli run-powershell 02-set-vm-resources -- -Group mysql -CpuCount 2 -MemoryGB 4
-python -m db_ops.sre.cli run-powershell 02-set-vm-resources -- -VmName mysql-01 -CpuCount 4 -MemoryGB 8
+python -m dbabrain.sre.cli run-powershell 02-set-vm-resources -- -Group mysql -CpuCount 2 -MemoryGB 4
+python -m dbabrain.sre.cli run-powershell 02-set-vm-resources -- -VmName mysql-01 -CpuCount 4 -MemoryGB 8
 
-python -m db_ops.sre.cli run-powershell 03-start-vms
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -Group shared
-python -m db_ops.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 03-start-vms
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -Group shared
+python -m dbabrain.sre.cli run-powershell 03-start-vms -- -VmName bastion-01
 
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -Group mysql
-python -m db_ops.sre.cli run-powershell 04-fix-guest-identity -- -VmName mysql-01 -SkipReboot
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -Group mysql
+python -m dbabrain.sre.cli run-powershell 04-fix-guest-identity -- -VmName mysql-01 -SkipReboot
 
-python -m db_ops.sre.cli run-powershell 05-get-vm-info
+python -m dbabrain.sre.cli run-powershell 05-get-vm-info
 
-python -m db_ops.sre.cli run-powershell 06-snapshot-vms
+python -m dbabrain.sre.cli run-powershell 06-snapshot-vms
 
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup mysql
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup postgresql
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup sqlserver
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup oracle_rac
-python -m db_ops.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup oracle_dg
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup mysql
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup postgresql
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup sqlserver
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup oracle_rac
+python -m dbabrain.sre.cli run-powershell 07-bootstrap-bastion-ansible -- -TargetGroup oracle_dg
 
 # Deploy to shared VMs only (bastion-01, mon-01, ...) — NOT database nodes
-python -m db_ops.sre.cli run-powershell 08-deploy-host-ssh-key -- -Group shared
-python -m db_ops.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
+python -m dbabrain.sre.cli run-powershell 08-deploy-host-ssh-key -- -Group shared
+python -m dbabrain.sre.cli run-powershell 08-deploy-host-ssh-key -- -VmName bastion-01
 
 # Oracle RAC shared ASM disks (VMs must be stopped)
-python -m db_ops.sre.cli run-powershell add-oracle-shared-disks
-python -m db_ops.sre.cli run-powershell add-oracle-shared-disks -- -OcrDiskGb 15 -DataDiskGb 80 -FraDiskGb 50
-python -m db_ops.sre.cli run-powershell add-oracle-shared-disks -- -Force
+python -m dbabrain.sre.cli run-powershell add-oracle-shared-disks
+python -m dbabrain.sre.cli run-powershell add-oracle-shared-disks -- -OcrDiskGb 15 -DataDiskGb 80 -FraDiskGb 50
+python -m dbabrain.sre.cli run-powershell add-oracle-shared-disks -- -Force
 
 # Oracle installer staging (Windows → bastion → nodes via SCP)
 # RAC: requires oracle.grid_installer_path + oracle.db_installer_path
 # DG:  requires oracle.db_installer_path only
-python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_rac
-python -m db_ops.sre.cli run-powershell stage-oracle-installer -- -Group oracle_dg
+python -m dbabrain.sre.cli run-powershell stage-oracle-installer -- -Group oracle_rac
+python -m dbabrain.sre.cli run-powershell stage-oracle-installer -- -Group oracle_dg
 
 # Stop VMs by group (soft → hard)
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group mysql
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group postgresql
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group sqlserver
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group oracle_rac
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group oracle_dg
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group shared
-python -m db_ops.sre.cli run-powershell stop-vms -- -Group all
-python -m db_ops.sre.cli run-powershell stop-vms -- -VmName mssql-01,mssql-02
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group mysql
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group postgresql
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group sqlserver
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group oracle_rac
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group oracle_dg
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group shared
+python -m dbabrain.sre.cli run-powershell stop-vms -- -Group all
+python -m dbabrain.sre.cli run-powershell stop-vms -- -VmName mssql-01,mssql-02
 
-python -m db_ops.sre.cli run-powershell list-running-vms
-python -m db_ops.sre.cli run-powershell stop-all-running-vms
+python -m dbabrain.sre.cli run-powershell list-running-vms
+python -m dbabrain.sre.cli run-powershell stop-all-running-vms
 ```
 
 Add `--dry-run` to any command to print the resolved PowerShell invocation without executing:
 
 ```powershell
-python -m db_ops.sre.cli run-powershell 01-clone-vms --dry-run
+python -m dbabrain.sre.cli run-powershell 01-clone-vms --dry-run
 ```
 
 ### Bastion SSH Commands
@@ -1373,102 +1373,102 @@ Requires: Step 5 (host key deployed) and Step 6 (repo synced on bastion).
 
 ```powershell
 # Run Ansible playbook from bastion
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/mysql-cluster.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/mysql-cluster.yml `
     -i inventory/mysql/hosts.yml
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/postgresql-ha.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/postgresql-ha.yml `
     -i inventory/postgresql/hosts.yml
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/sqlserver-ag.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/sqlserver-ag.yml `
     -i inventory/sqlserver/hosts.yml
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/observability.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/observability.yml `
     -i inventory/monitoring/hosts.yml
 
 # Run a bash script on bastion
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- mysql
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- postgresql
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- sqlserver
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_rac
-python -m db_ops.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_dg
-python -m db_ops.sre.cli run-bastion-script recover-mysql-cluster-after-outage.sh
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- mysql
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- postgresql
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- sqlserver
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_rac
+python -m dbabrain.sre.cli run-bastion-script bootstrap-bastion-ansible -- oracle_dg
+python -m dbabrain.sre.cli run-bastion-script recover-mysql-cluster-after-outage.sh
 
 # Oracle RAC Ansible playbooks
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-os-prep.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-os-prep.yml `
     -i inventory/oracle/rac/hosts.yml
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-grid.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-grid.yml `
     -i inventory/oracle/rac/hosts.yml
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-db.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-rac-db.yml `
     -i inventory/oracle/rac/hosts.yml
 
 # Oracle DataGuard Ansible playbooks
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-os-prep.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-os-prep.yml `
     -i inventory/oracle/dataguard/hosts.yml
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-primary.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-primary.yml `
     -i inventory/oracle/dataguard/hosts.yml
-python -m db_ops.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-standby.yml `
+python -m dbabrain.sre.cli run-bastion-playbook automation/ansible/playbooks/oracle-dg-standby.yml `
     -i inventory/oracle/dataguard/hosts.yml
 
 # Ansible ad-hoc
-python -m db_ops.sre.cli run-bastion-ansible mysql -m ping
-python -m db_ops.sre.cli run-bastion-ansible mysql -m shell -a "systemctl is-active mysql"
-python -m db_ops.sre.cli run-bastion-ansible sqlserver -m ping
-python -m db_ops.sre.cli run-bastion-ansible sqlserver -m shell -a "systemctl is-active mssql-server"
+python -m dbabrain.sre.cli run-bastion-ansible mysql -m ping
+python -m dbabrain.sre.cli run-bastion-ansible mysql -m shell -a "systemctl is-active mysql"
+python -m dbabrain.sre.cli run-bastion-ansible sqlserver -m ping
+python -m dbabrain.sre.cli run-bastion-ansible sqlserver -m shell -a "systemctl is-active mssql-server"
 ```
 
 ### setup-sequence
 
 ```powershell
 # Provision a full cluster end-to-end
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence mysql
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence postgresql
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence mssql
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence oracle-rac
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence oracle-dg
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence mysql
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence postgresql
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence mssql
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence oracle-rac
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence oracle-dg
 
 # Print each step's command without executing
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence mssql --dry-run
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence mssql --dry-run
 
 # Resume from step N (skip earlier steps)
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence oracle-rac --from-step 5
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence oracle-rac --from-step 5
 
 # Continue past step failures
-python -m db_ops.sre.cli --config data/sre_config.json setup-sequence oracle-dg --continue-on-error
+python -m dbabrain.sre.cli --config data/sre_config.json setup-sequence oracle-dg --continue-on-error
 ```
 
 ### Health Checks
 
 ```powershell
 # Shared VMs: hostname, IP, systemd state
-python -m db_ops.sre.cli check-shared-vms
-python -m db_ops.sre.cli check-shared-vms --vm-name bastion-01
-python -m db_ops.sre.cli check-shared-vms --vm-name bastion-01 mon-01
+python -m dbabrain.sre.cli check-shared-vms
+python -m dbabrain.sre.cli check-shared-vms --vm-name bastion-01
+python -m dbabrain.sre.cli check-shared-vms --vm-name bastion-01 mon-01
 
 # MySQL: 1 PRIMARY + 2 SECONDARY via mysqlsh
-python -m db_ops.sre.cli check-mysql-cluster
+python -m dbabrain.sre.cli check-mysql-cluster
 
 # PostgreSQL: 1 primary + 2 streaming replicas via psql
-python -m db_ops.sre.cli check-postgresql-ha
+python -m dbabrain.sre.cli check-postgresql-ha
 
 # Dry-run: print the run-cmd request each check would send, passwords masked as ***
-python -m db_ops.sre.cli check-mysql-cluster --dry-run
-python -m db_ops.sre.cli check-shared-vms --dry-run
+python -m dbabrain.sre.cli check-mysql-cluster --dry-run
+python -m dbabrain.sre.cli check-shared-vms --dry-run
 ```
 
 ### Direct SSH
 
 ```powershell
-python -m db_ops.sre.cli ssh 198.51.100.3  -- uptime
-python -m db_ops.sre.cli ssh 198.51.100.11 -- systemctl status mysql
+python -m dbabrain.sre.cli ssh 198.51.100.3  -- uptime
+python -m dbabrain.sre.cli ssh 198.51.100.11 -- systemctl status mysql
 ```
 
 ### Lab Database Docker Instances
 
 `create-db-docker` provisions a single or HA-lab database **container** (distinct from the VMware cluster flows above), writes its compose + `.env` under `/opt/db_ops/containers/<name>/`, brings it up with `docker compose`, waits for health, and registers the connection in `data/docker_db_connections.json`.
 
-**Where the work runs (0.23.0).** `sre.cli create-db-docker` (and so `/spbot_create_db_docker`) no longer builds anything itself. It validates the spec, stores `--password-text` under its ref, resolves the database password and the SSH login (`--remote-password-ref`, `--remote-key`), and hands them to **`common.cli create-db-docker`** on stdin - which builds the instance and reads no configuration - then registers the record the answer describes. `move-db-docker` is split the same way: `sre` resolves both targets into logins and the engine from the registry, `common.cli move-db-docker` moves, `sre` repoints the entry. The work is `db_ops/common/docker_db/` (templates, compose, health, provisioner, mover, the SSH host); what an instance *is* - `DockerDbSpec`, `ENGINE_META` - is `db_ops/lib/docker_db_spec.py`, because both sides need it. The command line, the flags and the Telegram parameters did not change. Progress streams to stderr as it happens (an Oracle first start takes many minutes); stdout carries the summary. A dry run connects to nothing and never installs Docker - `--install-docker --dry-run` used to install it. Request and answer: `docs/13_common.md`.
+**Where the work runs (0.23.0).** `sre.cli create-db-docker` (and so `/spbot_create_db_docker`) no longer builds anything itself. It validates the spec, stores `--password-text` under its ref, resolves the database password and the SSH login (`--remote-password-ref`, `--remote-key`), and hands them to **`common.cli create-db-docker`** on stdin - which builds the instance and reads no configuration - then registers the record the answer describes. `move-db-docker` is split the same way: `sre` resolves both targets into logins and the engine from the registry, `common.cli move-db-docker` moves, `sre` repoints the entry. The work is `dbabrain/common/docker_db/` (templates, compose, health, provisioner, mover, the SSH host); what an instance *is* - `DockerDbSpec`, `ENGINE_META` - is `dbabrain/lib/docker_db_spec.py`, because both sides need it. The command line, the flags and the Telegram parameters did not change. Progress streams to stderr as it happens (an Oracle first start takes many minutes); stdout carries the summary. A dry run connects to nothing and never installs Docker - `--install-docker --dry-run` used to install it. Request and answer: `docs/13_common.md`.
 
 It can run three ways:
 
 1. **inside the worker container** from the master via the control app's `worker-run` — the original path, still fully supported and **unchanged**. Example:
-   `python -m db_ops.control.cli worker-run --key-base64 "<KEY>" -- python -m db_ops.sre.cli create-db-docker --name ora_lab --engine oracle --version 23.26.2 --mode ha-lab`.
+   `python -m dbabrain.control.cli worker-run --key-base64 "<KEY>" -- python -m dbabrain.sre.cli create-db-docker --name ora_lab --engine oracle --version 23.26.2 --mode ha-lab`.
    Here docker runs on the worker host and the post-start step (Oracle Data Guard / SQL Server AG) executes **synchronously inside the container** using the local filesystem — the `--remote-host` machinery below is not involved. All four engines and their HA labs work this way. (See `docs/11_control_app.md`.)
 2. **locally** on any Docker-equipped host (run the CLI directly, no `--remote-host`);
 3. **directly against a remote Ubuntu host over SSH** with `--remote-host <ip> --remote-user <user>` — the CLI runs on the master (no intermediate hop, no worker involved): instance files are written over SFTP and every `docker`/`docker compose`/health command executes on that machine. The connection entry is registered in the **master's** `data/docker_db_connections.json` with the remote IP as host.
@@ -1478,7 +1478,9 @@ It can run three ways:
    - the DB password with `--password-text '<db-pass>'` (stored under `<NAME>_PASSWORD` in the master secret store, which needs `--key-base64 "<KEY>"`); or set an env var and pass `--password-ref`. The store is checked before the build, and the password is stored only **after** the build succeeds. Until 2026-09-25 it was stored first, so a failed build left the password of a lab that did not exist. A `{worker_host}` placeholder that nothing filled in is never recorded as the lab's host.
    - on the VM: **docker + the compose plugin installed**, and **both folders a lab writes** owned by the SSH user - the containers dir and the backup bind mount (one-time: `sudo mkdir -p /opt/db_ops/containers /opt/db_ops/backup && sudo chown <user>: /opt/db_ops/containers /opt/db_ops/backup`) — **or pass `--install-docker`** (`install_docker = yes` in `/spbot_create_db_docker`) to have the CLI do all of that over SSH for a bare Ubuntu VM (installs docker via `get.docker.com`, and falls back to the distro packages `docker.io` + `docker-compose-v2` whenever that script cannot be fetched or fails - a host behind a proxy often reaches its apt mirror and not Docker's site; until 0.26.0 the download was piped into `sh` without `pipefail`, so a failed download read as a finished install and the command then called Docker *installed but not usable* on a host that had none, which it now reports as *NOT installed*; adds the SSH user to the docker group, creates **both** folders and hands them to the SSH user; needs the SSH user to have sudo). `--install-docker` is idempotent: a host that already has Docker gets only the group and the folders. Until 2026-09-24 it prepared only the containers dir, and the backup mount - created later over SFTP, without sudo - failed with *Permission denied* for a user with full sudo rights; a failed preparation now says so instead of surfacing as that SFTP error. **The backup mount is handed over at its top only, never recursively**: the engines write their backups beneath it as their own users (SQL Server as uid 10001), and a `chown -R` there - which the first version of this fix ran on every lab created on the host - took every existing backup folder away from its engine, whose next LOG and FULL backups then failed *Access is denied*. The SQL Server backup job takes its own folder over when it has to (`docs/08_backup_restore_app.md`).
 
-   **`--backup-mount`, and a lab that is backup-ready as built (0.23.0).** SQL Server mounts `/opt/db_ops/backup` by default; PostgreSQL, Oracle (Free and XE) and MySQL mount the folder only when it is passed. With a mount a lab's backups go under **`<mount>/<lab name>`** - `create-db-docker` prints it as *Backup folder*; it is the backup entry's `backup_dir` and a restore's `source_backup_host_dir` - and the lab is ready to be backed up with no work by hand:
+   **Where a lab's two folders come from (0.29.0).** A lab lives in two folders on its host: the containers folder, where each instance's compose file sits, and the backup folder mounted into the container. They are the node's facts, stated in `data/sre_config.json` as `"sre": {"docker_db": {"containers_dir": "/opt/db_ops/containers", "backup_mount": "/opt/db_ops/backup"}}` (the shipped file's values). `create-db-docker`, `move-db-docker` and `control.cli worker-create-db-docker` take a flag, else this block, and nothing else: the code held both as constants until 0.29.0 and holds neither now, so a node that states none and gives no flag is refused by name. The folder matters most for a lab that already exists - a move and a forced re-create find it under the containers folder and its name, not by the `compose_path` its record carries. `upgrade-config` writes the two folders into a node that states none (`lib.lab_folders` reads the block for the apps; the command that builds a lab reads no configuration).
+
+   **`--backup-mount`, and a lab that is backup-ready as built (0.23.0).** SQL Server mounts the node's backup folder (`sre.docker_db.backup_mount` in `sre_config.json` - `/opt/db_ops/backup` in the shipped file) unless the flag says otherwise, and is refused when neither says; PostgreSQL, Oracle (Free and XE) and MySQL mount the folder only when it is passed. With a mount a lab's backups go under **`<mount>/<lab name>`** - `create-db-docker` prints it as *Backup folder*; it is the backup entry's `backup_dir` and a restore's `source_backup_host_dir` - and the lab is ready to be backed up with no work by hand:
    - **PostgreSQL** (single, and the HA primary): the container makes that folder as root on start and hands it to postgres, and runs with `archive_mode=on`, `archive_command` into its `wal/` and `summarize_wal=on` (incrementals need WAL summaries).
    - **Oracle Free single**: `initdb/10-archivelog.sql` runs once, after the image creates the database, and turns ARCHIVELOG on - the image has no switch for it (read from its entrypoint, 23.26.3). The Data Guard lab runs ARCHIVELOG already.
    - **Oracle XE single**: the same first-start script, mounted into `/container-entrypoint-initdb.d`. XE 11 is a non-CDB, so the script has no pluggable step. Until 2026-09-25 the script was Oracle Free's only and XE's template mounted no script directory, so an XE lab came up NOARCHIVELOG, backup mount or not.
@@ -1498,7 +1500,7 @@ It can run three ways:
            - subnet: 172.30.<n>.0/24
    ```
 
-   where `<n>` is derived from `--name` (`db_ops/lib/docker_db_spec.py::lab_network_subnet`), or
+   where `<n>` is derived from `--name` (`dbabrain/lib/docker_db_spec.py::lab_network_subnet`), or
    whatever `--network-subnet` says. It is never left to Docker, whose default pool spans
    `172.17.0.0/16`–`172.31.0.0/16` — private ranges that plenty of networks already route real
    databases on. An auto-allocated lab bridge has twice taken a production instance off the map:
@@ -1506,7 +1508,7 @@ It can run three ways:
    a monitored instance inside that range into the new bridge instead of the LAN — every metric on
    a healthy SQL Server failed to connect for two hours. Two lab names can hash to the same `/24`; that is a loud `docker compose up` error
    ("Pool overlaps…"), settled with `--network-subnet 172.30.42.0/24`. The host-side half of the
-   guard is `db_ops/sre/host_config/docker-daemon.json`, which also moves `docker0` off `172.17.0.0/16`.
+   guard is `dbabrain/sre/host_config/docker-daemon.json`, which also moves `docker0` off `172.17.0.0/16`.
 
    **`oracle` vs `oracle-xe` — two engines, not one with different tags (2026-08-14).**
    `--engine oracle` is Oracle Database **Free** (`gvenzl/oracle-free`, 23ai/26ai);
@@ -1571,73 +1573,73 @@ It can run three ways:
 
 ```powershell
 # PostgreSQL single instance
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name pg_lab_01 --engine postgres --version 16 --mode single `
     --host-port 5433 --password-ref POSTGRES_PASSWORD
 
 # MySQL single instance
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name mysql_lab_01 --engine mysql --version 8.4 --mode single `
     --host-port 3307 --password-ref MYSQL_ROOT_PASSWORD
 
 # SQL Server single instance. --host-port and --password-ref may be omitted: the port defaults
 # to the engine's own (1433) and the secret ref to <NAME>_PASSWORD.
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name mssql_lab_01 --engine mssql --version 2022-latest --mode single
 
 # PostgreSQL HA lab: 1 primary + N standbys via native streaming replication
 # (official postgres image; standbys seeded with pg_basebackup); each node on its own port
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name pg_ha_lab_01 --engine postgres --version 18 --mode ha-lab `
     --replicas 2 --host-port 5433 --password-ref POSTGRES_PASSWORD
 
 # SQL Server Always On lab: 3 nodes, AG with CLUSTER_TYPE = NONE (see the note below).
 # Also stores the password in the encrypted secret store under MSSQL_AG_LAB_PASSWORD.
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name mssql_ag_lab --engine mssql --version 2022-latest --mode ha-lab `
     --replicas 2 --host-port 15433 --password-text '<StrongPassw0rd!>'
 
 # Oracle Database Free 26ai single instance (gvenzl/oracle-free image; the tag is the major
 # version — 26 = 26ai, 23 = 23ai; there is no '26ai' tag). For 11g R2 see `oracle-xe` below.
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name ora_lab_01 --engine oracle --version 23.26.2 --mode single
 
 # Oracle Data Guard lab: 1 primary + 1 physical standby (replicas fixed at 1)
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name ora_dg_lab --engine oracle --version 23.26.2 --mode ha-lab --host-port 15210 `
     --password-text '<StrongPassw0rd!>' --key-base64 "<KEY>"
 
 # Oracle 11g R2 — engine `oracle-xe`, NOT a tag of `oracle`. See the note below.
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name ora11g_lab --engine oracle-xe --version 11 --mode single --host-port 1521 `
     --password-text '<StrongPassw0rd!>' --key-base64 "<KEY>"
 
 # Provision DIRECTLY on a remote Ubuntu host from the master (no worker hop), nothing
 # pre-seeded — just ip + SSH user + SSH password. docker runs on that machine.
 # Oracle Data Guard (1 primary + 1 standby) on the VM in a single command:
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name ora_dg_lab --engine oracle --version 23.26.2 --mode ha-lab --host-port 15210 `
     --remote-host 198.51.100.146 --remote-user dba_user --remote-password '<SSH-PASSWORD>' `
     --password-text '<DB-PASSWORD>' --key-base64 "<KEY>"
 
 # ... or single instance, same idea:
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name ora_lab_01 --engine oracle --version 23.26.2 --mode single `
     --remote-host 198.51.100.146 --remote-user dba_user --remote-password '<SSH-PASSWORD>' `
     --password-text '<DB-PASSWORD>' --key-base64 "<KEY>"
 
 # Key-auth VM (e.g. Oracle Cloud), bare Ubuntu — install docker over SSH then deploy, one command:
-python -m db_ops.sre.cli create-db-docker `
+python -m dbabrain.sre.cli create-db-docker `
     --name pg_cloud --engine postgres --version 18 --mode single --host-port 5433 `
     --remote-host 203.0.113.188 --remote-user ubuntu --remote-key C:\path\to\oracle-cloud.key `
     --install-docker --password-text '<DB-PASSWORD>' --key-base64 "<KEY>"
 
 # Preview everything (compose, .env, connection entry, commands) — changes nothing
-python -m db_ops.sre.cli create-db-docker --name pg_lab_01 --engine postgres `
+python -m dbabrain.sre.cli create-db-docker --name pg_lab_01 --engine postgres `
     --version 16 --mode single --host-port 5433 --password-ref POSTGRES_PASSWORD --dry-run
 
 # Register a connection only (no container created)
-python -m db_ops.sre.cli register-db-connection `
+python -m dbabrain.sre.cli register-db-connection `
     --name pg_lab_01 --engine postgres --host 198.51.100.129 --port 5433 `
     --database postgres --username postgres --password-ref POSTGRES_PASSWORD
 ```
@@ -1656,7 +1658,7 @@ Options for `create-db-docker`:
 | `--password-text` | The password value. Stored under `--password-ref` in the encrypted secret store, then used to provision. Visible in the process list while it runs. |
 | `--password-text-env` | Name of an env var holding the password instead — how the Telegram command passes it, so nothing sensitive reaches argv. |
 | `--worker-host` | DB host/IP recorded in the connection entry and connection hint. |
-| `--containers-dir` | Base dir for instance folders (default `/opt/db_ops/containers`). **A backup bind mount must not live under this default** — it is inside the `control deploy` tree; see [Backups and the container must be kept separate](#backups-and-the-container-must-be-kept-separate). |
+| `--containers-dir` | Base dir for instance folders. Without the flag: what the node states in `sre_config.json` (`sre.docker_db.containers_dir` - `/opt/db_ops/containers` in the shipped file). **The code holds no folder** (0.29.0): a node that states none must give the flag, or the command is refused by name. **A backup bind mount must not live under this default** — it is inside the `control deploy` tree; see [Backups and the container must be kept separate](#backups-and-the-container-must-be-kept-separate). |
 | `--no-register` | Create the instance but skip the connection registration. |
 | `--force` | Clean-recreate an existing instance: `docker compose down -v` (removes its containers **and data volumes**) before rebuilding. Required to change an instance's engine version. |
 | `--dry-run` | Print generated compose/`.env`/connection/commands without changing anything. |
@@ -1696,20 +1698,20 @@ host produces an **empty database with the same name**.
 
 ```powershell
 # What would move, without touching anything
-python -m db_ops.sre.cli move-db-docker --name ora11g_lab `
+python -m dbabrain.sre.cli move-db-docker --name ora11g_lab `
     --from-target ACME-192-0-2-249-HOST `
     --to-target   ACME-192-0-2-11-LABSQL-1433 `
     --dry-run --key-base64 "<KEY>"
 
 # The move itself: container filesystem included, source stopped once the destination is healthy
-python -m db_ops.sre.cli move-db-docker --name ora11g_lab `
+python -m dbabrain.sre.cli move-db-docker --name ora11g_lab `
     --from-target ACME-192-0-2-249-HOST `
     --to-target   ACME-192-0-2-11-LABSQL-1433 `
     --commit-container --stop-source --key-base64 "<KEY>"
 ```
 
-Both hosts are named as db_ops **targets** — a `server_id` or ip from `db_instances.json` — not
-as host/user/password: a machine that already runs db_ops containers is already in the inventory
+Both hosts are named as dbabrain **targets** — a `server_id` or ip from `db_instances.json` — not
+as host/user/password: a machine that already runs dbabrain containers is already in the inventory
 with a credential the secret store resolves, and retyping it is how two spellings of one host end
 up in two runbooks. `sre` resolves each into an SSH login - the same three steps
 `common.host_ops.resolve_host` takes, out of the same files - and the engine from
@@ -1748,7 +1750,7 @@ the operator wrote, and `docker compose up` in that directory still does the rig
    data-travels check above, the instance dir free (or `--force`), the published ports free, and
    the pinned subnet not overlapping one the destination's Docker already routes. Each of these
    otherwise fails *after* the transfer, and a lab bundle is gigabytes.
-3. **Exports into one staging directory on the source** (`/tmp/db_ops_move/<name>`): the image(s)
+3. **Exports into one staging directory on the source** (`/tmp/dbabrain_move/<name>`): the image(s)
    as `docker save | gzip -1`, the instance directory, and each volume as a tar. The containers
    are stopped for that with `docker stop -t 180` — Docker's default of 10 s SIGKILLs Oracle
    mid-checkpoint, and a datafile copied in that state restores to a database that opens and is
@@ -1791,8 +1793,8 @@ Options for `move-db-docker`:
 |---|---|
 | `--name` | Instance name — the directory under the containers dir, which is also the compose project name. The destination must use the same name: volumes are `<project>_<volume>`, so a different one restores the data into volumes nothing mounts. |
 | `--from-target` / `--to-target` | Source and destination hosts, as `server_id` or ip from `db_instances.json`. |
-| `--containers-dir` / `--to-containers-dir` | Instance folders on the source / destination (default `/opt/db_ops/containers`, and the same on both). |
-| `--stage-dir` | Where the bundle is written on both hosts (default `/tmp/db_ops_move`). Removed afterwards unless `--keep-stage`. |
+| `--containers-dir` / `--to-containers-dir` | Instance folders on the source / destination. Without the flag the source's is what the node states (`sre.docker_db.containers_dir`), and the destination's is the same as the source's; there is no folder in the code to fall back to. |
+| `--stage-dir` | Where the bundle is written on both hosts (default `/tmp/dbabrain_move`). Removed afterwards unless `--keep-stage`. |
 | `--commit-container` | Move the container's filesystem too, via `docker commit`. Required whenever the engine writes outside its declared volumes; the mover refuses and names this flag rather than shipping an empty database. |
 | `--no-volumes` | Image and compose files only — the destination initialises an **empty** database. Say it deliberately. |
 | `--stop-source` | A move rather than a clone: stop the source containers once the destination is healthy. Files and volumes are kept. |
@@ -1813,7 +1815,7 @@ destination and re-run with `--force`.
 
 **File:** `data/sre_config.json`
 
-Override: `--config <path>` or `DB_OPS_SRE_CONFIG` env var.
+Override: `--config <path>` or `DBABRAIN_SRE_CONFIG` env var.
 
 ### `sre.vmware`
 
@@ -1923,7 +1925,7 @@ path that has nothing to do with the container. Three separations, none optional
    `VOLUME /var/lib/postgresql`, so a backup mounted at `/var/lib/postgresql/backup` lives inside
    the data volume. If that bind mount ever goes missing the path still works, and backups land in
    the database's own volume to be deleted with it.
-3. **Not under `/opt/db_ops`** — `--containers-dir` defaults to `/opt/db_ops/containers`, inside
+3. **Not under `/opt/db_ops`** — the instance folders are under `/opt/db_ops/containers` (the shipped `sre.docker_db.containers_dir`), inside
    the tree `control deploy` manages. The deploy re-owns that tree to the SSH user, which takes
    write access away from the database user inside the container (PostgreSQL is uid 999, the
    deploy user is uid 1000).
@@ -1942,7 +1944,7 @@ Full rationale, the current layout table, the audit one-liner, and the relocatio
 ## Architecture
 
 ```
-db_ops.sre.cli
+dbabrain.sre.cli
   │
   ├── run-powershell <script>
   │     powershell -File <ps1> -DbSrePayloadJsonBase64 <config> [args]
@@ -2004,7 +2006,7 @@ Once Step 5 is complete (host key on bastion), all SSH-based commands work.
 | SQL Server: `Login failed for user 'SA'` | Missing `-C` flag (sqlcmd18 requires cert trust) | Already fixed in `group_vars/sqlserver.yml` (`mssql_sqlcmd_path: "/opt/mssql-tools18/bin/sqlcmd -C"`) |
 | `tar: Cannot connect to C: resolve failed` | Git Bash's `tar` in PATH, not Windows System32 tar | Already fixed in `07-bootstrap-bastion-ansible.ps1` (uses `$env:SystemRoot\System32\tar.exe`) |
 | `bastion-01 not found in inventory` | Missing entry in `sre.inventory.groups.shared` | Add `{"name": "bastion-01", "role": "bastion", "ip": "..."}` |
-| `[db_ops.config] source=shared_fallback` | `data/sre_config.json` not found | Create it or set `DB_OPS_SRE_CONFIG` |
+| `[dbabrain.config] source=shared_fallback` | `data/sre_config.json` not found | Create it or set `DBABRAIN_SRE_CONFIG` |
 | `stage-oracle-installer`: `Grid installer not found` | Path in `oracle.grid_installer_path` is wrong or null | Set the full path in `sre_config.json` (e.g. `D:/softwares/LINUX.X64_2326100_grid_home.zip`) |
 | `stage-oracle-installer`: `SCP of Grid installer to bastion failed` | bastion SSH key not deployed or bastion not reachable | Run Step 5 (host SSH key) and Step 7 (bootstrap-bastion) first |
 | `stage-oracle-installer`: `chown: invalid group: grid:oinstall` | Oracle users not yet created on RAC nodes | Run `oracle-rac-os-prep.yml` first, then re-run `stage-oracle-installer` |
@@ -2025,4 +2027,4 @@ Once Step 5 is complete (host key on bastion), all SSH-based commands work.
 |---|---|
 | `logs/sre.log` | Structured events: `DATE\|LEVEL\|APP\|HOST\|FUNCTION\|TEXT` |
 | `logs/sre_runtime.log` | All stdout/stderr output |
-| `logs/errors.log` | ERROR-level events across all db_ops components |
+| `logs/errors.log` | ERROR-level events across all dbabrain components |

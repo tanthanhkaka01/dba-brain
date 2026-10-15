@@ -15,8 +15,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.backup_restore import restore_by_id
-from db_ops.backup_restore.backup import BackupTarget
+from dbabrain.backup_restore import restore_by_id
+from dbabrain.backup_restore.backup import BackupTarget
 
 
 def _job(**over):
@@ -31,8 +31,8 @@ def _job(**over):
 @pytest.fixture
 def estate(monkeypatch):
     """Source SRC: host 192.0.2.10, container prod, SQL port 1433."""
-    import db_ops.backup_restore.backup as backup
-    import db_ops.lib.data_sources as data_sources
+    import dbabrain.backup_restore.backup as backup
+    import dbabrain.lib.data_sources as data_sources
 
     monkeypatch.setattr(backup, "resolve_ssh_target", lambda sid, **_k: BackupTarget(
         server_id=sid, host="192.0.2.10", port=22, username="u", container_name="prod",
@@ -70,7 +70,7 @@ def test_another_machine_is_allowed(estate):
 
 
 def test_the_guard_runs_before_any_step(monkeypatch, estate):
-    from db_ops.backup_restore import restore_script
+    from dbabrain.backup_restore import restore_script
 
     ran = []
     monkeypatch.setattr(restore_script, "load_script_restores",
@@ -87,7 +87,7 @@ def test_the_guard_runs_before_any_step(monkeypatch, estate):
 
 def test_no_port_is_guessed(monkeypatch):
     """It was 1433 when nothing said otherwise, and the source's port when the target was unnamed."""
-    import db_ops.lib.data_sources as data_sources
+    import dbabrain.lib.data_sources as data_sources
 
     monkeypatch.setattr(data_sources, "load_db_instances", lambda _d=None: [
         {"server_id": "SRC", "db_type": "sqlserver", "port": 1433}])

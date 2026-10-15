@@ -1,4 +1,4 @@
-"""Applying and verifying a SQL Server cumulative update: db_ops.common.sqlserver_patch.
+"""Applying and verifying a SQL Server cumulative update: dbabrain.common.sqlserver_patch.
 
 Every assertion here is a defect the 2026-08-03 CU26 run produced or narrowly avoided
 (``docs/reports/20260803_ord129-sqlserver-2022-cu26-execution-report.md``):
@@ -16,9 +16,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.common import host_ops, sqlserver_patch as patch
-from db_ops.common.evidence import FAIL, OK, GateReport
-from db_ops.common.remote_exec import RemoteResult
+from dbabrain.common import host_ops, sqlserver_patch as patch
+from dbabrain.common.evidence import FAIL, OK, GateReport
+from dbabrain.common.remote_exec import RemoteResult
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ CONNECTION = {"db_type": "sqlserver", "host": "192.0.2.10", "port": 1433, "usern
 def _filled(command, request, data_dir):
     """The request as the app sends it (rules R09): the host's login, policy and rules filled from
     the fixture's data folder, the database login stated."""
-    from db_ops.lib.data_sources import request_fill
+    from dbabrain.lib.data_sources import request_fill
 
     return request_fill.fill_request(command, {"connection": CONNECTION, **request},
                                      data_dir=data_dir, secrets={"PW": "pw"})
@@ -364,7 +364,7 @@ def test_the_patch_prompt_says_the_cu_cannot_be_uninstalled(data_dir, monkeypatc
         lambda *a, **k: FakeSession([json.dumps(
             {"exit_code": 3010, "started_at": "2026-08-03T19:57:06",
              "finished_at": "2026-08-03T20:01:56", "duration_minutes": 4.8,
-             "run_directory": r"C:\Windows\Temp\db_ops_cu_x"}
+             "run_directory": r"C:\Windows\Temp\dbabrain_cu_x"}
         )]),
     )
     monkeypatch.setattr(host_ops.confirm, "is_interactive", lambda: True)

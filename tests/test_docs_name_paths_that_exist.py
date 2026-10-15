@@ -1,10 +1,10 @@
 """Every repository path the documentation names is a path that exists.
 
-On 2026-08-22 the shipped assets moved out of ``db_ops/assets/`` and into the component that owns
+On 2026-08-22 the shipped assets moved out of ``dbabrain/assets/`` and into the component that owns
 each tree — ``metrics/collectors``, ``common/backup_scripts``, ``common/restore_scripts``,
 ``sre/host_config``. The code and the tests moved with them and the suite stayed green, because a
 test executes its paths. Documentation does not: **thirteen markdown files went on naming
-``db_ops/assets/...`` and nothing noticed**, and the only thing that caught it was a person
+``dbabrain/assets/...`` and nothing noticed**, and the only thing that caught it was a person
 grepping by hand afterwards.
 
 That is the failure mode worth guarding. A doc naming a path that no longer exists is worse than a
@@ -15,10 +15,10 @@ behaviour, so nothing that runs has an opinion about it.
 
 Two vocabularies are checked, because the docs legitimately use both:
 
-- **``db_ops/...``** is a literal location on disk, always. It is where the code is and it means
+- **``dbabrain/...``** is a literal location on disk, always. It is where the code is and it means
   nothing else.
 - **``assets/...``** is what *configuration* says, and it resolves through
-  :func:`db_ops.lib.paths.resolve_tool_path` — the operator's tree first, the package's shipped
+  :func:`dbabrain.lib.paths.resolve_tool_path` — the operator's tree first, the package's shipped
   copy second. So it is checked the way the tool would resolve it rather than as a literal
   directory: ``assets/backup/sqlserver/mssql_backup_database.sh`` is correct even though no such
   file sits at the repository root, and stops being correct the moment the shipped copy moves
@@ -35,7 +35,7 @@ Three kinds of token are skipped rather than excepted, because none of them clai
 - a place *inside* a file — ``module.py::function``, ``worker_status.py:17`` — where the file is
   the part that has to exist, so the suffix is cut and the file checked;
 - an **operator-owned** asset kind. ``assets/tasks/`` and ``assets/sql_telegram_commands/`` ship no
-  built-in copy at all (:data:`db_ops.lib.paths.OPERATOR_ASSET_KINDS`), so every path under them in
+  built-in copy at all (:data:`dbabrain.lib.paths.OPERATOR_ASSET_KINDS`), so every path under them in
   a doc is an example of what *you* would write. Requiring those to exist would mean shipping one
   estate's task SQL to make the documentation pass.
 
@@ -48,15 +48,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from db_ops.lib.distribution import PRIVATE_PACKAGES
-from db_ops.lib.paths import OPERATOR_ASSET_KINDS, builtin_asset_root, resolve_tool_path
+from dbabrain.lib.distribution import PRIVATE_PACKAGES
+from dbabrain.lib.paths import OPERATOR_ASSET_KINDS, builtin_asset_root, resolve_tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: Any token that looks like a path into the code or the asset trees, anywhere on the page —
 #: prose, table cell, inline span or fenced block. The lookbehind stops it matching the tail of a
 #: longer path that was already matched from its start.
-DOCUMENTED_PATH = re.compile(r"(?<![\w./-])((?:db_ops|assets)/[\w./{}<>*?,-]+)")
+DOCUMENTED_PATH = re.compile(r"(?<![\w./-])((?:dbabrain|assets)/[\w./{}<>*?,-]+)")
 
 #: Trailing punctuation a sentence or a JSON snippet leaves on the end of a path.
 TRAILING = ".,;:)`\"'"
@@ -71,7 +71,7 @@ INSIDE_A_FILE = re.compile(r"(?P<path>[^\s:]+\.(?:py|sql|sh|ps1|json|md))::?[\w.
 #: The example this guard uses to prove it reads fenced blocks. Pinned rather than described,
 #: because "the sweep still works" is not something a passing test can otherwise claim.
 A_PATH_INSIDE_A_FENCED_BLOCK = (
-    "db_ops/metrics/collectors/sqlserver/legacy_2008r2/069_sqlserver_linked_server_status.sql"
+    "dbabrain/metrics/collectors/sqlserver/legacy_2008r2/069_sqlserver_linked_server_status.sql"
 )
 
 #: Paths the docs name that genuinely do not exist, with the reason each is tolerated. Empty on
@@ -103,11 +103,11 @@ def _is_withheld_component(token: str) -> bool:
     repository every package exists, so a genuinely wrong path is caught where it is written.
     """
     parts = token.split("/")
-    if len(parts) > 1 and parts[0] == "db_ops" and parts[1] in PRIVATE_PACKAGES:
+    if len(parts) > 1 and parts[0] == "dbabrain" and parts[1] in PRIVATE_PACKAGES:
         return True
     # `assets/<kind>` too: configuration's vocabulary resolves through BUILTIN_ASSET_ROOTS into a
-    # package, and `assets/host/` lands in `db_ops/sre/`, which the thin distribution withholds.
-    # Checking only the `db_ops/...` spelling missed exactly one path and took two runs to see.
+    # package, and `assets/host/` lands in `dbabrain/sre/`, which the thin distribution withholds.
+    # Checking only the `dbabrain/...` spelling missed exactly one path and took two runs to see.
     if len(parts) > 1 and parts[0] == "assets":
         root = builtin_asset_root(parts[1])
         if root is not None and root.parent.name in PRIVATE_PACKAGES:

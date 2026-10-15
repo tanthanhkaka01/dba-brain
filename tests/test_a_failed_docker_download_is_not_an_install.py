@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common.docker_db.remote_host import RemoteHostError, docker_install_script, ensure_docker
+from dbabrain.common.docker_db.remote_host import RemoteHostError, docker_install_script, ensure_docker
 
 SH = shutil.which("sh")
 pytestmark = pytest.mark.skipif(SH is None, reason="needs a POSIX sh")
@@ -90,6 +90,6 @@ class _HostWithoutDocker:
 
 def test_a_docker_that_even_root_cannot_find_is_called_not_installed():
     with pytest.raises(RemoteHostError, match="NOT installed") as caught:
-        ensure_docker(_HostWithoutDocker(), sudo_password="pw")
+        ensure_docker(_HostWithoutDocker(), sudo_password="pw", containers_dir="/opt/acme/containers")
 
     assert "not usable as" not in str(caught.value)

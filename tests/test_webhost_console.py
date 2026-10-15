@@ -1,6 +1,6 @@
 """The console must refuse everything to a stranger and render the estate to a signed-in operator.
 
-:class:`~db_ops.webhost.app.WebApp` is a plain request -> response function, so all of this runs
+:class:`~dbabrain.webhost.app.WebApp` is a plain request -> response function, so all of this runs
 with no socket and no browser. What is being held down here:
 
 * **No page past the login form is reachable without a session** — including the JSON endpoints,
@@ -34,12 +34,12 @@ import pytest
 
 from conftest import write_catalogued_data, shipped_config
 
-from db_ops.db import config_sync
-from db_ops.db.config_store import ConfigStore
-from db_ops.db.run_requests import RunRequestStore
-from db_ops.db.web_auth_store import WebAuthStore
-from db_ops.lib import web_auth
-from db_ops.webhost.app import Request, WebApp, WebSettings, _schedule_text
+from dbabrain.db import config_sync
+from dbabrain.db.config_store import ConfigStore
+from dbabrain.db.run_requests import RunRequestStore
+from dbabrain.db.web_auth_store import WebAuthStore
+from dbabrain.lib import web_auth
+from dbabrain.webhost.app import Request, WebApp, WebSettings, _schedule_text
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PASSWORD = "console-password-1"
@@ -90,7 +90,7 @@ def console(tmp_path: Path, _template) -> WebApp:
     a save rebuilds ``data/<file>.json``, which is the point of them.
     """
     template_store, template_data = _template
-    store_path = tmp_path / "db_ops.sqlite"
+    store_path = tmp_path / "dbabrain.sqlite"
     shutil.copy(template_store, store_path)
     data = tmp_path / "data"
     shutil.copytree(template_data, data)
@@ -158,7 +158,7 @@ def cookie_from(response) -> str:
 
 
 def sign_in(console: WebApp, username: str = "thanh", password: str = PASSWORD):
-    response = console.handle(post_form("/db_ops/login",
+    response = console.handle(post_form("/dbabrain/login",
                                         {"username": username, "password": password}))
     assert response.status == 303, "a good login must redirect, not re-render the form"
     return cookie_from(response)
@@ -169,23 +169,23 @@ def sign_in(console: WebApp, username: str = "thanh", password: str = PASSWORD):
 # --------------------------------------------------------------------------- #
 def test_the_console_claims_only_its_own_prefix(console: WebApp) -> None:
     """The report URLs must keep working exactly as they did; the console is a prefix beside them."""
-    assert console.owns("/db_ops") and console.owns("/db_ops/login")
+    assert console.owns("/dbabrain") and console.owns("/dbabrain/login")
     assert not console.owns("/report_dba/database-inventory.html")
-    assert not console.owns("/db_ops_other/page.html"), (
+    assert not console.owns("/dbabrain_other/page.html"), (
         "prefix matching must be on a path segment, or a sibling mount is swallowed")
 
 
 # --------------------------------------------------------------------------- #
 # Nothing without a session
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("path", ["/db_ops/", "/db_ops/dashboard"])
+@pytest.mark.parametrize("path", ["/dbabrain/", "/dbabrain/dashboard"])
 def test_a_page_without_a_session_redirects_to_the_login_form(console: WebApp, path: str) -> None:
     response = console.handle(get(path))
     assert response.status == 303
-    assert dict(response.headers)["Location"].startswith("/db_ops/login")
+    assert dict(response.headers)["Location"].startswith("/dbabrain/login")
 
 
-@pytest.mark.parametrize("path", ["/db_ops/api/session", "/db_ops/api/apps", "/db_ops/api/config"])
+@pytest.mark.parametrize("path", ["/dbabrain/api/session", "/dbabrain/api/apps", "/dbabrain/api/config"])
 def test_an_api_without_a_session_answers_401_json(console: WebApp, path: str) -> None:
     """A fetch() must get an error it can read, not a login page it would parse as data."""
     response = console.handle(get(path))
@@ -195,7 +195,7 @@ def test_an_api_without_a_session_answers_401_json(console: WebApp, path: str) -
 
 
 def test_a_forged_cookie_is_not_a_session(console: WebApp) -> None:
-    response = console.handle(get("/db_ops/", cookie="db_ops_session=made-up-token"))
+    response = console.handle(get("/dbabrain/", cookie="dbabrain_session=made-up-token"))
     assert response.status == 303
 
 
@@ -204,7 +204,7 @@ def test_a_forged_cookie_is_not_a_session(console: WebApp) -> None:
 # --------------------------------------------------------------------------- #
 def test_the_login_cookie_survives_closing_the_browser(console: WebApp) -> None:
     """`Max-Age` is the requirement. Without it the browser drops the cookie on exit."""
-    response = console.handle(post_form("/db_ops/login",
+    response = console.handle(post_form("/dbabrain/login",
                                         {"username": "thanh", "password": PASSWORD}))
     header = next(value for name, value in response.headers if name == "Set-Cookie")
     assert "Max-Age=" in header, "a cookie with no Max-Age is discarded when the browser closes"
@@ -215,7 +215,7 @@ def test_the_login_cookie_survives_closing_the_browser(console: WebApp) -> None:
 
 
 def test_a_wrong_password_re_renders_the_form_and_sets_no_cookie(console: WebApp) -> None:
-    response = console.handle(post_form("/db_ops/login",
+    response = console.handle(post_form("/dbabrain/login",
                                         {"username": "thanh", "password": "wrong"}))
     assert response.status == 401
     assert not any(name == "Set-Cookie" for name, _ in response.headers)
@@ -225,9 +225,9 @@ def test_a_wrong_password_re_renders_the_form_and_sets_no_cookie(console: WebApp
 def test_the_form_says_the_same_thing_for_an_unknown_user_as_for_a_wrong_password(
         console: WebApp) -> None:
     """Otherwise the login page is a way to find out who works here."""
-    unknown = console.handle(post_form("/db_ops/login",
+    unknown = console.handle(post_form("/dbabrain/login",
                                        {"username": "ghost", "password": PASSWORD}))
-    wrong = console.handle(post_form("/db_ops/login",
+    wrong = console.handle(post_form("/dbabrain/login",
                                      {"username": "thanh", "password": "nope"}))
     assert unknown.status == wrong.status == 401
     assert b"Wrong username or password" in unknown.body
@@ -236,26 +236,26 @@ def test_the_form_says_the_same_thing_for_an_unknown_user_as_for_a_wrong_passwor
 
 def test_signing_in_reaches_the_dashboard(console: WebApp) -> None:
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/", cookie=cookie))
+    response = console.handle(get("/dbabrain/", cookie=cookie))
     assert response.status == 200
-    assert b"db_ops console" in response.body
+    assert b"dbabrain console" in response.body
     assert b"Thanh" in response.body
 
 
 def test_the_login_page_redirects_someone_already_signed_in(console: WebApp) -> None:
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/login", cookie=cookie))
-    assert response.status == 303 and dict(response.headers)["Location"] == "/db_ops/"
+    response = console.handle(get("/dbabrain/login", cookie=cookie))
+    assert response.status == 303 and dict(response.headers)["Location"] == "/dbabrain/"
 
 
 def test_signing_out_revokes_the_session_and_clears_the_cookie(console: WebApp) -> None:
     cookie = sign_in(console)
-    response = console.handle(post_form("/db_ops/logout", {"csrf": csrf_of(console, cookie)},
+    response = console.handle(post_form("/dbabrain/logout", {"csrf": csrf_of(console, cookie)},
                                         cookie=cookie))
     assert response.status == 303
     header = next(value for name, value in response.headers if name == "Set-Cookie")
     assert "Max-Age=0" in header
-    assert console.handle(get("/db_ops/", cookie=cookie)).status == 303, (
+    assert console.handle(get("/dbabrain/", cookie=cookie)).status == 303, (
         "the token must stop working server-side, not only be dropped by the browser")
 
 
@@ -263,30 +263,30 @@ def test_a_link_cannot_sign_anyone_out(console: WebApp) -> None:
     """A GET signed out with no token, so any page - an <img src> on a wiki - ended a session
     (review 0.25.0, B6.3). It goes to the dashboard now and the session stays."""
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/logout", cookie=cookie))
-    assert response.status == 303 and dict(response.headers)["Location"] == "/db_ops/"
-    assert console.handle(get("/db_ops/", cookie=cookie)).status == 200
+    response = console.handle(get("/dbabrain/logout", cookie=cookie))
+    assert response.status == 303 and dict(response.headers)["Location"] == "/dbabrain/"
+    assert console.handle(get("/dbabrain/", cookie=cookie)).status == 200
 
 
 def test_a_sign_out_without_the_form_s_token_is_refused(console: WebApp) -> None:
     cookie = sign_in(console)
-    assert console.handle(post_form("/db_ops/logout", {}, cookie=cookie)).status == 403
-    assert console.handle(get("/db_ops/", cookie=cookie)).status == 200
+    assert console.handle(post_form("/dbabrain/logout", {}, cookie=cookie)).status == 403
+    assert console.handle(get("/dbabrain/", cookie=cookie)).status == 200
 
 
 def test_the_sign_out_form_carries_the_session_s_token(console: WebApp) -> None:
     cookie = sign_in(console)
-    page = console.handle(get("/db_ops/", cookie=cookie)).body.decode("utf-8")
-    form = page[page.index('action="/db_ops/logout"'):]
+    page = console.handle(get("/dbabrain/", cookie=cookie)).body.decode("utf-8")
+    form = page[page.index('action="/dbabrain/logout"'):]
     assert f'name="csrf" value="{csrf_of(console, cookie)}"' in form[:400]
 
 
 def test_the_next_parameter_cannot_send_a_user_off_site(console: WebApp) -> None:
     """A login form is exactly where an open redirect gets used."""
     response = console.handle(post_form(
-        "/db_ops/login",
+        "/dbabrain/login",
         {"username": "thanh", "password": PASSWORD, "next": "https://evil.example/steal"}))
-    assert dict(response.headers)["Location"] == "/db_ops/"
+    assert dict(response.headers)["Location"] == "/dbabrain/"
 
 
 def _fresh_console(tmp_path: Path, data_copy: Path) -> WebApp:
@@ -299,7 +299,7 @@ def _fresh_console(tmp_path: Path, data_copy: Path) -> WebApp:
 def test_an_empty_store_gets_admin_admin_and_says_so(tmp_path: Path, data_copy: Path) -> None:
     """First run (owner decision 2026-10-01): admin / admin, level 100, to be changed at once."""
     app = _fresh_console(tmp_path, data_copy)
-    body = app.handle(get("/db_ops/login")).body
+    body = app.handle(get("/dbabrain/login")).body
 
     assert b"First sign-in" in body and b"admin" in body
     admin = app.auth.get_user("admin")
@@ -311,26 +311,26 @@ def test_an_empty_store_gets_admin_admin_and_says_so(tmp_path: Path, data_copy: 
 def test_the_first_sign_in_must_change_the_password_before_anything_else(tmp_path: Path,
                                                                         data_copy: Path) -> None:
     app = _fresh_console(tmp_path, data_copy)
-    app.handle(get("/db_ops/login"))
+    app.handle(get("/dbabrain/login"))
     cookie = sign_in(app, "admin", "admin")
 
-    assert dict(app.handle(get("/db_ops/", cookie=cookie)).headers)["Location"] == "/db_ops/password"
-    assert app.handle(get("/db_ops/api/apps", cookie=cookie)).status == 403
-    assert b"Choose a new password" in app.handle(get("/db_ops/password", cookie=cookie)).body
+    assert dict(app.handle(get("/dbabrain/", cookie=cookie)).headers)["Location"] == "/dbabrain/password"
+    assert app.handle(get("/dbabrain/api/apps", cookie=cookie)).status == 403
+    assert b"Choose a new password" in app.handle(get("/dbabrain/password", cookie=cookie)).body
 
     token = csrf_of(app, cookie)
-    weak = app.handle(post_form("/db_ops/password", {
+    weak = app.handle(post_form("/dbabrain/password", {
         "csrf": token, "current_password": "admin", "new_password": "short",
         "new_password_again": "short"}, cookie=cookie))
     assert weak.status == 400
 
-    changed = app.handle(post_form("/db_ops/password", {
+    changed = app.handle(post_form("/dbabrain/password", {
         "csrf": token, "current_password": "admin", "new_password": "N3w-strong-pw",
         "new_password_again": "N3w-strong-pw"}, cookie=cookie))
     assert changed.status == 303
     fresh = cookie_from(changed)
-    assert app.handle(get("/db_ops/", cookie=fresh)).status == 200
-    assert app.handle(get("/db_ops/", cookie=cookie)).status == 303, "the old session ended"
+    assert app.handle(get("/dbabrain/", cookie=fresh)).status == 200
+    assert app.handle(get("/dbabrain/", cookie=cookie)).status == 303, "the old session ended"
     assert int(app.auth.get_user("admin")["must_change_password"]) == 0
     assert app.auth.authenticate(username="admin", password="admin")[0] is None
 
@@ -340,12 +340,12 @@ def test_reports_send_a_first_run_session_to_change_its_password(tmp_path: Path,
 
     from tests.test_the_console_login_guards_reports_and_redirects import _get
 
-    console = SimpleNamespace(prefix="/db_ops", settings=SimpleNamespace(reports_require_login=True),
-                              owns=lambda path: path.startswith("/db_ops"),
+    console = SimpleNamespace(prefix="/dbabrain", settings=SimpleNamespace(reports_require_login=True),
+                              owns=lambda path: path.startswith("/dbabrain"),
                               current_session=lambda request: {"must_change_password": True})
     status, headers, _ = _get(tmp_path, console, "/report_dba/page.html")
 
-    assert status == 303 and headers["Location"] == "/db_ops/password"
+    assert status == 303 and headers["Location"] == "/dbabrain/password"
 
 
 # --------------------------------------------------------------------------- #
@@ -353,10 +353,10 @@ def test_reports_send_a_first_run_session_to_change_its_password(tmp_path: Path,
 # --------------------------------------------------------------------------- #
 def test_the_console_knows_every_app_that_is_installed(console: WebApp) -> None:
     blocks = console.app_blocks()
-    # A *package*, not merely a directory: `db_ops/assets` holds the shipped SQL and scripts and
+    # A *package*, not merely a directory: `dbabrain/assets` holds the shipped SQL and scripts and
     # is data, not a component. `tests/test_docs_cover_every_component.py` draws the same line the
     # same way, and the console's app list has to agree with it.
-    packages = {p.name for p in (REPO_ROOT / "db_ops").iterdir()
+    packages = {p.name for p in (REPO_ROOT / "dbabrain").iterdir()
                 if p.is_dir() and not p.name.startswith("__") and (p / "__init__.py").exists()}
     # Counted from the tree rather than written down. This asserted `== 14` until a distribution
     # shipped thirteen of them, and then a correct console failed a test for agreeing with the
@@ -371,10 +371,10 @@ def test_the_sidebar_lists_every_app_in_order_on_every_page(console: WebApp) -> 
     """The same names in the same place on every page is the whole point of a fixed list."""
     cookie = sign_in(console)
     order = [block["app_code"] for block in console.app_blocks()]
-    for url in ("/db_ops/", "/db_ops/app/metrics", "/db_ops/config/telegram_users.json",
-                "/db_ops/config/telegram_users.json/telegram_users/100000001"):
+    for url in ("/dbabrain/", "/dbabrain/app/metrics", "/dbabrain/config/telegram_users.json",
+                "/dbabrain/config/telegram_users.json/telegram_users/100000001"):
         html = console.handle(get(url, cookie=cookie)).body.decode()
-        links = re.findall(r'href="/db_ops/app/([a-z_]+)"', html)
+        links = re.findall(r'href="/dbabrain/app/([a-z_]+)"', html)
         # Sliced to the sidebar's own length rather than to a remembered 14: a page may carry app
         # links below the sidebar, and the number of apps depends on what this distribution
         # installs.
@@ -383,22 +383,22 @@ def test_the_sidebar_lists_every_app_in_order_on_every_page(console: WebApp) -> 
 
 def test_the_sidebar_marks_which_app_is_open(console: WebApp) -> None:
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/telegram", cookie=cookie)).body.decode()
-    active = re.search(r'<a class="item active" href="/db_ops/app/([a-z_]+)"', html)
+    html = console.handle(get("/dbabrain/app/telegram", cookie=cookie)).body.decode()
+    active = re.search(r'<a class="item active" href="/dbabrain/app/([a-z_]+)"', html)
     assert active and active.group(1) == "telegram"
 
 
 def test_a_config_page_keeps_its_app_highlighted(console: WebApp) -> None:
     """Descending into a file must not lose which app you are in."""
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/config/metric_definitions.json", cookie=cookie)).body.decode()
-    active = re.search(r'<a class="item active" href="/db_ops/app/([a-z_]+)"', html)
+    html = console.handle(get("/dbabrain/config/metric_definitions.json", cookie=cookie)).body.decode()
+    active = re.search(r'<a class="item active" href="/dbabrain/app/([a-z_]+)"', html)
     assert active and active.group(1) == "metrics"
 
 
 def test_clicking_an_app_shows_that_app(console: WebApp) -> None:
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/telegram", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/app/telegram", cookie=cookie)).body.decode()
     assert "Telegram App" in html
     assert "APP-TELEGRAM" in html
     assert "Metrics Engine" not in html.split('<section class="detail">')[1], (
@@ -408,14 +408,14 @@ def test_clicking_an_app_shows_that_app(console: WebApp) -> None:
 def test_an_unknown_app_is_a_404_not_a_silent_fallback(console: WebApp) -> None:
     """Falling back to the first app would make a stale link look like it worked."""
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/app/invented", cookie=cookie))
+    response = console.handle(get("/dbabrain/app/invented", cookie=cookie))
     assert response.status == 404
     assert b"No app called" in response.body
 
 
 def test_the_overview_counts_the_estate(console: WebApp) -> None:
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/", cookie=cookie)).body.decode()
     assert "Overview" in html
     expected_apps = len(console.app_blocks())
     assert re.search(rf'<div class="n">{expected_apps}</div>\s*<div class="l">apps</div>', html), (
@@ -432,7 +432,7 @@ def test_a_block_carries_the_schedule_of_the_commands_it_owns(console: WebApp) -
     assert command["repeat_interval"] == 1
     assert command["schedule_text"] == "every 1s"
     assert command["timeout"] == 300
-    assert "python -m db_ops.telegram.cli" in command["command_text"]
+    assert "python -m dbabrain.telegram.cli" in command["command_text"]
 
 
 def test_an_app_with_no_scheduled_command_says_so_rather_than_looking_broken(
@@ -440,7 +440,7 @@ def test_an_app_with_no_scheduled_command_says_so_rather_than_looking_broken(
     lib = next(b for b in console.app_blocks() if b["app_code"] == "lib")
     assert lib["commands"] == []
     cookie = sign_in(console)
-    body = console.handle(get("/db_ops/app/lib", cookie=cookie)).body
+    body = console.handle(get("/dbabrain/app/lib", cookie=cookie)).body
     assert b"No scheduled command" in body
 
 
@@ -469,7 +469,7 @@ def test_a_schedule_reads_the_way_an_operator_says_it(window: dict, expected: st
     """`repeat_interval: 0` means run-once-and-stay-up; "every 0 seconds" reads as a broken clock.
 
     The window goes through the scheduler's parser first, as the console reads it (rules R20)."""
-    from db_ops.lib.time_window import window_of
+    from dbabrain.lib.time_window import window_of
 
     assert _schedule_text(window_of({"time_window": window})) == expected
 
@@ -477,7 +477,7 @@ def test_a_schedule_reads_the_way_an_operator_says_it(window: dict, expected: st
 def test_an_app_page_renders_without_the_run_history(console: WebApp) -> None:
     """A store that cannot answer job_runs must cost the status column, not the whole page."""
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/app/metrics", cookie=cookie))
+    response = console.handle(get("/dbabrain/app/metrics", cookie=cookie))
     assert response.status == 200
     assert b"no run history" in response.body
     assert b"APP-METRICS" in response.body
@@ -488,13 +488,13 @@ def test_an_app_page_renders_without_the_run_history(console: WebApp) -> None:
 # --------------------------------------------------------------------------- #
 def test_the_session_api_reports_who_is_signed_in(console: WebApp) -> None:
     cookie = sign_in(console, "viewer")
-    payload = json.loads(console.handle(get("/db_ops/api/session", cookie=cookie)).body)
+    payload = json.loads(console.handle(get("/dbabrain/api/session", cookie=cookie)).body)
     assert payload["username"] == "viewer" and payload["level"] == 1
 
 
 def test_the_config_api_returns_the_mirrored_records(console: WebApp) -> None:
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/api/config", cookie=cookie,
+    response = console.handle(get("/dbabrain/api/config", cookie=cookie,
                                   source_file="reports_config.json"))
     items = json.loads(response.body)["items"]
     assert {item["source_file"] for item in items} == {"reports_config.json"}
@@ -521,14 +521,14 @@ def test_a_config_value_containing_markup_is_escaped_on_the_page(tmp_path: Path,
     cookie = sign_in(app)
     # The tampered summary is on the first app's own page, which is where a summary is shown.
     first = app.app_blocks()[0]["app_code"]
-    body = app.handle(get(f"/db_ops/app/{first}", cookie=cookie)).body
+    body = app.handle(get(f"/dbabrain/app/{first}", cookie=cookie)).body
     assert b"<script>alert" not in body
     assert b"&lt;script&gt;alert" in body
 
 
 def test_an_unknown_console_page_is_a_404_not_a_redirect_loop(console: WebApp) -> None:
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/nope", cookie=cookie))
+    response = console.handle(get("/dbabrain/nope", cookie=cookie))
     assert response.status == 404
 
 
@@ -538,7 +538,7 @@ def test_a_failure_inside_the_console_is_a_page_not_a_dropped_connection(console
     monkeypatch.setattr(console, "app_blocks",
                         lambda: (_ for _ in ()).throw(RuntimeError("store is gone")))
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/", cookie=cookie))
+    response = console.handle(get("/dbabrain/", cookie=cookie))
     assert response.status == 500
     assert b"store is gone" in response.body
 
@@ -555,7 +555,7 @@ NEW_USER = {
 
 def test_a_config_file_page_lists_its_records(console: WebApp) -> None:
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/config/telegram_users.json", cookie=cookie))
+    response = console.handle(get("/dbabrain/config/telegram_users.json", cookie=cookie))
     assert response.status == 200
     assert b"telegram_users" in response.body
     assert b"100000001" in response.body, "the record keys are what an operator clicks"
@@ -565,7 +565,7 @@ def test_a_record_page_shows_the_json_that_will_be_saved(console: WebApp) -> Non
     """A JSON editor, not a generated form: these records have no fixed shape."""
     cookie = sign_in(console)
     response = console.handle(
-        get("/db_ops/config/telegram_users.json/telegram_users/100000001", cookie=cookie))
+        get("/dbabrain/config/telegram_users.json/telegram_users/100000001", cookie=cookie))
     assert response.status == 200
     assert b"operator" in response.body
     assert b"<textarea" in response.body
@@ -575,7 +575,7 @@ def test_saving_a_new_record_writes_the_store_and_the_file(console: WebApp) -> N
     """The file is what the apps read; a save that stopped at the store would do nothing."""
     cookie = sign_in(console)
     response = console.handle(post_form(
-        "/db_ops/config/telegram_users.json/telegram_users",
+        "/dbabrain/config/telegram_users.json/telegram_users",
         {"confirm_password": PASSWORD, "csrf": csrf_of(console, cookie), "payload": json.dumps(NEW_USER)}, cookie=cookie))
 
     assert response.status == 303
@@ -591,7 +591,7 @@ def test_editing_a_record_bumps_its_revision_and_records_the_author(console: Web
     record = dict(users_on_disk(console)[0])
     record["user_type"] = 42
     console.handle(post_form(
-        f"/db_ops/config/telegram_users.json/telegram_users/{record['user_id']}",
+        f"/dbabrain/config/telegram_users.json/telegram_users/{record['user_id']}",
         {"confirm_password": PASSWORD, "csrf": token, "payload": json.dumps(record)}, cookie=cookie))
 
     row = console.config.get_item(source_file="telegram_users.json",
@@ -606,7 +606,7 @@ def test_retiring_a_record_from_the_console_keeps_its_row(console: WebApp) -> No
     token = csrf_of(console, cookie)
     target = users_on_disk(console)[0]["user_id"]
     response = console.handle(post_form(
-        f"/db_ops/config/telegram_users.json/telegram_users/{target}/delete",
+        f"/dbabrain/config/telegram_users.json/telegram_users/{target}/delete",
         {"csrf": token}, cookie=cookie))
 
     assert response.status == 303
@@ -621,7 +621,7 @@ def test_a_refused_edit_explains_itself_and_changes_nothing(console: WebApp) -> 
     cookie = sign_in(console)
     before = users_on_disk(console)
     response = console.handle(post_form(
-        "/db_ops/config/telegram_users.json/telegram_users",
+        "/dbabrain/config/telegram_users.json/telegram_users",
         {"confirm_password": PASSWORD, "csrf": csrf_of(console, cookie), "payload": json.dumps({"username": "no-key"})},
         cookie=cookie))
 
@@ -633,7 +633,7 @@ def test_a_refused_edit_explains_itself_and_changes_nothing(console: WebApp) -> 
 def test_malformed_json_is_refused_before_anything_is_written(console: WebApp) -> None:
     cookie = sign_in(console)
     response = console.handle(post_form(
-        "/db_ops/config/telegram_users.json/telegram_users",
+        "/dbabrain/config/telegram_users.json/telegram_users",
         {"csrf": csrf_of(console, cookie), "payload": "{not json"}, cookie=cookie))
     assert response.status == 400
     assert b"not valid JSON" in response.body
@@ -644,17 +644,17 @@ def test_the_retired_records_are_hidden_until_asked_for(console: WebApp) -> None
     token = csrf_of(console, cookie)
     target = users_on_disk(console)[0]["user_id"]
     console.handle(post_form(
-        f"/db_ops/config/telegram_users.json/telegram_users/{target}/delete",
+        f"/dbabrain/config/telegram_users.json/telegram_users/{target}/delete",
         {"csrf": token}, cookie=cookie))
 
     # Asserted on the row marker, not on the word: the page's own hint text explains what
     # retiring does, so a substring search for it matches whether or not any row is shown.
-    plain = console.handle(get("/db_ops/config/telegram_users.json", cookie=cookie)).body
+    plain = console.handle(get("/dbabrain/config/telegram_users.json", cookie=cookie)).body
     assert b'<tr class="retired">' not in plain
     assert target.encode() not in plain
 
     shown = console.handle(
-        get("/db_ops/config/telegram_users.json", cookie=cookie, retired="1")).body
+        get("/dbabrain/config/telegram_users.json", cookie=cookie, retired="1")).body
     assert b'<tr class="retired">' in shown and target.encode() in shown
 
 
@@ -666,7 +666,7 @@ def test_a_write_without_the_csrf_token_is_refused(console: WebApp) -> None:
     cookie = sign_in(console)
     before = users_on_disk(console)
     response = console.handle(post_form(
-        "/db_ops/config/telegram_users.json/telegram_users",
+        "/dbabrain/config/telegram_users.json/telegram_users",
         {"csrf": "not-the-token", "payload": json.dumps(NEW_USER)}, cookie=cookie))
 
     assert response.status == 403
@@ -677,7 +677,7 @@ def test_a_write_without_the_csrf_token_is_refused(console: WebApp) -> None:
 def test_a_write_with_no_csrf_field_at_all_is_refused(console: WebApp) -> None:
     cookie = sign_in(console)
     response = console.handle(post_form(
-        "/db_ops/config/telegram_users.json/telegram_users",
+        "/dbabrain/config/telegram_users.json/telegram_users",
         {"payload": json.dumps(NEW_USER)}, cookie=cookie))
     assert response.status == 403
 
@@ -685,11 +685,11 @@ def test_a_write_with_no_csrf_field_at_all_is_refused(console: WebApp) -> None:
 def test_a_viewer_may_read_config_but_not_change_it(console: WebApp) -> None:
     """Level 1 is the read gate; editing needs 50."""
     cookie = sign_in(console, "viewer")
-    assert console.handle(get("/db_ops/config/telegram_users.json", cookie=cookie)).status == 200
+    assert console.handle(get("/dbabrain/config/telegram_users.json", cookie=cookie)).status == 200
 
     before = users_on_disk(console)
     response = console.handle(post_form(
-        "/db_ops/config/telegram_users.json/telegram_users",
+        "/dbabrain/config/telegram_users.json/telegram_users",
         {"csrf": csrf_of(console, cookie), "payload": json.dumps(NEW_USER)}, cookie=cookie))
     assert response.status == 403
     assert b"needs level 50" in response.body
@@ -699,19 +699,19 @@ def test_a_viewer_may_read_config_but_not_change_it(console: WebApp) -> None:
 def test_a_viewer_sees_no_edit_controls(console: WebApp) -> None:
     """A button that answers 403 is a worse answer than no button."""
     cookie = sign_in(console, "viewer")
-    body = console.handle(get("/db_ops/config/telegram_users.json", cookie=cookie)).body
+    body = console.handle(get("/dbabrain/config/telegram_users.json", cookie=cookie)).body
     assert b"Add a record" not in body
     record = console.handle(
-        get("/db_ops/config/telegram_users.json/telegram_users/100000001", cookie=cookie)).body
+        get("/dbabrain/config/telegram_users.json/telegram_users/100000001", cookie=cookie)).body
     assert b"Retire this record" not in record
     assert b"read-only access" in record
 
 
 def test_editing_config_needs_a_session_at_all(console: WebApp) -> None:
     response = console.handle(post_form(
-        "/db_ops/config/telegram_users.json/telegram_users", {"payload": "{}"}))
+        "/dbabrain/config/telegram_users.json/telegram_users", {"payload": "{}"}))
     assert response.status == 303
-    assert dict(response.headers)["Location"].startswith("/db_ops/login")
+    assert dict(response.headers)["Location"].startswith("/dbabrain/login")
 
 
 # --------------------------------------------------------------------------- #
@@ -721,7 +721,7 @@ def test_run_now_queues_a_request_and_starts_nothing(console: WebApp) -> None:
     """The console's whole side of this feature is one row; the daemon does the running."""
     cookie = sign_in(console)
     response = console.handle(post_form(
-        "/db_ops/apps/APP-METRICS/run", {"csrf": csrf_of(console, cookie)}, cookie=cookie))
+        "/dbabrain/apps/APP-METRICS/run", {"csrf": csrf_of(console, cookie)}, cookie=cookie))
 
     assert response.status == 303
     assert dict(response.headers)["Location"].endswith("?queued=APP-METRICS")
@@ -735,8 +735,8 @@ def test_run_now_queues_a_request_and_starts_nothing(console: WebApp) -> None:
 def test_pressing_run_twice_does_not_queue_it_twice(console: WebApp) -> None:
     cookie = sign_in(console)
     token = csrf_of(console, cookie)
-    console.handle(post_form("/db_ops/apps/APP-METRICS/run", {"csrf": token}, cookie=cookie))
-    second = console.handle(post_form("/db_ops/apps/APP-METRICS/run", {"csrf": token},
+    console.handle(post_form("/dbabrain/apps/APP-METRICS/run", {"csrf": token}, cookie=cookie))
+    second = console.handle(post_form("/dbabrain/apps/APP-METRICS/run", {"csrf": token},
                                       cookie=cookie))
 
     assert dict(second.headers)["Location"].endswith("?already_queued=APP-METRICS")
@@ -746,11 +746,11 @@ def test_pressing_run_twice_does_not_queue_it_twice(console: WebApp) -> None:
 def test_a_queued_app_shows_as_queued_instead_of_offering_the_button(console: WebApp) -> None:
     cookie = sign_in(console)
     token = csrf_of(console, cookie)
-    before = console.handle(get("/db_ops/app/metrics", cookie=cookie)).body.count(b"Run now")
+    before = console.handle(get("/dbabrain/app/metrics", cookie=cookie)).body.count(b"Run now")
     assert before == 1
-    console.handle(post_form("/db_ops/apps/APP-METRICS/run", {"csrf": token}, cookie=cookie))
+    console.handle(post_form("/dbabrain/apps/APP-METRICS/run", {"csrf": token}, cookie=cookie))
 
-    body = console.handle(get("/db_ops/app/metrics", cookie=cookie)).body
+    body = console.handle(get("/dbabrain/app/metrics", cookie=cookie)).body
     assert b"Run now" not in body
     assert b"pending" in body
 
@@ -759,9 +759,9 @@ def test_running_an_app_returns_to_the_page_it_was_pressed_on(console: WebApp) -
     """Sending every run to the overview takes the operator off the app they were reading."""
     cookie = sign_in(console)
     response = console.handle(post_form(
-        "/db_ops/apps/APP-METRICS/run",
+        "/dbabrain/apps/APP-METRICS/run",
         {"csrf": csrf_of(console, cookie), "from": "app/metrics"}, cookie=cookie))
-    assert dict(response.headers)["Location"] == "/db_ops/app/metrics?queued=APP-METRICS"
+    assert dict(response.headers)["Location"] == "/dbabrain/app/metrics?queued=APP-METRICS"
 
 
 @pytest.mark.parametrize("hostile", ["//evil.example/", "app/../../elsewhere", "app/invented",
@@ -775,19 +775,19 @@ def test_the_return_target_cannot_be_used_to_go_anywhere_else(console: WebApp,
     """
     cookie = sign_in(console)
     response = console.handle(post_form(
-        "/db_ops/apps/APP-METRICS/run",
+        "/dbabrain/apps/APP-METRICS/run",
         {"csrf": csrf_of(console, cookie), "from": hostile}, cookie=cookie))
-    assert dict(response.headers)["Location"].startswith("/db_ops/?")
+    assert dict(response.headers)["Location"].startswith("/dbabrain/?")
 
 
 def test_running_an_app_needs_the_level_and_the_token(console: WebApp) -> None:
     viewer = sign_in(console, "viewer")
-    refused = console.handle(post_form("/db_ops/apps/APP-METRICS/run",
+    refused = console.handle(post_form("/dbabrain/apps/APP-METRICS/run",
                                        {"csrf": csrf_of(console, viewer)}, cookie=viewer))
     assert refused.status == 403 and b"needs level 50" in refused.body
 
     admin = sign_in(console)
-    no_token = console.handle(post_form("/db_ops/apps/APP-METRICS/run", {"csrf": "x"},
+    no_token = console.handle(post_form("/dbabrain/apps/APP-METRICS/run", {"csrf": "x"},
                                         cookie=admin))
     assert no_token.status == 403
     assert console.requests.list_requests() == []
@@ -796,7 +796,7 @@ def test_running_an_app_needs_the_level_and_the_token(console: WebApp) -> None:
 def test_an_app_that_is_not_configured_cannot_be_queued(console: WebApp) -> None:
     """The id comes off a page, so a bad one means a stale page or a hand-written request."""
     cookie = sign_in(console)
-    response = console.handle(post_form("/db_ops/apps/APP-INVENTED/run",
+    response = console.handle(post_form("/dbabrain/apps/APP-INVENTED/run",
                                         {"csrf": csrf_of(console, cookie)}, cookie=cookie))
     assert response.status == 404
     assert b"No app command" in response.body
@@ -811,8 +811,8 @@ def test_the_dashboard_still_renders_without_a_run_queue(tmp_path: Path, _templa
     app = WebApp(auth_store=WebAuthStore(store_path), config_store=ConfigStore(store_path),
                  request_store=None, data_dir=data, settings=WebSettings())
     cookie = sign_in(app)
-    assert b"may not run apps" in app.handle(get("/db_ops/", cookie=cookie)).body
-    assert b"Run now" not in app.handle(get("/db_ops/app/metrics", cookie=cookie)).body
+    assert b"may not run apps" in app.handle(get("/dbabrain/", cookie=cookie)).body
+    assert b"Run now" not in app.handle(get("/dbabrain/app/metrics", cookie=cookie)).body
 
 
 # --------------------------------------------------------------------------- #
@@ -826,7 +826,7 @@ def test_serve_hands_the_console_every_store_it_needs(estate, monkeypatch) -> No
     check: on 2026-08-20 `serve` was shipped without the run queue, so the deployed console had
     no Run buttons at all and every test still passed, because the tests built their own WebApp.
     """
-    from db_ops.webhost import cli
+    from dbabrain.webhost import cli
 
     built = {}
 
@@ -853,7 +853,7 @@ def test_serve_hands_the_console_every_store_it_needs(estate, monkeypatch) -> No
 
 
 def test_no_console_serves_reports_only(estate, monkeypatch) -> None:
-    from db_ops.webhost import cli
+    from dbabrain.webhost import cli
 
     built = {}
     monkeypatch.setattr(cli, "serve", lambda **kwargs: built.update(kwargs) or 0)
@@ -895,7 +895,7 @@ def test_a_record_is_drawn_as_a_grid_not_as_raw_json(console: WebApp) -> None:
     """Raw JSON in a textarea was honest and unreadable; the fields are the readable form."""
     cookie = sign_in(console)
     html = console.handle(
-        get("/db_ops/config/telegram_users.json/telegram_users/100000001", cookie=cookie)
+        get("/dbabrain/config/telegram_users.json/telegram_users/100000001", cookie=cookie)
     ).body.decode()
 
     assert '<table class="fields">' in html
@@ -911,7 +911,7 @@ def test_a_nested_block_is_drawn_as_its_own_section(console: WebApp) -> None:
     """`time_window` is how an operator already thinks of it — a heading, not eight loose rows."""
     cookie = sign_in(console)
     html = console.handle(
-        get("/db_ops/config/reports_config.json/reports/rp_metric_daily_logging", cookie=cookie)
+        get("/dbabrain/config/reports_config.json/reports/rp_metric_daily_logging", cookie=cookie)
     ).body.decode()
     assert '<tr class="section">' in html
     assert "time_window" in html
@@ -921,7 +921,7 @@ def test_a_nested_block_is_drawn_as_its_own_section(console: WebApp) -> None:
 def test_saving_the_grid_unchanged_changes_nothing(console: WebApp) -> None:
     """The strongest check there is: opening a record and pressing Save must be a no-op."""
     cookie = sign_in(console)
-    url = "/db_ops/config/telegram_users.json/telegram_users/100000001"
+    url = "/dbabrain/config/telegram_users.json/telegram_users/100000001"
     html = console.handle(get(url, cookie=cookie)).body.decode()
 
     before = console.config.get_item(source_file="telegram_users.json",
@@ -941,7 +941,7 @@ def test_saving_the_grid_unchanged_changes_nothing(console: WebApp) -> None:
 
 def test_editing_one_field_in_the_grid_changes_only_that_field(console: WebApp) -> None:
     cookie = sign_in(console)
-    url = "/db_ops/config/telegram_users.json/telegram_users/100000001"
+    url = "/dbabrain/config/telegram_users.json/telegram_users/100000001"
     html = console.handle(get(url, cookie=cookie)).body.decode()
     form = dict(_grid_fields(html))
     target = next(name for name in form if name.endswith('["user_type"]'))
@@ -959,7 +959,7 @@ def test_editing_one_field_in_the_grid_changes_only_that_field(console: WebApp) 
 
 def test_a_bad_number_in_the_grid_is_refused_and_names_the_field(console: WebApp) -> None:
     cookie = sign_in(console)
-    url = "/db_ops/config/telegram_users.json/telegram_users/100000001"
+    url = "/dbabrain/config/telegram_users.json/telegram_users/100000001"
     html = console.handle(get(url, cookie=cookie)).body.decode()
     form = dict(_grid_fields(html))
     form[next(name for name in form if name.endswith('["user_type"]'))] = "very high"
@@ -973,7 +973,7 @@ def test_a_bad_number_in_the_grid_is_refused_and_names_the_field(console: WebApp
 def test_the_json_box_still_saves_and_is_how_a_key_is_added(console: WebApp) -> None:
     """The grid edits the fields a record has; adding one needs the JSON box."""
     cookie = sign_in(console)
-    url = "/db_ops/config/telegram_users.json/telegram_users/100000001"
+    url = "/dbabrain/config/telegram_users.json/telegram_users/100000001"
     record = dict(users_on_disk(console)[0])
     record["nickname"] = "added via json"
     console.handle(post_form(url, {"confirm_password": PASSWORD, "csrf": csrf_of(console, cookie),
@@ -988,7 +988,7 @@ def test_the_json_box_still_saves_and_is_how_a_key_is_added(console: WebApp) -> 
 def test_a_viewer_gets_the_grid_read_only(console: WebApp) -> None:
     cookie = sign_in(console, "viewer")
     html = console.handle(
-        get("/db_ops/config/telegram_users.json/telegram_users/100000001", cookie=cookie)
+        get("/dbabrain/config/telegram_users.json/telegram_users/100000001", cookie=cookie)
     ).body.decode()
     assert '<table class="fields">' in html
     assert "readonly" in html
@@ -1002,7 +1002,7 @@ def test_the_logging_page_shows_the_running_log_newest_first(console: WebApp) ->
     """The line you want in a log you are watching is the one just written."""
     cookie = sign_in(console)
     html = console.handle(
-        get("/db_ops/app/logging_ops", cookie=cookie, file="metrics.log")).body.decode()
+        get("/dbabrain/app/logging_ops", cookie=cookie, file="metrics.log")).body.decode()
 
     assert "Running log" in html
     assert html.index("line 249") < html.index("line 200"), "newest must be at the top"
@@ -1013,7 +1013,7 @@ def test_the_logging_page_shows_the_running_log_newest_first(console: WebApp) ->
 def test_the_log_that_moved_last_is_the_one_offered(console: WebApp) -> None:
     """Opening the page should land on whatever is being written now, not on an alphabetical first."""
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/logging_ops", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/app/logging_ops", cookie=cookie)).body.decode()
     assert '<option value="telegram.log" selected>' in html, (
         "telegram.log was written last in the fixture, so it is what an operator wants first")
 
@@ -1021,7 +1021,7 @@ def test_the_log_that_moved_last_is_the_one_offered(console: WebApp) -> None:
 def test_the_logging_page_shows_no_config_table(console: WebApp) -> None:
     """It used to list notify_levels.json — config nothing reads. The file is gone; so is the row."""
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/logging_ops", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/app/logging_ops", cookie=cookie)).body.decode()
     assert "notify_levels" not in html
     assert "owns no config file" in html
 
@@ -1029,13 +1029,13 @@ def test_the_logging_page_shows_no_config_table(console: WebApp) -> None:
 def test_only_the_logging_page_carries_the_viewer(console: WebApp) -> None:
     """Every app writes a log; the logging engine is the one you open to read them."""
     cookie = sign_in(console)
-    other = console.handle(get("/db_ops/app/metrics", cookie=cookie)).body.decode()
+    other = console.handle(get("/dbabrain/app/metrics", cookie=cookie)).body.decode()
     assert "Running log" not in other
 
 
 def test_rotated_logs_are_not_offered(console: WebApp) -> None:
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/logging_ops", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/app/logging_ops", cookie=cookie)).body.decode()
     assert "metrics_20260819" not in html
     assert html.count("<option") == 2
 
@@ -1043,7 +1043,7 @@ def test_rotated_logs_are_not_offered(console: WebApp) -> None:
 def test_another_log_can_be_picked(console: WebApp) -> None:
     cookie = sign_in(console)
     html = console.handle(
-        get("/db_ops/app/logging_ops", cookie=cookie, file="telegram.log")).body.decode()
+        get("/dbabrain/app/logging_ops", cookie=cookie, file="telegram.log")).body.decode()
     assert "queued" in html
     assert '<option value="telegram.log" selected>' in html
 
@@ -1051,9 +1051,9 @@ def test_another_log_can_be_picked(console: WebApp) -> None:
 def test_the_log_api_pages_backwards_without_gaps(console: WebApp) -> None:
     cookie = sign_in(console)
     first = json.loads(console.handle(
-        get("/db_ops/api/logs", cookie=cookie, file="metrics.log")).body)
+        get("/dbabrain/api/logs", cookie=cookie, file="metrics.log")).body)
     second = json.loads(console.handle(
-        get("/db_ops/api/logs", cookie=cookie, file="metrics.log",
+        get("/dbabrain/api/logs", cookie=cookie, file="metrics.log",
             before=str(first["next_before"]))).body)
 
     assert [line["message"] for line in first["lines"]][:2] == ["line 249", "line 248"]
@@ -1064,7 +1064,7 @@ def test_the_log_api_pages_backwards_without_gaps(console: WebApp) -> None:
 def test_a_raw_stdout_line_survives_the_api(console: WebApp) -> None:
     cookie = sign_in(console)
     page = json.loads(console.handle(
-        get("/db_ops/api/logs", cookie=cookie, file="telegram.log")).body)
+        get("/dbabrain/api/logs", cookie=cookie, file="telegram.log")).body)
     assert [line["structured"] for line in page["lines"]] == [False, True]
     assert page["lines"][0]["text"].startswith("Traceback")
 
@@ -1075,13 +1075,13 @@ def test_the_log_name_cannot_reach_outside_the_log_directory(console: WebApp,
                                                              hostile: str) -> None:
     """The name arrives from a URL, and joining it onto a directory is how that becomes a read."""
     cookie = sign_in(console)
-    response = console.handle(get("/db_ops/api/logs", cookie=cookie, file=hostile))
+    response = console.handle(get("/dbabrain/api/logs", cookie=cookie, file=hostile))
     assert response.status == 404
     assert b"No current log named" in response.body
 
 
 def test_reading_a_log_needs_a_session(console: WebApp) -> None:
-    response = console.handle(get("/db_ops/api/logs", file="metrics.log"))
+    response = console.handle(get("/dbabrain/api/logs", file="metrics.log"))
     assert response.status == 401
 
 
@@ -1093,7 +1093,7 @@ def test_a_node_with_no_logs_says_so(tmp_path: Path, _template) -> None:
     app = WebApp(auth_store=WebAuthStore(store_path), config_store=ConfigStore(store_path),
                  data_dir=data, log_dir=tmp_path / "empty-logs", settings=WebSettings())
     cookie = sign_in(app)
-    html = app.handle(get("/db_ops/app/logging_ops", cookie=cookie)).body.decode()
+    html = app.handle(get("/dbabrain/app/logging_ops", cookie=cookie)).body.decode()
     assert "No log files under" in html
 
 
@@ -1106,49 +1106,49 @@ def test_an_app_with_a_single_config_file_opens_it_on_the_page(console: WebApp) 
     The daemon owns exactly ``app_commands.json``, and that file is what its page is *for*.
     """
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/jobs", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/app/jobs", cookie=cookie)).body.decode()
 
     assert "<table class=\"records\">" in html
     assert "APP-METRICS" in html and "APP-TELEGRAM" in html, "the records themselves, not a link"
     assert "app_commands" in html
     # The record links go where they always did, so the file's own page is still reachable.
-    assert "/db_ops/config/app_commands.json/app_commands/APP-METRICS" in html
+    assert "/dbabrain/config/app_commands.json/app_commands/APP-METRICS" in html
 
 
 def test_the_single_file_block_is_named_after_the_file(console: WebApp) -> None:
     """"Config" above one file's records says less than the thing under it."""
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/jobs", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/app/jobs", cookie=cookie)).body.decode()
     assert "Scheduled app commands" in html
 
 
 def test_an_app_with_several_config_files_still_lists_them(console: WebApp) -> None:
     """There the choice is real, so the table earns its place."""
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/metrics", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/app/metrics", cookie=cookie)).body.decode()
 
     assert "metric_definitions.json" in html and "db_instances.json" in html
-    assert "/db_ops/config/metric_definitions.json" in html
+    assert "/dbabrain/config/metric_definitions.json" in html
     assert "INSTANCE_STATUS" not in html, "a list of files, not every record in all of them"
 
 
 def test_an_app_with_no_config_says_so(console: WebApp) -> None:
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/lib", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/app/lib", cookie=cookie)).body.decode()
     assert "owns no config file" in html
 
 
 def test_the_inline_file_says_that_saving_writes_the_file(console: WebApp) -> None:
     """The same warning the file's own page carries: an edit here reaches data/*.json."""
     cookie = sign_in(console)
-    html = console.handle(get("/db_ops/app/jobs", cookie=cookie)).body.decode()
+    html = console.handle(get("/dbabrain/app/jobs", cookie=cookie)).body.decode()
     assert "rewrites" in html and "data/app_commands.json" in html
 
 
 def test_a_record_edited_from_the_app_page_saves_the_same_way(console: WebApp) -> None:
     """The inline view links to the same editor, so there is one write path and not two."""
     cookie = sign_in(console)
-    url = "/db_ops/config/app_commands.json/app_commands/APP-METRICS"
+    url = "/dbabrain/config/app_commands.json/app_commands/APP-METRICS"
     html = console.handle(get(url, cookie=cookie)).body.decode()
     form = dict(_grid_fields(html))
     target = next(name for name in form if name.endswith('["display_name"]'))
@@ -1168,11 +1168,11 @@ def test_a_record_edited_from_the_app_page_saves_the_same_way(console: WebApp) -
 def test_the_inline_view_and_the_file_page_show_the_same_records(console: WebApp) -> None:
     """One renderer. Two would eventually show the same file two different ways."""
     cookie = sign_in(console)
-    inline = console.handle(get("/db_ops/app/jobs", cookie=cookie)).body.decode()
-    own = console.handle(get("/db_ops/config/app_commands.json", cookie=cookie)).body.decode()
+    inline = console.handle(get("/dbabrain/app/jobs", cookie=cookie)).body.decode()
+    own = console.handle(get("/dbabrain/config/app_commands.json", cookie=cookie)).body.decode()
 
     keys = lambda html: sorted(set(re.findall(
-        r'/db_ops/config/app_commands.json/app_commands/([A-Z0-9-]+)', html)))
+        r'/dbabrain/config/app_commands.json/app_commands/([A-Z0-9-]+)', html)))
     assert keys(inline) == keys(own) and keys(inline)
 
 
@@ -1187,7 +1187,7 @@ def test_a_failing_webhost_command_says_why_instead_of_raising_from_its_own_logg
     """
     import inspect
 
-    from db_ops.webhost import cli as webhost_cli
+    from dbabrain.webhost import cli as webhost_cli
 
     source = inspect.getsource(webhost_cli.main)
 
@@ -1204,7 +1204,7 @@ def test_a_permission_file_is_not_changed_without_the_password(console: WebApp) 
     cookie = sign_in(console)
     before = users_on_disk(console)
     response = console.handle(post_form(
-        "/db_ops/config/telegram_users.json/telegram_users",
+        "/dbabrain/config/telegram_users.json/telegram_users",
         {"csrf": csrf_of(console, cookie), "payload": json.dumps(NEW_USER)}, cookie=cookie))
 
     assert response.status == 403
@@ -1215,7 +1215,7 @@ def test_a_permission_file_is_not_changed_without_the_password(console: WebApp) 
 def test_a_wrong_password_is_refused_too(console: WebApp) -> None:
     cookie = sign_in(console)
     response = console.handle(post_form(
-        "/db_ops/config/telegram_users.json/telegram_users",
+        "/dbabrain/config/telegram_users.json/telegram_users",
         {"confirm_password": "not-it", "csrf": csrf_of(console, cookie),
          "payload": json.dumps(NEW_USER)}, cookie=cookie))
 
@@ -1224,7 +1224,7 @@ def test_a_wrong_password_is_refused_too(console: WebApp) -> None:
 
 def test_the_command_a_daemon_runs_needs_the_password_and_its_schedule_does_not(console: WebApp) -> None:
     cookie = sign_in(console)
-    url = "/db_ops/config/app_commands.json/app_commands/APP-METRICS"
+    url = "/dbabrain/config/app_commands.json/app_commands/APP-METRICS"
     record = json.loads(console.config.get_item(source_file="app_commands.json",
                                                 collection="app_commands",
                                                 item_key="APP-METRICS")["item_json"])
@@ -1241,7 +1241,7 @@ def test_the_command_a_daemon_runs_needs_the_password_and_its_schedule_does_not(
 
 
 def test_what_counts_as_a_sensitive_change() -> None:
-    from db_ops.lib.config_exec_fields import sensitive_changes
+    from dbabrain.lib.config_exec_fields import sensitive_changes
 
     assert sensitive_changes("app_commands.json", {"command_text": "a"}, {"command_text": "b"}) == ["command_text"]
     assert sensitive_changes("app_commands.json", {"command_text": "a", "note": "x"},
@@ -1255,13 +1255,13 @@ def test_what_counts_as_a_sensitive_change() -> None:
 # --------------------------------------------------------------------------- #
 def test_a_viewer_cannot_read_the_logs(console: WebApp) -> None:
     viewer = sign_in(console, "viewer")
-    response = console.handle(get("/db_ops/api/logs", cookie=viewer))
+    response = console.handle(get("/dbabrain/api/logs", cookie=viewer))
 
     assert response.status == 403
 
 
 def test_an_admin_still_can(console: WebApp) -> None:
-    response = console.handle(get("/db_ops/api/logs", cookie=sign_in(console)))
+    response = console.handle(get("/dbabrain/api/logs", cookie=sign_in(console)))
 
     assert response.status != 403, "an admin reaches the log endpoint (no log here answers 404)"
 
@@ -1272,5 +1272,5 @@ def test_min_level_view_is_enforced(console: WebApp) -> None:
     viewer = sign_in(console, "viewer")
     console.settings = dataclasses.replace(console.settings, min_level_view=10)
 
-    assert console.handle(get("/db_ops/", cookie=viewer)).status == 403
-    assert console.handle(get("/db_ops/", cookie=sign_in(console))).status == 200
+    assert console.handle(get("/dbabrain/", cookie=viewer)).status == 403
+    assert console.handle(get("/dbabrain/", cookie=sign_in(console))).status == 200

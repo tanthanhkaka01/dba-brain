@@ -46,7 +46,7 @@ management views the metric SQL reads in production, not a reduced Express featu
 about a minute to come up:
 
 ```bash
-docker inspect -f '{{.State.Health.Status}}' dbops_quickstart_mssql
+docker inspect -f '{{.State.Health.Status}}' dbabrain_quickstart_mssql
 ```
 
 ## 2. Create the monitoring login
@@ -56,7 +56,7 @@ command rather than a mounted script — read [`setup/01_monitor_login.sql`](./s
 before you run it:
 
 ```bash
-docker exec -i dbops_quickstart_mssql /opt/mssql-tools18/bin/sqlcmd \
+docker exec -i dbabrain_quickstart_mssql /opt/mssql-tools18/bin/sqlcmd \
   -S localhost -U sa -P 'Quickstart_not_a_real_password_1' -C -b \
   -i /dev/stdin < setup/01_monitor_login.sql
 ```
@@ -82,14 +82,14 @@ report on besides the system databases.
 ## 3. Store, secret, collect
 
 ```bash
-python -m db_ops.db.cli --config config.json init
+python -m dbabrain.db.cli --config config.json init
 
 cp secrets/secret_text.example.json secrets/secret_text.json
-python -m db_ops.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
+python -m dbabrain.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
 
-export DB_OPS_SECRET_KEY=quickstart     # PowerShell: $env:DB_OPS_SECRET_KEY="quickstart"
-python -m db_ops.metrics.cli --config config.json collect --dry-run
-python -m db_ops.metrics.cli --config config.json collect
+export DBABRAIN_SECRET_KEY=quickstart     # PowerShell: $env:DBABRAIN_SECRET_KEY="quickstart"
+python -m dbabrain.metrics.cli --config config.json collect --dry-run
+python -m dbabrain.metrics.cli --config config.json collect
 ```
 
 ```text
@@ -111,7 +111,7 @@ here.
 ## 4. Read the finding
 
 ```bash
-python -m db_ops.metrics.cli --config config.json summary-latest
+python -m dbabrain.metrics.cli --config config.json summary-latest
 ```
 
 ```text
@@ -130,7 +130,7 @@ decides what age is acceptable. Neither of those numbers is in any Python file.
 provenance in one table:
 
 ```bash
-python -m db_ops.metrics.cli --config config.json report
+python -m dbabrain.metrics.cli --config config.json report
 ```
 
 ```text
@@ -142,11 +142,11 @@ python -m db_ops.metrics.cli --config config.json report
 ## 5. Fix it, and watch the finding clear
 
 ```bash
-docker exec dbops_quickstart_mssql /opt/mssql-tools18/bin/sqlcmd \
+docker exec dbabrain_quickstart_mssql /opt/mssql-tools18/bin/sqlcmd \
   -S localhost -U sa -P 'Quickstart_not_a_real_password_1' -C \
   -Q "BACKUP DATABASE APPDB TO DISK='/var/opt/mssql/data/APPDB.bak' WITH INIT, COMPRESSION"
 
-python -m db_ops.metrics.cli --config config.json collect --metric-code BACKUP_AGE --force
+python -m dbabrain.metrics.cli --config config.json collect --metric-code BACKUP_AGE --force
 ```
 
 ```text
@@ -179,7 +179,7 @@ until you speak to it first there is nowhere for it to reply.
 ```
 
 ```bash
-python -m db_ops.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
+python -m dbabrain.cli encrypt-secret --key-base64 "cXVpY2tzdGFydA=="
 ```
 
 The token never goes in a file under `data/`. `data/bot_telegram.json` names it — that is all it
@@ -189,7 +189,7 @@ post as it.
 **2. Find your chat id** and put it in `data/telegram_groups.json`:
 
 ```bash
-python -m db_ops.telegram.cli --config config.json get-updates
+python -m dbabrain.telegram.cli --config config.json get-updates
 ```
 
 The reply carries `"chat": {"id": ...}`. It is **positive for a direct message and negative for a
@@ -207,8 +207,8 @@ Then build the alert out of what was collected, and send it. Collection has alre
 this is two commands:
 
 ```bash
-python -m db_ops.metrics.cli  --config config.json alert-summary --include-warning
-python -m db_ops.telegram.cli --config config.json send-message --chat-id <your chat id> --text "<the summary>"
+python -m dbabrain.metrics.cli  --config config.json alert-summary --include-warning
+python -m dbabrain.telegram.cli --config config.json send-message --chat-id <your chat id> --text "<the summary>"
 ```
 
 It reads the **stored results** rather than re-querying anything, so it needs no passphrase, costs
@@ -226,7 +226,7 @@ What arrives in the chat is the finding itself, not a notification that somethin
 is the whole point: an alert you can act on without opening anything else.
 
 > **There is a scheduled version of this**, and it is what you want once the toolkit runs
-> unattended: `db-ops reports queue-metrics-reports` followed by `db-ops telegram send-queue`
+> unattended: `dbabrain reports queue-metrics-reports` followed by `dbabrain telegram send-queue`
 > dedupes, splits messages over Telegram's length limit, and routes by severity level.
 > `alert-summary` is the direct form, which is easier to see working the first time.
 
@@ -254,7 +254,7 @@ the one that would otherwise carry your bot token into a commit.
 
 | | |
 | --- | --- |
-| **`service_name` is a label, not a database** | `data/db_instances.json` sets `"service_name": "QUICKSTART"`, and no database of that name exists. Collection always connects to `master` and the metric SQL issues its own `USE`. Passing the label as the connection database fails *every* SQL Server target at once, which is why the rule is enforced in `db_ops/metrics/executor.py` rather than left to configuration. |
+| **`service_name` is a label, not a database** | `data/db_instances.json` sets `"service_name": "QUICKSTART"`, and no database of that name exists. Collection always connects to `master` and the metric SQL issues its own `USE`. Passing the label as the connection database fails *every* SQL Server target at once, which is why the rule is enforced in `dbabrain/metrics/executor.py` rather than left to configuration. |
 | **A version picks the query** | `"major_version": 16` selects the `min_major_version: 11` variant. The shipped catalogue pairs most SQL Server metrics with a `legacy_2008r2` variant too, so an engine too old to parse the modern query gets one it can instead of failing every cycle. |
 | **Severity is data** | `LOCK_BLOCKING_SESSIONS` carries a `report_policy` in `data/metric_definitions.json`: blocking under five seconds is suppressed, and the same finding is graded by the target's `env` — it pages in `prod` and is only logged in `lab`, which is what this target is. No code knows those numbers. |
 | **A finding you can act on** | The backup warning is real, specific, and clears when you fix the thing it is about. |

@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from db_ops.reports import metrics_reports
+from dbabrain.reports import metrics_reports
 
 
 class RecordingStore:

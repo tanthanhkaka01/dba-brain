@@ -9,22 +9,22 @@ send queue to it by watching the store at the moment each message goes out.
 
 from __future__ import annotations
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram import send_queue
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram import send_queue
 
 PENDING, SENT, PROCESSING = 0, 1, 2
 
 
 def test_each_message_is_marked_sent_before_the_next_one_is_touched(tmp_path, monkeypatch):
-    path = tmp_path / "db_ops.sqlite"
-    store = DbOpsStore(path)
+    path = tmp_path / "dbabrain.sqlite"
+    store = DbaBrainStore(path)
     store.initialize()
     ids = [store.insert_telegram_send_message(tlgchat_id="-100", message_text=f"LOGGING|host|part {n}")
            for n in range(3)]
     seen: list[dict[int, int]] = []
 
     def fake_send(**kwargs):
-        seen.append({send_id: int(DbOpsStore(path).fetch_telegram_send_message(
+        seen.append({send_id: int(DbaBrainStore(path).fetch_telegram_send_message(
             send_tlgmsg_id=send_id)["send_status"]) for send_id in ids})
         return {"ok": True, "result": {"message_id": len(seen)}}
 

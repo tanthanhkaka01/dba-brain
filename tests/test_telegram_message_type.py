@@ -11,8 +11,8 @@ stays only as the fallback for rows that declare nothing.
 
 import pytest
 
-from db_ops.db.telegram_queue import message_type_for, queue_telegram_message
-from db_ops.telegram.severity import MESSAGE_TYPES, decorate_message
+from dbabrain.db.telegram_queue import message_type_for, queue_telegram_message
+from dbabrain.telegram.severity import MESSAGE_TYPES, decorate_message
 
 
 class FakeStore:
@@ -166,7 +166,7 @@ def test_logging_level_is_plain_not_unset():
 def test_notify_level_words_are_accepted_as_declared_types():
     """`error`/`warn`/`logging` are what everyone reaches for, because that is the vocabulary
     the rest of the config uses. Accepting them beats silently dropping a reasonable guess."""
-    from db_ops.telegram.severity import normalize_message_type
+    from dbabrain.telegram.severity import normalize_message_type
 
     assert normalize_message_type("error") == "failed"
     assert normalize_message_type("warn") == "warning"

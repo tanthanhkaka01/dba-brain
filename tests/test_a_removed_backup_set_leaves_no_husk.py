@@ -21,8 +21,8 @@ import subprocess
 
 import pytest
 
-from db_ops.common import backup_copy
-from db_ops.common.backupfiles import postgresql
+from dbabrain.common import backup_copy
+from dbabrain.common.backupfiles import postgresql
 
 
 class _Sftp:

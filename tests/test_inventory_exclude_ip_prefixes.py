@@ -1,6 +1,6 @@
 """Which servers an inventory page leaves out is the operator's decision, not the library's.
 
-`db_ops/lib/inventory_render.py` carried `EXCLUDE_IP_PREFIXES = ("198.51.100.",)` — one estate's
+`dbabrain/lib/inventory_render.py` carried `EXCLUDE_IP_PREFIXES = ("198.51.100.",)` — one estate's
 management subnet, written into the rendering code. Every inventory page rendered by anyone,
 anywhere, silently dropped every server in that range, and nothing on the page said so. A reader
 counting servers would have got the wrong number and had no way to notice.
@@ -19,9 +19,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from db_ops.lib.data_sources import inventory_exclude_ip_prefixes
-from db_ops.lib.inventory_render import EXCLUDE_IP_PREFIXES, _render_markdown
-from db_ops.reports.inventory_report import build_models
+from dbabrain.lib.data_sources import inventory_exclude_ip_prefixes
+from dbabrain.lib.inventory_render import EXCLUDE_IP_PREFIXES, _render_markdown
+from dbabrain.reports.inventory_report import build_models
 
 INVENTORY = {
     "servers": [

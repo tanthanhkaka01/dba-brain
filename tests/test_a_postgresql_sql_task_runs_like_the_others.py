@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import sql_run
-from db_ops.lib.sql_access import SQL_TASK_DB_TYPES
-from db_ops.lib.sql_text import split_postgresql_statements as split
+from dbabrain.common import sql_run
+from dbabrain.lib.sql_access import SQL_TASK_DB_TYPES
+from dbabrain.lib.sql_text import split_postgresql_statements as split
 
 
 # --------------------------------------------------------------------------- #
@@ -131,7 +131,7 @@ def estate(tmp_path):
 def test_a_postgresql_task_registers(estate):
     import json
 
-    from db_ops.common import sql_task_admin
+    from dbabrain.common import sql_task_admin
 
     sql_task_admin.add_sql_command({"display_name": "count the drill", "db_type": "postgresql",
                                     "sql_text": "select count(*) from drill;"},
@@ -143,7 +143,7 @@ def test_a_postgresql_task_registers(estate):
 
 def test_a_postgresql_parameter_its_script_never_says_is_refused_by_name(estate):
     """0.23.0 refused any parameter here; 0.24.0 binds ``:name``, and refuses one the script lacks."""
-    from db_ops.common import sql_task_admin
+    from dbabrain.common import sql_task_admin
 
     with pytest.raises(sql_task_admin.SqlTaskAdminError, match="job_no are declared but no script"):
         sql_task_admin.add_sql_command({"display_name": "by job", "db_type": "postgresql",

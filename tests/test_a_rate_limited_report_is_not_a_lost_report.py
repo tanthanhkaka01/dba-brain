@@ -21,7 +21,7 @@ import logging
 
 import pytest
 
-from db_ops.telegram import api
+from dbabrain.telegram import api
 
 
 def test_a_429_carries_the_wait_telegram_asked_for(monkeypatch):
@@ -107,8 +107,8 @@ def test_a_wait_longer_than_the_cap_goes_back_to_the_queue_and_is_logged(monkeyp
 # The queue: a deferral is not a failure
 # ---------------------------------------------------------------------------
 def test_a_rate_limited_row_comes_back_to_the_queue_instead_of_dying(tmp_path, monkeypatch, caplog):
-    from db_ops.db import DbOpsStore
-    from db_ops.telegram import send_queue
+    from dbabrain.db import DbaBrainStore
+    from dbabrain.telegram import send_queue
 
     store, send_id = _queue_one(tmp_path)
     _record_sleep(monkeypatch, module=send_queue)
@@ -117,10 +117,10 @@ def test_a_rate_limited_row_comes_back_to_the_queue_instead_of_dying(tmp_path, m
 
     with caplog.at_level(logging.WARNING, logger="telegram"):
         result = send_queue.send_one_message(
-            sqlite_path=tmp_path / "db_ops.sqlite", send_tlgmsg_id=send_id, bot_token="t")
+            sqlite_path=tmp_path / "dbabrain.sqlite", send_tlgmsg_id=send_id, bot_token="t")
 
     assert result["status"] == "rate_limited"
-    row = DbOpsStore(tmp_path / "db_ops.sqlite").fetch_telegram_send_message(send_tlgmsg_id=send_id)
+    row = DbaBrainStore(tmp_path / "dbabrain.sqlite").fetch_telegram_send_message(send_tlgmsg_id=send_id)
     assert int(row["send_status"]) == 0                   # pending again, not a terminal -1
     assert "rate limited" in caplog.text and "requeued" in caplog.text
 
@@ -129,8 +129,8 @@ def test_a_requeued_row_comes_back_as_itself(tmp_path, monkeypatch):
     """`reset_telegram_send_message_pending` replaced the whole metadata object with its own
     failure text. It had no caller until now, so nothing had met it: a re-queued document row
     would have lost `document_path` and gone out next cycle as a plain message."""
-    from db_ops.db import DbOpsStore
-    from db_ops.telegram import send_queue
+    from dbabrain.db import DbaBrainStore
+    from dbabrain.telegram import send_queue
 
     store, send_id = _queue_one(tmp_path, metadata={"document_path": "report.xlsx"})
     _record_sleep(monkeypatch, module=send_queue)
@@ -138,9 +138,9 @@ def test_a_requeued_row_comes_back_as_itself(tmp_path, monkeypatch):
                         _raises(api.TelegramRateLimited("Telegram HTTP 429", 2)))
 
     send_queue.send_one_message(
-        sqlite_path=tmp_path / "db_ops.sqlite", send_tlgmsg_id=send_id, bot_token="t")
+        sqlite_path=tmp_path / "dbabrain.sqlite", send_tlgmsg_id=send_id, bot_token="t")
 
-    row = DbOpsStore(tmp_path / "db_ops.sqlite").fetch_telegram_send_message(send_tlgmsg_id=send_id)
+    row = DbaBrainStore(tmp_path / "dbabrain.sqlite").fetch_telegram_send_message(send_tlgmsg_id=send_id)
     metadata = json.loads(str(row["metadata_json"]))
     assert metadata["document_path"] == "report.xlsx"
     assert metadata["last_fail_text"]
@@ -149,8 +149,8 @@ def test_a_requeued_row_comes_back_as_itself(tmp_path, monkeypatch):
 def test_a_refusal_is_still_terminal_and_now_says_so_in_the_log(tmp_path, monkeypatch, caplog):
     """Nothing about an ordinary failure changed except that it is visible. A 400 is the body
     being wrong; retrying it for ever would be the other way to lose a report."""
-    from db_ops.db import DbOpsStore
-    from db_ops.telegram import send_queue
+    from dbabrain.db import DbaBrainStore
+    from dbabrain.telegram import send_queue
 
     store, send_id = _queue_one(tmp_path)
     monkeypatch.setattr(send_queue, "send_message",
@@ -158,20 +158,20 @@ def test_a_refusal_is_still_terminal_and_now_says_so_in_the_log(tmp_path, monkey
 
     with caplog.at_level(logging.ERROR, logger="telegram"):
         result = send_queue.send_one_message(
-            sqlite_path=tmp_path / "db_ops.sqlite", send_tlgmsg_id=send_id, bot_token="t",
+            sqlite_path=tmp_path / "dbabrain.sqlite", send_tlgmsg_id=send_id, bot_token="t",
             retry_count=1)
 
     assert result["status"] == "failed"
-    row = DbOpsStore(tmp_path / "db_ops.sqlite").fetch_telegram_send_message(send_tlgmsg_id=send_id)
+    row = DbaBrainStore(tmp_path / "dbabrain.sqlite").fetch_telegram_send_message(send_tlgmsg_id=send_id)
     assert int(row["send_status"]) == -1
     assert "delivery FAILED" in caplog.text
 
 
 # ---------------------------------------------------------------------------
 def _queue_one(tmp_path, *, metadata=None):
-    from db_ops.db import DbOpsStore
+    from dbabrain.db import DbaBrainStore
 
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     send_id = store.insert_telegram_send_message(
         tlgchat_id="-100", message_text="WARNING|host01|disk at 91%", metadata=metadata)

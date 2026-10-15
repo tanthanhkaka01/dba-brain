@@ -10,9 +10,9 @@ moved, and links out for the rest.
 
 from __future__ import annotations
 
-from db_ops.lib.state_transition import decide_notification, diff_states
-from db_ops.sla.models import SlaPolicyResult, SlaValidationSummary
-from db_ops.sla.publish import TELEGRAM_MESSAGE_MAX_CHARS, build_transition_message
+from dbabrain.lib.state_transition import decide_notification, diff_states
+from dbabrain.sla.models import SlaPolicyResult, SlaValidationSummary
+from dbabrain.sla.publish import TELEGRAM_MESSAGE_MAX_CHARS, build_transition_message
 
 SEVERITY = ("FAILED", "AT_RISK", "NO_DATA", "PASSED")
 REPORT = "http://example.invalid/report_dba/sla.html"
@@ -128,7 +128,7 @@ def test_the_headline_reports_bad_news_alongside_the_good():
 
 
 def test_the_producer_does_not_stamp_its_own_emoji():
-    """Tagging is the send layer's job (db_ops.telegram.severity); one vocabulary for all
+    """Tagging is the send layer's job (dbabrain.telegram.severity); one vocabulary for all
     producers is the point, and a second one here would drift from it."""
     results = [_result("A", "s", "FAILED")]
     body, _ = _built({"A @ s": "PASSED"}, results)
@@ -138,7 +138,7 @@ def test_the_producer_does_not_stamp_its_own_emoji():
 def test_the_message_severity_describes_the_change_not_the_backlog():
     """With a standing backlog the run status is FAILED forever. Passing that through would put a
     failure emoji on a message whose entire content is good news."""
-    from db_ops.sla.publish import transition_status
+    from dbabrain.sla.publish import transition_status
 
     good_news = diff_states({"A @ s": "FAILED"}, {"A @ s": "PASSED"}, severity_order=SEVERITY, healthy=("PASSED",))
     assert transition_status(good_news, decide_notification(good_news, last_sent_at=None)) == "SUCCESS"

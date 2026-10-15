@@ -7,8 +7,8 @@ is UTC — a bare local time cannot be compared with `sql_runs.started_at` witho
 clock it came from, and the reader has no way to ask.
 
 `format_message_time` used to resolve its own offset from an env var and render `UTC+07:00`, which
-made two spellings of one value — the drift `db_ops.lib.text_format`'s own docstring is about. It
-is now one call deep into `db_ops.lib.timezone`, so a Telegram alert and the report header about
+made two spellings of one value — the drift `dbabrain.lib.text_format`'s own docstring is about. It
+is now one call deep into `dbabrain.lib.timezone`, so a Telegram alert and the report header about
 the same failure are stamped identically. These tests are what holds it there: the assertion that
 matters is not the string, it is that the string is the *same* string.
 """
@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from db_ops.lib import timezone as tz
-from db_ops.lib.text_format import MESSAGE_UTC_OFFSET_ENV, format_message_time, format_utc
+from dbabrain.lib import timezone as tz
+from dbabrain.lib.text_format import MESSAGE_UTC_OFFSET_ENV, format_message_time, format_utc
 
 
 MOMENT = datetime(2026, 9, 4, 6, 13, 11, tzinfo=timezone.utc)
@@ -75,7 +75,7 @@ def test_the_displayed_time_never_becomes_the_stored_time():
 
 
 def test_the_env_var_this_replaces_is_still_the_name_the_fallback_reads(monkeypatch):
-    """`DB_OPS_MESSAGE_UTC_OFFSET_HOURS` was the only mechanism there used to be. It still works —
+    """`DBABRAIN_MESSAGE_UTC_OFFSET_HOURS` was the only mechanism there used to be. It still works —
     an operator who set it does not silently land on UTC after upgrading — but it now feeds the
     same resolution as everything else instead of being read here."""
     monkeypatch.delenv(tz.TIMEZONE_ENV_VAR, raising=False)

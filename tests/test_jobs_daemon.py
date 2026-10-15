@@ -4,11 +4,11 @@ from io import StringIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from db_ops.lib.time_window import TimeWindow
+from dbabrain.lib.time_window import TimeWindow
 import pytest
 
 from conftest import shipped_config
-from db_ops.jobs import daemon
+from dbabrain.jobs import daemon
 
 
 def commands_running(running: dict) -> set[str]:
@@ -74,16 +74,16 @@ class FakeStore:
 
 class FakeConfig:
     def __init__(self, log_dir=None, telegram_enabled=False):
-        self.log_dir = Path(log_dir or "tools/db_ops/tmp_test_logs")
-        self.sqlite_path = Path("runtime/db_ops.sqlite")
+        self.log_dir = Path(log_dir or "tools/dbabrain/tmp_test_logs")
+        self.sqlite_path = Path("runtime/dbabrain.sqlite")
         self.telegram = FakeTelegram(enabled=telegram_enabled)
 
 
 
     @property
     def store(self):
-        """SQLite store declaration matching this fake's sqlite_path (see db_ops.lib.config)."""
-        from db_ops.lib.config import SqliteStoreConfig, StoreConfig
+        """SQLite store declaration matching this fake's sqlite_path (see dbabrain.lib.config)."""
+        from dbabrain.lib.config import SqliteStoreConfig, StoreConfig
         from pathlib import Path as _Path
 
         return StoreConfig(sqlite=SqliteStoreConfig(path=_Path(str(self.sqlite_path))))
@@ -193,9 +193,9 @@ def test_the_packaged_catalogue_carries_the_same_cadence_as_this_repository():
     file a fresh `init` copies says something else — which is how the command menu shipped one
     order and installed another in 0.18.0. This reads the packaged catalogue directly.
     """
-    from db_ops.lib.paths import TOOL_ROOT
+    from dbabrain.lib.paths import TOOL_ROOT
 
-    catalogue = TOOL_ROOT / "db_ops" / "jobs" / "catalogue" / "app_commands.json"
+    catalogue = TOOL_ROOT / "dbabrain" / "jobs" / "catalogue" / "app_commands.json"
     commands = daemon.load_app_commands(catalogue)
     assert commands["APP-SQL_TASKS"].repeat_interval_seconds == 1
     assert commands["APP-TELEGRAM"].repeat_interval_seconds == 1
@@ -222,7 +222,7 @@ def test_daemon_appends_key_base64_to_spawned_command(tmp_path, monkeypatch):
         [
             app_command(
                 "APP-TELEGRAM",
-                command_text="python -m db_ops.telegram.cli --config config.json run-workflow",
+                command_text="python -m dbabrain.telegram.cli --config config.json run-workflow",
             )
         ],
     )
@@ -240,7 +240,7 @@ def test_daemon_appends_key_base64_to_spawned_command(tmp_path, monkeypatch):
 
     # The key is in the child's environment, never in its argv (review 0.25.0, B2.4).
     assert [_after_interpreter(c) for c in started] == [
-        "-m db_ops.telegram.cli --config config.json run-workflow"]
+        "-m dbabrain.telegram.cli --config config.json run-workflow"]
 
 
 def test_daemon_sets_secret_key_env_for_spawned_restore_command(tmp_path, monkeypatch):
@@ -250,14 +250,14 @@ def test_daemon_sets_secret_key_env_for_spawned_restore_command(tmp_path, monkey
         [
             app_command(
                 "APP-RESTORE-WORKFLOW",
-                command_text="python -m db_ops.metrics.cli collect --config config.json",
+                command_text="python -m dbabrain.metrics.cli collect --config config.json",
             )
         ],
     )
     started = []
 
     def fake_popen(*args, **kwargs):
-        started.append((args[0], kwargs["env"].get("DB_OPS_SECRET_KEY")))
+        started.append((args[0], kwargs["env"].get("DBABRAIN_SECRET_KEY")))
         return FakeProcess(returncode=None)
 
     monkeypatch.setattr(daemon.subprocess, "Popen", fake_popen)
@@ -282,7 +282,7 @@ def test_a_plain_key_never_reaches_the_spawned_command_line(tmp_path, monkeypatc
         [
             app_command(
                 "APP-METRICS",
-                command_text="python -m db_ops.metrics.cli --config config.json collect",
+                command_text="python -m dbabrain.metrics.cli --config config.json collect",
             )
         ],
     )
@@ -298,7 +298,7 @@ def test_a_plain_key_never_reaches_the_spawned_command_line(tmp_path, monkeypatc
         forwarded_key_args=daemon.ForwardedKeyArgs("--key", "plain key"),
     )
 
-    assert [_after_interpreter(c) for c in started] == ["-m db_ops.metrics.cli --config config.json collect"]
+    assert [_after_interpreter(c) for c in started] == ["-m dbabrain.metrics.cli --config config.json collect"]
     assert all("plain key" not in c for c in started)
 
 
@@ -560,7 +560,7 @@ def _make_app_command(app_command_id="APP-RESTORE-WORKFLOW", *, timeout=7200, re
         # run - is not specific to backup_restore, and naming it made the test unable to run
         # wherever that component is not installed: the daemon cannot introspect a module
         # that is not there, so it correctly does something else and the test reads as a bug.
-        command_text="python -m db_ops.metrics.cli collect",
+        command_text="python -m dbabrain.metrics.cli collect",
         time_window=TimeWindow(
             from_day=1, to_day=31, from_hour=0, to_hour=23,
             repeat_interval=repeat_interval, retry_interval=retry_interval, timeout=timeout,
@@ -655,7 +655,7 @@ def test_recover_stale_running_jobs_frees_a_row_whose_process_is_gone(monkeypatc
 
 def test_recover_stale_running_jobs_sends_telegram_when_enabled(tmp_path, monkeypatch):
     # The daemon holds no Telegram settings: it asks the shared router and obeys the answer.
-    from db_ops.lib import telegram_route as _route
+    from dbabrain.lib import telegram_route as _route
 
     monkeypatch.setattr(_route, "telegram_route",
                         lambda level, **_: {"enabled": True, "alert": True, "chat_id": "grp-error"})
@@ -681,7 +681,7 @@ def test_recover_stale_running_jobs_sends_telegram_when_enabled(tmp_path, monkey
 def test_recover_stale_running_jobs_no_telegram_when_the_router_says_no(monkeypatch):
     """Telegram off, level muted, or no chat mapped all reach the daemon as one answer: "".
     It must not re-derive any of them from config — that is how it used to drift."""
-    from db_ops.lib import telegram_route as _route
+    from dbabrain.lib import telegram_route as _route
 
     monkeypatch.setattr(_route, "telegram_route",
                         lambda level, **_: {"enabled": True, "alert": False, "chat_id": ""})
@@ -715,7 +715,7 @@ def test_log_command_not_due_includes_workflow_state_and_next_retry():
     row = _make_row("error", started_seconds_ago=300, log_id=5)
     messages = []
 
-    import db_ops.jobs.daemon as d
+    import dbabrain.jobs.daemon as d
     original = d.log_event
     d.log_event = lambda logger, level, message: messages.append(message)
     try:
@@ -738,13 +738,13 @@ def test_recover_stale_running_ignores_non_running_statuses():
         assert store.updated == [], f"should not update status={status}"
 
 
-def test_resolve_working_dir_maps_tools_db_ops_sentinel_to_tool_root(tmp_path):
-    # "tools/db_ops" is the logical alias for the tool root and must resolve to
+def test_resolve_working_dir_maps_tools_dbabrain_sentinel_to_tool_root(tmp_path):
+    # "tools/dbabrain" is the logical alias for the tool root and must resolve to
     # TOOL_ROOT regardless of the physical layout (flat dev checkout or the image's
-    # /app/tools/db_ops). Regression: the daemon crash-looped after db_ops was moved
-    # out of repo/tools/db_ops because this relied on REPO_ROOT being tools' parent.
-    assert daemon.resolve_working_dir("tools/db_ops", data_dir=tmp_path) == daemon.TOOL_ROOT
-    assert daemon.resolve_working_dir(r"tools\db_ops", data_dir=tmp_path) == daemon.TOOL_ROOT
+    # /app/tools/dbabrain). Regression: the daemon crash-looped after dbabrain was moved
+    # out of repo/tools/dbabrain because this relied on REPO_ROOT being tools' parent.
+    assert daemon.resolve_working_dir("tools/dbabrain", data_dir=tmp_path) == daemon.TOOL_ROOT
+    assert daemon.resolve_working_dir(r"tools\dbabrain", data_dir=tmp_path) == daemon.TOOL_ROOT
 
 
 def test_resolve_working_dir_passes_absolute_path_through(tmp_path):
@@ -799,7 +799,7 @@ def test_a_long_running_service_is_closed_quietly_and_still_restarts_at_once():
     assert len(store.updated) == 1                      # closed: no row leaks per restart
     assert store.updated[0]["status"] == "timeout"      # ...in a state job_due will restart from
     assert store.telegram_sent == []                    # ...without crying wolf
-    from db_ops.lib.time_window import ERROR_STATUSES
+    from dbabrain.lib.time_window import ERROR_STATUSES
     assert store.updated[0]["status"] in ERROR_STATUSES
     assert daemon.app_command_is_due(service, dict(stale, status="timeout")) is True
 
@@ -836,7 +836,7 @@ def routed_alerts(monkeypatch):
     Routing is not what these tests are about. Supplying it makes them measure the thing they name:
     one alert for a whole startup, not one per stale row.
     """
-    from db_ops.lib import notify_route
+    from dbabrain.lib import notify_route
 
     monkeypatch.setattr(notify_route, "chat_from_route", lambda route: "chat-under-test")
     yield
@@ -895,7 +895,7 @@ def test_a_failed_run_records_why_it_failed_not_just_that_it_did():
 
 
 def test_the_cause_falls_back_to_stdout():
-    """Several db_ops CLIs print their failure to stdout, not stderr."""
+    """Several dbabrain CLIs print their failure to stdout, not stderr."""
     text = daemon._failed_run_error_text(2, "", "ERROR: target not found")
 
     assert "ERROR: target not found" in text
@@ -982,21 +982,21 @@ def test_sigterm_unwinds_instead_of_killing_the_process():
 def test_the_forwarded_key_wins_over_an_inherited_one(tmp_path, monkeypatch):
     """`--key-base64` is a decision; an inherited variable is an accident of the shell.
 
-    The daemon used `env.setdefault`, so a `DB_OPS_SECRET_KEY` already in the environment beat
+    The daemon used `env.setdefault`, so a `DBABRAIN_SECRET_KEY` already in the environment beat
     the key it had just been handed. Every child then decrypted with a passphrase nobody passed,
     and the symptom is a wrong-key failure that does not match the command line — close to
     undiagnosable, and silent until something fails to decrypt.
 
     Found because an operator ran the suite in the shell they had used to start the daemon.
     """
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "whatever-the-shell-had")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "whatever-the-shell-had")
     data_dir = tmp_path / "data"
     write_app_commands(data_dir, [app_command(
-        "APP-METRICS", command_text="python -m db_ops.metrics.cli collect --config config.json")])
+        "APP-METRICS", command_text="python -m dbabrain.metrics.cli collect --config config.json")])
     started = []
 
     monkeypatch.setattr(daemon.subprocess, "Popen", lambda *a, **k: (
-        started.append(k["env"].get("DB_OPS_SECRET_KEY")), FakeProcess(returncode=None))[1])
+        started.append(k["env"].get("DBABRAIN_SECRET_KEY")), FakeProcess(returncode=None))[1])
 
     daemon.run_scheduler_scan(
         config=FakeConfig(tmp_path / "logs"), store=FakeStore(), data_dir=data_dir, logger=None,
@@ -1013,14 +1013,14 @@ def test_an_inherited_key_is_left_alone_when_no_flag_was_given(tmp_path, monkeyp
     A daemon started with no key at all must still pass on whatever the operator exported, which
     is how the container runs it.
     """
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "from-the-environment")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "from-the-environment")
     data_dir = tmp_path / "data"
     write_app_commands(data_dir, [app_command(
-        "APP-METRICS", command_text="python -m db_ops.metrics.cli collect --config config.json")])
+        "APP-METRICS", command_text="python -m dbabrain.metrics.cli collect --config config.json")])
     started = []
 
     monkeypatch.setattr(daemon.subprocess, "Popen", lambda *a, **k: (
-        started.append(k["env"].get("DB_OPS_SECRET_KEY")), FakeProcess(returncode=None))[1])
+        started.append(k["env"].get("DBABRAIN_SECRET_KEY")), FakeProcess(returncode=None))[1])
 
     daemon.run_scheduler_scan(
         config=FakeConfig(tmp_path / "logs"), store=FakeStore(), data_dir=data_dir, logger=None,

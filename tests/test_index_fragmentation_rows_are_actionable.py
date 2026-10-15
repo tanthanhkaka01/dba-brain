@@ -21,7 +21,7 @@ Two more defects fell out of the same reading, both silent:
 
 from __future__ import annotations
 
-from db_ops.reports.index_report import _float, _fragmented_section, _short_index_type
+from dbabrain.reports.index_report import _float, _fragmented_section, _short_index_type
 
 
 def _row(**kwargs):

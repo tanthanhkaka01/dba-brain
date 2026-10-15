@@ -21,11 +21,11 @@ import pytest
 
 from conftest import patch_restore
 
-from db_ops.backup_restore import cli as backup_cli
-from db_ops.backup_restore import restore_database as restore_module
-from db_ops.backup_restore.config import parse_restore_config
-from db_ops.lib.config import DbOpsConfig
-from db_ops.lib import shared_objects
+from dbabrain.backup_restore import cli as backup_cli
+from dbabrain.backup_restore import restore_database as restore_module
+from dbabrain.backup_restore.config import parse_restore_config
+from dbabrain.lib.config import DbaBrainConfig
+from dbabrain.lib import shared_objects
 from test_backup_restore import make_config
 
 MINIMAL = {
@@ -46,8 +46,8 @@ def _restore(tmp_path, monkeypatch, *, checkdb=True, checkdb_fails=False):
     backup = config.vm_import_unc / "APPDB_Prod" / "FULL" / "latest.bak"
     backup.parent.mkdir(parents=True)
     backup.write_text("backup", encoding="utf-8")
-    app_config = DbOpsConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
-                             sqlite_path=tmp_path / "runtime" / "db_ops.sqlite")
+    app_config = DbaBrainConfig(log_dir=tmp_path / "logs", runtime_dir=tmp_path / "runtime",
+                             sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     commands, messages = [], []
 
     def fake_run_sqlcmd(cmd, **_kwargs):
@@ -62,7 +62,7 @@ def _restore(tmp_path, monkeypatch, *, checkdb=True, checkdb_fails=False):
     patch_restore(monkeypatch, "run_sqlcmd_query_command", fake_run_sqlcmd)
     patch_restore(monkeypatch, "log_event", lambda _logger, **kwargs: messages.append(kwargs["message"]))
     run = lambda: restore_module.run_restore_database(  # noqa: E731
-        config=config, db_ops_config=app_config, backup_file=backup,
+        config=config, dbabrain_config=app_config, backup_file=backup,
         ensure_certificate=False, ensure_credential=False, logger=object())
     return run, commands, messages
 

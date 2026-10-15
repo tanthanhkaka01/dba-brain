@@ -24,10 +24,10 @@ import types
 
 import pytest
 
-from db_ops.backup_restore import restore_script
-from db_ops.common import backup_copy, cli_backup_copy
-from db_ops.lib import restore_space
-from db_ops.lib.time_window import TimeWindow
+from dbabrain.backup_restore import restore_script
+from dbabrain.common import backup_copy, cli_backup_copy
+from dbabrain.lib import restore_space
+from dbabrain.lib.time_window import TimeWindow
 
 GIB = 1024 ** 3
 KIB_PER_GIB = 1024 * 1024
@@ -363,7 +363,7 @@ def test_the_free_space_is_read_from_the_last_line_of_df():
 
 
 def test_both_paths_ask_the_target_with_the_same_command():
-    from db_ops.backup_restore import space
+    from dbabrain.backup_restore import space
 
     assert space.linux_free_space_command is restore_space.free_space_command
     assert "while [ ! -e" in restore_space.free_space_command("/stage/it's here")

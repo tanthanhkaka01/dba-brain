@@ -25,8 +25,8 @@ import sqlite3
 
 import pytest
 
-from db_ops.lib.config import PostgresStoreConfig, SqliteStoreConfig, StoreConfig
-from db_ops.db import DbOpsStore, declaration
+from dbabrain.lib.config import PostgresStoreConfig, SqliteStoreConfig, StoreConfig
+from dbabrain.db import DbaBrainStore, declaration
 
 
 def _pg_config(**over):
@@ -65,7 +65,7 @@ def test_a_live_store_can_describe_itself_without_a_config(tmp_path):
     """The daemon's case: its notify helper deliberately takes no config — holding Telegram
     settings of its own is exactly how it drifted from every other app — so the store object is
     the only thing that can say where a row goes."""
-    store = DbOpsStore(tmp_path / "runtime.sqlite")
+    store = DbaBrainStore(tmp_path / "runtime.sqlite")
 
     block = declaration.describe_store(store)
 
@@ -143,7 +143,7 @@ def test_the_cli_writes_to_the_store_the_caller_named(tmp_path):
     """Not to config.json's. This is what unblocked moving message queueing onto the CLI: eleven
     tests write to a temp store, and before declarations there was no way to tell it which."""
     sqlite_path = tmp_path / "named.sqlite"
-    DbOpsStore(sqlite_path).initialize()
+    DbaBrainStore(sqlite_path).initialize()
     request = {
         "store": declaration.for_path(sqlite_path),
         "chat_id": "-1", "text": "declared", "level": "logging", "phase": "START",
@@ -151,7 +151,7 @@ def test_the_cli_writes_to_the_store_the_caller_named(tmp_path):
     }
 
     completed = subprocess.run(
-        [sys.executable, "-m", "db_ops.db.cli", "queue-telegram-message", "-"],
+        [sys.executable, "-m", "dbabrain.db.cli", "queue-telegram-message", "-"],
         input=json.dumps(request), capture_output=True, text=True,
     )
 

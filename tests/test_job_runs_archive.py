@@ -14,9 +14,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.db.job_runs import JobRun
-from db_ops.db import DbOpsStore
-from db_ops.jobs import daemon as daemon_mod
+from dbabrain.db.job_runs import JobRun
+from dbabrain.db import DbaBrainStore
+from dbabrain.jobs import daemon as daemon_mod
 
 
 def _stamp(days_ago: float) -> str:
@@ -24,7 +24,7 @@ def _stamp(days_ago: float) -> str:
 
 
 def _store_with_runs(tmp_path, ages_in_days):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     for index, age in enumerate(ages_in_days):
         store.insert_job_run(
@@ -156,9 +156,9 @@ def test_a_failing_sweep_never_takes_the_scheduler_down():
 # ---------------------------------------------------------------------------
 def _request_pointing_at(store, tmp_path, log_id):
     """A finished "run this now" request whose job_run_id names an existing run."""
-    from db_ops.db.run_requests import RunRequestStore
+    from dbabrain.db.run_requests import RunRequestStore
 
-    requests = RunRequestStore(tmp_path / "db_ops.sqlite")
+    requests = RunRequestStore(tmp_path / "dbabrain.sqlite")
     requests.initialize()
     request_id = int(requests.request_run(app_command_id="APP-0", requested_by="tester")["request_id"])
     requests.claim("APP-0")

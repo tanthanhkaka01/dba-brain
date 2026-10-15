@@ -25,7 +25,7 @@ is told which engine it is looking at, and three of the metric codes are written
 too. A section that invents Oracle storage on a SQL Server page is worse than one that is missing.
 """
 
-from db_ops.reports.server_report import (
+from dbabrain.reports.server_report import (
     build_oracle_instance,
     build_oracle_objects,
     build_oracle_redo,

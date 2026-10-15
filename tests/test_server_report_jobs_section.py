@@ -18,7 +18,7 @@ window it covers, because averaging them into one number would invent a comparis
 not support.
 """
 
-from db_ops.reports.server_report import build_jobs
+from dbabrain.reports.server_report import build_jobs
 
 
 def _job(name, message, value="ENABLED"):

@@ -17,9 +17,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.backup_restore import schedule
-from db_ops.db.job_runs import JobRun
-from db_ops.db.store import DbOpsStore
+from dbabrain.backup_restore import schedule
+from dbabrain.db.job_runs import JobRun
+from dbabrain.db.store import DbaBrainStore
 
 
 class _Config:
@@ -30,15 +30,15 @@ class _Config:
 
     @property
     def store(self):
-        """SQLite store declaration matching this fake's sqlite_path (see db_ops.lib.config)."""
-        from db_ops.lib.config import SqliteStoreConfig, StoreConfig
+        """SQLite store declaration matching this fake's sqlite_path (see dbabrain.lib.config)."""
+        from dbabrain.lib.config import SqliteStoreConfig, StoreConfig
         from pathlib import Path as _Path
 
         return StoreConfig(sqlite=SqliteStoreConfig(path=_Path(str(self.sqlite_path))))
 
 @pytest.fixture()
 def store(tmp_path):
-    return DbOpsStore(str(tmp_path / "runtime.sqlite"))
+    return DbaBrainStore(str(tmp_path / "runtime.sqlite"))
 
 
 def _running(store, job_code, *, started: datetime, metadata=None):
@@ -154,7 +154,7 @@ def test_the_id_is_recovered_from_the_job_code_when_the_metadata_lost_it(store, 
 
 def test_reaping_pushes_a_critical_alert_naming_the_run(store, tmp_path, monkeypatch):
     """The whole point: the operator hears about it. Without this the run simply vanished."""
-    monkeypatch.setattr("db_ops.lib.telegram_route.telegram_route",
+    monkeypatch.setattr("dbabrain.lib.telegram_route.telegram_route",
                         lambda level, **_: {"enabled": True, "alert": True, "chat_id": 42})
     job_code = schedule.restore_job_code("ACME_TO_MSSQL2025_DOCKER")
     _running(store, job_code, started=NOW - timedelta(hours=4),
@@ -181,7 +181,7 @@ def test_reaping_pushes_a_critical_alert_naming_the_run(store, tmp_path, monkeyp
 def test_reaping_runs_before_the_due_check_in_the_scheduler(tmp_path, monkeypatch):
     """A stale row must be closed in the same cycle that notices it, not left for whenever
     someone next reads the table."""
-    from db_ops.backup_restore import workflow as wf
+    from dbabrain.backup_restore import workflow as wf
 
     calls: list[str] = []
     monkeypatch.setattr(wf, "load_restore_configs", lambda _p: [])
@@ -199,7 +199,7 @@ def test_reaping_runs_before_the_due_check_in_the_scheduler(tmp_path, monkeypatc
         def fetch_latest_job_runs_by_job_code(self): return {}
         def fetch_running_job_runs(self, _prefix=""): return []
 
-    monkeypatch.setattr(wf, "DbOpsStore", _Store)
+    monkeypatch.setattr(wf, "DbaBrainStore", _Store)
 
     wf.run_scheduled_restores(app_config=_Config(tmp_path / "r.sqlite"), config_path="x.json")
 

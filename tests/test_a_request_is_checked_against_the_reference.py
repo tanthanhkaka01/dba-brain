@@ -22,8 +22,8 @@ import json
 
 import pytest
 
-from db_ops.common import cli, cli_request
-from db_ops.lib import request_check
+from dbabrain.common import cli, cli_request
+from dbabrain.lib import request_check
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ def test_a_blank_required_field_is_still_refused() -> None:
 
 def test_an_unknown_key_is_measured_and_not_refused(capsys, tmp_path, monkeypatch) -> None:
     log = tmp_path / "request_check.jsonl"
-    monkeypatch.setenv("DB_OPS_REQUEST_CHECK_LOG", str(log))
+    monkeypatch.setenv("DBABRAIN_REQUEST_CHECK_LOG", str(log))
     request = {"prompt": "Go on?", "answer": "yes", "colour": "blue"}
 
     token = cli_request.COMMAND.set("ask")
@@ -122,8 +122,8 @@ def test_every_input_entry_checks_an_empty_request_without_raising(entry) -> Non
 
 
 def test_the_reference_is_the_packaged_copy_never_a_node_s_data() -> None:
-    from db_ops.lib.paths import PACKAGED_CATALOGUE
-    from db_ops.lib import shared_objects
+    from dbabrain.lib.paths import PACKAGED_CATALOGUE
+    from dbabrain.lib import shared_objects
 
     assert request_check.reference() == shared_objects.load(PACKAGED_CATALOGUE)
 
@@ -137,7 +137,7 @@ def test_this_version_refuses() -> None:
 def test_with_the_switch_off_a_wrong_value_is_measured_and_the_command_runs(capsys, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(request_check, "REFUSING", False)
     log = tmp_path / "request_check.jsonl"
-    monkeypatch.setenv("DB_OPS_REQUEST_CHECK_LOG", str(log))
+    monkeypatch.setenv("DBABRAIN_REQUEST_CHECK_LOG", str(log))
     request = {"prompt": "Go on?", "tries": "twice"}
 
     token = cli_request.COMMAND.set("ask")

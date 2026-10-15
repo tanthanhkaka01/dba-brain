@@ -18,7 +18,7 @@ import json
 import pytest
 
 from conftest import shipped_config
-from db_ops.telegram import command_processor as cp
+from dbabrain.telegram import command_processor as cp
 
 COMMAND_TEXT = "spbot_create_db_docker"
 

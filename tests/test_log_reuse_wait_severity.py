@@ -5,7 +5,7 @@ catch-all is the right default — an unrecognised reason is worth a look precis
 has decided what it means yet — but it only works if the *known* values are all listed, and
 `DATABASE_SNAPSHOT_CREATION` never was. Microsoft documents that one as "routine, and typically
 brief", and `DBCC CHECKDB` creates the internal snapshot that causes it. So a routine consistency
-check — including the one db_ops' own restore workflow runs as its last step — reported at the
+check — including the one dbabrain' own restore workflow runs as its last step — reported at the
 same severity as a database that is OFFLINE.
 
 Worse, it outlives the check. `log_reuse_wait_desc` is cached and recomputed only when the engine
@@ -23,7 +23,7 @@ import re
 from pathlib import Path
 
 import pytest
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 
 SQL_DIR = resolve_tool_path("assets/metrics/sqlserver")
 VARIANTS = {

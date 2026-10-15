@@ -1,7 +1,7 @@
 """Registering a SQL task writes three files, and the runner has to be able to read all three.
 
-The engine is ``db_ops.common.config_admin`` and its face is ``common.cli add-sql``. It was
-reached through a ``db_ops.sql_tasks.config_admin`` shim until 2026-08-15 — this file was named
+The engine is ``dbabrain.common.config_admin`` and its face is ``common.cli add-sql``. It was
+reached through a ``dbabrain.sql_tasks.config_admin`` shim until 2026-08-15 — this file was named
 after the shim, and the shim was deleted: one command, one name.
 
 What these tests hold is the round trip. ``add_sql_task`` writes the ``.sql``, appends to
@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import config_admin
-from db_ops.common.config_admin import ConfigAdminError, add_sql_task, next_sql_id, slugify
-from db_ops.sql_tasks.runner import load_sql_commands, load_sql_targets, resolve_sql_file
+from dbabrain.common import config_admin
+from dbabrain.common.config_admin import ConfigAdminError, add_sql_task, next_sql_id, slugify
+from dbabrain.sql_tasks.runner import load_sql_commands, load_sql_targets, resolve_sql_file
 
 
 def _seed(tmp_path: Path) -> Path:
@@ -176,7 +176,7 @@ def test_a_fresh_install_registers_a_task_at_the_levels_it_has(monkeypatch):
     """`sql` is a level only while a Telegram group defines it, and a fresh install defines none:
     defaulting to it regardless made `add-sql` and `sql-target-add` refuse their own default there,
     so no task could be registered on a new install (0.25.0, 1.67)."""
-    from db_ops.lib.notify import NOTIFY_CHAT_LEVELS
+    from dbabrain.lib.notify import NOTIFY_CHAT_LEVELS
 
     monkeypatch.setattr(config_admin, "known_chat_levels", lambda: NOTIFY_CHAT_LEVELS)
     assert config_admin.default_sql_task_chats() == ("logging", "error")

@@ -31,9 +31,9 @@ import pytest
 
 from conftest import write_catalogued_data
 
-from db_ops.control import config_gate
-from db_ops.db import config_sync
-from db_ops.db.config_store import ConfigStore
+from dbabrain.control import config_gate
+from dbabrain.db import config_sync
+from dbabrain.db.config_store import ConfigStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # Any app command will do; the inventory one this used moved into reports_config.json in 0.22.0.
@@ -67,7 +67,7 @@ def _template(tmp_path_factory):
 def estate(tmp_path: Path, _template):
     """A master whose ``data/`` and store agree, ready to be pulled apart."""
     template_store, template_data = _template
-    store_path = tmp_path / "db_ops.sqlite"
+    store_path = tmp_path / "dbabrain.sqlite"
     shutil.copy(template_store, store_path)
     data = tmp_path / "data"
     shutil.copytree(template_data, data)
@@ -92,7 +92,7 @@ def interval_in_store(store: ConfigStore) -> int:
 
 def edit_in_console(estate, value: int) -> None:
     """What the web console does: write the store, and rewrite *its own* node's file."""
-    from db_ops.db import config_edit
+    from dbabrain.db import config_edit
 
     row = estate["store"].get_item(source_file="app_commands.json", collection="app_commands",
                                    item_key=COMMAND)
@@ -197,7 +197,7 @@ def test_keep_ships_the_masters_files_and_re_syncs_the_store(estate) -> None:
 
 def test_keep_does_not_lose_the_discarded_value(estate) -> None:
     """It is superseded on the record, not erased: the revision trail still holds 3600."""
-    from db_ops.db.config_edit import record_history
+    from dbabrain.db.config_edit import record_history
 
     edit_in_console(estate, 3600)
     leave_master_behind(estate, 7200)

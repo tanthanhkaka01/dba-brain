@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import subprocess
 
-from db_ops.control import export_public
+from dbabrain.control import export_public
 
 
 def _git(root, *args):
@@ -28,8 +28,8 @@ def _git(root, *args):
 def _repo(tmp_path):
     """A miniature repository shaped like this one, with one committed public file."""
     root = tmp_path
-    (root / "db_ops").mkdir()
-    (root / "db_ops" / "__init__.py").write_text("__version__ = '0'\n", encoding="utf-8")
+    (root / "dbabrain").mkdir()
+    (root / "dbabrain" / "__init__.py").write_text("__version__ = '0'\n", encoding="utf-8")
     (root / "README.md").write_text("# probe\n", encoding="utf-8")
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "probe@example.invalid")
@@ -46,10 +46,10 @@ def test_a_committed_tree_reports_nothing(tmp_path):
 
 def test_an_untracked_module_that_would_ship_is_named(tmp_path):
     root = _repo(tmp_path)
-    (root / "db_ops" / "half_written.py").write_text("def f():\n    ...\n", encoding="utf-8")
+    (root / "dbabrain" / "half_written.py").write_text("def f():\n    ...\n", encoding="utf-8")
 
     plan = export_public.build_plan(root)
-    assert "db_ops/half_written.py" in plan.uncommitted, (
+    assert "dbabrain/half_written.py" in plan.uncommitted, (
         "an untracked module inside the package is exactly what got published by mistake")
 
 
@@ -77,9 +77,9 @@ def test_not_a_repository_is_not_a_clean_bill_of_health(tmp_path, monkeypatch):
     The ceiling is what makes this case real, and it was missing. `pytest.ini` sets
     `--basetemp=.pytest_tmp`, so `tmp_path` is *inside* this repository: every other test here
     `git init`s its own tree and is shadowed by that nested `.git`, but this one deliberately does
-    not, so `git status` answered for **db_ops itself** and returned db_ops' own dirty files. It
+    not, so `git status` answered for **dbabrain itself** and returned dbabrain' own dirty files. It
     passed anyway, because the plan for this two-file tree intersects that list only at
-    `db_ops/__init__.py` — and it failed the first time somebody edited that file and ran the
+    `dbabrain/__init__.py` — and it failed the first time somebody edited that file and ran the
     suite, which is a release bumping `__version__`. A test that depends on a specific file of the
     surrounding repository being committed is measuring the wrong tree.
 
@@ -87,12 +87,12 @@ def test_not_a_repository_is_not_a_clean_bill_of_health(tmp_path, monkeypatch):
     is no repository to find and the subprocess is the one being tested rather than this checkout.
     """
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
-    (tmp_path / "db_ops").mkdir()
-    (tmp_path / "db_ops" / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "db_ops" / "half_written.py").write_text("def f():\n    ...\n", encoding="utf-8")
+    (tmp_path / "dbabrain").mkdir()
+    (tmp_path / "dbabrain" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "dbabrain" / "half_written.py").write_text("def f():\n    ...\n", encoding="utf-8")
 
     plan = export_public.build_plan(tmp_path)
 
     shipped = {relative.as_posix() for _, relative in plan.files}
-    assert "db_ops/half_written.py" in shipped, "the file is in the plan..."
+    assert "dbabrain/half_written.py" in shipped, "the file is in the plan..."
     assert plan.uncommitted == [], "...and still not reported, because git could not answer"

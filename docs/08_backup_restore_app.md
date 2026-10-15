@@ -18,7 +18,7 @@ free >= bytes_to_copy x factor
 they take no room; a forced copy to a Linux target writes each again beside itself, and is counted
 the largest of them). `free` is read where the files will land (a UNC share or local path with
 `disk_usage`; a Linux target with `df -Pk` over the SSH session the copy itself uses). The rule is
-`db_ops/lib/restore_space.py`; the measuring is `db_ops/backup_restore/space.py`.
+`dbabrain/lib/restore_space.py`; the measuring is `dbabrain/backup_restore/space.py`.
 
 **That is the whole rule, on every engine: the copy, at x2** (the operator, 2026-10-02). The factor
 defaults to **2.0** for SQL Server, PostgreSQL and Oracle alike (1.5 until 0.26.0), and the database
@@ -139,7 +139,7 @@ and never used by a scheduled, manual or `/spbot_restore` run.
 database's backups on the source are listed and the restore's own rule picks the chain: the newest
 FULL at or before the moment (now, or the point in time), the newest DIFF after it and at or before
 the moment, and the LOGs after that - for a point in time, up to and including the first LOG that
-reaches it, which is written after the moment (`db_ops/lib/sqlserver_backup_chain.py`). Only those
+reaches it, which is written after the moment (`dbabrain/lib/sqlserver_backup_chain.py`). Only those
 files are copied, and the space check counts the same list. On 2026-10-01 the window copy of the
 100.250 drill was **527.9 GiB** - eight days of daily DIFFs and hourly LOGs, because the window had to
 reach a weekly FULL - for a chain of **56.8 GiB**, and the space check refused it. All three copy
@@ -182,11 +182,11 @@ space*.
 
 ## Package / Files
 
-- `db_ops/backup_restore/` - the SQL Server share-driven restore is `restore_database.py` (the `run_restore_*` entry points, the plan, the per-database run) over four modules split out of it on 2026-10-03: `restore_base.py` (the candidate and how a step is logged), `restore_find.py` (which FULL / DIFF / LOG files a restore needs, latest or to a moment, on a share or a Linux host), `restore_sql.py` (recovery, recovery model, CHECKDB, the composed RESTORE a dry run shows - the RESTORE itself is written once, in `common/restorestep/sqlserver.py`, R43) and `restore_sqlcmd.py` (running a step with sqlcmd: request, transport, progress, resume state, output judged). `restore_database` re-exports every name; a test replaces a collaborator with `conftest.patch_restore`, which reaches every module that binds it
-- `db_ops/backup_restore/sql/sqlserver/`
+- `dbabrain/backup_restore/` - the SQL Server share-driven restore is `restore_database.py` (the `run_restore_*` entry points, the plan, the per-database run) over four modules split out of it on 2026-10-03: `restore_base.py` (the candidate and how a step is logged), `restore_find.py` (which FULL / DIFF / LOG files a restore needs, latest or to a moment, on a share or a Linux host), `restore_sql.py` (recovery, recovery model, CHECKDB, the composed RESTORE a dry run shows - the RESTORE itself is written once, in `common/restorestep/sqlserver.py`, R43) and `restore_sqlcmd.py` (running a step with sqlcmd: request, transport, progress, resume state, output judged). `restore_database` re-exports every name; a test replaces a collaborator with `conftest.patch_restore`, which reaches every module that binds it
+- `dbabrain/backup_restore/sql/sqlserver/`
 - `data/restore_config.json`
 - `data/backup_policy.json` — owned here (`app_code: backup_restore`), read by `reports`
-- the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/db_ops.sqlite` when the backend is `sqlite`)
+- the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/dbabrain.sqlite` when the backend is `sqlite`)
 
 ## Runtime Tables
 
@@ -197,8 +197,8 @@ space*.
 
 `data/restore_config.json` defines source/target paths, SQL Server connection metadata, database mapping, certificate import settings, copy/delete windows, and restore verification behavior. Secrets are resolved through the same local secret pattern as other database connections.
 
-**Nothing configured is a state, not a failure.** `db-ops init` writes the file from
-`db_ops/backup_restore/catalogue/restore_config.json`: `{"backups": [], "restores": []}` plus
+**Nothing configured is a state, not a failure.** `dbabrain init` writes the file from
+`dbabrain/backup_restore/catalogue/restore_config.json`: `{"backups": [], "restores": []}` plus
 `notes` giving the shape and the `cleanup_retention` contract. It ships empty because a restore
 target is an estate fact and has no sensible default. An empty list, an absent `restores` key and
 an absent file all load as **no entries**: the scheduled `workflow` has nothing due, reports
@@ -217,8 +217,8 @@ the clear and running `encrypt-secret`. That last step is the one deleting the f
 not undo.
 
 ```bash
-python -m db_ops.backup_restore.cli backup-add @data/new_backup.json --key-base64 "<KEY>"
-python -m db_ops.backup_restore.cli restore-add @data/new_restore.json --key-base64 "<KEY>"
+python -m dbabrain.backup_restore.cli backup-add @data/new_backup.json --key-base64 "<KEY>"
+python -m dbabrain.backup_restore.cli restore-add @data/new_restore.json --key-base64 "<KEY>"
 ```
 
 One JSON object in — inline, `@file` or `-` — the same contract `instance-add` takes. On Windows,
@@ -302,7 +302,7 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
 
 * **PostgreSQL and Oracle backups require a container.** `DOCKER_CONTAINER` is not optional and
   every command in both engine scripts goes through `docker exec`; there is no host-native path, so
-  an engine installed directly on a VM cannot be backed up by db_ops. Every PostgreSQL and Oracle
+  an engine installed directly on a VM cannot be backed up by dbabrain. Every PostgreSQL and Oracle
   target in this estate is a container, so nothing is blocked — but the failure on a native instance
   is `DOCKER_CONTAINER is not set`, which reads like a configuration mistake rather than a missing
   capability. SQL Server has no such limit.
@@ -344,7 +344,7 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
   ```
 
   Until 2026-09-21 the PostgreSQL and Oracle scripts chose the level themselves, comparing
-  `${DB_OPS_WEEKDAY:-$(date +%u)}` against `7`. db_ops only began passing `DB_OPS_WEEKDAY` in
+  `${DBABRAIN_WEEKDAY:-$(date +%u)}` against `7`. dbabrain only began passing `DBABRAIN_WEEKDAY` in
   0.20.0, so every older node fell through to the container **host's** clock — a different day from
   the one the daemon read the same job's `from_hour` on. On 2026-09-19 the host said Saturday while
   the node's own +07 said Sunday, and five incrementals ran and failed on the night the weekly full
@@ -442,49 +442,49 @@ is verified at the instance; only SQL Server needs the per-database list.
 
 These commands read encrypted secrets (SMB/SQL passwords, certificate API token),
 so supply the passphrase with `--key_base64 "<base64>"` (or `--key "<passphrase>"`,
-or export `DB_OPS_SECRET_KEY`). It is omitted from the examples below for brevity.
+or export `DBABRAIN_SECRET_KEY`). It is omitted from the examples below for brevity.
 
 ```powershell
 # List configured restore IDs with their source/target IPs (no secrets needed).
 # This is the CLI the Telegram bot invokes for spbot_list_restore_id.
-python -m db_ops.backup_restore.cli list-restores --config config.json
+python -m dbabrain.backup_restore.cli list-restores --config config.json
 
 # Copy backup files into the local import folder
-python -m db_ops.backup_restore.cli copy-backup --config config.json
-python -m db_ops.backup_restore.cli copy-backup --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31
+python -m dbabrain.backup_restore.cli copy-backup --config config.json
+python -m dbabrain.backup_restore.cli copy-backup --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31
 
 # Delete old backup files from the import folder
 # OBSOLETE — superseded by common's list-backup-files + delete-files (docs/13_common.md).
 # Still here because restore-workflow calls it and the daemon schedules that; nothing new
 # should use it. It computes its own set from a retention window and a *.bak glob, so what it
 # would remove cannot be inspected first — which is the whole reason the replacement exists.
-python -m db_ops.backup_restore.cli delete-backup --config config.json --dry-run
-python -m db_ops.backup_restore.cli delete-backup --config config.json --retention-seconds 172800
+python -m dbabrain.backup_restore.cli delete-backup --config config.json --dry-run
+python -m dbabrain.backup_restore.cli delete-backup --config config.json --retention-seconds 172800
 
 # Import encryption certificate (dry-run first)
-python -m db_ops.backup_restore.cli import-certificate --config config.json --source-id ACME-192-0-2-250 --dry-run
+python -m dbabrain.backup_restore.cli import-certificate --config config.json --source-id ACME-192-0-2-250 --dry-run
 
 # Restore latest full backup (dry-run first to inspect SQL)
-python -m db_ops.backup_restore.cli restore-latest --config config.json --dry-run
-python -m db_ops.backup_restore.cli restore-latest --config config.json
-python -m db_ops.backup_restore.cli restore-latest --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31
-python -m db_ops.backup_restore.cli restore-latest --config config.json --source-id ACME-192-0-2-250 --database SALESDB_Prod --target-database APP_DR
+python -m dbabrain.backup_restore.cli restore-latest --config config.json --dry-run
+python -m dbabrain.backup_restore.cli restore-latest --config config.json
+python -m dbabrain.backup_restore.cli restore-latest --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31
+python -m dbabrain.backup_restore.cli restore-latest --config config.json --source-id ACME-192-0-2-250 --database SALESDB_Prod --target-database APP_DR
 
 # Full restore workflow: copy-backup → restore-latest → delete-backup
-python -m db_ops.backup_restore.cli restore-workflow --config config.json
-python -m db_ops.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31
-python -m db_ops.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --force
+python -m dbabrain.backup_restore.cli restore-workflow --config config.json
+python -m dbabrain.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31
+python -m dbabrain.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --force
 # Rehearse without writing: the space check runs (it only reads - its `space check:` line is the
 # answer before a first night), the copy is NOT run, the restore and cleanup are dry runs over what
 # is staged now. Until 0.27.0 a dry run copied the whole chain for real.
-python -m db_ops.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --dry-run
+python -m dbabrain.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --dry-run
 
 # Point-in-time restore (PITR) — requires FULL + LOG backups covering the target time
-python -m db_ops.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --point-in-time "2026-06-13 21:00:00 +07:00"
+python -m dbabrain.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --point-in-time "2026-06-13 21:00:00 +07:00"
 
 # Verify the restored databases open - common's check, the one the workflow's last phase runs
 # (the app's own `verify-restore` went in 0.24.0, rules R43). The request carries a password: @file.
-python -m db_ops.common.cli verify-restore @verify.json
+python -m dbabrain.common.cli verify-restore @verify.json
 #   {"db_type": "sqlserver", "database_names": ["APPDB_Prod_DR"],
 #    "target": {"host": "...", "port": 1453, "username": "...", "password": "..."}}
 ```
@@ -494,7 +494,7 @@ python -m db_ops.common.cli verify-restore @verify.json
 The backup restore app owns `restore_config.json` and exposes everything other
 apps need through its **own CLI** — including `list-restores`. Other apps (for
 example the Telegram bot's `spbot_list_restore_id`) **invoke this CLI as a
-subprocess**; they do **not** import `db_ops.backup_restore` and do **not** read
+subprocess**; they do **not** import `dbabrain.backup_restore` and do **not** read
 `restore_config.json` themselves. The caller only knows which command to run; the
 backup restore app resolves its own config and secrets. New "expose restore data
 to another app" features must follow the same rule: add a CLI subcommand here, not
@@ -502,7 +502,7 @@ a cross-app import or a second reader of `restore_config.json`.
 
 ## Where a backup actually runs (since 2026-08-07)
 
-Executing a backup moved down to `db_ops/common/backup/` and the `backup-database` command
+Executing a backup moved down to `dbabrain/common/backup/` and the `backup-database` command
 (`docs/13_common.md`). This app kept the half that reads data and remembers things:
 
 | Stays here | Moved to `common` |
@@ -540,7 +540,7 @@ touches the store, so it keeps working on a node without the passphrase.
 `resolve_ssh_target` accepted only `cmd_access.method = ssh` and refused everything else at config
 resolution, before anything was attempted. That read as a statement about the transport and was
 really a statement about what nobody had needed yet: `hostcmd.run_script` has dispatched WinRM the
-whole time, delegating to the same `db_ops.common.remote_exec` the metrics collectors use against
+whole time, delegating to the same `dbabrain.common.remote_exec` the metrics collectors use against
 these hosts every cycle. What it cost was a Windows SQL Server with no OpenSSH server —
 192.0.2.248, like most of the Windows estate — which could not be backed up at all, and whose
 only workaround was installing an SSH server to satisfy a check rather than a limitation.
@@ -551,7 +551,7 @@ only workaround was installing an SSH server to satisfy a check rather than a li
 | --- | --- | --- |
 | `ssh` | 22 | honoured |
 | `winrm` | 5985, or 5986 with `ssl: true` | dropped — a key is an SSH idea, and carrying one would make `spec_builder._ssh_password` suppress the password WinRM needs |
-| anything else, incl. `local` | — | refused: `local` would back up the db_ops container under the target's name |
+| anything else, incl. `local` | — | refused: `local` would back up the dbabrain container under the target's name |
 
 An explicit `cmd_access.port` still wins. Defaulting to 22 regardless of method was harmless while
 only SSH was allowed and is not now — a WinRM target with no stated port would speak WinRM at an SSH
@@ -565,8 +565,8 @@ side by side against the old rule: same access, same port, same key file for eve
 ### `prune-backups` — the backup side
 
 ```bash
-python -m db_ops.backup_restore.cli prune-backups --config config.json          # report only
-python -m db_ops.backup_restore.cli prune-backups --config config.json --apply  # delete
+python -m dbabrain.backup_restore.cli prune-backups --config config.json          # report only
+python -m dbabrain.backup_restore.cli prune-backups --config config.json --apply  # delete
 ```
 
 Its own step, not part of `backup`. Taking a backup and deleting one are different risks — a backup
@@ -709,7 +709,7 @@ after `cmdkey` on Windows - one answer shape either way), and its login stored w
 `smb-credential`; the certificate import on a Windows target is its PowerShell run by `run-cmd`
 over WinRM, and on this machine a `run-sqlcmd`; CHECKDB (`verify-restore`) is a `run-sqlcmd` like
 every other statement. What stays here is every decision - which files, which window, what is
-obsolete - through `db_ops/backup_restore/share.py`, which only states each request. Two things
+obsolete - through `dbabrain/backup_restore/share.py`, which only states each request. Two things
 changed on the way: a dry-run cleanup on a Windows target deletes nothing (the PowerShell engine
 took the flag and deleted anyway), and the certificate's password no longer rides on this
 machine's command line inside an `Invoke-Command` script.
@@ -725,10 +725,10 @@ went; a wrong SQL password answered *Login failed for user 'sa'*, and a deadline
 timeout the resume logic reads. The Linux path now logs its progress events too - only the
 Windows and local ones did.
 
-## Running db_ops itself on Linux (containerized) — SMB source reads
+## Running dbabrain itself on Linux (containerized) — SMB source reads
 
-The transport table above assumes db_ops runs on **Windows** and reads the backup
-source over a UNC path. When db_ops runs **on Linux** (the Docker image) it cannot
+The transport table above assumes dbabrain runs on **Windows** and reads the backup
+source over a UNC path. When dbabrain runs **on Linux** (the Docker image) it cannot
 read a Windows UNC share directly, so the copy step reads the source through
 `common.cli smb-list` / `smb-get`, which use `smbclient` there (validated end-to-end against a
 containerized SQL Server 2025 target):
@@ -748,7 +748,7 @@ containerized SQL Server 2025 target):
   before the window it was written - "selected no files" read like a window set too narrow, and
   it meant a share nothing had written to for eight days.
 - `smbclient` does not preserve file mtimes, so each backup's real time is
-  recovered from its filename (`..._YYYYMMDD_HHMMSS[Z]`). A trailing `Z` (what db_ops' own
+  recovered from its filename (`..._YYYYMMDD_HHMMSS[Z]`). A trailing `Z` (what dbabrain' own
   backup scripts write since 0.20.0) means UTC; a name without it, as other tools on the source
   server write, is read in local time as before (`shell_quoting.backup_time_from_name`). The log-chain selection
   filters logs by time relative to the FULL backup; without this the restore would
@@ -765,19 +765,19 @@ that level, so files land at `vm_import/<db>/FULL` — exactly where the restore
 A restore cannot do point-in-time from a backup set that has no logs in it, and a source does
 not always write its logs next to its fulls.
 
-`192.0.2.248` is the case. db_ops runs only a FULL job there (`ACME_MSSQL_2_248_ALL_FULL`,
+`192.0.2.248` is the case. dbabrain runs only a FULL job there (`ACME_MSSQL_2_248_ALL_FULL`,
 writing `.bak` to `\192.0.2.248\SQLBK_DBOPS`); the `.trn` files come from a separate SQL
 Agent maintenance plan writing to `D:\DBA\SqlBK\<instance>\<db>\LOG`. A PITR attempt on
-2026-08-13 failed with **"No transaction log backups found"** — correctly: db_ops' set had none.
+2026-08-13 failed with **"No transaction log backups found"** — correctly: dbabrain' set had none.
 
 **The answer is a second entry, not a second mechanism.** `192.0.2.250` already shows the
 pattern: `ACME_TO_MSSQL2025_DOCKER` reads that host's Agent tree (`\...\SQLBK\APPDB-DB$APPDB`,
-where FULL and LOG sit together) and `ACME_MSSQL_DBOPS_TO_MSSQL2025_DOCKER` reads db_ops' own.
+where FULL and LOG sit together) and `ACME_MSSQL_DBOPS_TO_MSSQL2025_DOCKER` reads dbabrain' own.
 One share each, no special support. `ACME_MSSQL_2_248_AGENT_PITR_TO_LABSQL_2_116` is the same
 split for 2.248.
 
 Pointing the *existing* entry at the Agent tree instead would work, but it silently stops
-verifying db_ops' own backups — which is what that entry is for. Two entries keep both answers.
+verifying dbabrain' own backups — which is what that entry is for. Two entries keep both answers.
 
 Three things a second entry against the same source must get right:
 
@@ -794,11 +794,11 @@ Three things a second entry against the same source must get right:
 for `APPDB` or `DtradeProduction` and no full at all for `APPDB`. Eleven databases had a complete
 current chain; those are the ones the entry names.
 
-**Do not close the gap by adding a LOG job to db_ops instead.** A log backup *truncates* the
+**Do not close the gap by adding a LOG job to dbabrain instead.** A log backup *truncates* the
 log, so two independent log-backup jobs on one database each take the records the other did not,
 and **neither set is a restorable chain**.
 
-**PITR reach is the other job's retention, not db_ops'.** On 2.248 `Job_Maintain_Backup_LOG`
+**PITR reach is the other job's retention, not dbabrain'.** On 2.248 `Job_Maintain_Backup_LOG`
 runs every 15 minutes with Ola Hallengren's `@CleanupTime = 2` — that parameter is in **hours**,
 which the FULL job's `@CleanupTime = 48` confirms (exactly two daily `.bak` survive). About
 8 hours of `.trn` were on disk when measured. It is a sliding window of hours; raising
@@ -839,7 +839,7 @@ own volume. Backups and data then die together, in one `docker compose down -v`.
 the data volume does not reach: `pg_ha_01` now uses `/opt/pgbackup`, which is why a missing mount
 would fail loudly instead of quietly writing to the wrong place.
 
-**3. Separate from the db_ops deploy root (`/opt/db_ops`).** `sre create-db-docker` defaults
+**3. Separate from the dbabrain deploy root (`/opt/db_ops`).** `sre create-db-docker` defaults
 `--containers-dir` to `/opt/db_ops/containers/<name>/`, which is inside the tree `control deploy`
 manages, and the deploy prepares that tree by re-owning it to the SSH user. A backup mount under
 it gets re-owned along with everything else — taking write access away from the **database** user
@@ -884,7 +884,7 @@ engine's data directory (`/var/lib/postgresql`, `/var/opt/mssql`, `/opt/oracle/o
 ### Relocating one
 
 A bind mount is fixed for a container's lifetime, so this recreates the container — plan it as a
-maintenance action, and check first whether anything else lives in that container (the db_ops
+maintenance action, and check first whether anything else lives in that container (the dbabrain
 runtime store itself runs in `pg_ha_01-primary`). Keep the host path on the same filesystem and
 the move is an instant rename rather than a copy of the whole archive.
 
@@ -914,7 +914,7 @@ SELECT archived_count, last_archived_time, failed_count, last_failed_time FROM p
 -- archived_count rising, and last_archived_time NEWER than last_failed_time
 ```
 
-That last comparison is the same one `db_ops/common/backup_scripts/postgresql/pg_archive_wal.sh` uses to decide
+That last comparison is the same one `dbabrain/common/backup_scripts/postgresql/pg_archive_wal.sh` uses to decide
 whether archiving is healthy, so it is what the alert will report too.
 
 ## Backup-Encryption Certificate and the Database Master Key
@@ -933,8 +933,16 @@ import - this app's SMB restore, `common.cli restore-key` for the script path, a
 read by the instance; one already there is left alone; a requested name that belongs to a different
 certificate becomes `<name>_<first 8 hex digits>`; nothing is dropped. Before, the SMB restore
 skipped the import when the name existed and the other two dropped the name and recreated it - and
-`db_ops_backup_cert` is the default everywhere, so a target dbabrain also backs up either never
-received the source's certificate or lost its own (2026-09-27, a lab VM).
+one default name served every server (`db_ops_backup_cert` then), so a target dbabrain also backs
+up either never received the source's certificate or lost its own (2026-09-27, a lab VM).
+
+**The name of the certificate is the record's to state.** A SQL Server backup job states it in its
+`env` (`BACKUP_CERT_NAME`), a script-driven restore the same way, a share-driven restore in
+`source.backup_certificate.name`. A record that states none takes `dbabrain_backup_cert`. Until
+0.29.0 that default was `db_ops_backup_cert`, and a certificate is an object on a server that the
+backups already taken are encrypted with - so `upgrade-config` (step `earlier-defaults`) writes
+that name into every record that had been running on it, and only a record made afterwards takes
+the new one.
 
 ### The pair beside dbabrain's own backups: `source.backup_certificate` (0.24.1)
 
@@ -945,7 +953,7 @@ of dbabrain's own backups could not be restored onto an instance that did not al
 
 ```json
 "source": {"backup_share": "\\\\192.0.2.250\\SQLBK_DBOPS", "...": "...",
-           "backup_certificate": {"name": "db_ops_backup_cert", "password_ref": "BACKUP_ENC_REF",
+           "backup_certificate": {"name": "dbabrain_backup_cert", "password_ref": "BACKUP_ENC_REF",
                                   "source_dir": "D:\\SQLBK_DBOPS\\_cert"}}
 ```
 
@@ -989,7 +997,7 @@ as `vm_import_linux_path`. Directory creation happens automatically over SSH.
 
 ### Requirements for Windows targets
 
-- Port 445 (SMB/CIFS) open between the machine running `db_ops` and the Windows restore VM.
+- Port 445 (SMB/CIFS) open between the machine running `dbabrain` and the Windows restore VM.
 - Windows Firewall → "File and Printer Sharing" enabled on the restore VM.
 - Port 5985 (WinRM HTTP) open if auto-create is needed (also required for sqlcmd execution).
 - `vm_username` must have at minimum Read+Write access on the `SQLBK_IMPORT` share.
@@ -1082,7 +1090,7 @@ END;
 
 The `DATABASEPROPERTYEX` check was added to handle the case where a previous run left the database in RESTORING state (i.e. `RESTORE DATABASE … WITH NORECOVERY` completed but `RESTORE WITH RECOVERY` never ran). A database in RESTORING state has no active connections, so skipping `SET SINGLE_USER` is safe. Without this guard, `ALTER DATABASE` raises an error and the restore is aborted.
 
-The container-to-container drill (`db_ops/common/restore_scripts/sqlserver/mssql_restore.sh`) needs the same guard
+The container-to-container drill (`dbabrain/common/restore_scripts/sqlserver/mssql_restore.sh`) needs the same guard
 and now carries it, written against `sys.databases.state` (`0` = ONLINE) since that script drops and
 rebuilds each database rather than restoring over it:
 
@@ -1214,8 +1222,8 @@ so no call site can publish a message without one:
 ## Per-Job Telegram Routing (`notify`)
 
 `notify` is a **shared config object**, not a backup_restore invention: the same shape SQL
-targets have always used, owned by `db_ops.lib.notify` the way `time_window` is owned by
-`db_ops.lib.time_window`. The full contract is in
+targets have always used, owned by `dbabrain.lib.notify` the way `time_window` is owned by
+`dbabrain.lib.time_window`. The full contract is in
 [`docs/13_common.md`](./13_common.md); this section covers
 where backup_restore puts it.
 
@@ -1367,10 +1375,18 @@ port. An entry with only `target_container` used to mean "a container on the sou
 SQL Server plan then connected to the source's own port and ran `RESTORE ... REPLACE` there.
 
 **The staging directory is marked.** The copy mirrors the source and the prune deletes by age, so
-both act only on a directory holding `.dbops-staging`. An empty directory is marked on first use, and
+both act only on a directory holding the marker file. An empty directory is marked on first use, and
 a staging folder from before 0.25.0 is adopted by itself: it shares files with its source, so the
 copy marks it and goes on. Only a directory holding files the source does not have, with no marker,
 is refused (nothing copied, nothing deleted), with the `touch` command that marks it.
+
+**The marker's name is the entry's to state** (`staging_marker`), and `.dbabrain-staging` when it
+states none. An entry that staged before 0.29.0 states `.dbops-staging`, the name its folder on the
+target carries - `upgrade-config` (step `earlier-defaults`) wrote it in. The default could not
+simply change under those folders: retention prunes every staged file and never the marker, so
+between two runs a folder holds the marker alone, and a marker under a name the copy does not look
+for is one unknown file in a folder that shares nothing with the source - refused. The entry hands
+the same name to the copy and to the prune.
 
 **An unknown chain is not copied whole.** A PostgreSQL source with no `_FULL`, or an Oracle source
 whose RMAN preview names no piece, fails the transfer with the reason.
@@ -1406,7 +1422,7 @@ The chain is **listed on the target host** and **read inside the target containe
 for one directory. When a volume serves the staging path the two are the same directory and there is
 nothing to do; when none does, the pieces must be copied in (`docker cp`) before anything reads them.
 
-The shell script has always done this (`stage_into_target`). `db_ops.common.restorestep.postgresql`
+The shell script has always done this (`stage_into_target`). `dbabrain.common.restorestep.postgresql`
 did not when the scheduled restore moved onto the common primitives in 2.69.52, and the failure was
 a quiet one: `pg_ha_cloud2-primary` still held a copy an older script-driven run had left behind, so
 the combine read the stale pieces happily and died only on the one that was new —
@@ -1486,7 +1502,7 @@ password, found five more; each is fixed and was measured on it:
 
 - **The WAL is replayed.** The recovery configuration (`restore_command`, `recovery.signal`) is
   written into the combined directory **before the container's first start**, the WAL is copied
-  into the data volume (`<staging parent>/dbops_wal`) by the same step, and the step waits until
+  into the data volume (`<staging parent>/dbabrain_wal`) by the same step, and the step waits until
   `pg_is_in_recovery()` is false. It used to be a separate step run after the server had already started on the combined
   data: no WAL was replayed, every PostgreSQL drill stopped at its last base or incremental backup
   and reported verified, and the `recovery.signal` left behind would have replayed the source's WAL
@@ -1494,7 +1510,7 @@ password, found five more; each is fixed and was measured on it:
 - **The target's SSH password travels** in the host block when it logs in by password (the
   key-login cloud hosts never showed the gap).
 - **`sudo` is a fallback, not a prefix**: plain `docker` when the SSH user may run it,
-  `sudo docker` only when it may not (`db_ops.lib.shell.docker_cli`) - a sudo that asks for a
+  `sudo docker` only when it may not (`dbabrain.lib.shell.docker_cli`) - a sudo that asks for a
   password cannot be answered.
 - **The target need not be running.** It is stopped first, and the combine and the data swap run
   in throwaway containers (`docker run --rm -u postgres --volumes-from <target>`, the target's own
@@ -1525,7 +1541,7 @@ engine: a marker row written, the moment noted, a second row written, a log / WA
 backup taken, then the restore. Every engine now keeps the first row and not the second. Before
 this, none of them reached the moment:
 
-- **The moment is read once, into the server's clock**: `db_ops.lib.restore.moment.server_clock_text`,
+- **The moment is read once, into the server's clock**: `dbabrain.lib.restore.moment.server_clock_text`,
   naive `YYYY-MM-DD HH:MM:SS`, UTC unless the server's offset is stated. Every container target runs
   on UTC. A server on another clock needs the moment without an offset, in its own clock. The reasons:
   - SQL Server's `STOPAT` refuses an offset (Msg 3217), and so does Oracle's `TO_DATE`.
@@ -1590,7 +1606,7 @@ is `warning`. Never a failure: the databases are the deliverable.
 The bundle a restore replays is written beside a backup by **the node that runs that backup**. A
 node restoring a source whose backup another node runs (a soak node beside the worker) has none,
 and the skip says so - it used to ask for `server_metadata.enabled`, which was already on.
-`python -m db_ops.backup_restore.cli export-instance-bundle --backup-id <id>` exports it on this
+`python -m dbabrain.backup_restore.cli export-instance-bundle --backup-id <id>` exports it on this
 node, for any backup entry, active here or not (read-only on the source; refused as
 `not_configured` for an entry with `server_metadata` off).
 
@@ -1614,7 +1630,7 @@ it now carries the id that was typed.
 ## Host-to-Host Transfer: Failures Must Surface, Not Stall
 
 The copy from source host to target host is one `tar` stream through the orchestrator
-(`common.cli copy-backup-dir`, `db_ops/common/backup_copy.py` - `transfer.py` in this app until 0.23.0),
+(`common.cli copy-backup-dir`, `dbabrain/common/backup_copy.py` - `transfer.py` in this app until 0.23.0),
 which makes it fast and makes its failure modes quiet — there is no per-file round trip in which an
 error can surface. Two guards exist for that, both added after a run hung for its full two-hour
 timeout with nothing to show for it:
@@ -1731,7 +1747,7 @@ Why not delete the files from outside, with one rule for all three: an RMAN leve
 backup sets finishing seconds apart, and a PostgreSQL base backup is a directory in a chain. A
 file-by-file rule cuts the first in half at the cutoff and cannot remove the second at all.
 
-The prune planner (`db_ops/lib/backupfiles_retention.py`) takes the seconds as they are since
+The prune planner (`dbabrain/lib/backupfiles_retention.py`) takes the seconds as they are since
 0.26.0: converted to whole days, anything under a day became 0 and 0 became the 14-day default
 (review 0.25.0, B4.4). Its answer names the window in the unit it was given (`window`: `"8-day"`,
 `"7200-second"`), and it judges each file **on the clock of the machine that stamped it**: every
@@ -1857,7 +1873,7 @@ Two properties are deliberate:
 The backup restore app resolves its config file using this chain:
 
 1. `--config <path>` CLI argument.
-2. `DB_OPS_BACKUP_RESTORE_CONFIG` environment variable.
+2. `DBABRAIN_BACKUP_RESTORE_CONFIG` environment variable.
 3. `config.backup_restore.json` next to `config.json`, or in the current working directory.
 4. `config.json` shared fallback.
 

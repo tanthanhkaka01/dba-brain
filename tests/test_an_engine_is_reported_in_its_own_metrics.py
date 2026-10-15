@@ -25,11 +25,11 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.lib.inventory_render import HEALTH_BLOCKS
-from db_ops.reports import inventory_health as ih
-from db_ops.reports import server_health as sh
-from db_ops.reports.inventory_report import _build_detail
-from db_ops.reports.server_series import metric_catalog
+from dbabrain.lib.inventory_render import HEALTH_BLOCKS
+from dbabrain.reports import inventory_health as ih
+from dbabrain.reports import server_health as sh
+from dbabrain.reports.inventory_report import _build_detail
+from dbabrain.reports.server_series import metric_catalog
 
 AT = "2026-10-09T04:20:00Z"
 

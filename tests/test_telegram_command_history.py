@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 
-from db_ops.db import telegram_command_history as history
-from db_ops.lib.telegram_command_text import render_command_line
+from dbabrain.db import telegram_command_history as history
+from dbabrain.lib.telegram_command_text import render_command_line
 
 
 def _row(**over):
@@ -234,7 +234,7 @@ def test_a_long_listing_is_sent_whole_in_parts_not_cut_short():
     `lib.telegram_text.split_telegram_message` is the standard for this and it already paces the
     parts against the rate limit, so a listing has no reason to solve it again.
     """
-    from db_ops.lib.telegram_text import split_telegram_message
+    from dbabrain.lib.telegram_text import split_telegram_message
 
     long_argument = "A-RATHER-LONG-SERVER-NAME-AS-THIS-ESTATE-WRITES-THEM-%03d" % 0
     rows = [_row(text=f"/spbot_shrink_log {long_argument} database_{n} 2000",

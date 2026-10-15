@@ -36,7 +36,7 @@ archived logs found*). The rest of this page is SQL Server, PostgreSQL and Oracl
   Run every command below from that root, with the secret key in the environment:
 
   ```bash
-  export DB_OPS_SECRET_KEY='<your passphrase>'
+  export DBABRAIN_SECRET_KEY='<your passphrase>'
   ```
 
 - Two Ubuntu machines reachable over SSH. The SSH user needs sudo for `--install-docker`, which

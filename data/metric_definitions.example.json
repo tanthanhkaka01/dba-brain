@@ -1197,7 +1197,7 @@
           "db_type": "postgresql",
           "name": "postgresql_covered_elsewhere",
           "supported": false,
-          "unsupported_reason": "PostgreSQL has no in-database job scheduler, so there is no server-side job outcome to read. The equivalent evidence is db_ops's own backup job history in the job_runs table (backup_restore.backup_job.<backup_id>.<job>), which the backup app already records."
+          "unsupported_reason": "PostgreSQL has no in-database job scheduler, so there is no server-side job outcome to read. The equivalent evidence is dbabrain's own backup job history in the job_runs table (backup_restore.backup_job.<backup_id>.<job>), which the backup app already records."
         }
       ],
       "report_policy": {
@@ -1556,7 +1556,7 @@
           "db_type": "postgresql",
           "name": "postgresql_covered_elsewhere",
           "supported": false,
-          "unsupported_reason": "Implemented as POSTGRES_BACKUP_LAST_RESULT, which emits this exact message contract from a docker collector. It cannot be a variant here because collector_type is per metric and a PostgreSQL base backup is a directory on disk rather than a catalog row. Both codes are listed in db_ops.common.backup_policy.BACKUP_LAST_RESULT_CODES so readers treat them as one."
+          "unsupported_reason": "Implemented as POSTGRES_BACKUP_LAST_RESULT, which emits this exact message contract from a docker collector. It cannot be a variant here because collector_type is per metric and a PostgreSQL base backup is a directory on disk rather than a catalog row. Both codes are listed in dbabrain.common.backup_policy.BACKUP_LAST_RESULT_CODES so readers treat them as one."
         }
       ],
       "report_policy": {
@@ -4951,7 +4951,7 @@
           "max_sample_items": 5
         }
       },
-      "note": "The PostgreSQL half of BACKUP_LAST_RESULT. It cannot be a variant of that metric because collector_type is per metric, not per variant, and a base backup is a directory on disk rather than a row in a catalog - so this needs the docker collector while BACKUP_LAST_RESULT is sql. It emits the identical message contract, and db_ops.common.backup_policy.BACKUP_LAST_RESULT_CODES lists both codes so the policy engine and the inventory report read them as one.",
+      "note": "The PostgreSQL half of BACKUP_LAST_RESULT. It cannot be a variant of that metric because collector_type is per metric, not per variant, and a base backup is a directory on disk rather than a row in a catalog - so this needs the docker collector while BACKUP_LAST_RESULT is sql. It emits the identical message contract, and dbabrain.common.backup_policy.BACKUP_LAST_RESULT_CODES lists both codes so the policy engine and the inventory report read them as one.",
       "max_rows": 500
     },
     {
@@ -5338,7 +5338,7 @@
         }
       ],
       "report_policy": {
-        "_note": "Raw cumulative counters, deliberately ungraded: the collector records totals and the report subtracts two collections to get an interval (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid, where a since-boot total plots as a straight ramp on every item. The Workload section of the server report is what renders them, as rates.",
+        "_note": "Raw cumulative counters, deliberately ungraded: the collector records totals and the report subtracts two collections to get an interval (dbabrain.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid, where a since-boot total plots as a straight ramp on every item. The Workload section of the server report is what renders them, as rates.",
         "collect_only": true,
         "chart_summary_only": true
       },
@@ -5395,7 +5395,7 @@
         }
       ],
       "report_policy": {
-        "_note": "Raw cumulative counters, deliberately ungraded: the collector records totals and the report subtracts two collections to get an interval (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid, where a since-boot total plots as a straight ramp on every item. The Workload section of the server report is what renders them, as rates.",
+        "_note": "Raw cumulative counters, deliberately ungraded: the collector records totals and the report subtracts two collections to get an interval (dbabrain.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid, where a since-boot total plots as a straight ramp on every item. The Workload section of the server report is what renders them, as rates.",
         "collect_only": true,
         "chart_summary_only": true
       },
@@ -5453,7 +5453,7 @@
         }
       ],
       "report_policy": {
-        "_note": "Raw cumulative counters, deliberately ungraded: the collector records totals and the report subtracts two collections to get an interval (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid, where a since-boot total plots as a straight ramp on every item. The Workload section of the server report is what renders them, as rates.",
+        "_note": "Raw cumulative counters, deliberately ungraded: the collector records totals and the report subtracts two collections to get an interval (dbabrain.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid, where a since-boot total plots as a straight ramp on every item. The Workload section of the server report is what renders them, as rates.",
         "collect_only": true,
         "chart_summary_only": true
       },
@@ -5510,7 +5510,7 @@
         }
       ],
       "report_policy": {
-        "_note": "Gauges, deliberately ungraded: each value is a reading of the moment, not a total, so the report summarises several of them into latest/min/max over a window rather than subtracting two (db_ops.lib.interval_rates.window_gauge). collect_only keeps them out of the warning/critical reports -- none of these has a threshold that holds on every instance, and the single-reading conclusion is the mistake the Memory section exists to prevent. chart_summary_only keeps them out of the generic chart grid. The Memory block of the server report is what renders them.",
+        "_note": "Gauges, deliberately ungraded: each value is a reading of the moment, not a total, so the report summarises several of them into latest/min/max over a window rather than subtracting two (dbabrain.lib.interval_rates.window_gauge). collect_only keeps them out of the warning/critical reports -- none of these has a threshold that holds on every instance, and the single-reading conclusion is the mistake the Memory section exists to prevent. chart_summary_only keeps them out of the generic chart grid. The Memory block of the server report is what renders them.",
         "collect_only": true,
         "chart_summary_only": true
       },
@@ -5568,7 +5568,7 @@
         }
       ],
       "report_policy": {
-        "_note": "Raw cumulative counters, one row per database, deliberately ungraded: the report subtracts two collections per database (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid. The Transaction log block under Workload on the server report is what renders them.",
+        "_note": "Raw cumulative counters, one row per database, deliberately ungraded: the report subtracts two collections per database (dbabrain.lib.interval_rates). collect_only keeps them out of the warning/critical reports -- a counter that ticks is not a finding -- and chart_summary_only keeps them out of the generic chart grid. The Transaction log block under Workload on the server report is what renders them.",
         "collect_only": true,
         "chart_summary_only": true
       },
@@ -5626,7 +5626,7 @@
         }
       ],
       "report_policy": {
-        "_note": "Raw cumulative totals per query_hash, deliberately ungraded: the report subtracts two collections per query to rank the interval's work (db_ops.lib.interval_rates). collect_only keeps them out of the warning/critical reports, and chart_summary_only keeps a row per statement out of the generic chart grid. The Top queries block under Workload on the server report is what renders them.",
+        "_note": "Raw cumulative totals per query_hash, deliberately ungraded: the report subtracts two collections per query to rank the interval's work (dbabrain.lib.interval_rates). collect_only keeps them out of the warning/critical reports, and chart_summary_only keeps a row per statement out of the generic chart grid. The Top queries block under Workload on the server report is what renders them.",
         "collect_only": true,
         "chart_summary_only": true
       },

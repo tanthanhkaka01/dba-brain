@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import verifyrestore
+from dbabrain.common import verifyrestore
 
 
 def _run(monkeypatch, *, stdout: str, exit_code: int) -> dict:

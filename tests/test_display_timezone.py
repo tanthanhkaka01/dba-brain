@@ -1,4 +1,4 @@
-"""The one clock db_ops shows its operator, and what happens when it is declared badly.
+"""The one clock dbabrain shows its operator, and what happens when it is declared badly.
 
 Every timestamp the store holds is UTC. That is what makes a rendered wall-clock time dangerous:
 `Snapshot 2026-09-07 07:32:56` cannot be lined up against `metric_results.collected_at` unless it
@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.lib import timezone as tz
+from dbabrain.lib import timezone as tz
 
 
 MOMENT = datetime(2026, 9, 7, 0, 32, 56, tzinfo=timezone.utc)
@@ -203,7 +203,7 @@ def test_the_local_calendar_day_ends_at_the_operators_midnight():
 
 def test_the_env_var_lets_one_config_file_be_copied_to_a_second_node(monkeypatch):
     """The worker gets a copy of the master's config.json. A per-node zone must not require
-    editing it - the same reason DB_OPS_NODE_ROLE exists."""
+    editing it - the same reason DBABRAIN_NODE_ROLE exists."""
     monkeypatch.setenv(tz.TIMEZONE_ENV_VAR, "Asia/Ho_Chi_Minh")
     assert tz.declaration_from_env() == "Asia/Ho_Chi_Minh"
 

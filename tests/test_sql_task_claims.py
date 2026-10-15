@@ -4,11 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from db_ops.lib.text_format import format_message_time
-from db_ops.lib.time_window import MANUAL_ONLY, TimeWindow
-from db_ops.db import DbOpsStore
-from db_ops.sql_tasks import runner
-from db_ops.lib import sql_task_catalog
+from dbabrain.lib.text_format import format_message_time
+from dbabrain.lib.time_window import MANUAL_ONLY, TimeWindow
+from dbabrain.db import DbaBrainStore
+from dbabrain.sql_tasks import runner
+from dbabrain.lib import sql_task_catalog
 
 from conftest import patch_sql_runner
 
@@ -123,7 +123,7 @@ def test_failing_sql_task_backs_off_instead_of_running_every_tick(tmp_path):
     """Regression: a task whose only runs are 'error' must not be re-run every scan tick.
     Before the fix due_sql_tasks looked only at done/running runs, so a failing task had no
     recent run on record and repeat_due(None) was always True -> it hammered the target."""
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     commands = {9: sql_command()}
     target = sql_target(repeat_interval=72000, timeout=7200)
@@ -143,7 +143,7 @@ def test_failing_sql_task_backs_off_instead_of_running_every_tick(tmp_path):
     old = (datetime.now(timezone.utc) - timedelta(seconds=80000)).strftime("%Y-%m-%dT%H:%M:%SZ")
     _insert_error_run(store, run_key=run_key, finished_at=old)
     # keep only the old error as the latest by clearing the recent one
-    with sqlite3.connect(tmp_path / "db_ops.sqlite") as conn:
+    with sqlite3.connect(tmp_path / "dbabrain.sqlite") as conn:
         conn.execute("DELETE FROM sql_runs WHERE started_at = ?;", (recent,))
         conn.commit()
     latest_any = store.fetch_latest_sql_runs_by_run_key()
@@ -154,13 +154,13 @@ def test_failing_sql_task_backs_off_instead_of_running_every_tick(tmp_path):
 
 @pytest.mark.xfail(strict=True, reason="Design gap: sql_runs has no atomic active claim/unique RUNNING row per run_key.")
 def test_concurrent_sql_task_workers_claim_one_run(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
 
     first_id = insert_running_sql(store)
     second_id = insert_running_sql(store)
 
-    with sqlite3.connect(tmp_path / "db_ops.sqlite") as conn:
+    with sqlite3.connect(tmp_path / "dbabrain.sqlite") as conn:
         rows = conn.execute(
             "SELECT sql_run_id, status, metadata_json FROM sql_runs WHERE run_key = ? AND status = 'running';",
             ("9|1|server|sqlserver|svc|inst|APPDB",),
@@ -173,13 +173,13 @@ def test_concurrent_sql_task_workers_claim_one_run(tmp_path):
 
 @pytest.mark.xfail(strict=True, reason="Design gap: folder SQL deploys have no durable per-target database lock.")
 def test_same_folder_deploy_cannot_execute_concurrently_for_same_target_database(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
 
     insert_running_sql(store, run_key="13|1|server|sqlserver|svc|inst|APPDB")
     insert_running_sql(store, run_key="13|1|server|sqlserver|svc|inst|APPDB")
 
-    with sqlite3.connect(tmp_path / "db_ops.sqlite") as conn:
+    with sqlite3.connect(tmp_path / "dbabrain.sqlite") as conn:
         running_count = conn.execute(
             "SELECT count(*) FROM sql_runs WHERE run_key = ? AND status = 'running';",
             ("13|1|server|sqlserver|svc|inst|APPDB",),
@@ -190,7 +190,7 @@ def test_same_folder_deploy_cannot_execute_concurrently_for_same_target_database
 
 @pytest.mark.xfail(strict=True, reason="Design gap: sql_runs has no active-run uniqueness constraint for duplicate run_key inserts.")
 def test_race_condition_insert_result_does_not_duplicate_run_key(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     run_ids = [insert_running_sql(store), insert_running_sql(store)]
 
@@ -201,7 +201,7 @@ def test_race_condition_insert_result_does_not_duplicate_run_key(tmp_path):
 
 @pytest.mark.xfail(strict=True, reason="Design gap: no claim_sql_run API or TTL lease expiration exists.")
 def test_lock_expiration_allows_reclaim_after_ttl(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     stale_started = (datetime.now(timezone.utc) - timedelta(seconds=600)).strftime("%Y-%m-%dT%H:%M:%SZ")
     insert_running_sql(store, started_at=stale_started)
@@ -214,7 +214,7 @@ def test_lock_expiration_allows_reclaim_after_ttl(tmp_path):
 
 @pytest.mark.xfail(strict=True, reason="Design gap: no heartbeat_sql_run API exists to protect active leases from stealing.")
 def test_heartbeat_prevents_lock_steal(tmp_path):
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     insert_running_sql(store)
 
@@ -270,7 +270,7 @@ def test_a_run_that_a_later_run_replaced_is_still_reaped(tmp_path):
     which read `fetch_latest_done_or_running_sql_runs_by_run_key` - could not see it again. It
     stayed `running` all day: no error row, no alert, and nothing in the error chat between
     07:00 and 20:00 local while two runs had in fact died."""
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     run_key = "9|1|server|sqlserver|svc|inst|APPDB"
     abandoned = insert_running_sql(store, started_at="2026-01-01T00:00:00Z")
@@ -321,7 +321,7 @@ def test_two_scans_that_find_the_same_dead_run_report_it_once(tmp_path, monkeypa
     """APP-SQL_TASKS runs ten scans at once; on 2026-09-26 two of them read the same `running` row,
     each closed it and each alerted, so three dead runs reached the chat twice. The close is a claim
     now - only the scan whose write lands reports - and it is held by the real store, not a fake."""
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     run_id = insert_running_sql(store, started_at="2026-01-01T00:00:00Z")
     # What each scan read before either closed it: that row, with no live claim on it.
@@ -359,7 +359,7 @@ def test_the_alert_says_when_the_run_died_and_on_which_clock():
     started = datetime.now(timezone.utc) - timedelta(seconds=3600)
     assert f"It started at {format_message_time(started)}" in text
     assert "was still 'running' 60 minutes later" in text
-    # The offset, not the word "UTC": one format for every clock db_ops shows, so this line
+    # The offset, not the word "UTC": one format for every clock dbabrain shows, so this line
     # and the report header about the same failure are comparable at a glance.
     assert any(line.startswith("time: ") and line.rstrip().endswith("+00")
                for line in text.splitlines())
@@ -610,7 +610,7 @@ def test_a_script_that_returns_nothing_produces_no_workbook(tmp_path):
 def test_a_task_can_export_csv_and_txt_not_only_a_workbook(tmp_path):
     """`output.format` was xlsx-or-nothing, so a task whose consumer wanted a CSV had no way to
     say so and someone converted the workbook by hand. The file formats now go through
-    db_ops.lib.result_format — the same renderer `run-sql --format` uses, so a scheduled
+    dbabrain.lib.result_format — the same renderer `run-sql --format` uses, so a scheduled
     export and an ad-hoc one cannot drift into two different-looking artifacts."""
     result = {"files": [{"result_sets": [{"columns": ["name", "qty"],
                                           "rows": [["PB-1", 5], ["PB-2", None]]}]}]}
@@ -661,7 +661,7 @@ def _history_row(**over):
 def test_a_run_line_leads_with_the_status_because_that_is_what_is_scanned_for():
     """Read on a phone by whoever just got an alert. Everything else on the line is context for
     the one word they came for."""
-    from db_ops.db import sql_run_history
+    from dbabrain.db import sql_run_history
 
     text = sql_run_history.render([_history_row()])
 
@@ -675,7 +675,7 @@ def test_a_run_line_leads_with_the_status_because_that_is_what_is_scanned_for():
 def test_a_failed_run_carries_its_reason_so_the_store_need_not_be_opened():
     """The trip to the store is exactly what this command exists to save. A listing that says
     ERROR and stops has not saved it."""
-    from db_ops.db import sql_run_history
+    from dbabrain.db import sql_run_history
 
     text = sql_run_history.render([_history_row(
         status="error", duration_ms=None, row_count=None,
@@ -689,7 +689,7 @@ def test_a_failed_run_carries_its_reason_so_the_store_need_not_be_opened():
 def test_a_successful_run_does_not_repeat_a_stale_error_column():
     """`error_text` outlives the row it belonged to in some shapes; printing it beside DONE would
     report a failure that did not happen."""
-    from db_ops.db import sql_run_history
+    from dbabrain.db import sql_run_history
 
     text = sql_run_history.render([_history_row(error_text="an error from a previous attempt")])
 
@@ -706,8 +706,8 @@ def test_a_long_listing_is_sent_whole_in_parts_not_cut_short():
     the parts against the rate limit — a listing solving that again solved it worse. This test is
     the sql_runs half of the pair; `test_telegram_command_history` holds the other.
     """
-    from db_ops.db import sql_run_history
-    from db_ops.lib.telegram_text import split_telegram_message
+    from dbabrain.db import sql_run_history
+    from dbabrain.lib.telegram_text import split_telegram_message
 
     rows = [_history_row(sql_run_id=n, sql_code="SQLSERVER-%03d-A-RATHER-LONG-TASK-NAME" % n)
             for n in range(200)]
@@ -726,14 +726,14 @@ def test_a_long_listing_is_sent_whole_in_parts_not_cut_short():
 
 
 def test_an_empty_history_says_so_rather_than_printing_a_bare_header():
-    from db_ops.db import sql_run_history
+    from dbabrain.db import sql_run_history
 
     assert sql_run_history.render([]) == "No SQL task runs recorded yet."
     assert sql_run_history.render([], sql_id=28) == "No SQL task runs recorded for sql_id 28 yet."
 
 
 def test_the_limit_is_bounded_so_a_typo_cannot_ask_for_the_whole_table():
-    from db_ops.db import sql_run_history
+    from dbabrain.db import sql_run_history
 
     asked = []
 
@@ -762,14 +762,14 @@ def test_an_explicit_retry_interval_is_used_instead_of_the_repeat_interval(tmp_p
     `retry_interval` to 5 minutes is asking to be retried *sooner* than its schedule, and nothing
     asserted the shorter value was the one used. Written 2026-09-17.
     """
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     commands = {9: sql_command()}
     target = sql_target(repeat_interval=72000, timeout=7200, retry_interval=300)
     run_key = target.run_key
 
     def _due_after(seconds_ago):
-        with sqlite3.connect(tmp_path / "db_ops.sqlite") as conn:
+        with sqlite3.connect(tmp_path / "dbabrain.sqlite") as conn:
             conn.execute("DELETE FROM sql_runs;")
         when = (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
         _insert_error_run(store, run_key=run_key, finished_at=when)
@@ -787,7 +787,7 @@ def test_an_explicit_retry_interval_is_used_instead_of_the_repeat_interval(tmp_p
 
 def test_without_a_retry_interval_a_failure_waits_the_repeat_interval(tmp_path):
     """The other side of the same branch, stated so the pair cannot drift apart."""
-    store = DbOpsStore(tmp_path / "db_ops.sqlite")
+    store = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     store.initialize()
     commands = {9: sql_command()}
     target = sql_target(repeat_interval=72000, timeout=7200)  # retry_interval unset

@@ -1,7 +1,7 @@
 """A container network that claims a routed range takes a database off one host and nowhere else.
 
 This is the failure these tests defend against, and it has happened three times to the same SQL
-Server: 2026-08-05 (the db_ops compose network took 172.20.0.0/16), 2026-08-14 (a lab project took
+Server: 2026-08-05 (the dbabrain compose network took 172.20.0.0/16), 2026-08-14 (a lab project took
 it), and 2026-08-26 (``docker0`` took it on a newly built worker VM). Each time the instance was
 healthy and reachable from every other machine; each time the worker reported an ordinary connect
 timeout, because that is exactly what a dropped SYN looks like from a database driver.
@@ -9,7 +9,7 @@ timeout, because that is exactly what a dropped SYN looks like from a database d
 Pinning was the answer to the first two, and it works — but only where somebody applied it, which
 is why the third happened on a new host. What was missing every time was *detection*: something
 that reads the host's own networks and says which one is doing it. That is
-``db_ops.lib.network_policy``, and these tests are what make it trustworthy, since a check nobody
+``dbabrain.lib.network_policy``, and these tests are what make it trustworthy, since a check nobody
 asserts on is indistinguishable from one that quietly stopped working.
 """
 
@@ -21,11 +21,11 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.control import worker_status
-from db_ops.lib import network_policy
-from db_ops.lib.network_policy import HIJACK, OVERLAP, UNCONFINED
-from db_ops.lib.paths import DEFAULT_DATA_DIR
-from db_ops.lib.docker_db_spec import LAB_NETWORK_PREFIX, lab_network_subnet
+from dbabrain.control import worker_status
+from dbabrain.lib import network_policy
+from dbabrain.lib.network_policy import HIJACK, OVERLAP, UNCONFINED
+from dbabrain.lib.paths import DEFAULT_DATA_DIR
+from dbabrain.lib.docker_db_spec import LAB_NETWORK_PREFIX, lab_network_subnet
 
 
 #: The estate's own declaration. ``data/*.json`` is private and does **not** ship, so in the public
@@ -36,7 +36,7 @@ from db_ops.lib.docker_db_spec import LAB_NETWORK_PREFIX, lab_network_subnet
 RESERVATIONS_FILE = DEFAULT_DATA_DIR / "network_reservations.json"
 EXAMPLE_FILE = DEFAULT_DATA_DIR / "network_reservations.example.json"
 INVENTORY_FILE = DEFAULT_DATA_DIR / "db_instances.json"
-HOST_DAEMON_FILE = Path(__file__).resolve().parents[1] / "db_ops" / "sre" / "host_config" / "docker-daemon.json"
+HOST_DAEMON_FILE = Path(__file__).resolve().parents[1] / "dbabrain" / "sre" / "host_config" / "docker-daemon.json"
 
 #: Both declarations where both exist. The example ships and the estate's does not, so the rules
 #: below are enforced on whichever the tree actually has.
@@ -267,7 +267,7 @@ def test_no_declared_container_range_overlaps_a_declared_routed_range(path):
 
 @pytest.mark.parametrize("path", SHIPPED_DECLARATIONS, ids=lambda path: path.name)
 def test_the_host_daemon_file_stays_inside_the_declared_container_ranges(path):
-    """docker-daemon.json is what an operator applies; this file is what db_ops checks against.
+    """docker-daemon.json is what an operator applies; this file is what dbabrain checks against.
 
     They are two statements of one decision, kept in different places for different readers, and
     nothing but this test stops them drifting apart.
@@ -327,7 +327,7 @@ def test_every_monitored_address_in_the_inventory_sits_in_a_declared_routed_rang
 def _data_dir(tmp_path: Path, *, inventory) -> Path:
     (tmp_path / "network_reservations.json").write_text(json.dumps({
         "routed_ranges": [{"cidr": "172.20.99.0/24", "owner": "estate LAN", "note": ""}],
-        "container_ranges": [{"cidr": "172.30.0.0/16", "owner": "db_ops", "note": ""}],
+        "container_ranges": [{"cidr": "172.30.0.0/16", "owner": "dbabrain", "note": ""}],
     }), encoding="utf-8")
     (tmp_path / "db_instances.json").write_text(json.dumps({"db_instances": inventory}), encoding="utf-8")
     return tmp_path

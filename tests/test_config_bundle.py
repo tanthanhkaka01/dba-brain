@@ -1,7 +1,7 @@
 """Moving an estate to a machine that has never seen this project, and losing nothing on the way.
 
-The sentence these tests defend is the one in :mod:`db_ops.lib.config_bundle`: after
-``pip install dbabrain`` and ``db-ops import-data <bundle>``, the new machine runs the same estate
+The sentence these tests defend is the one in :mod:`dbabrain.lib.config_bundle`: after
+``pip install dbabrain`` and ``dbabrain import-data <bundle>``, the new machine runs the same estate
 as the old one. Three things have to hold for that to be true rather than nearly true, and each
 one is a group below:
 
@@ -24,9 +24,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.lib import config_bundle
-from db_ops.lib.json_io import dump_json_text
-from db_ops.lib.config_bundle import (
+from dbabrain.lib import config_bundle
+from dbabrain.lib.json_io import dump_json_text
+from dbabrain.lib.config_bundle import (
     BUNDLE_FORMAT,
     ROLE_CONFIG_CATALOG,
     ROLE_CONFIG_SOURCE,
@@ -53,7 +53,7 @@ def source_root(tmp_path: Path) -> Path:
     write_catalogued_data(data)
 
     (root / "config.json").write_text(json.dumps({
-        "app_name": "db_ops",
+        "app_name": "dbabrain",
         "log_dir": "logs",
         "runtime_dir": "runtime",
         "store_config_file": "data/store_config.json",
@@ -202,14 +202,14 @@ def test_the_secret_store_travels_as_ciphertext_and_the_passphrase_does_not(
     """A bundle carries the store so a new machine inherits the estate's credentials.
 
     There is no field for the passphrase and no code path that reads one: the importing machine
-    supplies it through ``DB_OPS_SECRET_KEY``. Asserted as an absence because that is what the
+    supplies it through ``DBABRAIN_SECRET_KEY``. Asserted as an absence because that is what the
     guarantee is.
     """
     bundle = config_bundle.build_bundle(source_root)
     text = config_bundle.bundle_text(bundle).lower()
 
     assert bundle["files"][config_bundle.SECRET_STORE_RELATIVE]["role"] == ROLE_SECRET_STORE
-    assert "db_ops_secret_key" in text  # named in the notes, as the thing to set
+    assert "dbabrain_secret_key" in text  # named in the notes, as the thing to set
     assert "passphrase" not in json.dumps(
         bundle["files"][config_bundle.SECRET_STORE_RELATIVE]).lower()
 
@@ -534,7 +534,7 @@ def test_export_then_import_stands_a_second_machine_up(
     promised is a *command*, and every defect this project has shipped in a first-run path was in
     the layer between a working function and the words that call it.
     """
-    from db_ops import cli
+    from dbabrain import cli
 
     bundle = tmp_path / "prod-bundle.json"
     target = tmp_path / "second-machine"
@@ -550,7 +550,7 @@ def test_export_then_import_stands_a_second_machine_up(
 def test_export_refuses_to_clobber_an_existing_bundle(
     source_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    from db_ops import cli
+    from dbabrain import cli
 
     bundle = tmp_path / "prod-bundle.json"
     bundle.write_text("{}", encoding="utf-8")
@@ -569,7 +569,7 @@ def test_export_warns_when_the_filename_is_one_git_would_take(
     legitimate — but departing from it earns a line, because committing an estate is silent and
     cannot be undone once pushed.
     """
-    from db_ops import cli
+    from dbabrain import cli
 
     assert _tool(cli, "export-data", bundle=str(tmp_path / "estate.json"), root=str(source_root)) == 0
     assert "WARNING" in capsys.readouterr().out
@@ -582,7 +582,7 @@ def test_export_warns_when_the_filename_is_one_git_would_take(
 def test_plan_changes_nothing_and_names_every_action(
     source_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    from db_ops import cli
+    from dbabrain import cli
 
     bundle = tmp_path / "prod-bundle.json"
     target = tmp_path / "second-machine"
@@ -599,7 +599,7 @@ def test_plan_changes_nothing_and_names_every_action(
 def test_a_bundle_that_is_not_json_is_a_sentence_not_a_traceback(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    from db_ops import cli
+    from dbabrain import cli
 
     broken = tmp_path / "prod-bundle.json"
     broken.write_text("{ this is not json", encoding="utf-8")
@@ -609,7 +609,7 @@ def test_a_bundle_that_is_not_json_is_a_sentence_not_a_traceback(
 
 
 def test_both_commands_are_reachable_and_named_in_the_usage(capsys: pytest.CaptureFixture) -> None:
-    from db_ops import cli
+    from dbabrain import cli
 
     usage = cli._usage()
 
@@ -619,7 +619,7 @@ def test_both_commands_are_reachable_and_named_in_the_usage(capsys: pytest.Captu
 
 
 def _tool(cli, command: str, **request) -> int:
-    """``db-ops export-data`` / ``import-data`` as a person types them since 0.24.0: one JSON object
+    """``dbabrain export-data`` / ``import-data`` as a person types them since 0.24.0: one JSON object
     (rules R41 - the root's own commands became ``common.cli`` commands), read as text."""
     return cli.main([command, json.dumps({**request, "format": "txt"})])
 
@@ -747,19 +747,19 @@ def test_an_import_into_site_packages_is_refused_rather_than_reported_as_success
 
     Refusing is the whole fix, and the message has to name the directory and both ways out,
     because the operator's next move is to type one of them."""
-    from db_ops import cli
+    from dbabrain import cli
 
     bundle = _bundle_file(source_root, tmp_path / "estate-bundle.json")
     site_packages = tmp_path / "venv" / "lib" / "python3.14" / "site-packages"
     site_packages.mkdir(parents=True)
-    monkeypatch.setattr("db_ops.lib.paths.TOOL_ROOT", site_packages)
+    monkeypatch.setattr("dbabrain.lib.paths.TOOL_ROOT", site_packages)
 
     code = _tool(cli, "import-data", bundle=str(bundle))
     printed = "".join(capsys.readouterr())
 
     assert code == 1, f"an import into site-packages must fail, not succeed: {printed}"
     assert "site-packages" in printed
-    assert '"root"' in printed and "db-ops init" in printed
+    assert '"root"' in printed and "dbabrain init" in printed
     assert not (site_packages / "config.json").exists(), "nothing may be written on a refusal"
 
 
@@ -768,7 +768,7 @@ def test_stating_the_root_still_allows_an_unusual_destination(
 ) -> None:
     """The guard is about the *fallback*, not about policing where an operator may keep an estate.
     `--root` said it on purpose, so it is honoured."""
-    from db_ops import cli
+    from dbabrain import cli
 
     bundle = _bundle_file(source_root, tmp_path / "estate-bundle.json")
     destination = tmp_path / "lib" / "site-packages"
@@ -786,7 +786,7 @@ def test_an_estate_whose_commands_are_all_worker_says_so_after_importing(
     every command is `worker`, and the daemon starts and runs nothing - correctly, and for a reason
     the operator has not been given. It reaches the log on the first tick; that is too late and in
     the wrong place, so the import says it while they are still typing."""
-    from db_ops import cli
+    from dbabrain import cli
 
     (source_root / "data" / "app_commands.json").write_text(dump_json_text({"app_commands": [
         {"app_command_id": "APP-METRICS", "node_role": "worker", "active": True},
@@ -798,7 +798,7 @@ def test_an_estate_whose_commands_are_all_worker_says_so_after_importing(
     printed = "".join(capsys.readouterr())
 
     assert code == 0, printed
-    assert "DB_OPS_NODE_ROLE=worker" in printed
+    assert "DBABRAIN_NODE_ROLE=worker" in printed
     assert "run nothing" in printed
 
 
@@ -807,7 +807,7 @@ def test_an_estate_that_would_run_here_says_nothing_about_roles(
 ) -> None:
     """The note is only worth printing when it names a real mismatch. A schedule carrying `all`
     runs on a default process, so saying anything about roles would be noise."""
-    from db_ops import cli
+    from dbabrain import cli
 
     (source_root / "data" / "app_commands.json").write_text(dump_json_text({"app_commands": [
         {"app_command_id": "APP-METRICS", "node_role": "all", "active": True},
@@ -816,4 +816,4 @@ def test_an_estate_that_would_run_here_says_nothing_about_roles(
 
     _tool(cli, "import-data", bundle=str(bundle), root=str(tmp_path / "estate"))
 
-    assert "DB_OPS_NODE_ROLE" not in "".join(capsys.readouterr())
+    assert "DBABRAIN_NODE_ROLE" not in "".join(capsys.readouterr())

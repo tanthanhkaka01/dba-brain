@@ -3,15 +3,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.reports import cli as reports_cli
-from db_ops.reports import service
+from dbabrain.reports import cli as reports_cli
+from dbabrain.reports import service
 
 
 def _sqlite_store_config(sqlite_path):
-    """SQLite store declaration for a test config stand-in (mirrors DbOpsConfig.store)."""
+    """SQLite store declaration for a test config stand-in (mirrors DbaBrainConfig.store)."""
     from pathlib import Path as _Path
 
-    from db_ops.lib.config import SqliteStoreConfig, StoreConfig
+    from dbabrain.lib.config import SqliteStoreConfig, StoreConfig
 
     return StoreConfig(sqlite=SqliteStoreConfig(path=_Path(str(sqlite_path))))
 
@@ -210,7 +210,7 @@ def test_a_report_collects_nothing_and_starts_no_process():
     `metrics.cli collect --force` for the target first (rules R42); collecting is metrics' job."""
     source = Path(service.__file__).read_text(encoding="utf-8")
     assert "subprocess" not in source
-    assert "db_ops.metrics.cli" not in source
+    assert "dbabrain.metrics.cli" not in source
 
 
 def test_the_old_windowed_flag_is_refused_with_the_command_that_replaces_it(tmp_path):

@@ -26,8 +26,8 @@ import types
 
 import pytest
 
-from db_ops.common import backup_copy, remote_exec, ssh_relay
-from db_ops.lib.restore import copy_mode
+from dbabrain.common import backup_copy, remote_exec, ssh_relay
+from dbabrain.lib.restore import copy_mode
 
 
 # --------------------------------------------------------------------------- #
@@ -157,8 +157,8 @@ def test_a_misspelled_pin_is_refused_rather_than_read_as_auto():
 
 
 def test_the_restore_entry_s_copy_mode_reaches_the_copy_command(monkeypatch):
-    from db_ops.backup_restore import restore_script
-    from db_ops.lib.time_window import TimeWindow
+    from dbabrain.backup_restore import restore_script
+    from dbabrain.lib.time_window import TimeWindow
 
     job = restore_script.ScriptRestore(
         restore_id="PG_DRILL", db_type="postgresql", server_id="SRC", backup_dir="/backup",
@@ -183,7 +183,7 @@ def test_the_restore_entry_s_copy_mode_reaches_the_copy_command(monkeypatch):
 def test_an_entry_with_a_misspelled_copy_mode_is_refused_by_name(tmp_path):
     import json
 
-    from db_ops.backup_restore import restore_script
+    from dbabrain.backup_restore import restore_script
 
     config = tmp_path / "restore_config.json"
     config.write_text(json.dumps({"backup_restore": {"restores": [{
@@ -219,7 +219,7 @@ class _RenameSftp:
 def _replace(*, has_posix_rename: bool):
     sftp = _RenameSftp(has_posix_rename=has_posix_rename)
     session = types.SimpleNamespace(sftp=lambda: sftp)
-    return ssh_relay.atomic_replace(session, "/tmp/a.dbops_partial", "/tmp/a"), sftp.calls
+    return ssh_relay.atomic_replace(session, "/tmp/a.dbabrain_partial", "/tmp/a"), sftp.calls
 
 
 def test_a_replace_in_one_step_is_named_as_one():
@@ -234,7 +234,7 @@ def test_a_replace_that_removed_the_destination_first_says_so():
 def test_a_sent_file_s_answer_carries_how_it_took_its_name():
     from pathlib import Path
 
-    from db_ops.common import file_transfer
+    from dbabrain.common import file_transfer
 
     target = types.SimpleNamespace(server_id="LAB", host="192.0.2.49")
     common = dict(target=target, status="COPIED", local_path=Path("a"), remote_path="/tmp/a",
@@ -294,7 +294,7 @@ def test_an_answer_over_ssh_names_no_backend():
 # A SQL Server connection - the one that already said
 # --------------------------------------------------------------------------- #
 def test_a_connection_that_stepped_down_to_pymssql_reports_it():
-    from db_ops.common.sql_execution import SqlServerConnection
+    from dbabrain.common.sql_execution import SqlServerConnection
 
     stepped = SqlServerConnection(conn=None, driver="pymssql", odbc_error=RuntimeError("TLS"))
     first_try = SqlServerConnection(conn=None, driver="ODBC Driver 18 for SQL Server")

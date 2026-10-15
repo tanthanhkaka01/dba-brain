@@ -30,7 +30,7 @@ import sys
 
 import pytest
 
-from db_ops.backup_restore import restore_by_id
+from dbabrain.backup_restore import restore_by_id
 
 
 ALL_STEPS = ["restore-key", "restore-full", "restore-diff", "restore-log", "verify-restore"]
@@ -70,7 +70,7 @@ def test_each_step_runs_its_own_cli_command(step: str, monkeypatch) -> None:
 
     restore_by_id._execute(step, {"target": "X"})
 
-    assert recorder.argv[1:] == ["-m", "db_ops.common.cli", step, "-"], recorder.argv
+    assert recorder.argv[1:] == ["-m", "dbabrain.common.cli", step, "-"], recorder.argv
     assert recorder.argv[0] == sys.executable
 
 
@@ -151,8 +151,8 @@ def test_no_deadline_is_imposed_here(monkeypatch) -> None:
 def test_every_step_name_is_a_real_common_cli_command() -> None:
     """The names are the contract. A step this app can emit but the CLI cannot answer is a restore
     that fails at the step, in production, with the databases already half-applied."""
-    from db_ops.common import cli as common_cli
+    from dbabrain.common import cli as common_cli
 
     source = open(common_cli.__file__, encoding="utf-8").read()
     for step in restore_by_id._STEP_COMMANDS:
-        assert f'"{step}"' in source, f"db_ops.common.cli has no {step} command"
+        assert f'"{step}"' in source, f"dbabrain.common.cli has no {step} command"

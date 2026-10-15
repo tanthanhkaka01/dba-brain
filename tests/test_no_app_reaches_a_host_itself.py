@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 
-DB_OPS = Path(__file__).resolve().parents[1] / "db_ops"
+DBABRAIN = Path(__file__).resolve().parents[1] / "dbabrain"
 APPS = frozenset({"backup_restore", "control", "jobs", "metrics", "reports", "sla", "sql_tasks",
                   "sre", "telegram", "webhost"})
 
@@ -76,12 +76,12 @@ _STARTS = {("subprocess", name) for name in ("run", "Popen", "call", "check_call
 
 
 def _app_files() -> list[Path]:
-    return sorted(p for p in DB_OPS.rglob("*.py") if "__pycache__" not in p.parts
-                  and len(p.relative_to(DB_OPS).parts) > 1 and p.relative_to(DB_OPS).parts[0] in APPS)
+    return sorted(p for p in DBABRAIN.rglob("*.py") if "__pycache__" not in p.parts
+                  and len(p.relative_to(DBABRAIN).parts) > 1 and p.relative_to(DBABRAIN).parts[0] in APPS)
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(DB_OPS).as_posix()
+    return path.relative_to(DBABRAIN).as_posix()
 
 
 def _starts(path: Path) -> int:
@@ -120,5 +120,5 @@ def test_the_host_reaches_left_only_shrink():
 
 
 def test_every_named_file_exists():
-    missing = sorted(name for name in [*NOT_A_HOST_REACH, *HOST_REACH_LEFT] if not (DB_OPS / name).exists())
+    missing = sorted(name for name in [*NOT_A_HOST_REACH, *HOST_REACH_LEFT] if not (DBABRAIN / name).exists())
     assert not missing, f"named but not there: {missing}"

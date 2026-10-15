@@ -6,7 +6,7 @@ The Telegram App sends pending queue rows through the Telegram Bot API, saves up
 
 ## Package / Files
 
-- `db_ops/telegram/` - the support commands are `command_processor.py` (the claim, the dispatch and the conversation loop) over modules split out of it on 2026-10-03, in import order: `command_base.py` (the command record, its error, the dispatch log, masking), `command_replies.py`, `command_permissions.py` (levels, who may run what, the refusal), `command_cli.py` (a `cli_execute` action: argv, the request finished from this app's data, the result parsed and masked), `command_conversation.py` (prompts, answers, workflow state), `command_background.py` (a background run started, watched and judged complete), `command_listing.py` and `command_sql.py` (the built-in actions). `command_processor` re-exports every name; a test replaces a collaborator with `conftest.patch_telegram`, which reaches every module that binds it
+- `dbabrain/telegram/` - the support commands are `command_processor.py` (the claim, the dispatch and the conversation loop) over modules split out of it on 2026-10-03, in import order: `command_base.py` (the command record, its error, the dispatch log, masking), `command_replies.py`, `command_permissions.py` (levels, who may run what, the refusal), `command_cli.py` (a `cli_execute` action: argv, the request finished from this app's data, the result parsed and masked), `command_conversation.py` (prompts, answers, workflow state), `command_background.py` (a background run started, watched and judged complete), `command_listing.py` and `command_sql.py` (the built-in actions). `command_processor` re-exports every name; a test replaces a collaborator with `conftest.patch_telegram`, which reaches every module that binds it
 - `data/telegram_groups.json`
 - `data/telegram_users.json`
 - `data/bot_telegram.json`
@@ -42,7 +42,7 @@ typed password from the chat and a member may delete their own command; Telegram
 the whole reply (*400: message to be replied not found*) and the next question or the result
 never arrived - 64 replies on the 0.26 soak store.
 
-Severity emoji: `db_ops.telegram.api.send_message` prefixes every outgoing body with one symbol so an alert is not missed in a wall of text - `▶️` started, `✅` success, `❌` failed, `⚠️` warning, `⏳` running, `🚨` critical/aborted. Producers never write the emoji into the text; they declare **what the message is** and the symbol is applied once at send time (`db_ops/telegram/severity.py`). A message that already leads with a status emoji (the SLA report writes its own) keeps it - tagging never stacks.
+Severity emoji: `dbabrain.telegram.api.send_message` prefixes every outgoing body with one symbol so an alert is not missed in a wall of text - `▶️` started, `✅` success, `❌` failed, `⚠️` warning, `⏳` running, `🚨` critical/aborted. Producers never write the emoji into the text; they declare **what the message is** and the symbol is applied once at send time (`dbabrain/telegram/severity.py`). A message that already leads with a status emoji (the SLA report writes its own) keeps it - tagging never stacks.
 
 **`telegram_send_messages.message_type`** is that declaration: `started`, `success`, `failed`, `warning`, `running`, `critical`, or `plain`. Three states, and the difference between the last two matters:
 
@@ -64,7 +64,7 @@ Severity emoji: `db_ops.telegram.api.send_message` prefixes every outgoing body 
 > still delivers), which is why nothing failed loudly. Regression test:
 > `tests/test_telegram_severity_emoji.py::test_a_queued_row_keeps_its_declared_message_type_when_it_is_read_back`.
 
-Every app queues through **`db_ops.db.queue_message.queue_message`**, which writes the row in the app's own process (0.25.0: it no longer starts `db.cli` for it) - one entry point, so the vocabulary cannot fork per app. It and the CLI below take **one path from a request to a row**, `db_ops.db.telegram_queue.queue_from_request`: the store (the caller's, the request's `store` block, or `config.json`'s), the eleven fields, and the type through `queue_telegram_message` - so a script's message is stored exactly as an app's. Callers rarely hold a display type; they hold a `level` (`logging`/`warning`/`error`/`critical`) and often a `phase` (`START`/`END`/`ERROR`) or a status, and `message_type_for()` maps those once. `DbOpsStore.insert_telegram_send_message` stays public for the store's own use and for tests; application code should not call it directly.
+Every app queues through **`dbabrain.db.queue_message.queue_message`**, which writes the row in the app's own process (0.25.0: it no longer starts `db.cli` for it) - one entry point, so the vocabulary cannot fork per app. It and the CLI below take **one path from a request to a row**, `dbabrain.db.telegram_queue.queue_from_request`: the store (the caller's, the request's `store` block, or `config.json`'s), the eleven fields, and the type through `queue_telegram_message` - so a script's message is stored exactly as an app's. Callers rarely hold a display type; they hold a `level` (`logging`/`warning`/`error`/`critical`) and often a `phase` (`START`/`END`/`ERROR`) or a status, and `message_type_for()` maps those once. `DbaBrainStore.insert_telegram_send_message` stays public for the store's own use and for tests; application code should not call it directly.
 
 Two rules decide the mapping, and both exist because of a way it went wrong:
 
@@ -78,11 +78,11 @@ The status words each app actually concludes with are mapped centrally - `done`/
 **CLI** - for a shell script, a scheduled command, or another language. The request is a JSON object, inline, as `@file`, or on stdin, matching `run-sql`:
 
 ```bash
-python -m db_ops.db.cli queue-telegram-message \
+python -m dbabrain.db.cli queue-telegram-message \
   '{"chat_id": "-1001234567890", "text": "RESTORE FAILED on ACME-...", "message_type": "failed"}'
 
 echo '{"chat_id": "-100...", "text": "Daily summary", "level": "logging"}' \
-  | python -m db_ops.db.cli queue-telegram-message -
+  | python -m dbabrain.db.cli queue-telegram-message -
 # -> {"ok": true, "send_tlgmsg_id": 14426, "message_type": "plain"}
 ```
 
@@ -94,13 +94,13 @@ Incoming flow: Telegram `getUpdates` -> `telegram_messages` -> command prefix sy
 
 ## Long messages are split, never cut (2026-08-13)
 
-Telegram rejects a body over 4096 characters, and db_ops used to answer that by clipping in four
+Telegram rejects a body over 4096 characters, and dbabrain used to answer that by clipping in four
 different places: the SQL task table stopped at 20 rows with `… N more row(s)`, `ops_status` cut at
 3880 with `... (truncated)`, `backup_restore.events` cut its JSON payload at 3900, and
 `send_message` chopped whatever was still too long. Only the metrics reports split properly, into
 `[part i/n]` chunks.
 
-All of it is now one implementation, `db_ops/lib/telegram_text.py`, and it **splits**:
+All of it is now one implementation, `dbabrain/lib/telegram_text.py`, and it **splits**:
 
 - `send_message` applies it to every outgoing body, so **every producer inherits it** — nothing has
   to know about the limit.
@@ -160,7 +160,7 @@ reads its commands once per pass, so a `/spbot_self_status` reply took a minute 
 
 **A pass stops starting messages at half of the workflow's own timeout.** The daemon kills the
 Telegram workflow at its `time_window.timeout` in `app_commands.json` (300 s) and states that number
-to the process in `DB_OPS_APP_TIMEOUT_SECONDS` (`db_ops/lib/app_timeout.py`); the pass takes
+to the process in `DBABRAIN_APP_TIMEOUT_SECONDS` (`dbabrain/lib/app_timeout.py`); the pass takes
 `SEND_BUDGET_RATIO` (0.5) of it, counted from the process start, so the commands the workflow ran
 first count too. Past it no chat starts another row, and the rest stay at `send_status = 0` for the
 next pass, in order. Run by hand there is no timeout and no budget. The fixed 180 s
@@ -243,19 +243,19 @@ so an operator's change is no longer overwritten by a workflow pass that read th
 ## How to Run
 
 ```powershell
-python -m db_ops.telegram.cli --config config.json get-updates --limit 20
-python -m db_ops.telegram.cli --config config.json save-updates --limit 20
-python -m db_ops.telegram.cli --config config.json save-commands
-python -m db_ops.telegram.cli --config config.json process-commands --limit 50
-python -m db_ops.telegram.cli --config config.json process-conversations --limit 50
-python -m db_ops.telegram.cli --config config.json send-queue
-python -m db_ops.telegram.cli --config config.json send-one --send-tlgmsg-id 1
-python -m db_ops.telegram.cli --config config.json run-workflow
-python -m db_ops.telegram.cli --config config.json bot-info
-python -m db_ops.telegram.cli --config config.json group-level --group "<title or id>" --level warning --allow-command 1
-python -m db_ops.telegram.cli --config config.json user-level --user @someone --level 100
-python -m db_ops.telegram.cli --config config.json command-level --bot-command spbot_add_sql --level 100
-python -m db_ops.telegram.cli --config config.json command-level --shipped --dry-run
+python -m dbabrain.telegram.cli --config config.json get-updates --limit 20
+python -m dbabrain.telegram.cli --config config.json save-updates --limit 20
+python -m dbabrain.telegram.cli --config config.json save-commands
+python -m dbabrain.telegram.cli --config config.json process-commands --limit 50
+python -m dbabrain.telegram.cli --config config.json process-conversations --limit 50
+python -m dbabrain.telegram.cli --config config.json send-queue
+python -m dbabrain.telegram.cli --config config.json send-one --send-tlgmsg-id 1
+python -m dbabrain.telegram.cli --config config.json run-workflow
+python -m dbabrain.telegram.cli --config config.json bot-info
+python -m dbabrain.telegram.cli --config config.json group-level --group "<title or id>" --level warning --allow-command 1
+python -m dbabrain.telegram.cli --config config.json user-level --user @someone --level 100
+python -m dbabrain.telegram.cli --config config.json command-level --bot-command spbot_add_sql --level 100
+python -m dbabrain.telegram.cli --config config.json command-level --shipped --dry-run
 ```
 
 **Discovering is not deciding.** Intake records every group and every sender it sees, and records
@@ -368,7 +368,7 @@ the identity key the dispatcher and the store look rows up by.
 
 ### Cluster routing — `node_role`
 
-Like `app_commands.json`, each support command carries a `node_role`: `master`, `worker`, or `all`. The processing node handles only commands for its role — a **master** node runs `master`/`all`, a **worker** node runs `worker`/`all`. A command tagged for the other node is skipped (status `skipped_wrong_node_role`, left for that node), not replied to as "unknown". The node's own role comes from the `DB_OPS_NODE_ROLE` env and **defaults to `worker`** when unset (the Telegram workflow `APP-TELEGRAM` runs worker-side with `DB_OPS_NODE_ROLE=worker`), so a command with **no** `node_role` defaults to `worker` and keeps being handled exactly as before. Truly undefined `spbot_*` commands (not in the JSON) still get the normal "unknown command" reply.
+Like `app_commands.json`, each support command carries a `node_role`: `master`, `worker`, or `all`. The processing node handles only commands for its role — a **master** node runs `master`/`all`, a **worker** node runs `worker`/`all`. A command tagged for the other node is skipped (status `skipped_wrong_node_role`, left for that node), not replied to as "unknown". The node's own role comes from the `DBABRAIN_NODE_ROLE` env and **defaults to `worker`** when unset (the Telegram workflow `APP-TELEGRAM` runs worker-side with `DBABRAIN_NODE_ROLE=worker`), so a command with **no** `node_role` defaults to `worker` and keeps being handled exactly as before. Truly undefined `spbot_*` commands (not in the JSON) still get the normal "unknown command" reply.
 
 ## Action Types
 
@@ -388,7 +388,7 @@ The three arguments select one exact server/metric pair and a UTC window from `n
 
 Runs a configured CLI command from `command_template` or `command_argv`. Values come from `defaults` merged with conversational `parameters`. `conditional_args` can append arguments based on parameter values. Set `background` or `detached` to `true` for long-running commands; otherwise execution remains synchronous. Start/success/failure/timeout messages are driven by generic templates in `action_config`. For a background command that records its own authoritative outcome in the runtime store (e.g. restore), add a `completion_probe` so the poller reports the real result from `job_runs` instead of relying only on the detached process staying alive and its stdout marker.
 
-This is how the Telegram app runs **other apps without coupling to them**: it spawns the target app's CLI as a subprocess and **never imports it or reads its config**. (Since 2026-08-15 that includes `common` itself: `spbot_add_sql`, `spbot_metric_toggle`, `spbot_xlsx_to_table` and `spbot_sql_to_xlsx` used to import their engine and call it in-process, and now run `python -m db_ops.common.cli add-sql` / `metric-toggle` / `create-table-from-xlsx` / `run-sql` with one JSON object — the same command an operator types. What the bot still does in-process is *read* `db_instances.json` through `data_sources`, the one reader of the data folder, because the operator is never asked for the db_type, instance or credential the request needs. See `docs/05_sql_task_runner.md` and `docs/13_common.md`.) `success_text` may include `{stdout}` to return the command's output verbatim. Example — `spbot_list_restore_id` (no parameters) runs `db_ops.backup_restore.cli list-restores` and replies with `{stdout}` (the restore IDs plus source/target IPs); the backup restore app owns and reads `restore_config.json`, the Telegram app does not. To expose another app's data through the bot, add a CLI subcommand to that app and call it here — do not import the app or read its config files.
+This is how the Telegram app runs **other apps without coupling to them**: it spawns the target app's CLI as a subprocess and **never imports it or reads its config**. (Since 2026-08-15 that includes `common` itself: `spbot_add_sql`, `spbot_metric_toggle`, `spbot_xlsx_to_table` and `spbot_sql_to_xlsx` used to import their engine and call it in-process, and now run `python -m dbabrain.common.cli add-sql` / `metric-toggle` / `create-table-from-xlsx` / `run-sql` with one JSON object — the same command an operator types. What the bot still does in-process is *read* `db_instances.json` through `data_sources`, the one reader of the data folder, because the operator is never asked for the db_type, instance or credential the request needs. See `docs/05_sql_task_runner.md` and `docs/13_common.md`.) `success_text` may include `{stdout}` to return the command's output verbatim. Example — `spbot_list_restore_id` (no parameters) runs `dbabrain.backup_restore.cli list-restores` and replies with `{stdout}` (the restore IDs plus source/target IPs); the backup restore app owns and reads `restore_config.json`, the Telegram app does not. To expose another app's data through the bot, add a CLI subcommand to that app and call it here — do not import the app or read its config files.
 
 `spbot_restore` uses `cli_execute`, following the same generic CLI command pattern as command ID 4. Its required parameters are collected through the conversational flow:
 
@@ -418,8 +418,8 @@ Example JSON entry:
   "is_private": 1,
   "action_type": "cli_execute",
   "action_config": {
-    "working_dir": "tools/db_ops",
-    "command_argv": ["{python}", "-m", "db_ops.backup_restore.cli", "restore-workflow", "--config", "{config_path}", "--restore-id", "{restore_id}"],
+    "working_dir": "tools/dbabrain",
+    "command_argv": ["{python}", "-m", "dbabrain.backup_restore.cli", "restore-workflow", "--config", "{config_path}", "--restore-id", "{restore_id}"],
     "conditional_args": [
       {"parameter": "point_in_time", "not_equals": "LATEST", "argv": ["--point-in-time", "{point_in_time}"]}
     ],
@@ -463,8 +463,8 @@ asking.
 ### `/spbot_list_my_commands`
 
 One person's own last 10 distinct commands, each written back as the single line that runs it
-again. Runs `db-ops db telegram-command-history` like any other `cli_execute` command, and the
-work — the join, the rebuild, the rendering — is `db_ops.db.telegram_command_history`, which
+again. Runs `dbabrain db telegram-command-history` like any other `cli_execute` command, and the
+work — the join, the rebuild, the rendering — is `dbabrain.db.telegram_command_history`, which
 does not know what a bot is.
 
 The reason it is not simply "the last ten messages" is the [prompt
@@ -484,10 +484,10 @@ over 120 characters is cut to its first 60. The line cannot re-send a file anywa
 **Private chat only** (`is_group: 0`). The history spans every chat this person has used the bot
 in, so answering it in a group would read a private command out loud there.
 
-`"working_dir": "tools/db_ops"` is the **logical alias for the tool root**, not a folder in
-this repository — it resolves to the repository root locally and to `/app/tools/db_ops` in the
+`"working_dir": "tools/dbabrain"` is the **logical alias for the tool root**, not a folder in
+this repository — it resolves to the repository root locally and to `/app/tools/dbabrain` in the
 worker container, so the same config works on both. See
-[03_app_command_daemon.md](03_app_command_daemon.md#working_dir-and-the-toolsdb_ops-alias).
+[03_app_command_daemon.md](03_app_command_daemon.md#working_dir-and-the-toolsdbabrain-alias).
 
 ## Multi-Step Conversation (Parameter Chaining)
 
@@ -508,7 +508,7 @@ on an answer already given:
 | --- | --- |
 | `"skip_when": {"condition": "target_has_no_database", "parameter": "target_ip", "value": "-"}` | Does **not** ask a required question that cannot apply — an OS-only host has no db_type or port — and fills the value instead. |
 | `"ask_when": {"parameter": "remote_auth", "equals": "secret_ref"}` | **The general one (2026-09-09).** Asks the step only when a named earlier answer matches. Unlike the two below it takes no hardcoded condition name, so a new branch is config rather than Python. |
-| `"prompt_when": {"condition": "sql_task_has_parameters", "parameter": "sql_id"}` | **Does** ask an optional question that this run needs. `/spbot_run_sql_task`'s `task_params` is optional because most tasks declare none; a task that *requires* one was therefore run with none and failed telling the operator to pass a `--param` they were never asked for. The condition holds when the sql_id already answered names a task declaring parameters — asked of the sql_tasks app through `python -m db_ops.sql_tasks.cli list-tasks --sql-id N`, never by reading its config. |
+| `"prompt_when": {"condition": "sql_task_has_parameters", "parameter": "sql_id"}` | **Does** ask an optional question that this run needs. `/spbot_run_sql_task`'s `task_params` is optional because most tasks declare none; a task that *requires* one was therefore run with none and failed telling the operator to pass a `--param` they were never asked for. The condition holds when the sql_id already answered names a task declaring parameters — asked of the sql_tasks app through `python -m dbabrain.sql_tasks.cli list-tasks --sql-id N`, never by reading its config. |
 
 A prompt may contain `{sql_task_parameters}`, replaced with the names that task declares — the
 operator picked a task by number, so "the parameters this task declares" is not something they
@@ -625,7 +625,7 @@ declares:
 | `accept_file: true` | The answer may be a **document** instead of text; the file's contents become the value | the conversation loop (`command_processor.process_pending_conversation_messages`) |
 | `file_encoding: "base64"` | That document is **binary** (a spreadsheet), carried as base64 rather than decoded as text | the same loop |
 | `max_file_bytes` | The largest attachment this parameter takes, in bytes; a larger one is refused with a reply. Absent, Telegram's own bot limit (20 MB) is the only bound - the file is read whole into memory, and as base64 it grows by a third inside the JSON request (0.26.0, review 0.25.0 F8.3) | `command_sql._max_file_bytes` |
-| `options` + `allow_text_input: false` | A closed list, so the answer is one of the values — which are themselves single tokens, guarded by a test | `db_ops/lib/workflow_steps.py` |
+| `options` + `allow_text_input: false` | A closed list, so the answer is one of the values — which are themselves single tokens, guarded by a test | `dbabrain/lib/workflow_steps.py` |
 
 All four are data. Nothing about any particular command is hard-coded.
 
@@ -652,7 +652,7 @@ command you write, which is why it is written down here.
 ### Back, Skip and Cancel (2026-09-09)
 
 Every prompt now carries a keyboard and every workflow understands three words. They are one state
-machine in `db_ops/lib/workflow_steps.py` — a pure module with no store and no Telegram in it —
+machine in `dbabrain/lib/workflow_steps.py` — a pure module with no store and no Telegram in it —
 rather than a string comparison inside each command, which is how a workflow ends up with as many
 ideas of "back" as it has commands.
 
@@ -770,14 +770,14 @@ payload and the Telegram path and the shell path cannot drift. It is also why
 `/spbot_xlsx_to_table` can take a text file without a second parameter: the action gets bytes and
 decides for itself what they are.
 
-The download itself is **not size-capped by db_ops** (the 1 MB cap was removed on 2026-08-15).
+The download itself is **not size-capped by dbabrain** (the 1 MB cap was removed on 2026-08-15).
 Telegram's own 20 MB ceiling on what a bot may fetch still applies and is reported as Telegram's.
 
 ### `/spbot_xlsx_to_table`
 
 `action_type = "create_table_from_xlsx"`. Four prompts — **server_id → database → schema → the
-file** — then `db_ops.common.table_load.create_table_from_xlsx` runs with the same JSON object
-`python -m db_ops.common.cli create-table-from-xlsx` takes.
+file** — then `dbabrain.common.table_load.create_table_from_xlsx` runs with the same JSON object
+`python -m dbabrain.common.cli create-table-from-xlsx` takes.
 
 Two decisions are worth knowing because they are deliberate and easy to "fix" wrongly:
 
@@ -791,7 +791,7 @@ Two decisions are worth knowing because they are deliberate and easy to "fix" wr
   the config is the one place that decides.
 
 Every column is created `NVARCHAR(4000)` (or the engine's equivalent); see
-`db_ops/common/table_load.py` for why a guessed type is worse. Private chat only.
+`dbabrain/common/table_load.py` for why a guessed type is worse. Private chat only.
 
 **The attachment does not have to be a workbook.** An `.xlsx` *or* a delimited text file —
 `.txt`, `.csv`, `.tsv`, a block selected in Excel and pasted into Notepad — is accepted, and
@@ -800,10 +800,10 @@ starts `PK\x03\x04`; a renamed file is routine). For a text file the encoding an
 are guessed — UTF-16 with or without a BOM, UTF-8, the Windows codepage; tab, semicolon, comma or
 pipe counted on the header line — and the reply says which was used, because a wrong delimiter
 still produces plausible-looking columns. A row carrying *more* values than the header names is
-refused with its line number rather than clipped. `db_ops/lib/delimited_import.py` has the
+refused with its line number rather than clipped. `dbabrain/lib/delimited_import.py` has the
 detail; `"delimiter"` in `action_config` overrides the guess.
 
-**There is no db_ops size limit on the attachment.** There was a 1 MB cap until 2026-08-15, which
+**There is no dbabrain size limit on the attachment.** There was a 1 MB cap until 2026-08-15, which
 refused the ordinary 5 MB export this command exists for. What remains is Telegram's own: the Bot
 API serves a bot at most **20 MB** per file however large the upload was, and no setting here can
 lift it — `get_file_bytes` says so in those words rather than passing "file is too big" through.
@@ -859,26 +859,26 @@ They are ordinary `cli_execute` commands: the parameter chaining above collects 
 the confirmation answers, one prompt at a time, then passes them to the CLI that performs the
 operation — as a JSON object for the five `common` commands, as `--confirm yes` for the SQL task
 runner. Nothing about the safety model is specific to Telegram: every one of them reads its answer
-through `db_ops.common.confirm`, so a shell caller pays exactly the same price.
+through `dbabrain.common.confirm`, so a shell caller pays exactly the same price.
 
 **The confirmation is enforced in the CLI, not here.** `data/telegram_support_commands.json`
 decides who may ask (`command_type`) and what the prompts say;
 [`data/emergency_operations.json`](../data/emergency_operations.example.json) decides what the answers must
-be, and `db_ops/common/confirm.py` checks them. Running
-`python -m db_ops.common.cli host-restart -` from a shell with the same request costs exactly the
+be, and `dbabrain/common/confirm.py` checks them. Running
+`python -m dbabrain.common.cli host-restart -` from a shell with the same request costs exactly the
 same two answers. An operation that is missing from `emergency_operations.json` gets the strictest
 treatment, not the weakest — a command added to the CLI and forgotten in the config becomes harder
 to run, never easier.
 
 **The bot finishes the request before it runs it (0.24.0).** `common.cli` reads no configuration
-(rules R09), so an action whose argv names `db_ops.common.cli` with an inline request - the six
-above among them - is recognised (`db_ops.lib.common_cli.common_invocation`) and completed from this
-node's `data/` by `db_ops.lib.data_sources.request_fill`: the SQL login as `connection`, the host
+(rules R09), so an action whose argv names `dbabrain.common.cli` with an inline request - the six
+above among them - is recognised (`dbabrain.lib.common_cli.common_invocation`) and completed from this
+node's `data/` by `dbabrain.lib.data_sources.request_fill`: the SQL login as `connection`, the host
 login as `access`, the address `probe-host` knocks on, an 8i bridge's `secrets`, the maintenance
 `policy`, and the operation's `rules` - this node's
 `emergency_operations.json` entry, read here and sent, because `common` prices a request without
 `rules` from the ladder the package ships. The finished request carries a password, so the request
-argument becomes `-` and the JSON goes on the child's stdin: through `db_ops.transport` for a
+argument becomes `-` and the JSON goes on the child's stdin: through `dbabrain.transport` for a
 foreground action, and into the detached wrapper's stdin for `host-restart`. A `server_id` this
 node cannot finish is refused in the chat before anything starts.
 
@@ -923,7 +923,7 @@ the prompt is noise.
 The Telegram app resolves its config file using this chain:
 
 1. `--config <path>` CLI argument.
-2. `DB_OPS_TELEGRAM_CONFIG` environment variable.
+2. `DBABRAIN_TELEGRAM_CONFIG` environment variable.
 3. `config.telegram.json` next to `config.json`, or in the current working directory.
 4. `config.json` shared fallback.
 
@@ -941,7 +941,7 @@ Required keys: in `data/telegram_config.json` — `enabled` and the bot token (v
 
 ## Optional Integrations
 
-**`queue-metrics-reports` command**: calls `db_ops.reports.cli queue-metrics-reports` as a subprocess, passing `--config <resolved_config_path>` so the reports app resolves its own config from the correct location. If the reports app is absent or returns a non-zero exit code, this command raises `RuntimeError`. The send queue (`send-queue`) and all other commands are unaffected.
+**`queue-metrics-reports` command**: calls `dbabrain.reports.cli queue-metrics-reports` as a subprocess, passing `--config <resolved_config_path>` so the reports app resolves its own config from the correct location. If the reports app is absent or returns a non-zero exit code, this command raises `RuntimeError`. The send queue (`send-queue`) and all other commands are unaffected.
 
 **`telegram_send_messages` rows from other apps**: `send-queue` delivers any row in the table regardless of which app wrote it. If no other apps are running, the queue is simply empty and `send-queue` exits cleanly.
 

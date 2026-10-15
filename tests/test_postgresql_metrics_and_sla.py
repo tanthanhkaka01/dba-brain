@@ -2,13 +2,13 @@ from pathlib import Path
 import sys
 import types
 
-from db_ops.metrics.collector import _apply_postgresql_collection_policy, _apply_threshold_override
-from db_ops.metrics.models import MetricDefinition, MetricResult, MetricTarget
-from db_ops.metrics.storage import MetricStore
-from db_ops.sla.compliance import validate_sla_policies
-from db_ops.sla.models import SlaPolicy
-from db_ops.sla.policies import parse_sla_policy
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.metrics.collector import _apply_postgresql_collection_policy, _apply_threshold_override
+from dbabrain.metrics.models import MetricDefinition, MetricResult, MetricTarget
+from dbabrain.metrics.storage import MetricStore
+from dbabrain.sla.compliance import validate_sla_policies
+from dbabrain.sla.models import SlaPolicy
+from dbabrain.sla.policies import parse_sla_policy
+from dbabrain.lib.paths import resolve_tool_path
 
 
 def _target(expected: int) -> MetricTarget:
@@ -84,10 +84,10 @@ def test_postgresql_statement_timeout_is_set(monkeypatch):
     package = types.ModuleType("pg8000")
     package.dbapi = dbapi
     monkeypatch.setitem(sys.modules, "pg8000", package)
-    monkeypatch.setattr("db_ops.common.sql_run.execute_capture", lambda *_args, **_kwargs: ([], 0, False))
-    from db_ops.common import metric_batch
+    monkeypatch.setattr("dbabrain.common.sql_run.execute_capture", lambda *_args, **_kwargs: ([], 0, False))
+    from dbabrain.common import metric_batch
 
-    # The per-engine connect moved to db_ops.common.db_connect, so the metrics app has one
+    # The per-engine connect moved to dbabrain.common.db_connect, so the metrics app has one
     # execution path instead of four - and since 0.24.0 it runs in `metric-batch`. The
     # statement_timeout guarantee has to survive both moves: it is what bounds a catalog query
     # when the socket stays healthy but a relation is locked.

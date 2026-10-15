@@ -13,8 +13,8 @@ whole list therefore *deleted* those four from every database table on every pag
 carried "no CHECKDB has ever been recorded" with no row anywhere to attach it to.
 """
 
-from db_ops.reports import inventory_health
-from db_ops.reports.server_report import build_databases
+from dbabrain.reports import inventory_health
+from dbabrain.reports.server_report import build_databases
 
 
 def _row(code, item, value, message="", collected_at="2026-08-14T01:00:00Z"):

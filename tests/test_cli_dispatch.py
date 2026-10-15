@@ -1,6 +1,6 @@
 """One command, twelve apps — and the dispatcher stays a lookup, not a second parser.
 
-Every app has always been reachable as `python -m db_ops.<app>.cli`, which is what the daemon
+Every app has always been reachable as `python -m dbabrain.<app>.cli`, which is what the daemon
 runs and what the documentation shows. That is fine for a checkout and useless as a first
 impression: an installed toolkit that answers nothing when you type its name has not really been
 installed.
@@ -22,7 +22,7 @@ import sys
 
 import pytest
 
-from db_ops import cli
+from dbabrain import cli
 
 
 def test_every_app_directory_is_reachable_by_name() -> None:
@@ -31,7 +31,7 @@ def test_every_app_directory_is_reachable_by_name() -> None:
 
     packages = {
         path.name
-        for path in (Path(__file__).resolve().parents[1] / "db_ops").iterdir()
+        for path in (Path(__file__).resolve().parents[1] / "dbabrain").iterdir()
         if path.is_dir() and not path.name.startswith("__") and (path / "__init__.py").exists()
     }
     # `lib` is imported, never run — it has no CLI by rule (ORD 14), `logging_ops` is a library too,
@@ -65,7 +65,7 @@ def test_help_needs_no_app_and_no_driver(capsys) -> None:
     assert cli.main(["--help"]) == 0
 
     printed = capsys.readouterr().out
-    assert "usage: db-ops <app>" in printed
+    assert "usage: dbabrain <app>" in printed
     # The apps this build has, not a fixed three: the help text lists what is installed, so naming
     # `backup-restore` here asserted the private tree's shape rather than the behaviour under test.
     for name in cli.installed_apps():
@@ -85,7 +85,7 @@ def test_no_arguments_inside_a_tool_root_is_the_same_as_help(tmp_path, monkeypat
     monkeypatch.chdir(tmp_path)
 
     assert cli.main([]) == 0
-    assert "usage: db-ops <app>" in capsys.readouterr().out
+    assert "usage: dbabrain <app>" in capsys.readouterr().out
 
 
 def test_no_arguments_without_a_tool_root_says_what_to_type(tmp_path, monkeypatch, capsys) -> None:
@@ -103,11 +103,11 @@ def test_help_gives_the_full_listing_wherever_it_is_run(tmp_path, monkeypatch, c
     monkeypatch.chdir(tmp_path)
 
     assert cli.main(["--help"]) == 0
-    assert "usage: db-ops <app>" in capsys.readouterr().out
+    assert "usage: dbabrain <app>" in capsys.readouterr().out
 
 
 def test_the_version_is_the_package_version(capsys) -> None:
-    from db_ops import __version__
+    from dbabrain import __version__
 
     assert cli.main(["--version"]) == 0
     assert capsys.readouterr().out.strip() == __version__
@@ -124,7 +124,7 @@ def test_an_unknown_app_says_so_and_lists_the_real_ones(capsys) -> None:
 def test_underscores_and_hyphens_both_work() -> None:
     """The modules use underscores and the help prints hyphens, so a reader may type either."""
     assert "backup-restore" in cli.APPS
-    assert cli.APPS["backup-restore"] == "db_ops.backup_restore.cli"
+    assert cli.APPS["backup-restore"] == "dbabrain.backup_restore.cli"
 
 
 def test_the_app_receives_its_arguments_untouched(monkeypatch) -> None:
@@ -145,7 +145,7 @@ def test_the_app_receives_its_arguments_untouched(monkeypatch) -> None:
 
 def test_the_console_script_reads_the_real_arguments(monkeypatch, capsys) -> None:
     """setuptools calls `main()` with nothing, so the default has to be `sys.argv`."""
-    monkeypatch.setattr(sys, "argv", ["db-ops", "--version"])
+    monkeypatch.setattr(sys, "argv", ["dbabrain", "--version"])
 
     assert cli.main() == 0
     assert capsys.readouterr().out.strip()
@@ -161,7 +161,7 @@ def test_the_usage_text_is_ascii() -> None:
 @pytest.mark.parametrize("word", ["-h", "help"])
 def test_the_other_spellings_of_help_work(word, capsys) -> None:
     assert cli.main([word]) == 0
-    assert "usage: db-ops <app>" in capsys.readouterr().out
+    assert "usage: dbabrain <app>" in capsys.readouterr().out
 
 
 def test_the_usage_text_lists_apps_and_shared_layers_as_the_rules_do() -> None:

@@ -18,9 +18,9 @@ import posixpath
 import stat as st
 from types import SimpleNamespace
 
-from db_ops.backup_restore import restore_by_id as rbi
-from db_ops.common import backup_copy
-from db_ops.common.backupfiles import list_backup_files
+from dbabrain.backup_restore import restore_by_id as rbi
+from dbabrain.common import backup_copy
+from dbabrain.common.backupfiles import list_backup_files
 
 #: The 0.26 lab's staging after a copy of everything - names and manifest times as read on the node
 #: (2026-10-03, host clock +07: the 03:00Z full finished at 10:00:19 there).
@@ -37,7 +37,7 @@ STAGED = (
 
 def _plan(monkeypatch, staged: str, *, point_in_time: str = "") -> list[str]:
     """The backups the real plan restores, over the real listing of ``staged``."""
-    monkeypatch.setattr("db_ops.common.backupfiles.postgresql.run",
+    monkeypatch.setattr("dbabrain.common.backupfiles.postgresql.run",
                         lambda *a, **k: {"exit_code": 0, "stdout": staged, "stderr": ""})
     monkeypatch.setattr(rbi, "_list_backup_files", lambda request: list_backup_files(request))
     monkeypatch.setattr(rbi, "_visible_dir", lambda job: "/s")

@@ -4,7 +4,7 @@
     "Everything is relative to this file, so logs/ and runtime/ appear here and nowhere else. Delete the whole directory and nothing is left behind."
   ],
 
-  "app_name": "db_ops_quickstart_mssql",
+  "app_name": "dbabrain_quickstart_mssql",
 
   "log_dir": "logs",
   "runtime_dir": "runtime",

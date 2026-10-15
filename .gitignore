@@ -58,7 +58,7 @@ CLAUDE.local.md
 data/ssh_keys/*
 !data/ssh_keys/.gitkeep
 
-# Configuration bundles written by `db-ops export-data`. One of these is an entire estate in
+# Configuration bundles written by `dbabrain export-data`. One of these is an entire estate in
 # one file - every host, account and chat id, plus the secret store as ciphertext. It is a
 # credential, and the reason it is named here rather than left to judgement is that it is JSON
 # sitting in the tool root, which is exactly where `git add` finds things.
@@ -74,7 +74,7 @@ logs/
 # Docker build/deploy artifacts (image tar, packaged secrets) — never commit
 deploy/
 *.tar
-db_ops_image.tar
+dbabrain_image.tar
 
 # Backup/restore scratch dirs that land at the repo root when a pg_basebackup-shaped command
 # is run from here instead of a temp dir (tests/test_backup_transfer_stream.py builds exactly

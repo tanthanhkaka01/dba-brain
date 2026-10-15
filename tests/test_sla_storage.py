@@ -1,9 +1,9 @@
-from db_ops.metrics.models import MetricResult
-from db_ops.metrics.storage import MetricStore
-from db_ops.sla.compliance import validate_sla_policies
-from db_ops.sla.models import SlaPolicy
-from db_ops.sla.policies import parse_sla_policy
-from db_ops.sla.storage import SlaStore
+from dbabrain.metrics.models import MetricResult
+from dbabrain.metrics.storage import MetricStore
+from dbabrain.sla.compliance import validate_sla_policies
+from dbabrain.sla.models import SlaPolicy
+from dbabrain.sla.policies import parse_sla_policy
+from dbabrain.sla.storage import SlaStore
 
 
 def _metric_result(*, status: str, collected_at: str, target_id: str = "s/sqlserver/db", db_type: str = "sqlserver") -> MetricResult:
@@ -52,7 +52,7 @@ def _inventory(tmp_path, *targets):
 
 
 def test_db_type_scope_evaluates_each_instance_separately(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.insert_results(
         run_id=1,
         results=[
@@ -75,7 +75,7 @@ def test_db_type_scope_evaluates_each_instance_separately(tmp_path):
     )
 
     summary = validate_sla_policies(
-        sqlite_path=tmp_path / "db_ops.sqlite",
+        sqlite_path=tmp_path / "dbabrain.sqlite",
         policies=[policy],
         window_end="2026-05-28T04:00:00Z",
         data_dir=_inventory(tmp_path, ("s1", "sqlserver"), ("s2", "sqlserver"), ("o1", "oracle")),
@@ -93,7 +93,7 @@ def test_db_type_scope_evaluates_each_instance_separately(tmp_path):
 
 
 def test_aggregate_flag_produces_single_fleet_result(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.insert_results(
         run_id=1,
         results=[
@@ -112,7 +112,7 @@ def test_aggregate_flag_produces_single_fleet_result(tmp_path):
         aggregate=True,
     )
     summary = validate_sla_policies(
-        sqlite_path=tmp_path / "db_ops.sqlite", policies=[policy],
+        sqlite_path=tmp_path / "dbabrain.sqlite", policies=[policy],
         window_end="2026-05-28T04:00:00Z", data_dir=_inventory(tmp_path),
     )
     assert summary.result_count == 1
@@ -121,7 +121,7 @@ def test_aggregate_flag_produces_single_fleet_result(tmp_path):
 
 
 def test_error_budget_at_risk_when_budget_nearly_exhausted(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     # 96 good / 4 bad = 96% actual. Objective 95% -> budget 5%, bad 4% -> 80% consumed,
     # 20% remaining <= at_risk threshold 25% => AT_RISK (still meets objective).
     results = [_metric_result(status="OK", collected_at=f"2026-05-28T00:{m:02d}:00Z") for m in range(48)]
@@ -139,7 +139,7 @@ def test_error_budget_at_risk_when_budget_nearly_exhausted(tmp_path):
     )
 
     summary = validate_sla_policies(
-        sqlite_path=tmp_path / "db_ops.sqlite",
+        sqlite_path=tmp_path / "dbabrain.sqlite",
         policies=[policy],
         window_end="2026-05-28T04:00:00Z",
         data_dir=_inventory(tmp_path, ("s", "sqlserver")),
@@ -156,7 +156,7 @@ def test_error_budget_at_risk_when_budget_nearly_exhausted(tmp_path):
 
 
 def test_save_summary_persists_run_and_results(tmp_path):
-    sqlite_path = tmp_path / "db_ops.sqlite"
+    sqlite_path = tmp_path / "dbabrain.sqlite"
     store = MetricStore(sqlite_path)
     store.insert_results(
         run_id=1,
@@ -226,7 +226,7 @@ def test_history_survives_a_db_type_change_because_scope_is_server_id(tmp_path):
     and the SLA scoped on that column — so every OS SLO answered NO_DATA for machines with three
     weeks of history in the table. Scope is the server_id now, which does not move.
     """
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.insert_results(
         run_id=1,
         results=[
@@ -249,7 +249,7 @@ def test_history_survives_a_db_type_change_because_scope_is_server_id(tmp_path):
     )
 
     summary = validate_sla_policies(
-        sqlite_path=tmp_path / "db_ops.sqlite",
+        sqlite_path=tmp_path / "dbabrain.sqlite",
         policies=[policy],
         window_end="2026-05-28T04:00:00Z",
         data_dir=_inventory(tmp_path, ("h1", "host")),

@@ -4,7 +4,7 @@ The **lookup** is ``lib.telegram_route``: the route is a function of the configu
 in-process (0.24.0) - it used to cost a process per level, running the Telegram app's CLI from the
 layer everything imports (rules R07, R42). It must cache, and fail closed.
 
-The **policy** is shared and pure: :mod:`db_ops.lib.notify_route` is handed the answer and decides
+The **policy** is shared and pure: :mod:`dbabrain.lib.notify_route` is handed the answer and decides
 where a message goes. It must not read config, open a store, or start a process - the import
 assertion at the bottom keeps that true.
 
@@ -15,8 +15,8 @@ say so on stderr.
 
 import pytest
 
-from db_ops.lib import telegram_route as client
-from db_ops.lib import notify_route
+from dbabrain.lib import telegram_route as client
+from dbabrain.lib import notify_route
 
 
 @pytest.fixture(autouse=True)
@@ -169,5 +169,5 @@ def test_the_shared_layer_starts_no_process_and_reads_no_config():
             imported.add(node.module.split(".")[0])
 
     assert "subprocess" not in imported, "notify_route is starting processes again"
-    # `db_ops` here would be the config layer or an app; `typing`/`__future__` are fine.
+    # `dbabrain` here would be the config layer or an app; `typing`/`__future__` are fine.
     assert imported <= {"typing", "__future__"}, f"notify_route grew dependencies: {imported}"

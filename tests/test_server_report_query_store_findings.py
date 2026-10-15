@@ -11,7 +11,7 @@ had happened. The operator asked for the findings to be kept for a day so that t
 
 from __future__ import annotations
 
-from db_ops.reports.server_report import QUERY_STORE_FINDINGS_HOURS, build_query_store_findings
+from dbabrain.reports.server_report import QUERY_STORE_FINDINGS_HOURS, build_query_store_findings
 
 CODE = "QUERY_STORE_QUERY_ISSUES"
 

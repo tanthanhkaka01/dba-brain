@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.reports.inventory_health import build_inventory_health
-from db_ops.reports.inventory_report import build_models, render_html
-from db_ops.reports.inventory_summary import _merge_overlay
+from dbabrain.reports.inventory_health import build_inventory_health
+from dbabrain.reports.inventory_report import build_models, render_html
+from dbabrain.reports.inventory_summary import _merge_overlay
 
 
 # Anchored to the clock, not to a literal date. These tests were written with NOW frozen at
@@ -92,7 +92,7 @@ def built(tmp_path):
         _row("BACKUP_LAST_RESULT", "OrchestratorData / LOG", "2",
              f"backup_type=L, backup_finish_date={_ago(hours=2)}, recovery_model=FULL"),
     ]
-    sqlite_path = tmp_path / "db_ops.sqlite"
+    sqlite_path = tmp_path / "dbabrain.sqlite"
     _sqlite(sqlite_path, rows)
 
     inventory = {
@@ -227,7 +227,7 @@ def secured(tmp_path):
              r"login=examplecorp\svc-SALESSF$ | roles=[db_owner] | HIGH_PRIVILEGE"),
         _row("DATABASE_USER_PERMISSIONS", r"SALESDB\david", "SQL_USER", "login=david | roles=[db_datareader]"),
     ]
-    sqlite_path = tmp_path / "db_ops.sqlite"
+    sqlite_path = tmp_path / "dbabrain.sqlite"
     _sqlite(sqlite_path, rows)
     inventory = {"servers": [{
         "server_id": "ACME-192-0-2-115", "ip": "192.0.2.115", "company_code": "ACME",
@@ -238,7 +238,7 @@ def secured(tmp_path):
     overlay = json.loads(Path(health["file"]).read_text(encoding="utf-8"))
     _merge_overlay(overlay, inventory)
     scope, models = build_models(inventory)
-    from db_ops.reports.inventory_report import build_triage
+    from dbabrain.reports.inventory_report import build_triage
     return models[0], build_triage(models), render_html(scope, models, build_triage(models), TODAY)
 
 
@@ -281,7 +281,7 @@ def test_each_database_reports_its_users_and_owners(secured):
 
 def test_a_server_without_security_metrics_shows_no_security_block(tmp_path):
     rows = [_row("DATABASE_STATUS", "SALESDB", "ONLINE", "read_only=0")]
-    sqlite_path = tmp_path / "db_ops.sqlite"
+    sqlite_path = tmp_path / "dbabrain.sqlite"
     _sqlite(sqlite_path, rows)
     inventory = {"servers": [{
         "server_id": "ACME-192-0-2-115", "ip": "192.0.2.115",

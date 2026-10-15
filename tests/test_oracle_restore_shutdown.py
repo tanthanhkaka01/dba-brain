@@ -19,7 +19,7 @@ terminates.
 from __future__ import annotations
 
 from pathlib import Path
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 
 SCRIPT = resolve_tool_path("assets/restore/oracle/oracle_rman_restore.sh")
 

@@ -24,13 +24,13 @@ command finds it — the working directory is the second entry in the resolution
 environment variable is needed. Everything the toolkit writes (`logs/`, `runtime/`) appears there
 and nowhere else, so deleting the directory leaves nothing behind.
 
-**`db-ops init` makes one.** Do not build it by hand:
+**`dbabrain init` makes one.** Do not build it by hand:
 
 ```bash
 pip install 'dbabrain[mssql]'      # or [postgres], [oracle], [mysql]
                                    # add [ssh] or [winrm] for the OS metrics (2.8)
 mkdir my-estate && cd my-estate
-db-ops init
+dbabrain init
 ```
 
 It writes nine files and then prints the next six commands. It **never overwrites** — the files it
@@ -44,7 +44,7 @@ cloned is a guide it will not read.
 the rules, the key and the clock, adding a database through `instance-add`, the files and their
 registrars, `describe-object` / `check-objects` / `check-references`, schedules, the daemon, what to
 ask the tool, and which commands change a database or a host and need a person first. Its source is
-`db_ops/common/agents_guide.md` in the package, and every `db-ops <app> <command>` it names is checked
+`dbabrain/common/agents_guide.md` in the package, and every `dbabrain <app> <command>` it names is checked
 against that app's `--help` by the suite.
 
 It is the one file `init` **always replaces**, so the guide in a root is the installed version's -
@@ -56,9 +56,6 @@ another file. Before a root exists, `dbabrain guide` prints it and
 cannot write into the directory it was installed from, so the file appears on the first `init` or
 `guide '{"write": true}'`, never on `pip install` itself. (`init`, `guide`, `encrypt-secret`,
 `export-data` and `import-data` take one JSON object since 0.24.0 - an option is a key.)
-
-<!-- TODO(rename): the distribution is `db_ops` until the rename lands. The `db-ops` command
-     below keeps its name; `python -m db_ops.<app>.cli` becomes `python -m dbabrain.<app>.cli`. -->
 
 **One driver is not pip-installable.** SQL Server needs Microsoft's ODBC driver, a system package —
 `pyodbc` is a binding, not a driver. PostgreSQL needs nothing: `pg8000` is pure Python, which is why
@@ -102,7 +99,7 @@ printed), and what a `time_window`'s `from_hour`/`to_hour` mean. Give it an IANA
 Stored timestamps are UTC and stay UTC either way.
 
 ```bash
-db-ops db timezone --format txt              # what this node resolved (db.cli's since 0.24.0)
+dbabrain db timezone --format txt              # what this node resolved (db.cli's since 0.24.0)
 ```
 
 **SQLite on a first run is a decision, not a convenience.** Expecting PostgreSQL would mean the
@@ -206,7 +203,7 @@ and the two that are not guessable on Oracle and MySQL.
 A key beginning with `_` is skipped, so `_notes` is commentary rather than a secret.
 
 ```bash
-db-ops encrypt-secret --key-base64 <your passphrase, base64>
+dbabrain encrypt-secret --key-base64 <your passphrase, base64>
 ```
 
 `encrypt-secret` is a top-level command, so the key flag follows it. **The app CLIs are the other
@@ -220,14 +217,14 @@ key-derivation parameters, and nothing else, which is why it is safe to commit w
 **Verify before moving on**, because a wrong key produces an empty store rather than an error:
 
 ```bash
-db-ops check-credentials          # does every configured target resolve to a real login
+dbabrain check-credentials          # does every configured target resolve to a real login
 ```
 
 ### 2.4 Create the store and collect
 
 ```bash
-db-ops metrics collect --dry-run
-db-ops metrics --key-base64 <your passphrase, base64> collect
+dbabrain metrics collect --dry-run
+dbabrain metrics --key-base64 <your passphrase, base64> collect
 ```
 
 **`--key-base64` goes before the subcommand**, not after it. The app parses it, its subparser does
@@ -257,13 +254,13 @@ says a target is misconfigured rather than healthy.
 
 Put the bot token in the secret store the same way the database password went in, name it in
 `data/telegram_config.json`, and put your chat id in `data/telegram_groups.json`. A bot cannot open
-a conversation, so message it once first — then `db-ops telegram get-updates` shows the chat id.
+a conversation, so message it once first — then `dbabrain telegram get-updates` shows the chat id.
 
 **The direct way — build the alert from what was collected, and send it:**
 
 ```bash
-db-ops metrics  alert-summary --include-warning     # the text, from what was just collected
-db-ops telegram send-message --chat-id <id> --text "<that text>"
+dbabrain metrics  alert-summary --include-warning     # the text, from what was just collected
+dbabrain telegram send-message --chat-id <id> --text "<that text>"
 ```
 
 `alert-summary` reads the stored results rather than re-querying anything, so it says what the last
@@ -273,8 +270,8 @@ collection found and costs the monitored instance nothing.
 messages over Telegram's 4096-character limit, and routes by severity level:
 
 ```bash
-db-ops reports  --config config.json queue-metrics-reports
-db-ops telegram --config config.json send-queue
+dbabrain reports  --config config.json queue-metrics-reports
+dbabrain telegram --config config.json send-queue
 ```
 
 > One thing to know before the first run: **a queue run consumes the metric rows it read whether or
@@ -291,7 +288,7 @@ the commands above by hand first — the daemon runs *those same commands*, so a
 easier to read in the foreground — then start it:
 
 ```bash
-db-ops daemon --config config.json --delay-seconds 10 --key-base64 <your passphrase, base64>
+dbabrain daemon --config config.json --delay-seconds 10 --key-base64 <your passphrase, base64>
 ```
 
 Each entry is one app on its own interval, inside its own allowed hours. Trim the list to what you
@@ -302,12 +299,12 @@ you have not configured fails every cycle rather than doing nothing.
 
 `node_role` decides which machine runs a command. The scaffold ships `"all"`, which runs anywhere.
 A two-node estate sets `"master"` or `"worker"` per command and declares each node's role with the
-`DB_OPS_NODE_ROLE` environment variable — deliberately not in `config.json`, so a config copied
+`DBABRAIN_NODE_ROLE` environment variable — deliberately not in `config.json`, so a config copied
 between nodes cannot mislabel one. If nothing runs, the daemon says which of the three reasons it
 is (nothing defined, nothing active, or everything filtered out by role) and names the fix.
 
 The daemon runs its children with **its own interpreter**, not whatever `python` means on the
-machine. Installing into a virtualenv and scheduling `python -m db_ops...` used to hand every child
+machine. Installing into a virtualenv and scheduling `python -m dbabrain...` used to hand every child
 a Python without the toolkit in it — every command failing with `ModuleNotFoundError`, once a
 minute, in output nobody reads.
 
@@ -315,9 +312,9 @@ minute, in output nobody reads.
 
 | After | Assert |
 | --- | --- |
-| 2.1 | `db-ops init` reported the files it wrote, and `AGENTS.md` is one of them |
-| 2.2 | `db-ops metrics collect --dry-run` resolves **1 target**, not 0, and names a credential |
-| 2.3 | `db-ops check-credentials` resolves every target to a real login |
+| 2.1 | `dbabrain init` reported the files it wrote, and `AGENTS.md` is one of them |
+| 2.2 | `dbabrain metrics collect --dry-run` resolves **1 target**, not 0, and names a credential |
+| 2.3 | `dbabrain check-credentials` resolves every target to a real login |
 | 2.4 | `error_count: 0`, and `result_count` equals the metrics you expect |
 | 2.5 | `alert-summary` prints the target you configured; the send returns a `message_id` |
 | 2.6 | the daemon logs a run for each app command, and `err=0` |
@@ -330,7 +327,7 @@ That is one database, monitored and delivering. **2.8 adds the other kind of tar
 itself, which needs no database credential at all.
 ### 2.8 The OS metrics: monitoring a host with no database on it
 
-`db-ops init` writes the whole catalogue — 93 metrics, of which **14 read the operating system
+`dbabrain init` writes the whole catalogue — 93 metrics, of which **14 read the operating system
 rather than a database**: CPU, memory, disk, uptime, load, service state, the top processes by
 memory. They are worth doing early for a reason that is easy to miss: **they need no database
 credential and no database at all.** A host you cannot log into yet still answers them, and "the
@@ -395,14 +392,14 @@ password, **it is not read from there at run time**. Add it to that file and enc
 collection warns `Password ref not found in environment or the secret store`:
 
 ```bash
-db-ops encrypt-secret --key-base64 <your passphrase, base64>
+dbabrain encrypt-secret --key-base64 <your passphrase, base64>
 ```
 
 Then collect, and check that the OS rows arrived:
 
 ```bash
-db-ops metrics collect
-db-ops metrics summary-latest
+dbabrain metrics collect
+dbabrain metrics summary-latest
 ```
 
 **Windows targets take the same shape** with `"method": "winrm"`, `"platform": "windows"` and
@@ -426,7 +423,7 @@ agent driving this toolkit is not using a side door — it is using the only doo
 
 Two consequences worth stating for anything generating these files:
 
-- **Every `db_ops.common.cli` command takes one JSON object** — inline, `@file`, or on stdin — in
+- **Every `dbabrain.common.cli` command takes one JSON object** — inline, `@file`, or on stdin — in
   the same shape as the `data/*.json` files. So a value read out of configuration can be passed
   straight into a command without translation.
 - **A file the loader does not know is invisible, however present it is on disk.** Adding a record
@@ -438,7 +435,7 @@ Two consequences worth stating for anything generating these files:
 
 The web console is real and is not the thing described at the top of this page.
 
-**Today** `db_ops/webhost/` serves the generated reports and a console with login, a dashboard of
+**Today** `dbabrain/webhost/` serves the generated reports and a console with login, a dashboard of
 the apps, configuration editing and a "Run now" button. It edits files that already exist.
 
 **What is missing** is the flow this project intends: *add an instance the way a database client

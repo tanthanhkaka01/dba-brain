@@ -13,7 +13,7 @@ same configured base so they can never name different pages.
 
 from __future__ import annotations
 
-from db_ops.lib.report_links import href_for_page, page_relative
+from dbabrain.lib.report_links import href_for_page, page_relative
 
 
 def test_one_of_our_own_pages_becomes_relative():
@@ -45,7 +45,7 @@ def test_a_link_to_the_base_itself_becomes_the_current_directory():
 
 
 def test_the_rendered_page_links_relative_while_the_text_keeps_the_absolute_url(monkeypatch):
-    from db_ops.reports import index_report
+    from dbabrain.reports import index_report
 
     monkeypatch.setattr(index_report, "report_base_url",
                         lambda: "http://192.0.2.249:8080/report_dba/")
@@ -60,7 +60,7 @@ def test_the_rendered_page_links_relative_while_the_text_keeps_the_absolute_url(
 
 
 def test_a_url_on_its_own_line_is_rewritten_the_same_way(monkeypatch):
-    from db_ops.reports import index_report
+    from dbabrain.reports import index_report
 
     monkeypatch.setattr(index_report, "report_base_url",
                         lambda: "http://192.0.2.249:8080/report_dba/")
@@ -76,7 +76,7 @@ def test_a_bare_page_name_becomes_a_link_when_there_is_no_base_url(monkeypatch):
     plain prose. Measured on a node built from `init` on 2026-09-10: the published index-usage page
     carried **no anchors at all**, while the docs claimed it "falls back to relative hrefs".
     """
-    from db_ops.reports import index_report
+    from dbabrain.reports import index_report
 
     monkeypatch.setattr(index_report, "report_base_url", lambda: "")
     html = index_report._markdown_tables_to_html(
@@ -85,7 +85,7 @@ def test_a_bare_page_name_becomes_a_link_when_there_is_no_base_url(monkeypatch):
 
 
 def test_a_page_name_carrying_a_query_string_keeps_it(monkeypatch):
-    from db_ops.reports import index_report
+    from dbabrain.reports import index_report
 
     monkeypatch.setattr(index_report, "report_base_url", lambda: "")
     html = index_report._markdown_tables_to_html(
@@ -96,7 +96,7 @@ def test_a_page_name_carrying_a_query_string_keeps_it(monkeypatch):
 def test_an_absolute_url_on_the_line_still_wins(monkeypatch):
     # Both rules must not fire on one line: the absolute form is rewritten to a relative href and
     # linkifying the *result* again would nest an anchor inside an anchor.
-    from db_ops.reports import index_report
+    from dbabrain.reports import index_report
 
     monkeypatch.setattr(index_report, "report_base_url",
                         lambda: "http://192.0.2.249:8080/report_dba/")
@@ -106,7 +106,7 @@ def test_an_absolute_url_on_the_line_still_wins(monkeypatch):
 
 
 def test_a_word_that_merely_ends_in_html_is_not_turned_into_a_link():
-    from db_ops.lib.report_links import linkify_bare_pages
+    from dbabrain.lib.report_links import linkify_bare_pages
 
     # No false positives on prose: only a token that reads as a sibling page.
     assert linkify_bare_pages("see the .html format", lambda p: "LINK") == "see the .html format"

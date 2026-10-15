@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.metrics.collector import _apply_threshold_override
-from db_ops.metrics.models import MetricDefinition, MetricTarget
+from dbabrain.metrics.collector import _apply_threshold_override
+from dbabrain.metrics.models import MetricDefinition, MetricTarget
 
 METRIC = MetricDefinition("DATABASE_STATE", "sqlserver", "availability", 5, True)
 

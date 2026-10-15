@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.backup_restore.cli import (
+from dbabrain.backup_restore.cli import (
     _count_restore_statuses,
     _failed_restore_databases,
 )

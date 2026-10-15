@@ -18,8 +18,8 @@ import json
 import pytest
 
 from conftest import shipped_data_dir
-from db_ops.lib.task_output import FILE_OUTPUT_FORMATS, OUTPUT_FORMATS
-from db_ops.lib.sql_task_catalog import _target_notify, _target_output
+from dbabrain.lib.task_output import FILE_OUTPUT_FORMATS, OUTPUT_FORMATS
+from dbabrain.lib.sql_task_catalog import _target_notify, _target_output
 
 DATA_DIR = shipped_data_dir()
 
@@ -126,7 +126,7 @@ def test_a_lone_surrogate_is_refused_with_the_string_that_carried_it() -> None:
     Windows ANSI code page, and the characters either side. The next occurrence identifies the
     string instead of restarting the search.
     """
-    from db_ops.sql_tasks.runner import check_sql_text_is_encodable
+    from dbabrain.sql_tasks.runner import check_sql_text_is_encodable
 
     with pytest.raises(RuntimeError) as caught:
         check_sql_text_is_encodable(
@@ -147,7 +147,7 @@ def test_text_that_merely_contains_an_em_dash_is_fine() -> None:
     the two em dashes in the script that failed are ordinary comment punctuation in a valid
     UTF-8 file.
     """
-    from db_ops.sql_tasks.runner import check_sql_text_is_encodable
+    from dbabrain.sql_tasks.runner import check_sql_text_is_encodable
 
     check_sql_text_is_encodable("SELECT 1 -- happens — the CLI parses it", source="X")
 
@@ -157,7 +157,7 @@ def test_the_context_survives_a_second_bad_character() -> None:
 
     An error message that cannot itself be encoded is how this defect wasted an afternoon.
     """
-    from db_ops.sql_tasks.runner import check_sql_text_is_encodable
+    from dbabrain.sql_tasks.runner import check_sql_text_is_encodable
 
     with pytest.raises(RuntimeError) as caught:
         check_sql_text_is_encodable(f"A{chr(0xDC97)}B{chr(0xDC80)}C", source="X")

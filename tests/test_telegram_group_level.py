@@ -20,7 +20,7 @@ import json
 
 import pytest
 
-from db_ops.telegram.updates import KNOWN_NOTIFY_LEVELS, set_group_level
+from dbabrain.telegram.updates import KNOWN_NOTIFY_LEVELS, set_group_level
 
 
 def _groups(path, records):
@@ -125,7 +125,7 @@ def test_every_level_the_shipped_catalogue_routes_on_is_known():
 
 
 def test_the_command_is_registered_and_reaches_the_function():
-    from db_ops.telegram import cli
+    from dbabrain.telegram import cli
 
     args = cli.parse_args(["group-level", "--group", "G", "--level", "logging"])
     assert args.command == "group-level"

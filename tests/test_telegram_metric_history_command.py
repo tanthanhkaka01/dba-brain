@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram import command_processor
-from db_ops.telegram.command_processor import process_one_command_message
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram import command_processor
+from dbabrain.telegram.command_processor import process_one_command_message
 from conftest import shipped_config
 
 
@@ -39,7 +39,7 @@ def _write_json(path, root_key, rows):
 
 
 def _insert_command_message(sqlite_path, text, *, user_id="100"):
-    store = DbOpsStore(sqlite_path)
+    store = DbaBrainStore(sqlite_path)
     store.upsert_telegram_messages(
         [
             {
@@ -208,7 +208,7 @@ def test_metric_history_bot_suffix_builds_exact_argv_and_reports_counts(
     assert argv == [
         sys.executable,
         "-m",
-        "db_ops.reports.cli",
+        "dbabrain.reports.cli",
         "--config",
         str(config_path),
         "metric-history-report",

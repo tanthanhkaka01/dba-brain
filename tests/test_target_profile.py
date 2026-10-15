@@ -15,7 +15,7 @@ on an unknown version would have changed production behaviour on the day it ship
 
 import pytest
 
-from db_ops.lib.target_profile import (
+from dbabrain.lib.target_profile import (
     SOURCE_CONFIG,
     SOURCE_REQUEST,
     TargetProfile,
@@ -280,7 +280,7 @@ def test_the_selection_rule_reads_no_file_and_reaches_nothing():
     import ast
     from pathlib import Path
 
-    source = Path(__file__).resolve().parents[1] / "db_ops" / "lib" / "target_profile.py"
+    source = Path(__file__).resolve().parents[1] / "dbabrain" / "lib" / "target_profile.py"
     tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
 
     forbidden_calls = {"open", "load_json_file"}

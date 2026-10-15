@@ -1,9 +1,9 @@
-"""`db-ops init` is the first command anybody runs, and until 2026-08-22 it did not exist.
+"""`dbabrain init` is the first command anybody runs, and until 2026-08-22 it did not exist.
 
 Measured on a real `pip install` into a clean virtualenv, from an empty directory: the toolkit
 resolved its configuration to `site-packages` and told the reader to create a file there from an
 example that does not ship. **Installable and unstartable** — which made the resolution order in
-`db_ops.lib.paths` correct and useless.
+`dbabrain.lib.paths` correct and useless.
 
 These tests pin the properties that make the scaffold worth having, and every one of them is
 something a reader hits in the first five minutes:
@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import scaffold
-from db_ops.lib.paths import builtin_asset_root
+from dbabrain.common import scaffold
+from dbabrain.lib.paths import builtin_asset_root
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def root(tmp_path: Path) -> Path:
 
 def test_the_scaffold_is_a_tool_root_the_resolver_recognises(root: Path) -> None:
     """`config.json` and `data/` are the markers. Without one, standing here means nothing."""
-    from db_ops.lib.paths import looks_like_tool_root
+    from dbabrain.lib.paths import looks_like_tool_root
 
     assert looks_like_tool_root(root)
 
@@ -124,7 +124,7 @@ def test_the_starter_catalogue_names_queries_that_exist(root: Path) -> None:
 
 def test_the_starter_catalogue_loads_through_the_real_loader(root: Path) -> None:
     """Parsing is not loading. The loader validates fields the JSON alone cannot."""
-    from db_ops.metrics.definitions import load_metric_definitions
+    from dbabrain.metrics.definitions import load_metric_definitions
 
     definitions = load_metric_definitions(root / "data" / "metric_definitions.json")
 
@@ -220,7 +220,7 @@ def test_the_secret_source_says_it_is_not_what_the_toolkit_reads(root: Path) -> 
 
 def test_the_scaffolded_secret_file_encrypts_to_nothing(root: Path, tmp_path: Path) -> None:
     """An empty scaffold has no secrets, and the commentary must not become one."""
-    from db_ops.lib.secret_text import encrypt_secret_text_file
+    from dbabrain.lib.secret_text import encrypt_secret_text_file
 
     count = encrypt_secret_text_file(
         root / "secrets" / "secret_text.json", tmp_path / "out.json", "passphrase")
@@ -235,6 +235,6 @@ def test_the_next_steps_name_real_commands(root: Path) -> None:
     # `encrypt-secret-text` was a `control` command, and `control` is not in the thin
     # distribution — so the documented first run named a command the release does not have. Found
     # by following the steps against a real SQL Server.
-    for command in ("db-ops encrypt-secret", "db-ops metrics collect --dry-run"):
+    for command in ("dbabrain encrypt-secret", "dbabrain metrics collect --dry-run"):
         assert command in steps
-    assert "db-ops db encrypt-secret-text" not in steps
+    assert "dbabrain db encrypt-secret-text" not in steps

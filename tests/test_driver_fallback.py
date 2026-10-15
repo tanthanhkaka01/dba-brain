@@ -3,9 +3,9 @@ import types
 
 import pytest
 
-from db_ops.common import sql_execution
-from db_ops.metrics import executor
-from db_ops.metrics.models import MetricTarget
+from dbabrain.common import sql_execution
+from dbabrain.metrics import executor
+from dbabrain.metrics.models import MetricTarget
 
 
 def metric_target(*, connection_info=None):
@@ -146,7 +146,7 @@ def test_driver17_never_uses_optional_encrypt_value():
     """ODBC Driver 17 rejects Encrypt=optional (it accepts only yes/no). Driver 18 may
     use 'optional'. Regression guard for the prod incident where Driver 17 hosts failed
     with 'Invalid value specified for connection string attribute Encrypt'."""
-    from db_ops.common.sql_execution import sqlserver_driver_candidates
+    from dbabrain.common.sql_execution import sqlserver_driver_candidates
 
     drivers = ["ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"]
     pyodbc = types.SimpleNamespace(drivers=lambda: drivers)

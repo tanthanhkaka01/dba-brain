@@ -26,8 +26,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common.sql_execution import split_sql_batches
-from db_ops.lib.paths import BUILTIN_ASSET_ROOTS
+from dbabrain.common.sql_execution import split_sql_batches
+from dbabrain.lib.paths import BUILTIN_ASSET_ROOTS
 
 
 #: Every tree this project ships or runs SQL from. The shipped SQL now lives with the component

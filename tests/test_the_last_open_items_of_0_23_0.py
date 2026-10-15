@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.lib import data_sources
+from dbabrain.lib import data_sources
 
 GROUPS = [{"server_id": "S1", "db_type": "sqlserver", "service_name": "SALES-DEV", "instance_name": "MSSQLSERVER",
            "credentials": [{"credential_name": "sqlserver_s1_dba", "username": "dba"}]},
@@ -53,7 +53,7 @@ def test_a_credential_in_a_group_the_target_did_not_match_is_located():
 
 
 def test_the_sql_task_says_the_lookups_reason_not_just_the_name():
-    from db_ops.sql_tasks import runner
+    from dbabrain.sql_tasks import runner
 
     target = SimpleNamespace(server_id="S1", credential_name="oracle_s1_system", db_type="oracle",
                              service_name="OTHERPDB", instance_name="")
@@ -81,8 +81,8 @@ class _Cursor:
 
 
 def test_a_piece_named_like_a_backup_that_is_not_one_is_reported(monkeypatch):
-    import db_ops.common.db_connect as db_connect
-    from db_ops.common.backupfiles import list_backup_files
+    import dbabrain.common.db_connect as db_connect
+    from dbabrain.common.backupfiles import list_backup_files
 
     monkeypatch.setattr(db_connect, "connect_engine", lambda **_: SimpleNamespace(
         cursor=lambda: _Cursor(), close=lambda: None))
@@ -93,7 +93,7 @@ def test_a_piece_named_like_a_backup_that_is_not_one_is_reported(monkeypatch):
 
 
 def test_the_restore_finishes_with_a_warning_naming_it(monkeypatch):
-    from db_ops.backup_restore import restore_by_id, restore_script
+    from dbabrain.backup_restore import restore_by_id, restore_script
 
     job = SimpleNamespace(restore_id="R", db_type="sqlserver", env_secrets={}, is_remote=False, label="L")
     monkeypatch.setattr(restore_script, "load_script_restores", lambda _p=None: [job])
@@ -126,8 +126,8 @@ def _log(tmp_path, written: datetime):
 
 
 def test_a_log_written_today_is_not_archived_as_yesterday(tmp_path):
-    from db_ops.logging_ops.handlers import archive_yesterday_if_missing
-    from db_ops.lib.timezone import display_today
+    from dbabrain.logging_ops.handlers import archive_yesterday_if_missing
+    from dbabrain.lib.timezone import display_today
 
     path = _log(tmp_path, datetime.now(timezone.utc))
 
@@ -137,8 +137,8 @@ def test_a_log_written_today_is_not_archived_as_yesterday(tmp_path):
 
 def test_a_log_last_written_days_ago_is_archived_under_that_day(tmp_path):
     """A node back from three days down: its last lines belong to their own day, not yesterday."""
-    from db_ops.logging_ops.handlers import archive_yesterday_if_missing
-    from db_ops.lib.timezone import display_today, to_display
+    from dbabrain.logging_ops.handlers import archive_yesterday_if_missing
+    from dbabrain.lib.timezone import display_today, to_display
 
     written = datetime.now(timezone.utc) - timedelta(days=3)
     path = _log(tmp_path, written)

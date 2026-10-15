@@ -23,18 +23,18 @@ actually publishes.
 
 The toolkit does **not** look for its configuration next to its own code. It asks, in order:
 
-1. `DB_OPS_HOME`, if set;
+1. `DBABRAIN_HOME`, if set;
 2. the current working directory, if it holds `data/` or `config.json`;
 3. the package location, as the fallback that keeps a source checkout and the container working.
 
-`DB_OPS_DATA_DIR` moves the data folder on its own, for an installed copy whose configuration
+`DBABRAIN_DATA_DIR` moves the data folder on its own, for an installed copy whose configuration
 lives where the operator keeps configuration rather than beside the code.
 
 That is why an example directory works by being *stood in*:
 
 ```bash
 cd examples/postgres-quickstart
-python -m db_ops.metrics.cli --config config.json collect --dry-run
+python -m dbabrain.metrics.cli --config config.json collect --dry-run
 ```
 
 Full detail in [`docs/configuration.md`](../docs/configuration.md).

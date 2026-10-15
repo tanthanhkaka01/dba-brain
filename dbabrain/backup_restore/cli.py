@@ -1,0 +1,1890 @@
+from __future__ import annotations
+
+from dbabrain.lib import errors
+import argparse
+import dataclasses
+import datetime as dt
+import json
+import os
+import re
+import sys
+import time
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
+
+from dbabrain.backup_restore.backup import (
+    BACKUP_TYPES,
+    _load_secrets,
+    load_backup_jobs,
+    run_backup,
+)
+from dbabrain.transport import common_cli
+from dbabrain.lib import sql_instance
+from dbabrain.backup_restore.restore_script import load_script_restores, unusable_reason
+from dbabrain.lib.time_window import weekdays_text
+from dbabrain.lib.listing import active_only, hidden_note
+from dbabrain.backup_restore.workflow import run_workflow
+from dbabrain.backup_restore.config import (
+    BACKUP_RESTORE_NOTIFY_DEFAULTS,
+    BackupRestoreConfig,
+    DatabaseRestoreMapping,
+    load_restore_configs,
+    merge_notify_configs,
+)
+from dbabrain.backup_restore.copy_backup import newest_backup_hint, run_copy_backup
+from dbabrain.backup_restore.delete_backup import run_delete_backup
+from dbabrain.backup_restore.preflight import PreflightError, run_target_preflight
+from dbabrain.backup_restore.events import announce, emit_backup_restore_event, resolve_run_id
+from dbabrain.backup_restore.restore_database import (
+    parse_point_in_time,
+    run_restore_all_latest,
+    run_restore_database,
+    summarize_error_tail,
+)
+from dbabrain.backup_restore.sanitize import sanitize_text, sanitize_value
+from dbabrain.lib.notify import NotifyConfig
+from dbabrain.lib.secret_text import add_key_argument, set_key_env
+from dbabrain.lib.config import DEFAULT_CONFIG_PATH, load_config, resolve_config_path
+from dbabrain.db.store import utc_now_text
+from dbabrain.logging_ops import LOG_SCOPE_ENV_VAR, log_event, log_function_call, setup_app_logger
+from dbabrain.logging_ops.runtime_stdout import patch_stdout
+
+
+class RestoreWorkflowError(errors.OperationFailed):
+    def __init__(self, message: str, *, metadata: dict[str, object]) -> None:
+        super().__init__(message)
+        self.metadata = metadata
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    config_parent = argparse.ArgumentParser(add_help=False)
+    # SUPPRESS for the same reason as the key flags below: the top-level parser registers
+    # --config too, and a plain default here overwrote a --config given before the subcommand,
+    # silently falling back to config.json instead of the file that was asked for.
+    config_parent.add_argument("--config", default=argparse.SUPPRESS, help="Path to dbabrain config JSON. Defaults to config.backup_restore.json or config.json.")
+    # inherited=True: these same flags are registered on the top-level parser below, and every
+    # subcommand inherits this one. Without it, a --key-base64 given *before* the subcommand was
+    # overwritten by this copy's default at subparse time and the run died with "No decryption
+    # key provided" on a command line that was perfectly correct.
+    add_key_argument(config_parent, inherited=True)
+
+    parser = argparse.ArgumentParser(description="dbabrain backup restore automation.")
+    parser.add_argument("--config", default=None, help="Path to dbabrain config JSON. Defaults to config.backup_restore.json or config.json.")
+    add_key_argument(parser)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    copy = subparsers.add_parser("copy-backup", parents=[config_parent], help="Copy backup files into the local import folder.")
+    copy.add_argument("--hours", type=int, help="Override copy_recent_hours for this run. Use 0 or negative to copy all matching files.")
+    copy.add_argument("--source-id", help="Copy only one configured source/server.")
+    copy.add_argument("--restore-id", help="Copy only the restore entry with this restore_id.")
+    copy.add_argument("--force", action="store_true", help="Copy files even if they already exist in the target.")
+
+    delete = subparsers.add_parser("delete-backup", parents=[config_parent], help="Delete old backup files from the target import folder.")
+    # Seconds, and no longer required. It was `--hours`, mandatory, and the workflow converted the
+    # configured seconds into it with `max(1, seconds // 3600)` - so a retention under an hour
+    # silently became an hour. Now the entry's own `cleanup_retention` is the default and the
+    # override is in the same unit as the config. `--hours` still parses, because it was the only
+    # spelling for a year, and it says what it does to the number.
+    delete.add_argument("--retention-seconds", type=int, default=None,
+                        help="Delete target files older than this many seconds. "
+                             "Use 0 to remove the age gate. Default: each entry's cleanup_retention.")
+    delete.add_argument("--hours", type=int, default=None,
+                        help="Deprecated spelling of --retention-seconds, in hours (multiplied by 3600).")
+    delete.add_argument("--source-id", help="Delete target files for only one configured source/server.")
+    delete.add_argument("--restore-id", help="Delete target files only for the restore entry with this restore_id.")
+    delete.add_argument(
+        "--dry-run", action="store_true",
+        help="List what would be deleted and delete nothing. The engine has always accepted "
+             "this; the flag was missing here, so 'what would this remove' had no answer "
+             "short of running it against a real staging directory.")
+
+    backup = subparsers.add_parser(
+        "backup",
+        parents=[config_parent],
+        help="Run every configured backup job that is due (scans backup_restore.backups).",
+    )
+    backup.add_argument("--backup-id", help="Run jobs for only one configured backup entry.")
+    backup.add_argument("--job", help="Run only this job name within the selected entries (e.g. database, archivelog).")
+    backup.add_argument("--force", action="store_true", help="Run the selected jobs even if they are not due.")
+    backup.add_argument("--dry-run", action="store_true", help="List the jobs that would run without executing them.")
+    backup.add_argument(
+        "--backup-type", choices=BACKUP_TYPES, default=None,
+        help="Force the level for this run instead of letting the script derive it from the "
+             "weekday: full | diff | log. One word for every engine - it is translated to that "
+             "engine's own name (Oracle 0/1, PostgreSQL full/incr, SQL Server full/diff/log). "
+             "The scheduled config passes nothing, so the script keeps deciding for itself.",
+    )
+    backup.add_argument(
+        "--env", action="append", default=[], metavar="KEY=VALUE",
+        help="Override one script env var for this run only, e.g. --env BACKUP_LEVEL=0 to take a "
+             "level 0 baseline on a day the script would otherwise pick level 1. Repeatable.",
+    )
+
+    prune = subparsers.add_parser(
+        "prune-backups",
+        parents=[config_parent],
+        help="Delete the obsolete backup files of the configured entries (retention cleanup).",
+    )
+    prune.add_argument("--backup-id", help="Prune only one configured backup entry.")
+    prune.add_argument("--job", help="Prune only this job name within the selected entries.")
+    prune.add_argument(
+        "--retention-seconds", type=int, default=None,
+        help="Override the window for this run, in seconds. Default: whatever each job already "
+             "declares in cleanup_retention, which is the same number its own script prunes with.",
+    )
+    prune.add_argument(
+        "--retention-days", type=int, default=None,
+        help="Deprecated spelling of --retention-seconds, in days.",
+    )
+    prune.add_argument(
+        "--mode", choices=("age", "recovery_window"), default="age",
+        help="age (default): a file older than the window is obsolete, full/diff/log alike. "
+             "recovery_window: keep whatever is needed to restore to any point in the window.",
+    )
+    prune.add_argument(
+        "--apply", action="store_true",
+        help="Actually delete. Without it the command reports what is obsolete and removes "
+             "nothing - the opposite default from `backup`, because reporting a backup that did "
+             "not happen is a wasted run and reporting a deletion that did not happen is not.",
+    )
+
+    workflow = subparsers.add_parser(
+        "workflow",
+        parents=[config_parent],
+        help="Run the due backup jobs, then the due restore entries (the scheduled entry point).",
+    )
+    workflow.add_argument("--backup-id", help="Limit the backup half to one configured backup entry.")
+    workflow.add_argument("--job", help="Limit the backup half to this job name (e.g. database, archivelog).")
+    workflow.add_argument("--restore-id", help="Limit the restore half to one configured restore entry.")
+    workflow.add_argument("--force", action="store_true", help="Run the selected work even if it is not due.")
+    workflow.add_argument("--dry-run", action="store_true", help="List what would run without executing it.")
+    workflow.add_argument("--skip-backup", action="store_true", help="Run only the restore half.")
+    workflow.add_argument("--skip-restore", action="store_true", help="Run only the backup half.")
+    workflow.add_argument("--copy-hours", type=int, default=None,
+                          help="Hours for the restore copy step, overriding every entry's copy_recent_hours "
+                               "for this run. Default: each entry's own (24 when it sets none).")
+    workflow.add_argument("--delete-retention-seconds", type=int, default=None,
+                          help="Override target retention for the restore half, in seconds. "
+                               "Default: each entry's cleanup_retention.")
+    workflow.add_argument("--delete-hours", type=int, default=None,
+                          help="Deprecated spelling of --delete-retention-seconds, in hours.")
+    workflow.add_argument(
+        "--backup-type", choices=BACKUP_TYPES, default=None,
+        help="Force the backup level for the backup half of this run: full | diff | log.",
+    )
+    workflow.add_argument(
+        "--env", action="append", default=[], metavar="KEY=VALUE",
+        help="Override one backup script env var for this run only. Repeatable.",
+    )
+
+    subparsers.add_parser(
+        "list-backups", parents=[config_parent],
+        help="List configured backup IDs with their engine, level and schedule.",
+    )
+
+    # The JSON-request contract, the same one `instance-add` takes: one object, inline, @file or
+    # `-`. Never flags for the payload - a backup entry is a nested object with an array of jobs
+    # inside it, and flattening that into flags is how `--job-1-cleanup-retention` gets invented.
+    backup_add = subparsers.add_parser(
+        "backup-add", parents=[config_parent],
+        help="Register one backup entry from a JSON request object (see --help).",
+    )
+    backup_add.add_argument(
+        "request", nargs="?",
+        help="A JSON object, @path/to/file.json, or - to read stdin. Omit for the full help.")
+
+    restore_add = subparsers.add_parser(
+        "restore-add", parents=[config_parent],
+        help="Register one restore entry from a JSON request object (see --help).",
+    )
+    restore_add.add_argument(
+        "request", nargs="?",
+        help="A JSON object, @path/to/file.json, or - to read stdin. Omit for the full help.")
+
+    import_cert = subparsers.add_parser(
+        "import-certificate",
+        parents=[config_parent],
+        help="Fetch the configured backup encryption certificate and import it on the restore VM.",
+    )
+    import_cert.add_argument("--source-id", help="Import the certificate for only one configured source/server.")
+    import_cert.add_argument("--restore-id", help="Import the certificate only for the restore entry with this restore_id.")
+    import_cert.add_argument("--dry-run", action="store_true", help="Validate config without calling the certificate API or sqlcmd.")
+
+    restore = subparsers.add_parser(
+        "restore-latest",
+        parents=[config_parent],
+        help="Restore the latest FULL .bak file with recovery.",
+    )
+    restore.add_argument("--backup-file", help="Restore a specific VM import UNC .bak file instead of auto-selecting latest FULL.")
+    restore.add_argument("--source-id", help="Restore only one configured source/server.")
+    restore.add_argument("--restore-id", help="Restore only the entry with this restore_id.")
+    restore.add_argument("--database", help="Restore only one source database from the selected source.")
+    restore.add_argument("--target-database", help="Override target database name when --database is used.")
+    restore.add_argument("--dry-run", action="store_true", help="Print generated SQL and command without executing sqlcmd.")
+
+    restore_workflow = subparsers.add_parser(
+        "restore-workflow",
+        parents=[config_parent],
+        help="Run copy-backup, restore-latest, then delete-backup.",
+    )
+    restore_workflow.add_argument(
+        "restore_id_pos", nargs="?", default=None, metavar="RESTORE_ID",
+        help="Optional positional restore_id — equivalent to --restore-id RESTORE_ID.",
+    )
+    restore_workflow.add_argument("--source-id", help="Run workflow for only one configured source/server.")
+    restore_workflow.add_argument("--restore-id", help="Run workflow only for the restore entry with this restore_id. Example: python -m dbabrain.backup_restore.cli restore-workflow --config data/restore_config.json --restore-id ACME_TO_SQLSERVER_198_51_100_31 --force")
+    restore_workflow.add_argument("--copy-hours", type=int, default=None,
+                                  help="Hours for copy-backup, overriding the entry's copy_recent_hours for "
+                                       "this run. Default: the entry's own (24 when it sets none).")
+    restore_workflow.add_argument("--delete-retention-seconds", type=int, default=None,
+                                  help="Override how long staged files are kept on the target, in seconds. "
+                                       "Default: each entry's cleanup_retention.")
+    restore_workflow.add_argument("--delete-hours", type=int, default=None,
+                                  help="Deprecated spelling of --delete-retention-seconds, in hours.")
+    restore_workflow.add_argument(
+        "--dry-run", action="store_true",
+        help="Rehearse without writing: the space check runs (it only reads), the copy is not run, "
+             "the restore and the cleanup are dry runs over what is staged now.")
+    restore_workflow.add_argument("--force", action="store_true", help="Force copy even if files already exist in the target.")
+    restore_workflow.add_argument(
+        "--point-in-time",
+        default=None,
+        help="Restore to a specific point in time (PITR). Format: 'YYYY-MM-DD HH:MM:SS +HH:MM'. "
+             "Requires transaction log backups. If omitted, restores to the latest available state.",
+    )
+    restore_workflow.add_argument(
+        "--execution-mode",
+        default=None,
+        choices=["sync", "unsync"],
+        help="Override execution_mode for this run only (sync or unsync). Defaults to the value in config.",
+    )
+
+    # `restore-full`, `restore-diff` and `restore-log` were hidden commands here until 0.24.0 - one
+    # step of a configured restore, the job `common.cli restore-full/-diff/-log` does (rules R43).
+    # The diff and log ones were handed no file and only ever skipped.
+
+    by_id = subparsers.add_parser(
+        "restore-by-id", parents=[config_parent],
+        help="Restore one configured entry through the dbabrain.common primitives (JSON request).")
+    by_id.add_argument("request", help="JSON object: {\"restore_id\": ..., \"point_in_time\": ..., \"dry_run\": ...}")
+
+    bundle = subparsers.add_parser(
+        "export-instance-bundle", parents=[config_parent],
+        help="Export one backup entry's instance metadata bundle (logins, jobs ...) on THIS node - "
+             "read-only on the source - so a restore here can replay it. Runs whether or not the "
+             "entry is active on this node; its server_metadata must be on.")
+    bundle.add_argument("--backup-id", required=True)
+
+    # `verify-restore` was here until 0.24.0 - its own CHECKDB through run-sqlcmd, the job
+    # `common.cli verify-restore` does on every engine (rules R43, the operator's choice). The
+    # restore workflow's last phase asks common's; a person does the same, with the login stated.
+    subparsers.add_parser(
+        "list-restores",
+        parents=[config_parent],
+        help="List configured restore IDs with their source and target IPs (reads restore_config.json; no secrets needed).",
+    )
+    return parser.parse_args(argv)
+
+
+def _format_restore_list(
+    restore_configs: list[BackupRestoreConfig],
+    script_jobs: list | None = None,
+) -> str:
+    """Human/Telegram-friendly listing of the restore_ids that can actually be run.
+
+    Both kinds of restore belong here. An entry drives either the SMB + sqlcmd path or a
+    script (Oracle, PostgreSQL, the SQL Server container drill), and listing only the first
+    kind hid every restore this deployment actually runs - the reply named three ids, two of
+    them disabled, while the five live ones went unmentioned.
+    """
+    configs, hidden_configs = active_only(restore_configs)
+    scripts, hidden_scripts = active_only(script_jobs or [])
+    # Inactive entries a loader could not read (`RestoreConfigs.unusable`, `ScriptRestores.unusable`):
+    # they stop nothing, and they are said here, each with what it lacks, because this is where an
+    # operator looks first.
+    unusable = {**(getattr(restore_configs, "unusable", {}) or {}),
+                **(getattr(script_jobs, "unusable", {}) or {})}
+    incomplete = ([f"Inactive and incomplete ({len(unusable)}) - not usable until fixed:"]
+                  + [f"- {reason}" for _restore_id, reason in sorted(unusable.items())]) if unusable else []
+    total = len(configs) + len(scripts)
+    if not total:
+        note = hidden_note(hidden_configs + hidden_scripts, noun="entry")
+        return "\n".join(["No active restore entries in restore_config.json."]
+                         + ([note] if note else []) + ([""] + incomplete if incomplete else []))
+
+    lines = [f"Restore IDs ({total}):"]
+    for cfg in configs:
+        lines.append(f"- {cfg.restore_id}")
+        lines.append("    smb restore")
+        lines.append(f"    source: {cfg.prod_smb_credential_target or '?'}")
+        lines.append(f"    target: {cfg.vm_credential_target or '?'}")
+    for job in scripts:
+        lines.append(f"- {job.restore_id}")
+        lines.append(f"    {job.db_type} script restore on {job.server_id}")
+        lines.append(f"    target: {job.target_container or '?'}")
+    note = hidden_note(hidden_configs + hidden_scripts, noun="entry")
+    if note:
+        lines.extend(["", note])
+    if incomplete:
+        lines.extend(["", *incomplete])
+    return "\n".join(lines)
+
+
+def _registration_command(args) -> int:
+    """``backup-add`` / ``restore-add`` — the CLI face of :mod:`dbabrain.backup_restore.registration`.
+
+    Both take one JSON object, the way every command in the ``instance-add`` family does, and both
+    answer with the shared response envelope so a shell caller and the bot read the same shape.
+    The passphrase is already in the environment: ``main`` calls ``set_key_env`` before this runs,
+    so ``--key-base64`` given before *or* after the subcommand has the same effect.
+    """
+    from dbabrain.backup_restore import registration
+    from dbabrain.lib import response
+    from dbabrain.lib.json_io import read_json_request
+
+    add, usage = ((registration.add_backup, registration.BACKUP_ADD_USAGE)
+                  if args.command == "backup-add"
+                  else (registration.add_restore, registration.RESTORE_ADD_USAGE))
+    source = getattr(args, "request", None)
+    if not source:
+        sys.stdout.write(usage)
+        return 2
+    try:
+        request = read_json_request(source)
+    except ValueError as exc:
+        return _emit(response.fail(args.command, str(exc)))
+    try:
+        outcome = add(request, key=os.environ.get("DBABRAIN_SECRET_KEY") or None)
+    except registration.RegistrationError as exc:
+        return _emit(response.fail(args.command, str(exc)))
+    name = outcome.get("backup_id") or outcome.get("restore_id")
+    verb = "replaced" if outcome["replaced"] else "registered"
+    return _emit(response.ok(
+        args.command,
+        message=f"{verb} {name} - wrote {', '.join(outcome['files_written'])}",
+        data=outcome))
+
+
+def _emit(result: dict) -> int:
+    """The response envelope on stdout, the way ``restore-by-id`` already writes it here."""
+    from dbabrain.lib import response
+
+    sys.stdout.write(json.dumps(result, ensure_ascii=False, default=str) + chr(10))
+    return response.exit_code(result)
+
+
+def _format_backup_list(jobs: list) -> str:
+    """Human/Telegram-friendly listing of backup_id + engine + level + schedule.
+
+    What an operator needs before typing `spbot_backup <id>`: which ids exist, what each one
+    backs up, and whether its level is fixed or derived - because `--backup-type` only makes
+    sense for the derived ones.
+    """
+    active, hidden = active_only(jobs)
+    if not active:
+        note = hidden_note(hidden, noun="backup")
+        return "No active backup entries in restore_config.json." + (f"\n{note}" if note else "")
+    lines = [f"Backup IDs ({len(active)}):"]
+    for job in sorted(active, key=lambda j: j.backup_id):
+        window = job.time_window
+        if window.from_hour is not None:
+            when = f"{window.from_hour:02d}-{window.to_hour:02d}h"
+        elif window.repeat_interval:
+            when = f"every {window.repeat_interval // 60}m"
+        else:
+            when = "run-once"
+        # The days, when the entry names them. Since 0.21.0 "the weekly full" is
+        # `time_window.weekdays` rather than a literal inside the engine script, and an entry that
+        # runs one day in seven listed as "every 1200m" reads as a job that runs every 20 hours.
+        # `[]` is a real configuration meaning never, so it is printed, not skipped.
+        if window.weekdays is not None:
+            when = f"{when} on {weekdays_text(window.weekdays)}"
+        # A log/archive job has no full-vs-diff choice, so naming a derived level there would
+        # invite --backup-type on a job that cannot take one.
+        if job.job in ("archivelog", "wal", "log"):
+            level = f"{job.job} (no full/diff level)"
+        else:
+            # No BACKUP_LEVEL is a level the SCRIPT picks, and it no longer picks it by the day:
+            # it takes the incremental/diff, and promotes to a baseline when there is nothing it
+            # can chain onto. Saying "auto (Sun=full, else diff)" here outlived the rule it
+            # described by a whole version, and it was the only place an operator could read it.
+            level = job.env.get("BACKUP_LEVEL") or "unset (script default: diff/incr)"
+        encrypted = "  [encrypted]" if job.env_secrets.get("BACKUP_ENCRYPTION_PASSWORD") else ""
+        lines.append(f"- {job.backup_id}{encrypted}")
+        lines.append(f"    {job.db_type} {job.server_id}")
+        lines.append(f"    level: {level} | schedule: {when}")
+    # A PostgreSQL incremental chains onto the newest backup in BACKUP_DIR/base/, so the baseline
+    # has to be a job of the SAME entry - that is what makes them share one backup_dir. Split across
+    # two entries, a mismatched directory is not an error: `latest` comes back empty, the script
+    # takes a FULL baseline instead, reports success, and does so for ever. Nothing else would say
+    # so, which is why it is said here, in the listing an operator reads before running one.
+    # Grouped by backup_id, because `active` is already flattened one element per JOB - the first
+    # draft of this read each element as an entry and so reported every incremental in the estate.
+    by_entry: dict[str, set[str]] = {}
+    engines: dict[str, str] = {}
+    for one in active:
+        by_entry.setdefault(one.backup_id, set()).add(str(getattr(one, "job", "")).lower())
+        engines[one.backup_id] = str(getattr(one, "db_type", "")).lower()
+    for backup_id in sorted(by_entry):
+        if engines.get(backup_id) != "postgresql":
+            continue
+        levels = by_entry[backup_id]
+        if "database" in levels and "database_full" not in levels:
+            lines.append(f"    ! {backup_id}: an incremental with no database_full job beside "
+                         "it. A PostgreSQL incremental chains onto the newest backup in this "
+                         "entry's own backup_dir, so a baseline in another entry is not one it can "
+                         "reach - every run will take a FULL instead, and report success.")
+    lines.append("")
+    lines.append("Run one:  /spbot_backup <backup_id> <full|diff|log|->")
+    lines.append("Use - to let the schedule's own rule pick the level.")
+    note = hidden_note(hidden, noun="backup")
+    if note:
+        lines.append(note)
+    return "\n".join(lines)
+
+
+def _parse_env_overrides(values: list[str] | None) -> dict[str, str]:
+    """Parse repeated ``--env KEY=VALUE`` into a dict."""
+    overrides: dict[str, str] = {}
+    for item in values or []:
+        name, sep, value = str(item).partition("=")
+        if not sep or not name.strip():
+            raise ValueError(f"--env expects KEY=VALUE, got: {item!r}")
+        overrides[name.strip()] = value
+    return overrides
+
+
+def _retention_override(seconds: int | None, hours: int | None) -> int | None:
+    """One run's retention override, in seconds, from either spelling.
+
+    ``None`` means "use what the entry states", which is now always something: `cleanup_retention`
+    is mandatory on every restore entry and every backup job. The hours form is the old flag kept
+    working; it is multiplied here, in the open, rather than the configured seconds being divided
+    down somewhere inside the workflow - the division was `max(1, seconds // 3600)` and it turned
+    every retention under an hour into one hour without a word.
+    """
+    if seconds is not None:
+        return int(seconds)
+    if hours is not None:
+        return int(hours) * 3600
+    return None
+
+
+def _run_script_restore_on_demand(args, app_config, config_path: str, restore_id: str, log_scope: str) -> int:
+    """``restore-workflow --restore-id <script-driven entry>``: one run, forced, active or not."""
+    from dbabrain.backup_restore.workflow import run_scheduled_restores
+
+    logger = setup_app_logger(app_config, app_name=log_scope, log_scope=log_scope,
+                              enable_telegram_alerts=False, enable_console=False)
+    log_function_call(logger, function_name="backup_restore.restore-workflow")
+    summary = run_scheduled_restores(
+        app_config=app_config, config_path=config_path, logger=logger, restore_id=restore_id,
+        force=True, on_demand=True, key=getattr(args, "key", None),
+        key_base64=getattr(args, "key_base64", None),
+        point_in_time=str(getattr(args, "point_in_time", "") or ""))
+    sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
+    if summary.get("failed") or not summary.get("succeeded"):
+        return 1
+    # The line /spbot_restore's success_output_contains looks for, as the SQL Server path prints.
+    sys.stdout.write(f"restore-workflow completed status=SUCCESS restore_id={restore_id}\n")
+    return 0
+
+
+def _default_log_scope(command: str) -> str:
+    """Long-running, separately scheduled commands get their own runtime log file."""
+    if command == "restore-workflow":
+        return "restore_workflow"
+    if command in ("backup", "workflow"):
+        return "backup"
+    return "backup_restore"
+
+
+def _export_instance_bundle(config_path: str, backup_id: str) -> int:
+    """The bundle a restore on this node replays, exported here (1.88).
+
+    It is written by the node that runs the source's backup, beside that backup - so a node that
+    restores a source whose backup another node runs (the soak node; the worker runs the 100.250
+    backups) never has one, and the restore replays no login. Two scripts did this by hand (1.78,
+    1.88); this is that call, for any backup entry, active here or not. Read-only on the source.
+    """
+    import json as _json
+
+    from dbabrain.backup_restore.server_metadata import export_for_backup, instance_bundle_dir
+    from dbabrain.lib import response as _response
+
+    jobs = [job for job in load_backup_jobs(config_path) if job.backup_id == backup_id]
+    if not jobs:
+        result = _response.fail("export-instance-bundle", f"no backup entry {backup_id!r}.",
+                                kind="request")
+    elif not jobs[0].server_metadata.enabled:
+        result = _response.fail(
+            "export-instance-bundle",
+            f"{backup_id} has server_metadata off - there is no bundle to export for it.",
+            kind="not_configured")
+    else:
+        job = jobs[0]
+        bundle_dir = instance_bundle_dir(job.server_id)
+        exported = export_for_backup(job.server_metadata, server_id=job.server_id,
+                                     bundle_dir=bundle_dir)
+        ok = bool((exported or {}).get("ok", False))
+        result = (_response.ok("export-instance-bundle",
+                               message=f"{job.server_id}: bundle exported to {bundle_dir}.",
+                               data={"bundle_dir": str(bundle_dir), "export": exported})
+                  if ok else
+                  _response.fail("export-instance-bundle",
+                                 f"{job.server_id}: export failed - "
+                                 f"{(exported or {}).get('error') or 'see data.export'}",
+                                 data={"bundle_dir": str(bundle_dir), "export": exported}))
+    sys.stdout.write(_json.dumps(result, ensure_ascii=False, default=str) + chr(10))
+    return _response.exit_code(result)
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    set_key_env(getattr(args, "key", None), getattr(args, "key_base64", None))
+    logger = None
+    app_config = None
+    start_monotonic = time.monotonic()
+    started_at = utc_now_text()
+    pit_utc = None
+    _rw_meta: dict[str, object] = {}
+    # The restore ids this invocation is working on. Carried into every event (START, END and
+    # the failure path) so no message about a run can be published without naming it — and so
+    # a failure that happens before restore_configs resolve still says which ids it meant.
+    _id_meta: dict[str, object] = {}
+    # The id the operator typed, before anything resolves it: the refusal of an unknown id is the
+    # message that most needs to name it, and it said `backup_id=<unknown>` for NO_SUCH_BACKUP
+    # (the bot's refusal cases, 2026-09-25).
+    for _arg, _key in (("restore_id", "restore_id"), ("restore_id_pos", "restore_id"),
+                       ("backup_id", "backup_id")):
+        if getattr(args, _arg, None) and _key not in _id_meta:
+            _id_meta[_key] = str(getattr(args, _arg))
+    # Bound here, not where the entries are resolved: the failure path below reads it, and a
+    # command that fails *before* resolving its entries (an unknown restore_id, a bad config)
+    # would otherwise die with UnboundLocalError and hide the real error.
+    _notify: NotifyConfig = BACKUP_RESTORE_NOTIFY_DEFAULTS
+    try:
+        # getattr, not args.config: the inherited parser leaves the attribute unset when the flag
+        # was not given (see parse_args), which is what stops it clobbering the top-level value.
+        resolved_config_path = str(resolve_config_path("backup_restore", getattr(args, "config", None)))
+        # list-restores returns early — before patch_stdout — so the listing reaches
+        # real stdout (captured by the Telegram cli_execute caller), needs no key,
+        # and does not require a single resolved restore entry.
+        if args.command == "restore-by-id":
+            # The app reads the config and decrypts; dbabrain.common performs. This is the seam.
+            import json as _json
+
+            from dbabrain.backup_restore.restore_by_id import restore_by_id
+            from dbabrain.lib import response as _response
+
+            # This branch returns before the block that brackets every other subcommand, so it
+            # used to emit nothing at all: a restore driven from here - by an operator or by a
+            # Telegram command - was completely silent, while the same restore through the
+            # scheduler reported four events. Whoever starts a run brackets it, so this one
+            # brackets its own.
+            _rbid_app_config = load_config(resolved_config_path)
+            _rbid_id = str((_json.loads(args.request) or {}).get("restore_id") or "")
+            _rbid_meta = {"restore_id": _rbid_id}
+            _rbid_started = utc_now_text()
+            _rbid_notify = _restore_entry_notify(resolved_config_path, _rbid_id)
+
+            def _rbid_event(phase: str, message: str, extra: dict[str, object] | None = None,
+                            level: str = "logging", error_text: str | None = None) -> None:
+                emit_backup_restore_event(
+                    app_config=_rbid_app_config, command="restore-by-id", phase=phase,
+                    level=level, message=message, started_at=_rbid_started,
+                    error_text=error_text, metadata={**_rbid_meta, **(extra or {})},
+                    notify=_rbid_notify,
+                )
+
+            _rbid_event("START", f"Restore {_rbid_id} started.")
+            try:
+                payload = _json.loads(args.request)
+                data = restore_by_id(payload, key=getattr(args, "key", None),
+                                     key_base64=getattr(args, "key_base64", None),
+                                     on_phase=lambda p, m, e=None: _rbid_event(p, m, e))
+                result = _response.ok("restore-by-id",
+                                      message=f"{data['restore_id']} restored ({data['db_type']}).",
+                                      data=data)
+                _rbid_warnings = [str(w) for w in (data.get("warnings") or [])]
+                _rbid_event("END", f"Restore {_rbid_id} finished: done."
+                            + (f" With a warning - {'; '.join(_rbid_warnings)}" if _rbid_warnings else ""),
+                            {"warnings": _rbid_warnings} if _rbid_warnings else None,
+                            level="warning" if _rbid_warnings else "logging")
+            except Exception as exc:  # noqa: BLE001 - reported as JSON, like the common commands.
+                result = _response.fail("restore-by-id", str(exc))
+                _rbid_event("ERROR", f"Restore {_rbid_id} FAILED.", level="error",
+                            error_text=str(exc)[-2000:])
+            sys.stdout.write(_json.dumps(result, ensure_ascii=False, default=str) + chr(10))
+            return _response.exit_code(result)
+
+        if args.command in {"backup-add", "restore-add"}:
+            return _registration_command(args)
+        if args.command == "export-instance-bundle":
+            return _export_instance_bundle(resolved_config_path, str(args.backup_id))
+        if args.command == "list-backups":
+            sys.stdout.write(_format_backup_list(load_backup_jobs(resolved_config_path)) + "\n")
+            return 0
+        if args.command == "list-restores":
+            sys.stdout.write(_format_restore_list(
+                load_restore_configs(resolved_config_path),
+                load_script_restores(resolved_config_path),
+            ) + "\n")
+            return 0
+        app_config = load_config(resolved_config_path)
+        log_scope = os.getenv(LOG_SCOPE_ENV_VAR) or _default_log_scope(args.command)
+        patch_stdout(app_config.log_dir / f"{log_scope}_runtime.log", app_name=log_scope, sanitizer=sanitize_text)
+        # backup returns early: it is driven by backup_restore.backups, not by the restore
+        # entries the rest of main() resolves, and it must run even with no restores configured.
+        if args.command == "workflow":
+            logger = setup_app_logger(app_config, app_name=log_scope, log_scope=log_scope,
+                                      enable_telegram_alerts=False, enable_console=False)
+            log_function_call(logger, function_name="backup_restore.workflow")
+            summary = run_workflow(
+                app_config=app_config,
+                config_path=resolved_config_path,
+                logger=logger,
+                backup_id=getattr(args, "backup_id", None),
+                job_name=getattr(args, "job", None),
+                restore_id=getattr(args, "restore_id", None),
+                key=getattr(args, "key", None),
+                key_base64=getattr(args, "key_base64", None),
+                dry_run=bool(getattr(args, "dry_run", False)),
+                force=bool(getattr(args, "force", False)),
+                env_overrides=_parse_env_overrides(getattr(args, "env", None)),
+                backup_type=getattr(args, "backup_type", None),
+                copy_hours=getattr(args, "copy_hours", None),
+                delete_retention=_retention_override(
+                    getattr(args, "delete_retention_seconds", None),
+                    getattr(args, "delete_hours", None)),
+                skip_backup=bool(getattr(args, "skip_backup", False)),
+                skip_restore=bool(getattr(args, "skip_restore", False)),
+            )
+            sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+            return 1 if summary.get("failed") else 0
+        if args.command == "backup":
+            logger = setup_app_logger(app_config, app_name=log_scope, log_scope=log_scope,
+                                      enable_telegram_alerts=False, enable_console=False)
+            log_function_call(logger, function_name="backup_restore.backup")
+            summary = run_backup(
+                app_config=app_config,
+                config_path=resolved_config_path,
+                logger=logger,
+                backup_id=getattr(args, "backup_id", None),
+                job_name=getattr(args, "job", None),
+                key=getattr(args, "key", None),
+                key_base64=getattr(args, "key_base64", None),
+                dry_run=bool(getattr(args, "dry_run", False)),
+                force=bool(getattr(args, "force", False)),
+                env_overrides=_parse_env_overrides(getattr(args, "env", None)),
+                backup_type=getattr(args, "backup_type", None),
+            )
+            sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+            return 1 if summary.get("failed") else 0
+        if args.command == "prune-backups":
+            from dbabrain.backup_restore.prune import run_prune
+
+            logger = setup_app_logger(app_config, app_name=log_scope, log_scope=log_scope,
+                                      enable_telegram_alerts=False, enable_console=False)
+            log_function_call(logger, function_name="backup_restore.prune")
+            summary = run_prune(
+                app_config=app_config,
+                config_path=resolved_config_path,
+                logger=logger,
+                backup_id=getattr(args, "backup_id", None),
+                job_name=getattr(args, "job", None),
+                retention_seconds=_retention_override(
+                    getattr(args, "retention_seconds", None),
+                    (getattr(args, "retention_days", None) or 0) * 24 or None),
+                mode=getattr(args, "mode", "age"),
+                key=getattr(args, "key", None),
+                key_base64=getattr(args, "key_base64", None),
+                apply=bool(getattr(args, "apply", False)),
+            )
+            sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+            return 1 if summary.get("failed") else 0
+        restore_configs = load_restore_configs(resolved_config_path)
+        # restore_id: --restore-id flag takes precedence; positional restore_id_pos is the shorthand.
+        restore_id_filter = getattr(args, "restore_id", None) or getattr(args, "restore_id_pos", None)
+        if restore_id_filter:
+            smb_why_not = unusable_reason(restore_configs, restore_id_filter)
+            restore_configs = [config for config in restore_configs if config.restore_id == restore_id_filter]
+            if not restore_configs:
+                # A script-driven entry (one that declares `script`: the Oracle, PostgreSQL and
+                # container-to-container SQL Server drills) is not in this list at all — it is
+                # run by `workflow`, through run_scheduled_restores. Reporting it as "no entry
+                # found" sent an operator looking for a config problem that did not exist, on an
+                # entry sitting in the file they were reading. Name the command that runs it.
+                script_jobs = load_script_restores(resolved_config_path)
+                why_not = smb_why_not or unusable_reason(script_jobs, restore_id_filter)
+                if why_not:
+                    # An inactive entry the loader could not read: its own reason, not "no entry".
+                    raise ValueError(why_not)
+                script_ids = {job.restore_id for job in script_jobs}
+                if restore_id_filter in script_ids and args.command == "restore-workflow":
+                    # Run it, by the scheduler's own runner. This used to refuse, naming a CLI
+                    # command - and `/spbot_restore` runs exactly this, so not one PostgreSQL,
+                    # Oracle or container SQL Server drill could be started from the bot
+                    # (2026-09-24). The runner writes the restore-workflow END/ERROR rows the
+                    # bot's completion probe reads, under this restore_id.
+                    return _run_script_restore_on_demand(args, app_config, resolved_config_path,
+                                                         restore_id_filter, log_scope)
+                if restore_id_filter in script_ids:
+                    raise ValueError(
+                        f"restore_id={restore_id_filter} is a script-driven restore (it declares "
+                        f"`script` in restore_config.json), which `{args.command}` does not run. "
+                        f"Use: python -m dbabrain.backup_restore.cli workflow "
+                        f"--restore-id {restore_id_filter} [--force]"
+                    )
+                raise ValueError(f"No backup_restore entry found with restore_id={restore_id_filter}.")
+            if len(restore_configs) > 1:
+                raise ValueError(
+                    f"Ambiguous config: {len(restore_configs)} entries share restore_id={restore_id_filter!r}. "
+                    f"Each restore_id must be unique in restore_config.json."
+                )
+        elif getattr(args, "source_id", None):
+            restore_configs = [config for config in restore_configs if config.source_id == args.source_id]
+            if not restore_configs:
+                raise ValueError(f"No backup_restore source found with source_id={args.source_id}.")
+        if args.command == "restore-workflow" and not restore_id_filter:
+            restore_configs = [config for config in restore_configs if config.active]
+            if not restore_configs:
+                raise ValueError("No active backup_restore workflow entries found.")
+        if not restore_configs:
+            # An install with nothing configured loads as no entries, which is right for the
+            # scheduled `workflow` above - it has nothing due and says so. A command asked to act
+            # on one restore has nothing to act on, and without this it reached
+            # `restore_configs[0]` and failed as `IndexError: list index out of range`: the same
+            # unreadable error the empty-config fix of 2026-09-11 removed, one line further on.
+            raise ValueError(
+                f"`{args.command}` needs a restore entry and none is configured: "
+                "data/restore_config.json declares no `backup_restore.restores`. Add one through "
+                "the bot or by hand; `list-restores` shows what the file declares."
+            )
+        # Apply --execution-mode CLI override (per-run only, does not persist to config file).
+        execution_mode_override = getattr(args, "execution_mode", None)
+        if execution_mode_override is not None:
+            restore_configs = [dataclasses.replace(config, execution_mode=execution_mode_override) for config in restore_configs]
+        restore_config = restore_configs[0]
+        _id_meta = {"restore_ids": [config.restore_id for config in restore_configs]}
+        if len(restore_configs) == 1:
+            _id_meta["restore_id"] = restore_config.restore_id
+        # These events cover every selected entry, so a level is only overridden when they all
+        # agree on it — see merge_notify_configs.
+        _notify = merge_notify_configs([config.notify for config in restore_configs])
+        logger = setup_app_logger(app_config, app_name=log_scope, log_scope=log_scope, enable_telegram_alerts=False, enable_console=False)
+        log_function_call(logger, function_name=f"backup_restore.{args.command}")
+        if args.command == "restore-workflow" and getattr(args, "point_in_time", None):
+            pit_utc = parse_point_in_time(args.point_in_time)
+        restore_mode = "POINT_IN_TIME" if pit_utc is not None else "LATEST"
+        if args.command == "restore-workflow":
+            _mappings = [_build_restore_mapping(c) for c in restore_configs]
+            _rw_meta = {
+                "restore_mode": restore_mode,
+                "restore_count": len(restore_configs),
+                "mappings": _mappings,
+            }
+            if len(restore_configs) == 1:
+                _cfg0 = restore_configs[0]
+                _rw_meta["restore_id"] = _cfg0.restore_id
+                _rw_meta["target_id"] = _cfg0.target_id
+                _rw_meta["target_host"] = _cfg0.vm_credential_target
+            if pit_utc is not None:
+                _rw_meta["point_in_time_utc"] = pit_utc.isoformat()
+                _rw_meta["point_in_time_original"] = getattr(args, "point_in_time", None)
+        if args.command == "restore-workflow":
+            if len(restore_configs) == 1:
+                _cfg = restore_configs[0]
+                _start_message = f"started restore_id={_cfg.restore_id}"
+                _start_meta: dict[str, object] = {
+                    "restore_id": _cfg.restore_id,
+                    "source_id": _cfg.source_id,
+                    "target_id": _cfg.target_id,
+                    "target_host": _cfg.vm_credential_target,
+                    "target_os_type": _cfg.vm_platform,
+                    "execution_mode": _cfg.execution_mode,
+                    **_rw_meta,
+                }
+            else:
+                _start_message = f"started restore_count={len(restore_configs)}"
+                _start_meta = dict(_rw_meta)
+                _start_meta["restore_ids"] = [c.restore_id for c in restore_configs]
+        elif len(restore_configs) == 1:
+            _cfg = restore_configs[0]
+            _start_message = f"started restore_id={_cfg.restore_id}"
+            _start_meta = {
+                "restore_id": _cfg.restore_id,
+                "source_id": _cfg.source_id,
+                "target_id": _cfg.target_id,
+                "target_host": _cfg.vm_credential_target,
+                "target_os_type": _cfg.vm_platform,
+                "execution_mode": _cfg.execution_mode,
+            }
+        else:
+            _start_message = f"started sources={len(restore_configs)}"
+            _start_meta = {
+                "restore_ids": [config.restore_id for config in restore_configs],
+                "source_ids": [config.source_id for config in restore_configs],
+                "target_ids": [config.target_id for config in restore_configs],
+            }
+        emit_backup_restore_event(
+            app_config=app_config,
+            command=args.command,
+            phase="START",
+            level="logging",
+            message=_start_message,
+            logger=logger,
+            started_at=started_at,
+            metadata={**_id_meta, **_start_meta},
+            notify=_notify,
+        )
+
+        if args.command == "copy-backup":
+            source_outputs = []
+            for config in restore_configs:
+                if args.hours is not None:
+                    config = dataclasses.replace(config, copy_recent_hours=int(args.hours))
+                result = run_copy_backup(config, logger=logger, force=bool(getattr(args, "force", False)))
+                source_outputs.append(
+                    {
+                        "source_id": config.source_id,
+                        "returncode": result.returncode,
+                        "prod_backup_share": str(config.prod_backup_share),
+                        "vm_import_unc": str(config.vm_import_unc),
+                        "copy_recent_hours": config.copy_recent_hours,
+                        "copy_file_patterns": list(config.copy_file_patterns),
+                        "files_considered": result.files_considered,
+                        "copied": result.copied,
+                        "skipped": result.skipped,
+                    }
+                )
+            output = {
+                "status": "SUCCESS",
+                "sources_considered": len(source_outputs),
+                "sources": source_outputs,
+            }
+        elif args.command == "delete-backup":
+            source_outputs = []
+            override = _retention_override(args.retention_seconds, args.hours)
+            for config in restore_configs:
+                if override is not None:
+                    config = dataclasses.replace(config, cleanup_retention=override)
+                result = run_delete_backup(config, logger=logger,
+                                           dry_run=bool(getattr(args, "dry_run", False)))
+                source_outputs.append(
+                    {
+                        "source_id": config.source_id,
+                        "target_id": config.target_id,
+                        "returncode": result.returncode,
+                        "target_backup_dir": str(config.vm_import_unc),
+                        "cleanup_retention": result.cleanup_retention,
+                        "files_considered": result.files_considered,
+                        "deleted": result.deleted,
+                        "skipped": getattr(result, "skipped", 0),
+                        "dry_run": bool(getattr(args, "dry_run", False)),
+                    }
+                )
+            output = {
+                "status": "SUCCESS",
+                "dry_run": bool(getattr(args, "dry_run", False)),
+                "sources_considered": len(source_outputs),
+                "sources": source_outputs,
+            }
+        elif args.command == "import-certificate":
+            from dbabrain.backup_restore.certificate import ensure_source_certificate
+
+            source_outputs = [
+                ensure_source_certificate(config=config, dry_run=bool(args.dry_run), logger=logger)
+                for config in restore_configs
+            ]
+            output = {
+                "status": "DRY_RUN" if args.dry_run else "SUCCESS",
+                "sources_considered": len(source_outputs),
+                "sources": source_outputs,
+            }
+        elif args.command == "restore-latest":
+            if args.backup_file:
+                selected_config = _find_config_for_backup(Path(args.backup_file), restore_configs)
+                output = run_restore_database(
+                    config=selected_config,
+                    dbabrain_config=app_config,
+                    backup_file=Path(args.backup_file),
+                    dry_run=bool(args.dry_run),
+                    logger=logger,
+                )
+            elif args.database:
+                database = DatabaseRestoreMapping(
+                    source_database=args.database,
+                    target_database=args.target_database or "",
+                )
+                output = run_restore_database(
+                    config=restore_config,
+                    dbabrain_config=app_config,
+                    database=database,
+                    dry_run=bool(args.dry_run),
+                    logger=logger,
+                )
+            else:
+                source_outputs = [
+                    run_restore_all_latest(config=config, dbabrain_config=app_config, dry_run=bool(args.dry_run), logger=logger)
+                    for config in restore_configs
+                ]
+                # An aggregate must not be greener than the sources it aggregates - the same rule
+                # run_restore_instance now applies to its databases, for the same reason.
+                aggregate_status = "DRY_RUN" if args.dry_run else (
+                    "SUCCESS"
+                    if all(str(source.get("status")) in {"SUCCESS", "DRY_RUN"}
+                           for source in source_outputs)
+                    else "FAILED"
+                )
+                output = {
+                    "status": aggregate_status,
+                    "overall_status": aggregate_status,
+                    "sources_considered": len(source_outputs),
+                    **_summarize_restore_sources(source_outputs),
+                    "sources": source_outputs,
+                }
+        elif args.command == "restore-workflow":
+            def _rw_announce(phase: str, message: str, extra: dict[str, object] | None = None) -> None:
+                # Same events the scheduler emits. A run reports the same way whether an operator
+                # started it or the daemon did - that is the whole contract.
+                emit_backup_restore_event(
+                    app_config=app_config, command=args.command, phase=phase, level="logging",
+                    message=message, logger=logger, started_at=utc_now_text(),
+                    metadata={**_id_meta, **_rw_meta, **(extra or {})}, notify=_notify,
+                )
+
+            # Instance metadata replays here too, not only on the scheduled path. It used to live
+            # solely in run_scheduled_restores, so `restore-workflow` silently skipped the logins,
+            # roles and Agent jobs and said nothing about having skipped them - the same
+            # "behaviour depends on how you invoked it" asymmetry that left restore-by-id mute.
+            from dbabrain.backup_restore.workflow import replay_engine_phase
+            from dbabrain.lib import instance_bundle as _instance
+
+            _meta_lines, _meta_reports = "", {}
+            for _cfg in restore_configs:
+                _line, _report = replay_engine_phase(
+                    _cfg, phase=_instance.PRE_DATABASE, announce=_rw_announce)
+                _meta_lines += _line
+                _meta_reports.update(_report)
+
+            output = run_restore_workflow(
+                restore_configs=restore_configs,
+                app_config=app_config,
+                copy_hours=args.copy_hours,
+                delete_retention=_retention_override(
+                    args.delete_retention_seconds, args.delete_hours),
+                dry_run=bool(args.dry_run),
+                force=bool(args.force),
+                logger=logger,
+                point_in_time_utc=pit_utc,
+                on_phase=_rw_announce,
+            )
+
+            # Only after a restore that worked: Agent job steps name databases that have to exist.
+            for _cfg in restore_configs:
+                _line, _report = replay_engine_phase(
+                    _cfg, phase=_instance.POST_DATABASE, announce=_rw_announce)
+                _meta_lines += _line
+                _meta_reports.update(_report)
+            if _meta_reports:
+                output["server_metadata"] = _meta_reports
+        else:
+            raise ValueError(f"Unknown command: {args.command}")
+
+        duration_ms = int((time.monotonic() - start_monotonic) * 1000)
+        safe_output = sanitize_value(output)
+        _finished_rid = f"restore_id={_rw_meta['restore_id']} " if _rw_meta.get("restore_id") else ""
+        log_event(logger, level="logging", message=sanitize_text(f"{_finished_rid}backup_restore.{args.command} finished status={output.get('status')}"))
+        summary_output = _summarize_command_output(args.command, safe_output)
+        end_level, end_message, end_metadata = _build_end_event(command=args.command, output=summary_output)
+        if args.command == "restore-workflow" and _rw_meta:
+            end_metadata.update(_rw_meta)
+            end_metadata["restore_mode"] = summary_output.get("restore_mode", restore_mode)
+            if summary_output.get("point_in_time_utc"):
+                end_metadata["point_in_time_utc"] = summary_output["point_in_time_utc"]
+            for _field in ("databases_considered", "success", "failed", "skipped", "duration_seconds"):
+                if summary_output.get(_field) is not None:
+                    end_metadata[_field] = summary_output[_field]
+            if summary_output.get("per_restore_results"):
+                end_metadata["per_restore_results"] = summary_output["per_restore_results"]
+        emit_backup_restore_event(
+            app_config=app_config,
+            command=args.command,
+            phase="END",
+            level=end_level,
+            message=sanitize_text(end_message),
+            logger=logger,
+            started_at=started_at,
+            finished_at=utc_now_text(),
+            duration_ms=duration_ms,
+            metadata={**_id_meta, **end_metadata},
+            notify=_notify,
+        )
+        if args.command == "restore-workflow":
+            print(_format_restore_workflow_stdout(summary_output))
+        else:
+            print(json.dumps(safe_output, ensure_ascii=False, indent=2))
+        return 0
+    except Exception as exc:  # noqa: BLE001 - command-line failure path.
+        if logger:
+            _failed_command = getattr(args, "command", "cli")
+            _, _failed_id = resolve_run_id(_failed_command, _id_meta)
+            log_event(logger, level="critical", message=sanitize_text(
+                f"backup_restore.{_failed_command} failed restore_id={_failed_id}: {type(exc).__name__}: {exc}"))
+        if app_config:
+            error_metadata: dict[str, object] = {**_id_meta, **_rw_meta}
+            if isinstance(exc, RestoreWorkflowError):
+                error_metadata.update(exc.metadata)
+            error_metadata.update(_exception_metadata(exc, app_config=app_config, log_scope=os.getenv(LOG_SCOPE_ENV_VAR) or "backup_restore"))
+            emit_backup_restore_event(
+                app_config=app_config,
+                command=getattr(args, "command", "cli"),
+                phase="ERROR",
+                level="critical",
+                message=sanitize_text(f"failed: {exc}"),
+                logger=logger,
+                started_at=started_at,
+                finished_at=utc_now_text(),
+                duration_ms=int((time.monotonic() - start_monotonic) * 1000),
+                error_text=sanitize_text(f"{type(exc).__name__}: {exc}"),
+                metadata=error_metadata or None,
+                notify=_notify,
+            )
+        print(sanitize_text(f"ERROR: {exc}"), file=sys.stderr)
+        return 1
+
+
+def _restore_entry_notify(config_path: str, restore_id: str) -> NotifyConfig:
+    """The entry's own notify block, so a manual run reports where the scheduled one does.
+
+    Looked up rather than defaulted: `restore` and `backup` go to different chats, and falling
+    back to the app defaults would put a hand-run restore in whichever chat the defaults name -
+    quietly, and only for the runs somebody is watching most closely.
+    """
+    for loader in (load_script_restores, load_restore_configs):
+        try:
+            for entry in loader(config_path):
+                if getattr(entry, "restore_id", "") == restore_id:
+                    return entry.notify
+        except Exception:  # noqa: BLE001 - a bad entry must not stop the run reporting itself.
+            continue
+    return BACKUP_RESTORE_NOTIFY_DEFAULTS
+
+
+def _find_config_for_backup(backup_file: Path, configs: list[BackupRestoreConfig]) -> BackupRestoreConfig:
+    for config in configs:
+        try:
+            backup_file.relative_to(config.vm_import_unc)
+        except ValueError:
+            continue
+        return config
+    return configs[0]
+
+
+def _exception_metadata(exc: Exception, *, app_config: object, log_scope: str) -> dict[str, object]:
+    text = sanitize_text(str(exc))
+    metadata: dict[str, object] = {
+        "exception_type": type(exc).__name__,
+        "exception_message": text,
+        "error_tail": summarize_error_tail(text),
+    }
+    log_dir = getattr(app_config, "log_dir", None)
+    if log_dir is not None:
+        metadata["log_file_path"] = str(Path(log_dir) / f"{log_scope}_runtime.log")
+    stdout_tail = _section_tail(text, "stdout:")
+    stderr_tail = _section_tail(text, "stderr:")
+    if stdout_tail:
+        metadata["stdout_tail"] = stdout_tail
+    if stderr_tail:
+        metadata["stderr_tail"] = stderr_tail
+    sql_error = _sql_error_text(text)
+    if sql_error:
+        metadata["sql_error_text"] = sql_error
+    return metadata
+
+
+def _section_tail(text: str, marker: str, *, max_lines: int = 12) -> str:
+    index = text.lower().find(marker.lower())
+    if index < 0:
+        return ""
+    section = text[index + len(marker):]
+    for next_marker in ("stdout:", "stderr:"):
+        next_index = section.lower().find(next_marker)
+        if next_index > 0:
+            section = section[:next_index]
+    lines = [line for line in section.strip().splitlines() if line.strip()]
+    return "\n".join(lines[-max_lines:])
+
+
+def _sql_error_text(text: str, *, max_lines: int = 12) -> str:
+    lines = []
+    for line in text.splitlines():
+        lowered = line.lower()
+        if (
+            lowered.startswith("msg ")
+            or "restore " in lowered
+            or "alter database" in lowered
+            or "sql server" in lowered
+        ):
+            lines.append(line)
+    return "\n".join(lines[-max_lines:])
+
+
+def point_in_time_window_start(point_in_time_utc: dt.datetime | None, hours: int) -> dt.datetime | None:
+    """Where a point-in-time restore's copy window begins, or ``None`` for no lower bound.
+
+    ``hours <= 0`` means "every matching file" - the copy step's own rule for ``copy_recent_hours``
+    - so a point-in-time restore then reaches back without limit. ``point - 0 h`` made the window
+    zero wide (an inverted one for a negative value) and the copy found nothing to take.
+    """
+    if point_in_time_utc is None or int(hours) <= 0:
+        return None
+    return point_in_time_utc - dt.timedelta(hours=int(hours))
+
+
+def run_restore_workflow(
+    *,
+    restore_configs: list[BackupRestoreConfig],
+    app_config: object,
+    copy_hours: int | None = None,
+    delete_retention: int | None = None,
+    dry_run: bool = False,
+    force: bool = False,
+    logger: object | None = None,
+    point_in_time_utc: object = None,
+    on_phase: object = None,
+) -> dict[str, object]:
+    """``on_phase(phase, message, extra)`` reports the copy boundaries, when a caller supplies it.
+
+    The engine path copies inside this function, so without it a restore went ``START`` -> silence
+    -> ``END`` while the script path (which copies in ``restore_by_id``) announced both. Same
+    operation, different reporting, decided by which branch happened to run it.
+    """
+    # Optional and never fatal: reporting is not the restore. `events.announce` is the one copy
+    # of that rule — this was a fourth (2026-08-16).
+    def _say(phase: str, message: str, extra: dict[str, object] | None = None) -> None:
+        announce(on_phase, phase, message, extra)
+
+    restore_mode = "POINT_IN_TIME" if point_in_time_utc is not None else "LATEST"
+    mappings = [_build_restore_mapping(c) for c in restore_configs]
+    summary: dict[str, object] = {
+        "status": "RUNNING",
+        "overall_workflow_status": "RUNNING",
+        "restore_mode": restore_mode,
+        "point_in_time_utc": point_in_time_utc.isoformat() if point_in_time_utc is not None and hasattr(point_in_time_utc, "isoformat") else None,
+        "restore_count": len(restore_configs),
+        "mappings": mappings,
+        "per_restore_results": None,
+        "copy-backup": None,
+        "restore-latest": None,
+        "verify-restore": None,
+        "delete-backup": None,
+    }
+    _rw_restore_id = restore_configs[0].restore_id if len(restore_configs) == 1 else ""
+    _rid = f"restore_id={_rw_restore_id} " if _rw_restore_id else ""
+    workflow_start = time.monotonic()
+    if logger:
+        log_event(logger, level="logging", message=f"{_rid}restore-workflow start restore_mode={restore_mode}")
+    try:
+        # Preflight: validate (and if possible prepare) each target before touching any files.
+        # Windows: checks UNC share, tries WinRM create, then admin-share fallback.
+        # Linux: no-op — SSH/SFTP handles dir creation lazily.
+        # run_target_preflight returns a patched config when admin-share fallback is used
+        # (vm_import_unc overridden to admin share path). Scoped per restore_id.
+        _preflighted: list[BackupRestoreConfig] = []
+        with _workflow_phase(logger, f"{_rid}restore-workflow preflight", summary=summary, current_phase="preflight", restore_count=len(restore_configs)):
+            for config in restore_configs:
+                # The space check in here counts the chain the copy will take, and a point in time
+                # has a chain of its own (0.26.0 §1.74). It leaves out what is already staged
+                # unless the copy is forced, which writes those files again (§1.76).
+                measured = (dataclasses.replace(config, copy_window_end_utc=point_in_time_utc)
+                            if point_in_time_utc is not None else config)
+                override = run_target_preflight(measured, logger=logger, recopy=force,
+                                                dry_run=dry_run)
+                _preflighted.append(override if override is not None else config)
+        restore_configs = _preflighted
+
+        # How far back each entry copies: the run's --copy-hours when one was given, else the entry's
+        # own copy_recent_hours. Until 0.25.0 the flag defaulted to 24 and always won, so an entry's
+        # copy_recent_hours - set, say, to reach a weekly FULL - was read, parsed and never used
+        # (the 100.250 restore on the 0.25.0 soak copied 24 h of LOGs and no FULL).
+        def _hours(config: BackupRestoreConfig) -> int:
+            return int(copy_hours) if copy_hours is not None else int(config.copy_recent_hours)
+
+        def _window_start(config: BackupRestoreConfig):
+            return point_in_time_window_start(point_in_time_utc, _hours(config))
+
+        copy_window_end = point_in_time_utc if point_in_time_utc is not None else None
+        copy_window_start = _window_start(restore_configs[0]) if restore_configs else None
+        with _workflow_phase(
+            logger,
+            f"{_rid}restore-workflow calculating-copy-window",
+            summary=summary,
+            current_phase="calculating-copy-window",
+            restore_mode=restore_mode,
+            copy_hours=_hours(restore_configs[0]) if restore_configs else copy_hours,
+            window_start_utc=copy_window_start.isoformat() if copy_window_start is not None else None,
+            window_end_utc=copy_window_end.isoformat() if copy_window_end is not None else None,
+        ):
+            pass
+        copy_outputs = []
+        if dry_run:
+            # **A dry run copies nothing** (0.27.0 item 1.93). It ran the whole copy until then -
+            # tens of GB over SMB onto the target - and rehearsed only the restore. The space check
+            # in the preflight has already said what the copy would write; the restore below is
+            # rehearsed on what is staged now.
+            if logger:
+                log_event(logger, level="logging",
+                          message=f"{_rid}restore-workflow dry run: the copy is not run")
+            summary["copy-backup"] = {"status": "DRY_RUN", "sources": []}
+        if not dry_run:
+            _say("COPY_START", f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+                               f"copy started ({len(restore_configs)} source(s)).")
+        with _workflow_phase(logger, f"{_rid}restore-workflow copy-backup", summary=summary, current_phase="copy-backup", source_count=len(restore_configs)):
+            for config in ([] if dry_run else restore_configs):
+                copy_window_start = _window_start(config)
+                step_config = dataclasses.replace(
+                    config,
+                    copy_recent_hours=_hours(config),
+                    copy_window_start_utc=copy_window_start,
+                    copy_window_end_utc=copy_window_end,
+                )
+                result = run_copy_backup(step_config, logger=logger, force=force)
+                copy_outputs.append(
+                    {
+                        "source_id": step_config.source_id,
+                        "returncode": result.returncode,
+                        "copy_recent_hours": step_config.copy_recent_hours,
+                        "copy_window_start_utc": copy_window_start.isoformat() if copy_window_start is not None else None,
+                        "copy_window_end_utc": copy_window_end.isoformat() if copy_window_end is not None else None,
+                        "files_considered": result.files_considered,
+                        "copied": result.copied,
+                        "skipped": result.skipped,
+                    }
+                )
+                if result.returncode != 0:
+                    raise errors.OperationFailed(f"copy-backup failed for source_id={step_config.source_id} returncode={result.returncode}")
+                if result.files_considered == 0:
+                    raise errors.OperationFailed(
+                        "copy-backup selected no files "
+                        f"for source_id={step_config.source_id} restore_id={step_config.restore_id or 'unknown'} "
+                        f"window_start_utc={copy_window_start.isoformat() if copy_window_start is not None else 'now-minus-hours'} "
+                        f"window_end_utc={copy_window_end.isoformat() if copy_window_end is not None else 'unbounded'}"
+                        + newest_backup_hint(step_config)
+                    )
+        if not dry_run:
+            summary["copy-backup"] = {"status": "SUCCESS", "sources": copy_outputs}
+            _copied = sum(int(o.get("copied") or 0) for o in copy_outputs)
+            _skipped = sum(int(o.get("skipped") or 0) for o in copy_outputs)
+            _say("COPY_DONE",
+                 f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+                 f"copy finished - {_copied} file(s), {_skipped} already present.",
+                 {"copied": _copied, "skipped": _skipped})
+
+        with _workflow_phase(logger, f"{_rid}restore-workflow restore-preparation", summary=summary, current_phase="restore-preparation", source_count=len(restore_configs)):
+            restore_inputs = list(restore_configs)
+        with _workflow_phase(logger, f"{_rid}restore-workflow restore-execution", summary=summary, current_phase="restore-execution", source_count=len(restore_inputs)):
+            restore_outputs = [
+                run_restore_all_latest(config=config, dbabrain_config=app_config, dry_run=dry_run, logger=logger, point_in_time_utc=point_in_time_utc)
+                for config in restore_inputs
+            ]
+        restore_counts = _count_restore_statuses(restore_outputs)
+        failed_databases = _failed_restore_databases(restore_outputs)
+        summary["restore-latest"] = {
+            # Computed, not asserted. This said `SUCCESS` whenever no exception escaped, while the
+            # `failed` count directly below it was already right - so on 2026-09-15 a database left
+            # mid-restore by `Msg 5149` was recorded FAILED in `backup_restore_history` and
+            # announced to the group as `status=done`. The count was never the missing part.
+            "status": "DRY_RUN" if dry_run else ("FAILED" if failed_databases else "SUCCESS"),
+            "sources": restore_outputs,
+        }
+        summary.update(restore_counts)
+        per_restore_results = _build_per_restore_results(restore_configs, restore_outputs)
+        summary["per_restore_results"] = per_restore_results
+        if failed_databases:
+            # Raised rather than returned, so the one `except` below sets the status, the error tail
+            # and the alert - the shape `delete-backup` already uses for a non-zero return code.
+            #
+            # **And this deliberately stops before the retention cleanup.** A restore drill is what
+            # proves the backups are restorable; pruning them in the same run that failed to restore
+            # one is exactly backwards. Do not "fix" the early return.
+            raise errors.OperationFailed(f"{_restore_failure_text(restore_outputs, failed_databases)} "
+                               "Retention cleanup was not run.")
+
+        # **The last question, and the only one that matters to whoever asked for the restore:
+        # can the database be opened?** Every step above reports on the command it ran, and a
+        # command can return having left a database mid-restore - which is exactly what happened on
+        # 2026-09-15, when `Msg 5149` stopped a restore and the run still announced `status=done`.
+        # `verify-restore` runs a real query rather than reading a state column, because a database
+        # can read ONLINE and still refuse one while it finishes an upgrade step.
+        #
+        # `restore_by_id` has planned this as its last step for all three engines since it was
+        # written; this path never called it. So the check existed and the nightly job skipped it.
+        verify_outputs: list[dict[str, object]] = []
+        if not dry_run:
+            _say("VERIFY_START",
+                 f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+                 f"checking the restored database(s) can be opened.")
+            with _workflow_phase(logger, f"{_rid}restore-workflow verify-restore", summary=summary,
+                                 current_phase="verify-restore", source_count=len(restore_configs)):
+                try:
+                    verify_secrets = _load_secrets(data_dir=None, key=None, key_base64=None)
+                except Exception as exc:  # noqa: BLE001 - no key is a state, not a broken restore
+                    # The restore itself got its credentials some other way (a generated batch, an
+                    # ssh session). Failing the whole run because *this* check could not read the
+                    # store would make the check more fragile than the work it is checking.
+                    verify_secrets = {}
+                    _verify_unavailable = sanitize_text(str(exc))
+                else:
+                    _verify_unavailable = ""
+                # Each entry with its own restore's answer: one that states restore_all_databases is
+                # checked on every database its run restored, by the backup's name (1.101).
+                for config, restore_output in zip(restore_inputs, restore_outputs):
+                    request, why_not = _verify_plan(config, verify_secrets,
+                                                    _restored_databases(restore_output))
+                    if request is None:
+                        verify_outputs.append({
+                            "restore_id": config.restore_id, "target_id": config.target_id,
+                            "status": "SKIPPED",
+                            "reason": _verify_unavailable or why_not,
+                        })
+                        continue
+                    outcome = common_cli.run("verify-restore", request)
+                    verify_outputs.append({
+                        "restore_id": config.restore_id, "target_id": config.target_id,
+                        "status": "SUCCESS" if outcome.get("ok") else "FAILED",
+                        "checked": outcome.get("checked"), "failed": outcome.get("failed"),
+                        "databases": outcome.get("databases"),
+                    })
+            unusable = [
+                str(db.get("database_name"))
+                for item in verify_outputs
+                for db in (item.get("databases") or [])
+                if isinstance(db, dict) and not db.get("ok")
+            ]
+            _checked = sum(int(item.get("checked") or 0) for item in verify_outputs)
+            _skipped_entries = sum(1 for item in verify_outputs if item.get("status") == "SKIPPED")
+            summary["verify-restore"] = {
+                "status": "FAILED" if unusable else "SUCCESS",
+                "checked": _checked, "failed": len(unusable),
+                "skipped_entries": _skipped_entries, "targets": verify_outputs,
+            }
+            _say("VERIFY_DONE",
+                 f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+                 f"{_checked} database(s) checked, {len(unusable)} unusable"
+                 + (f", {_skipped_entries} entry(ies) skipped" if _skipped_entries else "") + ".",
+                 {"checked": _checked, "failed": len(unusable),
+                  "skipped_entries": _skipped_entries})
+            if unusable:
+                # Same reason the failed-restore count raises: the retention cleanup must not prune
+                # the backups when the drill that proves them restorable has just failed.
+                raise errors.OperationFailed(
+                    f"restore finished but {len(unusable)} database(s) cannot be opened: "
+                    f"{', '.join(sorted(unusable))}. Retention cleanup was not run.")
+
+        delete_outputs = []
+        # Announced like every other phase. Until 2026-09-11 the retention cleanup was the one
+        # phase that wrote nothing to the store: it logged to a file inside the container and
+        # nowhere else, so across 254 recorded workflow runs there was not a single row saying
+        # whether it had ever pruned anything. "Is retention running?" had no answer short of
+        # shelling into the worker and grepping.
+        _say("DELETE_START",
+             f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+             f"retention cleanup starting on {len(restore_configs)} source(s).",
+             {"cleanup_retention": delete_retention})
+        with _workflow_phase(logger, f"{_rid}restore-workflow delete-backup", summary=summary, current_phase="delete-backup", source_count=len(restore_configs), cleanup_retention=delete_retention):
+            for config in restore_configs:
+                # Seconds the whole way down now. This used to convert the configured seconds into
+                # hours with `max(1, seconds // 3600)` before handing them over, which turned any
+                # retention under an hour into an hour without saying so.
+                step_config = (config if delete_retention is None
+                               else dataclasses.replace(config, cleanup_retention=delete_retention))
+                result = run_delete_backup(step_config, logger=logger, dry_run=dry_run)
+                delete_outputs.append(
+                    {
+                        "source_id": step_config.source_id,
+                        "returncode": result.returncode,
+                        "cleanup_retention": result.cleanup_retention,
+                        "files_considered": result.files_considered,
+                        "deleted": result.deleted,
+                        "skipped": getattr(result, "skipped", 0),
+                    }
+                )
+                if result.returncode != 0:
+                    raise errors.OperationFailed(f"delete-backup failed for source_id={step_config.source_id} returncode={result.returncode}")
+        _deleted = sum(int(item.get("deleted") or 0) for item in delete_outputs)
+        _considered = sum(int(item.get("files_considered") or 0) for item in delete_outputs)
+        _skipped = sum(int(item.get("skipped") or 0) for item in delete_outputs)
+        # The counts are the point: "SUCCESS" on its own cannot distinguish a cleanup that pruned
+        # thirteen files from one that scanned nothing, and both had been reported identically.
+        _say("DELETE_DONE",
+             f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
+             f"retention cleanup finished - {_considered} considered, {_deleted} deleted, "
+             f"{_skipped} kept.",
+             {"files_considered": _considered, "deleted": _deleted, "skipped": _skipped,
+              "cleanup_retention": delete_retention})
+        summary["delete-backup"] = {"status": "SUCCESS", "sources": delete_outputs,
+                                    "files_considered": _considered, "deleted": _deleted,
+                                    "skipped": _skipped}
+        summary["status"] = "SUCCESS"
+        summary["overall_workflow_status"] = "SUCCESS"
+        summary["duration_seconds"] = round(time.monotonic() - workflow_start, 3)
+        if logger:
+            log_event(logger, level="logging", message=f"{_rid}restore-workflow completion status=SUCCESS elapsed_seconds={summary['duration_seconds']}")
+            log_event(logger, level="logging", message=f"{_rid}{_format_restore_workflow_stdout(summary)}")
+        return summary
+    except Exception as exc:
+        summary["status"] = "FAILED"
+        summary["overall_workflow_status"] = "FAILED"
+        summary["duration_seconds"] = round(time.monotonic() - workflow_start, 3)
+        summary["exception_type"] = type(exc).__name__
+        summary["exception_message"] = sanitize_text(str(exc))
+        summary["error_tail"] = summarize_error_tail(str(exc))
+        if logger:
+            log_event(logger, level="critical", message=sanitize_text(f"{_rid}restore-workflow failed error={type(exc).__name__}: {exc}"))
+        raise RestoreWorkflowError(str(exc), metadata=summary) from exc
+
+
+class _workflow_phase:
+    def __init__(
+        self,
+        logger: object | None,
+        phase: str,
+        *,
+        summary: dict[str, object] | None = None,
+        current_phase: str | None = None,
+        **metadata: object,
+    ) -> None:
+        self.logger = logger
+        self.phase = phase
+        self.summary = summary
+        self.current_phase = current_phase
+        self.metadata = metadata
+        self.started = 0.0
+
+    def __enter__(self) -> "_workflow_phase":
+        self.started = time.monotonic()
+        if self.summary is not None and self.current_phase:
+            self.summary["current_phase"] = self.current_phase
+        if self.logger:
+            log_event(self.logger, level="logging", message=f"{self.phase} start {_metadata_text(self.metadata)}".strip())
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, _tb: object) -> None:
+        elapsed = time.monotonic() - self.started
+        status = "FAILED" if exc_type else "SUCCESS"
+        if self.logger:
+            log_event(
+                self.logger,
+                level="critical" if exc_type else "logging",
+                message=f"{self.phase} end status={status} elapsed_seconds={elapsed:.3f} {_metadata_text(self.metadata)}".strip(),
+            )
+
+
+def _metadata_text(metadata: dict[str, object]) -> str:
+    return " ".join(f"{key}={value}" for key, value in metadata.items() if value is not None)
+
+
+def _summarize_restore_sources(source_outputs: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "selected_full_backup": [
+            backup
+            for source in source_outputs
+            for backup in _as_list(source.get("selected_full_backup"))
+        ],
+        "selected_diff_backup": [
+            backup
+            for source in source_outputs
+            for backup in _as_list(source.get("selected_diff_backup"))
+        ],
+        "selected_log_backups": [
+            backup
+            for source in source_outputs
+            for backup in _as_list(source.get("selected_log_backups"))
+        ],
+        "skipped_backups": [
+            skipped
+            for source in source_outputs
+            for skipped in _as_list(source.get("skipped_backups"))
+        ],
+        "per_database_restore_status": {
+            database: status
+            for source in source_outputs
+            for database, status in (
+                source.get("per_database_restore_status", {}).items()
+                if isinstance(source.get("per_database_restore_status"), dict)
+                else []
+            )
+        },
+        "final_recovery_status": {
+            database: status
+            for source in source_outputs
+            for database, status in (
+                source.get("final_recovery_status", {}).items()
+                if isinstance(source.get("final_recovery_status"), dict)
+                else []
+            )
+        },
+        "final_recovery_model_status": {
+            database: status
+            for source in source_outputs
+            for database, status in (
+                source.get("final_recovery_model_status", {}).items()
+                if isinstance(source.get("final_recovery_model_status"), dict)
+                else []
+            )
+        },
+    }
+
+
+def _verify_targets(config: Any, restored: Iterable[str] = ()) -> list[str]:
+    """The names to look for on the TARGET, which are not always the names on the source.
+
+    A drill commonly restores `SALES` as `SALES_STG`. Verifying the source name asks the target
+    about a database it was never asked to create, and reports the drill broken when it worked.
+
+    **Only what the entry states** (the operator, 2026-10-06, 0.27.0 1.101): its `database_mappings`,
+    or - when it states `restore_all_databases: true`, every database on the share under its
+    backup's name - ``restored``, the databases this run restored. An entry that states neither has
+    nothing here: the loader refuses it, and this answers empty rather than guess.
+    """
+    names: list[str] = []
+    # `target_database` / `source_database` are DatabaseRestoreMapping's fields. This asked for
+    # `restore_database_name` / `source_database_name` - the ENTRY's single-database fields - through
+    # getattr with a default until 2026-09-23, so every mapping answered "", the list came back
+    # empty, and every engine restore's verification was skipped as "not configured". The test
+    # passed because its stand-in mapping carried the same wrong names.
+    for mapping in (getattr(config, "databases", None) or ()):
+        name = mapping.target_database or mapping.source_database
+        if name and name not in names:
+            names.append(str(name))
+    if not names and getattr(config, "restore_all_databases", False) is True:
+        for name in restored:
+            if name and str(name) not in names:
+                names.append(str(name))
+    return names
+
+
+def _restored_databases(output: object) -> list[str]:
+    """The databases one entry's restore reported restored this run, by the target's name."""
+    per_database = output.get("per_database_restore_status") if isinstance(output, dict) else None
+    if not isinstance(per_database, dict):
+        return []
+    return [str(name) for name, status in per_database.items() if str(status) == "SUCCESS"]
+
+
+def _verify_plan(config: Any, secrets: dict[str, str],
+                 restored: Iterable[str] = ()) -> tuple[dict[str, Any] | None, str]:
+    """The `verify-restore` request for one entry - or ``None`` and the reason it cannot be checked.
+
+    ``None`` is a *state*, not a failure: an entry that names no target login is not a broken
+    restore, it is one this node was never given the credentials to look at. It is reported as
+    skipped, with the reason, rather than counted against the run - the rule the whole app follows
+    for "not configured". The reason is the one that applies: every skip read "no target login
+    configured" until 0.27.0, which sent the reader to a login that was configured.
+    """
+    host = str(getattr(config, "vm_credential_target", "") or "").strip()
+    username = str(getattr(config, "restore_sql_username", "") or "").strip()
+    password_ref = str(getattr(config, "restore_sql_password_env", "") or "").strip()
+    databases = _verify_targets(config, restored)
+    if not host:
+        return None, "no target host configured for this entry (target.credential_target)"
+    if not (username and password_ref):
+        return None, ("no target login configured for this entry "
+                      "(target.sql_username and target.sql_password_ref)")
+    if not databases:
+        return None, ("no database to check: the entry states no database_mappings, or states "
+                      "restore_all_databases and the run restored none")
+    password = secrets.get(password_ref)
+    if not password:
+        return None, f"the target login's secret {password_ref} is not in this node's secret store"
+    # **The port comes from the entry, and did not until 2026-09-19.** It was 1433 unconditionally,
+    # while the restore writes wherever `sql_instance` says. On this estate that entry restores into
+    # `localhost,1453` - the container MSSQL_192_0_2_115_1453 - and the check asked
+    # 192.0.2.115:1433, which is a different container with thirteen unrelated databases. Port
+    # 1453 held the three the drill restores, one of them stuck in RESTORING: the exact state this
+    # verification exists to catch, invisible to it, while all three were reported ABSENT.
+    #
+    # The *host* stays this node's own route to the machine. `sql_instance` commonly reads
+    # `localhost`, which is localhost on the target and not where this process is.
+    address = sql_instance.parse(getattr(config, "restore_sql_instance_on_vm", ""))
+    if not address.has_port:
+        # A named instance is resolved by the SQL Server Browser at connect time and has no port to
+        # hand a driver. Substituting the default would ask a different server and report its answer
+        # as this drill's verdict, which is the failure above wearing different numbers. Skipped
+        # with a reason, the way every other "cannot check this" is.
+        return None, ("the target instance names no port (target.sql_instance): a named "
+                      "instance's port is found only at connect time")
+    return ({"db_type": "sqlserver", "database_names": databases,
+             "target": {"host": host, "port": address.port,
+                        "username": username, "password": password}}, "")
+
+
+def _verify_request(config: Any, secrets: dict[str, str],
+                    restored: Iterable[str] = ()) -> dict[str, Any] | None:
+    """The `verify-restore` request for one entry, or ``None`` (see :func:`_verify_plan`)."""
+    return _verify_plan(config, secrets, restored)[0]
+
+
+#: A per-database outcome that is not a failure. `SKIPPED` is here because a database the run had
+#: no work for has not failed - it was not restored at all - while anything else (`FAILED`, an
+#: engine's own word, or a status nobody recognises) is not evidence of a usable database and is
+#: counted against the run.
+_RESTORE_SUCCESS_STATUSES = frozenset({"SUCCESS", "DRY_RUN"})
+_RESTORE_OK_STATUSES = _RESTORE_SUCCESS_STATUSES | {"SKIPPED"}
+
+
+def _restore_failure_text(source_outputs: list[dict[str, object]], failed: list[str]) -> str:
+    """Which databases failed, and at which step: a database whose `DBCC CHECKDB` failed was
+    restored and recovered, and is not reported as a failed restore.
+
+    "restore failed for 2 database(s): APPINST, SALESDB" on 2026-09-24 sent the operator to the
+    backups and the copy; both were fine - the target could not create the check's snapshot.
+    """
+    checked: list[str] = []
+    errors: dict[str, str] = {}
+    for source in source_outputs:
+        if not isinstance(source, dict):
+            continue
+        errors.update({str(k): str(v) for k, v in (source.get("per_database_error") or {}).items()})
+        checked.extend(str(name) for name, status in (source.get("per_database_restore_status") or {}).items()
+                       if str(status) == "CHECK_FAILED")
+    restore_failed = sorted(name for name in failed if name not in checked)
+    parts = []
+    if restore_failed:
+        parts.append(f"restore failed for {len(restore_failed)} database(s): {', '.join(restore_failed)}")
+    if checked:
+        numbers = sorted({number for name in checked
+                          for number in re.findall(r"Msg (\d+)", errors.get(name, ""))}, key=int)
+        parts.append(
+            f"{len(checked)} database(s) restored and recovered, but the integrity check "
+            f"(DBCC CHECKDB) failed: {', '.join(sorted(checked))}"
+            + (f" - SQL Server Msg {', '.join(numbers)}" if numbers else "")
+            + " (checkdb: false on the restore entry skips the check)")
+    return "; ".join(parts) + "."
+
+
+def _failed_restore_databases(source_outputs: list[dict[str, object]]) -> list[str]:
+    """Which databases the restore reported a non-success for, named so the failure can be read.
+
+    The count has always been computed; what was missing was anything that *said* which. A workflow
+    that fails with "1 database failed" sends its reader back to the store, which is where this
+    failure hid for two releases.
+    """
+    failed: list[str] = []
+    for source in source_outputs:
+        if not isinstance(source, dict):
+            continue
+        per_database = source.get("per_database_restore_status")
+        if not isinstance(per_database, dict):
+            if source.get("status") and str(source.get("status")) not in _RESTORE_OK_STATUSES:
+                failed.append(str(source.get("source_id") or source.get("target_id") or "?"))
+            continue
+        failed.extend(str(name) for name, status in per_database.items()
+                      if str(status) not in _RESTORE_OK_STATUSES)
+    return failed
+
+
+def _count_restore_statuses(source_outputs: list[dict[str, object]]) -> dict[str, int]:
+    statuses: list[str] = []
+    for source in source_outputs:
+        if not isinstance(source, dict):
+            continue
+        per_database = source.get("per_database_restore_status")
+        if isinstance(per_database, dict):
+            statuses.extend(str(status) for status in per_database.values())
+            continue
+        if source.get("status"):
+            statuses.append(str(source.get("status")))
+    success = sum(1 for status in statuses if status in _RESTORE_SUCCESS_STATUSES)
+    skipped = sum(1 for status in statuses if status == "SKIPPED")
+    failed = len(statuses) - success - skipped
+    return {
+        "databases_considered": len(statuses),
+        "success": success,
+        "failed": failed,
+        "skipped": skipped,
+    }
+
+
+def _build_restore_mapping(config: BackupRestoreConfig) -> dict[str, object]:
+    mapping: dict[str, object] = {
+        "restore_id": config.restore_id,
+        "source_id": config.source_id,
+        "target_id": config.target_id,
+    }
+    if config.vm_credential_target:
+        mapping["target_host"] = config.vm_credential_target
+    if config.vm_platform:
+        mapping["target_os_type"] = config.vm_platform
+    return mapping
+
+
+def _build_per_restore_results(
+    configs: list[BackupRestoreConfig],
+    restore_outputs: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    results = []
+    for config, output in zip(configs, restore_outputs):
+        counts = _count_single_restore_statuses(output)
+        per: dict[str, object] = {
+            "restore_id": config.restore_id,
+            "source_id": config.source_id,
+            "target_id": config.target_id,
+        }
+        if config.vm_credential_target:
+            per["target_host"] = config.vm_credential_target
+        per["status"] = str(output.get("status") or "UNKNOWN")
+        per.update(counts)
+        results.append(per)
+    return results
+
+
+def _count_single_restore_statuses(output: dict[str, object]) -> dict[str, int]:
+    statuses: list[str] = []
+    per_database = output.get("per_database_restore_status")
+    if isinstance(per_database, dict):
+        statuses.extend(str(s) for s in per_database.values())
+    elif output.get("status"):
+        statuses.append(str(output.get("status")))
+    success = sum(1 for s in statuses if s in {"SUCCESS", "DRY_RUN"})
+    skipped = sum(1 for s in statuses if s == "SKIPPED")
+    failed = len(statuses) - success - skipped
+    return {
+        "databases_considered": len(statuses),
+        "success": success,
+        "failed": failed,
+        "skipped": skipped,
+    }
+
+
+def _format_restore_workflow_stdout(output: dict[str, object]) -> str:
+    parts = [
+        "restore-workflow completed",
+        f"status={output.get('status')}",
+        f"restore_mode={output.get('restore_mode', 'LATEST')}",
+    ]
+    if output.get("restore_count") is not None:
+        parts.append(f"restore_count={output['restore_count']}")
+    parts.extend([
+        f"databases_considered={output.get('databases_considered', 0)}",
+        f"success={output.get('success', 0)}",
+        f"failed={output.get('failed', 0)}",
+        f"skipped={output.get('skipped', 0)}",
+        f"duration_seconds={output.get('duration_seconds', 0)}",
+    ])
+    if output.get("point_in_time_utc"):
+        parts.append(f"point_in_time_utc={output.get('point_in_time_utc')}")
+    return sanitize_text(" ".join(parts))
+
+
+def _summarize_command_output(command: str, output: dict[str, object]) -> dict[str, object]:
+    if command == "restore-workflow":
+        summary: dict[str, object] = {
+            "status": output.get("status"),
+            "overall_workflow_status": output.get("overall_workflow_status"),
+            "restore_mode": output.get("restore_mode", "LATEST"),
+            "restore_count": output.get("restore_count"),
+            "mappings": output.get("mappings"),
+            "databases_considered": output.get("databases_considered", 0),
+            "success": output.get("success", 0),
+            "failed": output.get("failed", 0),
+            "skipped": output.get("skipped", 0),
+            "duration_seconds": output.get("duration_seconds", 0),
+            "per_restore_results": output.get("per_restore_results"),
+        }
+        if output.get("point_in_time_utc"):
+            summary["point_in_time_utc"] = output.get("point_in_time_utc")
+        return summary
+    return output
+
+
+def _as_list(value: object) -> list[object]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _build_end_event(*, command: str, output: dict[str, object]) -> tuple[str, str, dict[str, object]]:
+    if command != "restore-latest":
+        return (
+            "logging",
+            f"finished status={output.get('status')} sources={output.get('sources_considered')}",
+            {"output": output},
+        )
+
+    restore_results = _collect_restore_results(output)
+    total = len(restore_results)
+    failed = [item for item in restore_results if _restore_result_has_error(item)]
+    success_count = total - len(failed)
+    level = "logging" if not failed else "critical"
+    message = (
+        f"finished status={output.get('status')} restore_success={success_count}/{total} "
+        f"failed={len(failed)} sources={output.get('sources_considered')}"
+    )
+    return (
+        level,
+        message,
+        {
+            "output": output,
+            "restore_success": success_count,
+            "restore_total": total,
+            "restore_failed": len(failed),
+            "failed_databases": [
+                {
+                    "source_id": item.get("source_id"),
+                    "database_name": item.get("database_name"),
+                    "backup_file_on_vm": item.get("backup_file_on_vm"),
+                    "status": item.get("status"),
+                }
+                for item in failed
+            ],
+        },
+    )
+
+
+def _collect_restore_results(output: dict[str, object]) -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    if "database_name" in output:
+        results.append(output)
+    for source in output.get("sources", []) if isinstance(output.get("sources"), list) else []:
+        if not isinstance(source, dict):
+            continue
+        for item in source.get("results", []) if isinstance(source.get("results"), list) else []:
+            if isinstance(item, dict):
+                results.append(item)
+    return results
+
+
+def _restore_result_has_error(result: dict[str, object]) -> bool:
+    if str(result.get("status", "")).upper() not in {"SUCCESS", "DRY_RUN"}:
+        return True
+    stdout = str(result.get("stdout") or "")
+    stderr = str(result.get("stderr") or "")
+    error_text = f"{stdout}\n{stderr}".lower()
+    return any(
+        marker in error_text
+        for marker in (
+            "restore database is terminating abnormally",
+            "terminating abnormally",
+            "incorrectly formed",
+            "can not be read",
+            "cannot be read",
+            "the media family",
+            "level 16",
+            "level 17",
+            "level 18",
+            "level 19",
+            "level 20",
+            "msg 3013",
+            "msg 3287",
+        )
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

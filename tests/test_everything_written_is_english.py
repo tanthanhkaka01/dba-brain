@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-ROOTS = ("db_ops", "tests", "tests_estate", "docs", "examples", "scripts", "data",
+ROOTS = ("dbabrain", "tests", "tests_estate", "docs", "examples", "scripts", "data",
          "README.md", "CHANGELOG.md", "CONTRIBUTING.md")
 SKIP_PARTS = {"__pycache__", ".venv", "node_modules"}
 NOT_ENGLISH = re.compile(r"[ăâđêôơưĂÂĐÊÔƠƯẠ-ỹ]|â€|â†")

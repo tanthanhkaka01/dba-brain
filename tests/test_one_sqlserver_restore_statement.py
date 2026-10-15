@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common.restorestep import RestoreStepError
-from db_ops.common.restorestep import sqlserver as mssql
+from dbabrain.common.restorestep import RestoreStepError
+from dbabrain.common.restorestep import sqlserver as mssql
 
 GOLDEN = json.loads((Path(__file__).parent / "fixtures" / "nightly_restore_sql.json")
                     .read_text(encoding="utf-8"))["cases"]
@@ -78,7 +78,7 @@ def test_the_two_ways_of_placing_the_files_are_one_or_the_other():
 def test_through_sqlcmd_a_step_runs_one_file_and_answers_as_run_sqlcmd_does(monkeypatch):
     """The caller reads the answer - a Msg 4305 log is skipped, a lost connection is inspected - so
     the step answers what sqlcmd said and does not decide for it."""
-    from db_ops.common import sqlcmd_run
+    from dbabrain.common import sqlcmd_run
 
     seen = {}
 

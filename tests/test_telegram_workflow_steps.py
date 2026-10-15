@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.lib import workflow_steps as ws
+from dbabrain.lib import workflow_steps as ws
 
 
 def step(**overrides) -> dict:

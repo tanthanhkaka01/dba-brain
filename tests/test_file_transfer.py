@@ -19,7 +19,7 @@ import zipfile
 
 import pytest
 
-from db_ops.common import file_transfer
+from dbabrain.common import file_transfer
 
 
 def _write(directory, name, content=b"backup-piece"):

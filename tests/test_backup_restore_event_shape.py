@@ -29,7 +29,7 @@ import pathlib
 
 import pytest
 
-APP = pathlib.Path(__file__).resolve().parents[1] / "db_ops" / "backup_restore"
+APP = pathlib.Path(__file__).resolve().parents[1] / "dbabrain" / "backup_restore"
 
 #: Phases that bracket a run. Anything else must be a step phase.
 RUN_PHASES = {"START", "END", "ERROR", "TIMEOUT"}

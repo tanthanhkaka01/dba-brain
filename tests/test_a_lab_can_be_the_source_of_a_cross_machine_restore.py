@@ -21,10 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common.docker_db import templates as t
-from db_ops.lib.docker_db_spec import DockerDbSpec
+from dbabrain.common.docker_db import templates as t
+from dbabrain.lib.docker_db_spec import DockerDbSpec
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "db_ops" / "common" / "backup_scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "dbabrain" / "common" / "backup_scripts"
 MSSQL = SCRIPTS / "sqlserver" / "mssql_backup_database.sh"
 
 
@@ -84,4 +84,8 @@ def test_an_ha_lab_takes_a_backup_mount_now():
 
 def test_an_ha_lab_that_names_no_mount_is_still_built():
     _spec("postgres", mode="ha-lab", replicas=2).validate()
-    _spec("mssql", mode="ha-lab", version="2025-latest", replicas=2).validate()
+    # SQL Server mounts its backup folder, and which folder is the node's to state (0.29.0): it
+    # asks for none with an empty string, and is refused by name when it says nothing.
+    _spec("mssql", mode="ha-lab", version="2025-latest", replicas=2, backup_mount="").validate()
+    with pytest.raises(ValueError, match="backup_mount is not stated"):
+        _spec("mssql", mode="ha-lab", version="2025-latest", replicas=2).validate()

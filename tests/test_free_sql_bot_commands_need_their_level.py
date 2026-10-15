@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from db_ops.telegram import command_processor
-from db_ops.telegram.command_processor import load_support_commands, warn_low_level
+from dbabrain.telegram import command_processor
+from dbabrain.telegram.command_processor import load_support_commands, warn_low_level
 
 from conftest import patch_telegram
 
@@ -39,7 +39,7 @@ def test_a_node_file_left_at_10_is_used_as_written_and_warned_about_once(tmp_pat
 
 
 def test_the_shipped_catalogue_states_the_levels_itself():
-    shipped = Path(__file__).resolve().parents[1] / "db_ops" / "telegram" / "catalogue" / "telegram_support_commands.json"
+    shipped = Path(__file__).resolve().parents[1] / "dbabrain" / "telegram" / "catalogue" / "telegram_support_commands.json"
     rows = json.loads(shipped.read_text(encoding="utf-8"))["telegram_support_commands"]
     levels = {r["command_text"]: r["command_type"] for r in rows
               if r.get("action_type") in ("add_sql_task", "sql_to_xlsx")}

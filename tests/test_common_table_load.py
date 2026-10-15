@@ -22,8 +22,8 @@ import base64
 
 import pytest
 
-from db_ops.common import table_load
-from db_ops.lib import xlsx_export
+from dbabrain.common import table_load
+from dbabrain.lib import xlsx_export
 
 
 #: The login a caller states - common.cli reads no configuration (rules R09), so every request here

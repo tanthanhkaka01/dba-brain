@@ -12,7 +12,7 @@ than as maintenance.
 
 import pytest
 
-from db_ops.reports import index_report as ir
+from dbabrain.reports import index_report as ir
 from conftest import shipped_config
 
 
@@ -247,7 +247,7 @@ def test_a_clean_server_says_so_instead_of_rendering_empty_tables(monkeypatch):
 def test_the_report_links_to_the_server_dashboard_with_the_same_slug_the_page_uses():
     """Built with server_report.page_href, not a hand-formatted query string: a slug that drifts
     from the published one is a 404, which is worse than no link."""
-    from db_ops.reports.server_report import page_href
+    from dbabrain.reports.server_report import page_href
 
     url = ir.server_dashboard_url("ACME-192-0-2-248")
 
@@ -322,7 +322,7 @@ def test_the_inventory_workflow_publishes_the_index_pages_too():
     schedules that can disagree about how fresh "the reports" are."""
     import inspect
 
-    from db_ops.reports import inventory_summary
+    from dbabrain.reports import inventory_summary
 
     source = inspect.getsource(inventory_summary.build_inventory_workflow)
 

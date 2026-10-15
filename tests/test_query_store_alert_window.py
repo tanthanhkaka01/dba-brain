@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 
 import pytest
-from db_ops.lib.paths import resolve_tool_path
+from dbabrain.lib.paths import resolve_tool_path
 from conftest import shipped_config
 
 DEFINITIONS = shipped_config("metric_definitions.json")

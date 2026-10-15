@@ -18,18 +18,18 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.telegram import api, send_queue
+from dbabrain.db import DbaBrainStore
+from dbabrain.telegram import api, send_queue
 
 
-def _store(tmp_path: Path) -> tuple[Path, DbOpsStore]:
-    path = tmp_path / "db_ops.sqlite"
-    store = DbOpsStore(path)
+def _store(tmp_path: Path) -> tuple[Path, DbaBrainStore]:
+    path = tmp_path / "dbabrain.sqlite"
+    store = DbaBrainStore(path)
     store.initialize()
     return path, store
 
 
-def _metadata(store: DbOpsStore, row_id: int) -> dict:
+def _metadata(store: DbaBrainStore, row_id: int) -> dict:
     return json.loads(str(store.fetch_telegram_send_message(send_tlgmsg_id=row_id)["metadata_json"]))
 
 

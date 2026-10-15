@@ -28,10 +28,10 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore import copy_backup, space
-from db_ops.backup_restore import share as share_module
-from db_ops.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
-from db_ops.lib import restore_space
+from dbabrain.backup_restore import copy_backup, space
+from dbabrain.backup_restore import share as share_module
+from dbabrain.backup_restore.config import BackupRestoreConfig, DatabaseRestoreMapping
+from dbabrain.lib import restore_space
 
 GIB = 1024 ** 3
 
@@ -61,7 +61,7 @@ def _entry(tmp_path: Path, **overrides) -> BackupRestoreConfig:
 
 def _linux_node(monkeypatch, *, listing: str = LISTING, staged: dict[str, int] | None = None) -> list:
     """This process as the container worker: the share answers ``smb-list``, the target a listing."""
-    from db_ops.common import smb
+    from dbabrain.common import smb
 
     asked: list = []
 

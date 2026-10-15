@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.reports.inventory_health import (
+from dbabrain.reports.inventory_health import (
     HEALTH_CODES,
     build_config_warnings,
     build_instance_health,
     parse_kv,
     parse_kv_any,
 )
-from db_ops.reports.inventory_report import _build_detail
+from dbabrain.reports.inventory_report import _build_detail
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -200,7 +200,7 @@ POSTGRESQL_MESSAGE = (
     "wal_level=replica; archive_mode=on; started=2026-10-02 09:37:10; uptime_seconds=584549"
 )
 
-COLLECTORS = REPO_ROOT / "db_ops" / "metrics" / "collectors"
+COLLECTORS = REPO_ROOT / "dbabrain" / "metrics" / "collectors"
 
 
 def _detail(message):

@@ -3,7 +3,7 @@
 Two boundaries are stubbed here and they are stubbed at different places on purpose, because
 they are different kinds of thing:
 
-* the **write** goes out through ``db_ops.common.cli add-sql`` (``lib.common_cli.run``) — an app
+* the **write** goes out through ``dbabrain.common.cli add-sql`` (``lib.common_cli.run``) — an app
   does not import ``common``, it hands it a JSON object. Since 2026-08-15 the assertions are
   therefore about *the request*, not about keyword arguments;
 * the **read** that fills in db_type, instance, service and credential is
@@ -15,9 +15,9 @@ they are different kinds of thing:
 import pytest
 
 from conftest import shipped_config
-from db_ops.telegram import command_processor as cp
-from db_ops.lib import data_sources
-from db_ops.transport import common_cli
+from dbabrain.telegram import command_processor as cp
+from dbabrain.lib import data_sources
+from dbabrain.transport import common_cli
 
 
 def _cmd():
@@ -169,7 +169,7 @@ def test_sql_text_parameter_accepts_file():
 
 
 def test_download_document_text(monkeypatch):
-    from db_ops.telegram import api
+    from dbabrain.telegram import api
 
     monkeypatch.setattr(api, "get_file_bytes", lambda **kw: "﻿SELECT 1;\n".encode("utf-8"))
 
@@ -177,18 +177,18 @@ def test_download_document_text(monkeypatch):
         class telegram:
             resolved_bot_token = "tok"
             api_url = "https://api.telegram.org"
-    monkeypatch.setattr("db_ops.lib.config.load_config", lambda *_a, **_k: _Cfg())
+    monkeypatch.setattr("dbabrain.lib.config.load_config", lambda *_a, **_k: _Cfg())
     text = cp._download_document_text({"file_id": "F1", "file_name": "x.sql"}, config_path="config.json")
     assert text == "SELECT 1;"  # BOM stripped, trailing newline trimmed
 
 
 def test_download_document_text_rejects_empty(monkeypatch):
-    from db_ops.telegram import api
+    from dbabrain.telegram import api
     monkeypatch.setattr(api, "get_file_bytes", lambda **kw: b"   ")
     class _Cfg:
         class telegram:
             resolved_bot_token = "tok"
             api_url = "https://api.telegram.org"
-    monkeypatch.setattr("db_ops.lib.config.load_config", lambda *_a, **_k: _Cfg())
+    monkeypatch.setattr("dbabrain.lib.config.load_config", lambda *_a, **_k: _Cfg())
     with pytest.raises(RuntimeError):
         cp._download_document_text({"file_id": "F1"}, config_path="config.json")

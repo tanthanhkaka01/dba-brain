@@ -15,7 +15,7 @@ data" and must never fall back to the since-boot average, which is the mistake t
 exists to prevent.
 """
 
-from db_ops.lib import interval_rates as ir
+from dbabrain.lib import interval_rates as ir
 
 
 def _sample(stamp, *, since="2026-08-01 03:00:00", **values):

@@ -1,4 +1,4 @@
-"""Every ``db_ops.common.cli`` command answers in the **one response shape**, on stdout.
+"""Every ``dbabrain.common.cli`` command answers in the **one response shape**, on stdout.
 
 The input half of the contract is held by ``test_common_cli_json_contract.py``. This is the
 output half, and until 2026-08-16 it was held by nothing — which is why it drifted:
@@ -38,11 +38,11 @@ import tempfile
 
 import pytest
 
-from db_ops.common import cli
+from dbabrain.common import cli
 from tests.test_common_cli_json_contract import ALL_COMMANDS
 
 
-#: The seven keys `db_ops/lib/response.py` builds, always present even when empty.
+#: The seven keys `dbabrain/lib/response.py` builds, always present even when empty.
 ENVELOPE_KEYS = frozenset({"success", "operation", "message", "error", "error_kind", "data", "metrics"})
 
 #: What each command is sent. ``{}`` is valid JSON and satisfies no command's own validation, so
@@ -60,7 +60,7 @@ SAFE_REQUEST: dict[str, dict] = {
     #: went unnoticed because most of the files exist; on a public checkout it wrote `config.json`,
     #: `AGENTS.md` and every `data/*.json`, and nine later tests read those instead of the shipped
     #: examples (found while building 0.24.0). A throwaway directory takes it instead.
-    "init": {"root": tempfile.mkdtemp(prefix="dbops_response_shape_init_")},
+    "init": {"root": tempfile.mkdtemp(prefix="dbabrain_response_shape_init_")},
 }
 
 
@@ -87,7 +87,7 @@ def _payload(command: str) -> str:
 #:
 #: **Two commands keep something that looks like an exception and is not.** `run-cmd` passes
 #: through the *remote* command's exit code — `2` from a remote `grep` means "no match", not
-#: "db_ops failed" — and `run-sql` / `run-cmd` still answer in `txt` / `csv` / `xml` / `xlsx` /
+#: "dbabrain failed" — and `run-sql` / `run-cmd` still answer in `txt` / `csv` / `xml` / `xlsx` /
 #: `raw` when the **request asks for one**, which is the contract working: the rendering is chosen
 #: inside the request object, so a config file can carry it.
 NOT_YET_ENVELOPE: frozenset[str] = frozenset()
@@ -117,7 +117,7 @@ def test_a_command_answers_in_the_response_envelope(command: str, capsys) -> Non
     missing = sorted(ENVELOPE_KEYS - set(parsed))
     assert not missing, (
         f"{command} is missing {missing} from its response. Build the answer with "
-        "db_ops.lib.response.ok()/fail() and print it with response.emit(), so every caller "
+        "dbabrain.lib.response.ok()/fail() and print it with response.emit(), so every caller "
         "reads one shape. Do not add it to NOT_YET_ENVELOPE: that list only shrinks."
     )
 

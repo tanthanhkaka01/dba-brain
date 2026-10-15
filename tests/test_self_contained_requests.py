@@ -15,9 +15,9 @@ succeed.
 
 import pytest
 
-from db_ops.common import host_ops, sql_run
-from db_ops.lib.cmd_access import resolve_cmd_credential
-from db_ops.lib.connection_spec import ConnectionSpec, ConnectionSpecError
+from dbabrain.common import host_ops, sql_run
+from dbabrain.lib.cmd_access import resolve_cmd_credential
+from dbabrain.lib.connection_spec import ConnectionSpec, ConnectionSpecError
 
 
 # --------------------------------------------------------------------------- #

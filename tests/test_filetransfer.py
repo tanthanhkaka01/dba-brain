@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import filetransfer as ft
-from db_ops.common.hostcmd import parse_host
+from dbabrain.common import filetransfer as ft
+from dbabrain.common.hostcmd import parse_host
 
 
 def _linux(**over):
@@ -33,9 +33,9 @@ def _windows():
 def test_a_linux_folder_is_tarred_from_inside_itself():
     """`-C <folder> .` keeps the archive free of the absolute path, so it can be unpacked
     anywhere - which is the whole point of moving it to another machine."""
-    command = ft._pack_command(_linux(), archive="/tmp/a.tar", folder="/b/dbops",
+    command = ft._pack_command(_linux(), archive="/tmp/a.tar", folder="/b/dbabrain",
                                files=[], fmt=ft.TAR)
-    assert "-C /b/dbops ." in command
+    assert "-C /b/dbabrain ." in command
 
 
 def test_windows_uses_compress_archive_for_zip():

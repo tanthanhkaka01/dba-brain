@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.sre.automation import list_known_workflows
-from db_ops.sre.config import SreOperationalConfig, load_sre_operational_config
-from db_ops.sre.inventory import list_inventory_assets
-from db_ops.sre.service import (
+from dbabrain.sre.automation import list_known_workflows
+from dbabrain.sre.config import SreOperationalConfig, load_sre_operational_config
+from dbabrain.sre.inventory import list_inventory_assets
+from dbabrain.sre.service import (
     check_mysql_cluster,
     check_postgresql_ha,
     check_shared_vms,
@@ -316,7 +316,7 @@ def test_a_command_that_never_ran_keeps_ssh_s_exit_code(monkeypatch):
     """`_wait_for_bastion_ssh` tells "the bastion is not up yet" from "the command failed" by
     255, the code ssh exits with when it never ran the command. run-cmd answering without an
     exit code is that same fact."""
-    from db_ops.sre import service
+    from dbabrain.sre import service
 
     monkeypatch.setattr(service, "run_allowing_failure",
                         lambda command, request: (False, {}, "could not connect to tuser@10.0.0.1"))
@@ -326,7 +326,7 @@ def test_a_command_that_never_ran_keeps_ssh_s_exit_code(monkeypatch):
 
 
 def test_a_command_that_ran_reports_its_own_exit_code(monkeypatch):
-    from db_ops.sre import service
+    from dbabrain.sre import service
 
     sent = []
     monkeypatch.setattr(service, "run_allowing_failure",
@@ -339,7 +339,7 @@ def test_a_command_that_ran_reports_its_own_exit_code(monkeypatch):
 
 def test_the_cli_dry_run_masks_the_powershell_payload():
     """The payload is base64 of the resolved credentials - encoded, not hidden."""
-    from db_ops.sre.cli import _dry_run_text
+    from dbabrain.sre.cli import _dry_run_text
 
     text = _dry_run_text(["powershell.exe", "-File", "x.ps1", "-DbSrePayloadJsonBase64", "c2VjcmV0"])
     assert "c2VjcmV0" not in text
@@ -358,10 +358,10 @@ def test_check_postgresql_ha_missing_group_raises():
 
 
 # ---------------------------------------------------------------------------
-# Import boundary — db_ops.sre must not import from db_sre
+# Import boundary — dbabrain.sre must not import from db_sre
 # ---------------------------------------------------------------------------
 
-_SRE_PKG = Path(__file__).resolve().parents[1] / "db_ops" / "sre"
+_SRE_PKG = Path(__file__).resolve().parents[1] / "dbabrain" / "sre"
 
 
 def _collect_imports(py_file: Path) -> list[str]:
@@ -376,31 +376,31 @@ def _collect_imports(py_file: Path) -> list[str]:
     return names
 
 
-def test_no_db_sre_imports_in_db_ops_sre():
+def test_no_db_sre_imports_in_dbabrain_sre():
     violations = []
     for py_file in _SRE_PKG.glob("*.py"):
         for imp in _collect_imports(py_file):
             if imp.startswith("db_sre"):
                 violations.append(f"{py_file.name}: {imp}")
-    assert not violations, f"db_ops.sre imports db_sre: {violations}"
+    assert not violations, f"dbabrain.sre imports db_sre: {violations}"
 
 
-def test_no_db_sre_subprocess_in_db_ops_sre():
+def test_no_db_sre_subprocess_in_dbabrain_sre():
     violations = []
     for py_file in _SRE_PKG.glob("*.py"):
         text = py_file.read_text(encoding="utf-8")
         if "db_sre.cli" in text or "db_sre/cli" in text:
             violations.append(py_file.name)
-    assert not violations, f"db_ops.sre references db_sre.cli: {violations}"
+    assert not violations, f"dbabrain.sre references db_sre.cli: {violations}"
 
 
-def test_no_tools_db_sre_path_in_db_ops_sre():
+def test_no_tools_db_sre_path_in_dbabrain_sre():
     violations = []
     for py_file in _SRE_PKG.glob("*.py"):
         text = py_file.read_text(encoding="utf-8")
         if "tools/db_sre" in text or "tools\\db_sre" in text:
             violations.append(py_file.name)
-    assert not violations, f"db_ops.sre references tools/db_sre path: {violations}"
+    assert not violations, f"dbabrain.sre references tools/db_sre path: {violations}"
 
 
 # ---------------------------------------------------------------------------
@@ -409,14 +409,14 @@ def test_no_tools_db_sre_path_in_db_ops_sre():
 
 
 def test_cli_parse_list_workflows():
-    from db_ops.sre.cli import build_parser
+    from dbabrain.sre.cli import build_parser
 
     args = build_parser().parse_args(["list-workflows"])
     assert args.command == "list-workflows"
 
 
 def test_cli_parse_check_mysql():
-    from db_ops.sre.cli import build_parser
+    from dbabrain.sre.cli import build_parser
 
     args = build_parser().parse_args(["check-mysql-cluster", "--dry-run"])
     assert args.command == "check-mysql-cluster"
@@ -424,7 +424,7 @@ def test_cli_parse_check_mysql():
 
 
 def test_cli_parse_check_postgresql():
-    from db_ops.sre.cli import build_parser
+    from dbabrain.sre.cli import build_parser
 
     args = build_parser().parse_args(["check-postgresql-ha"])
     assert args.command == "check-postgresql-ha"
@@ -432,21 +432,21 @@ def test_cli_parse_check_postgresql():
 
 
 def test_cli_parse_inventory_assets():
-    from db_ops.sre.cli import build_parser
+    from dbabrain.sre.cli import build_parser
 
     args = build_parser().parse_args(["inventory-assets"])
     assert args.command == "inventory-assets"
 
 
 def test_cli_parse_vmware_list():
-    from db_ops.sre.cli import build_parser
+    from dbabrain.sre.cli import build_parser
 
     args = build_parser().parse_args(["vmware-list"])
     assert args.command == "vmware-list"
 
 
 def test_cli_no_delegate_command():
-    from db_ops.sre.cli import build_parser
+    from dbabrain.sre.cli import build_parser
 
     parser = build_parser()
     with pytest.raises(SystemExit):
@@ -454,7 +454,7 @@ def test_cli_no_delegate_command():
 
 
 def test_cli_config_defaults_to_none():
-    from db_ops.sre.cli import build_parser
+    from dbabrain.sre.cli import build_parser
 
     args = build_parser().parse_args(["list-workflows"])
     assert args.config is None

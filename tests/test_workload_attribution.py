@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_ops.reports import workload, workload_attribution as wa
+from dbabrain.reports import workload, workload_attribution as wa
 
 T0 = "2026-09-11T05:00:00Z"
 T1 = "2026-09-11T05:15:00Z"
@@ -259,7 +259,7 @@ def test_the_fleet_overlay_does_not_load_a_row_per_statement():
 
 
 def test_the_server_page_payload_carries_both_blocks():
-    from db_ops.reports import server_report
+    from dbabrain.reports import server_report
 
     rows = [_log_row(T0, "APPDB", log_bytes_flushed=0, log_flushes=0),
             _log_row(T1, "APPDB", log_bytes_flushed=1024, log_flushes=1),

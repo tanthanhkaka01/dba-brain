@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import config_upgrade, field_migration
-from db_ops.lib import field_names
+from dbabrain.common import config_upgrade, field_migration
+from dbabrain.lib import field_names
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -39,7 +39,7 @@ STALE = """{
 """
 
 
-@pytest.mark.parametrize("catalogue", ["db_ops/db/catalogue/config_catalog.json",
+@pytest.mark.parametrize("catalogue", ["dbabrain/db/catalogue/config_catalog.json",
                                        "data/config_catalog.example.json"])
 def test_a_shipped_catalogue_names_no_field_by_a_renamed_spelling(catalogue):
     sites = field_migration._sites()

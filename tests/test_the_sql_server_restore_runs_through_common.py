@@ -26,8 +26,8 @@ import pytest
 
 from conftest import patch_restore
 
-from db_ops.backup_restore.restore_database import _sqlcmd_argv, _sqlcmd_request, build_sqlcmd_query_command
-from db_ops.common import sqlcmd_run
+from dbabrain.backup_restore.restore_database import _sqlcmd_argv, _sqlcmd_request, build_sqlcmd_query_command
+from dbabrain.common import sqlcmd_run
 from tests.test_backup_restore import make_config
 
 SQL = "RESTORE DATABASE [APPDB] FROM DISK = N'E:\\SQLBK_IMPORT\\APPDB.bak' WITH NORECOVERY, STATS = 10"
@@ -53,7 +53,7 @@ def _lines(text: str, *starts: str) -> list[str]:
 
 def test_a_windows_target_runs_the_same_sqlcmd_over_winrm(windows, monkeypatch):
     """The app's `Invoke-Command` and the script `remote_exec` runs pass sqlcmd the same values."""
-    monkeypatch.setattr("db_ops.lib.powershell.powershell_executable", lambda: "powershell")
+    monkeypatch.setattr("dbabrain.lib.powershell.powershell_executable", lambda: "powershell")
     before = _sqlcmd_argv(sql=SQL, config=windows)[-1]
 
     request = _sqlcmd_request(build_sqlcmd_query_command(sql=SQL, config=windows), windows, via="winrm")
@@ -74,7 +74,7 @@ def test_a_windows_target_runs_the_same_sqlcmd_over_winrm(windows, monkeypatch):
 
 def test_a_windows_target_without_a_password_gets_no_credential_either(windows):
     """No stored host password ran the app's `Invoke-Command` as the node's own identity."""
-    from db_ops.common import remote_exec
+    from dbabrain.common import remote_exec
 
     config = dataclasses.replace(windows, vm_username="", vm_password_env="",
                                  restore_command_timeout_seconds=0)
@@ -88,7 +88,7 @@ def test_a_windows_target_without_a_password_gets_no_credential_either(windows):
 
 def test_the_exit_code_comes_from_sqlcmd_not_from_the_error_stream(monkeypatch):
     """pypsrp says only whether the error stream was written; sqlcmd -b writes its error to stdout."""
-    from db_ops.common import remote_exec
+    from dbabrain.common import remote_exec
 
     class Session:
         def __enter__(self):
@@ -125,7 +125,7 @@ def test_a_local_run_gets_the_same_sqlcmd_argv(tmp_path, monkeypatch):
 
 def _connect_to(monkeypatch, client):
     """`remote_exec`'s SSH session, connected to ``client`` instead of a host."""
-    from db_ops.common import remote_exec
+    from dbabrain.common import remote_exec
 
     def connect(session):
         session._client = client
@@ -226,8 +226,8 @@ def test_a_request_that_cannot_run_is_refused_by_name(request_, message):
 
 
 def test_the_app_reads_a_timeout_answer_as_a_started_command(monkeypatch):
-    from db_ops.backup_restore import restore_database
-    from db_ops.transport import common_cli
+    from dbabrain.backup_restore import restore_database
+    from dbabrain.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure",
                         lambda *a, **k: (True, {"timed_out": True, "exit_code": None}, ""))
@@ -238,8 +238,8 @@ def test_the_app_reads_a_timeout_answer_as_a_started_command(monkeypatch):
 
 
 def test_the_app_reads_a_command_that_could_not_run_as_an_error(monkeypatch):
-    from db_ops.backup_restore import restore_database
-    from db_ops.transport import common_cli
+    from dbabrain.backup_restore import restore_database
+    from dbabrain.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure",
                         lambda *a, **k: (False, {}, "could not connect to tuser@198.51.100.31"))
@@ -249,8 +249,8 @@ def test_the_app_reads_a_command_that_could_not_run_as_an_error(monkeypatch):
 
 
 def test_a_completed_run_comes_back_as_the_process_it_was(monkeypatch):
-    from db_ops.backup_restore import restore_database
-    from db_ops.transport import common_cli
+    from dbabrain.backup_restore import restore_database
+    from dbabrain.transport import common_cli
 
     monkeypatch.setattr(common_cli, "run_allowing_failure", lambda *a, **k: (
         True, {"timed_out": False, "exit_code": 1, "stdout": "Msg 3013", "stderr": ""}, ""))
@@ -309,7 +309,7 @@ def test_a_batch_that_finishes_before_the_first_poll_is_still_echoed(monkeypatch
 def test_a_linux_restore_logs_its_progress_too(tmp_path, monkeypatch):
     """The Linux path logged no progress events at all before 0.23.0 - only the Windows and local
     ones did. The answer carries the same lines on every path."""
-    from db_ops.backup_restore import restore_database
+    from dbabrain.backup_restore import restore_database
 
     config = dataclasses.replace(make_config(tmp_path), vm_platform="linux",
                                  vm_credential_target="198.51.100.31")

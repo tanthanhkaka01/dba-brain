@@ -1,9 +1,9 @@
-from db_ops.metrics.models import MetricResult
-from db_ops.metrics.storage import MetricStore
+from dbabrain.metrics.models import MetricResult
+from dbabrain.metrics.storage import MetricStore
 
 
 def test_fetch_latest_report_results_can_filter_active_metric_codes(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
 
     store.insert_results(
         run_id=1,
@@ -49,7 +49,7 @@ def test_fetch_latest_report_results_can_filter_active_metric_codes(tmp_path):
 
 
 def test_fetch_latest_report_results_empty_metric_code_filter_returns_no_rows(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
 
     rows = store.fetch_latest_report_results(metric_codes=set())
 
@@ -57,7 +57,7 @@ def test_fetch_latest_report_results_empty_metric_code_filter_returns_no_rows(tm
 
 
 def test_latest_successful_result_time_ignores_sql_execution_failed_warning(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.insert_results(
         run_id=1,
         results=[
@@ -88,7 +88,7 @@ def test_latest_successful_result_time_ignores_sql_execution_failed_warning(tmp_
 
 
 def test_mark_daily_report_created_updates_selected_metric_rows(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
     store.insert_results(
         run_id=1,
         results=[
@@ -119,7 +119,7 @@ def test_mark_daily_report_created_updates_selected_metric_rows(tmp_path):
 
 
 def test_insert_results_coerces_raw_command_metadata_to_sqlite_types(tmp_path):
-    store = MetricStore(tmp_path / "db_ops.sqlite")
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
 
     class OddStream:
         def __str__(self):

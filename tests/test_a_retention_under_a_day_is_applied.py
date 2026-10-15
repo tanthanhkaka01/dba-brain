@@ -33,12 +33,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.backup_restore import prune, spec_builder
-from db_ops.backup_restore.backup import BackupJob
-from db_ops.common import cli_backup_files
-from db_ops.common.backupfiles import age_seconds, list_backup_files
-from db_ops.lib.backupfiles_retention import AGE, KEEP, OBSOLETE, RECOVERY_WINDOW, plan_retention
-from db_ops.lib.time_window import parse_time_window_config
+from dbabrain.backup_restore import prune, spec_builder
+from dbabrain.backup_restore.backup import BackupJob
+from dbabrain.common import cli_backup_files
+from dbabrain.common.backupfiles import age_seconds, list_backup_files
+from dbabrain.lib.backupfiles_retention import AGE, KEEP, OBSOLETE, RECOVERY_WINDOW, plan_retention
+from dbabrain.lib.time_window import parse_time_window_config
 
 SCRIPTS = Path(spec_builder.__file__).resolve().parents[1] / "common" / "backup_scripts"
 
@@ -289,7 +289,7 @@ def test_postgresql_reads_the_hosts_clock_in_the_same_listing(monkeypatch):
         seen["command"] = command
         return {"stdout": listing}
 
-    monkeypatch.setattr("db_ops.common.backupfiles.postgresql.run", fake_run)
+    monkeypatch.setattr("dbabrain.common.backupfiles.postgresql.run", fake_run)
     files = list_backup_files({"db_type": "postgresql", "path": "/b",
                                "host": {"runtime": "docker", "container": "pg"}})["files"]
     assert "date '+%Y-%m-%d %H:%M:%S'" in seen["command"]
@@ -311,7 +311,7 @@ def test_oracle_reads_the_clock_of_the_shell_rman_ran_in(monkeypatch):
         seen["command"] = command
         return {"stdout": listing}
 
-    monkeypatch.setattr("db_ops.common.backupfiles.oracle.run", fake_run)
+    monkeypatch.setattr("dbabrain.common.backupfiles.oracle.run", fake_run)
     files = list_backup_files({"db_type": "oracle", "path": "/b",
                                "host": {"runtime": "docker", "container": "ora"}})["files"]
     assert "__HOST_NOW__ $(date" in seen["command"]
@@ -320,7 +320,7 @@ def test_oracle_reads_the_clock_of_the_shell_rman_ran_in(monkeypatch):
 
 def test_sqlserver_asks_the_instance_for_its_own_now(monkeypatch):
     """BackupFinishDate and GETDATE() are the same clock, and neither carries a zone."""
-    from db_ops.common.backupfiles import sqlserver
+    from dbabrain.common.backupfiles import sqlserver
 
     asked = []
 
@@ -334,7 +334,7 @@ def test_sqlserver_asks_the_instance_for_its_own_now(monkeypatch):
                  "BackupFinishDate": datetime(2026, 10, 2, 9, 42, 12)}]
 
     connection = SimpleNamespace(cursor=lambda: object(), close=lambda: None)
-    monkeypatch.setattr("db_ops.common.db_connect.connect_engine", lambda **kwargs: connection)
+    monkeypatch.setattr("dbabrain.common.db_connect.connect_engine", lambda **kwargs: connection)
     monkeypatch.setattr(sqlserver.sql_run, "query_rows", fake_rows)
     rows = sqlserver.list_files({"path": "/b", "target": {"host": "h", "username": "sa", "password": "p"}})
     assert any("GETDATE()" in statement for statement in asked)
@@ -384,8 +384,8 @@ def test_the_common_command_refuses_to_delete_a_postgresql_backup_by_name(monkey
         {"path": "/b/base/20261002T090000Z_FULL", "kind": "full", "database_name": None,
          "finished_at": "2026-10-02 09:00:00", "age_seconds": 2580},
     ]}
-    monkeypatch.setattr("db_ops.common.backupfiles.list_backup_files", lambda request: listed)
-    monkeypatch.setattr("db_ops.common.deletefiles.delete_files",
+    monkeypatch.setattr("dbabrain.common.backupfiles.list_backup_files", lambda request: listed)
+    monkeypatch.setattr("dbabrain.common.deletefiles.delete_files",
                         lambda request: pytest.fail("nothing may be deleted"))
     code = cli_backup_files._prune({"db_type": "postgresql", "path": "/b", "cleanup_retention": 7200,
                                     "delete": True, "host": {}})

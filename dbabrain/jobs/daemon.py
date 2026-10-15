@@ -1,0 +1,1790 @@
+from __future__ import annotations
+
+from dbabrain.lib import errors
+from dbabrain.lib.text_format import format_log_value  # noqa: F401 - one definition, see that module
+
+import argparse
+import json
+import os
+import shlex
+import socket
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, IO
+
+from dbabrain.lib.json_io import load_json_file
+from dbabrain.lib.secret_text import SECRET_KEY_ENV_VAR, resolve_cli_key
+from dbabrain.lib.config import DEFAULT_CONFIG_PATH, DbaBrainConfig, load_config, resolve_config_path
+from dbabrain.lib.time_window import (
+    DueVerdict,
+    TimeWindow,
+    due_from_row,
+    is_time_window_open,
+    parse_time_window_config,
+    run_anchor,
+)
+from dbabrain.lib.timezone import display_now
+from dbabrain import __version__ as dbabrain_version
+from dbabrain.db import DbaBrainStore
+from dbabrain.db.store import RunAlreadyClaimed
+from dbabrain.lib import app_timeout, daemon_state, node_identity, process_liveness, run_claim, store_outage
+from dbabrain.lib.process_liveness import child_start_marker, own_group_kwargs, stop_process_tree
+from dbabrain.lib import node_role as node_role_rule
+from dbabrain.lib import run_mode as run_mode_lib
+from dbabrain.db.store import utc_now_text
+from dbabrain.jobs.models import JobRun
+from dbabrain.logging_ops import LOG_SCOPE_ENV_VAR, build_log_paths, log_event, log_function_error, setup_app_logger, validate_log_scope
+from dbabrain.logging_ops.handlers import archive_yesterday_if_missing, ensure_current_log_file
+from dbabrain.logging_ops.runtime_stdout import patch_stdout
+from dbabrain.lib.paths import DEFAULT_DATA_DIR, REPO_ROOT, TOOL_ROOT  # noqa: F401 - one definition, see that module
+
+
+# dbabrain is a standalone repo root; keep REPO_ROOT as an alias so path resolution
+# never escapes the project (was TOOL_ROOT.parents[1] under the old repo/tools/dbabrain layout).
+MAX_OUTPUT_CHARS = 8000
+
+
+@dataclass(frozen=True)
+class AppCommand:
+    app_command_id: str
+    app_code: str
+    app_name: str
+    display_name: str
+    log_scope: str
+    working_dir: str
+    command_text: str
+    time_window: TimeWindow
+    active: bool
+    node_role: str = "all"  # master | worker | all — which cluster node runs this command
+    #: sync (default) = the daemon waits for one run to finish before starting the next; async =
+    #: it starts the command whenever it is due, in flight or not, up to max_parallel. An async
+    #: command must refuse its own duplicate work — see dbabrain/lib/run_mode.py.
+    run_mode: run_mode_lib.RunMode = field(default_factory=run_mode_lib.RunMode)
+
+    @property
+    def repeat_interval_seconds(self) -> int | None:
+        return self.time_window.repeat_interval
+
+    @property
+    def retry_interval_seconds(self) -> int:
+        # Explicit None check so 0 (retry immediately) survives instead of falling back to 60.
+        value = self.time_window.retry_interval
+        return int(value) if value is not None else 60
+
+    @property
+    def timeout_seconds(self) -> int:
+        # Explicit None check so 0 (no timeout-kill) survives instead of falling back to 300.
+        value = self.time_window.timeout
+        return int(value) if value is not None else 300
+
+    @property
+    def timeout_disabled(self) -> bool:
+        """timeout == 0 => long-running service; the daemon never timeout-kills it."""
+        return self.time_window.timeout == 0
+
+
+@dataclass
+class RunningAppCommand:
+    app_command: AppCommand
+    process: subprocess.Popen
+    started_at: datetime
+    log_id: int
+    working_dir: Path
+    logs_dir: Path
+    stdout_file: IO[str]
+    stderr_file: IO[str]
+    #: The console request this run answers, when it was not the schedule that started it. Carried
+    #: on the running record rather than looked up at reap time, because by then the only thing
+    #: left tying the two together is a field inside the job_runs metadata blob.
+    run_request_id: int | None = None
+    requested_by: str = ""
+    #: The head's start time, read right after it was launched - what lets a stop walk its tree
+    #: without ever walking a stranger's (`process_liveness.stop_process_tree`).
+    start_marker: str | None = None
+
+    @property
+    def request_metadata(self) -> dict[str, Any]:
+        """The request fields to stamp on this run's job_runs row, at start **and** at finish.
+
+        The finish rewrites the row's metadata wholesale, so leaving them off there silently
+        erased them: a completed requested run looked exactly like a scheduled one, and "why did
+        this run at 03:00" stopped being answerable the moment it succeeded.
+        """
+        if self.run_request_id is None:
+            return {}
+        return {"run_request_id": int(self.run_request_id), "requested_by": self.requested_by}
+
+
+@dataclass(frozen=True)
+class ForwardedKeyArgs:
+    option: str = ""
+    value: str = ""
+
+    @property
+    def supplied(self) -> bool:
+        return bool(self.option and self.value)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run dbabrain app-command daemon forever.")
+    parser.add_argument("--config", default=None, help="Path to config JSON. Defaults to config.jobs.json or config.json.")
+    parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR), help="Directory containing app_commands.json.")
+    # 1 second since 2026-09-18, from 2. The scan is a read of app_commands.json and a due-ness
+    # check; what it costs is nothing next to being the thing that decides when a task runs. At 2
+    # a command asking for every 60 s got 60-62, and the operator had to reason about two clocks.
+    parser.add_argument("--delay-seconds", type=int, default=1, help="Delay between app command scans. Default: 1.")
+    parser.add_argument("--once", action="store_true",
+                        help="Run one app command scan and exit after started commands finish. "
+                             "Long-running services (timeout 0, e.g. the web host) are skipped, "
+                             "because they never finish.")
+    parser.add_argument(
+        "--key",
+        default=None,
+        help="Passphrase to decrypt data/encrypted_secret_text.json. Handed to spawned app commands in DBABRAIN_SECRET_KEY, never on their command line.",
+    )
+    parser.add_argument(
+        "--key-base64",
+        "--key_base64",
+        dest="key_base64",
+        default=None,
+        help=(
+            "Base64-encoded UTF-8 passphrase to decrypt data/encrypted_secret_text.json. "
+            "Handed to spawned app commands in DBABRAIN_SECRET_KEY, never on their command line."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+# job_runs is the busiest table in the store — the daemon appends to it on every app-command
+# start and finish — and nothing pruned it, so it reached ~1M rows / 965 MB with the oldest row
+# 2.5 months back. The daemon is the right owner: it is the process that writes most of those
+# rows and the only one always running.
+JOB_RUNS_RETENTION_DAYS = 15
+#: How often to sweep. Not every tick: the loop runs every 1-10s and a `SELECT ... LIMIT` per
+#: tick would be pure noise against a table this size.
+JOB_RUNS_SWEEP_INTERVAL_SECONDS = 300
+#: Rows per transaction, and transactions per sweep. One capped batch keeps a pass short enough
+#: that scheduling never waits on housekeeping; the backlog drains over successive passes.
+JOB_RUNS_SWEEP_BATCH_SIZE = 20000
+JOB_RUNS_SWEEP_MAX_BATCHES = 1
+
+_JOB_RUNS_SWEEP_STATE: dict[str, float] = {"last_swept_at": 0.0}
+
+
+def sweep_job_runs_history(
+    *,
+    store: DbaBrainStore,
+    logger: Any = None,
+    retention_days: int = JOB_RUNS_RETENTION_DAYS,
+    interval_seconds: int = JOB_RUNS_SWEEP_INTERVAL_SECONDS,
+    now: float | None = None,
+) -> int:
+    """Move aged ``job_runs`` rows into ``job_runs_history``, at most once per interval.
+
+    Returns how many rows moved (0 when the interval has not elapsed).
+
+    Every failure is swallowed. Housekeeping must never take the scheduler down with it: a
+    daemon that cannot archive is a table that grows, while a daemon that dies is every app
+    command on the node not running.
+    """
+    moment = time.monotonic() if now is None else now
+    if moment - _JOB_RUNS_SWEEP_STATE["last_swept_at"] < interval_seconds:
+        return 0
+    _JOB_RUNS_SWEEP_STATE["last_swept_at"] = moment
+    try:
+        moved = store.archive_old_job_runs(
+            retention_days=retention_days,
+            batch_size=JOB_RUNS_SWEEP_BATCH_SIZE,
+            max_batches=JOB_RUNS_SWEEP_MAX_BATCHES,
+        )
+    except Exception as exc:  # noqa: BLE001 - housekeeping must not stop the scheduler.
+        if logger:
+            log_function_error(
+                logger, function_name="app.daemon.job_runs_sweep", error_text=str(exc)
+            )
+        return 0
+    if moved and logger:
+        log_app_event(
+            logger,
+            "app.daemon.job_runs_sweep",
+            status="done",
+            moved=moved,
+            retention_days=retention_days,
+        )
+    return moved
+
+
+#: The result-file sweep runs hourly: files are kept for days, so a finer pass finds nothing new.
+OUTPUT_SWEEP_INTERVAL_SECONDS = 3600
+_OUTPUT_SWEEP_STATE: dict[str, float] = {"last_swept_at": float("-inf")}
+
+
+def sweep_output_files(
+    *,
+    runtime_dir: Path,
+    retention_days: int,
+    logger: Any = None,
+    interval_seconds: int = OUTPUT_SWEEP_INTERVAL_SECONDS,
+    now: float | None = None,
+) -> int:
+    """Delete result files under ``<runtime_dir>/output`` older than ``retention_days``.
+
+    Query results, xlsx exports and config exports land there and nothing removed them: the folder
+    only grew, holding business data no one would read again (review 0.25.0, F4.3). Only regular
+    files are touched, only under that folder, and only by age - a file still waiting to be sent is
+    minutes old. Directories stay; an empty one costs nothing. Returns how many files went.
+
+    Every failure is swallowed, as for the ``job_runs`` sweep: a daemon that cannot tidy up must
+    still schedule.
+    """
+    moment = time.monotonic() if now is None else now
+    if retention_days <= 0 or moment - _OUTPUT_SWEEP_STATE["last_swept_at"] < interval_seconds:
+        return 0
+    _OUTPUT_SWEEP_STATE["last_swept_at"] = moment
+    root = Path(runtime_dir) / "output"
+    cutoff = time.time() - retention_days * 86400
+    removed = 0
+    try:
+        candidates = [path for path in root.rglob("*") if path.is_file() and not path.is_symlink()]
+    except OSError:
+        return 0
+    for path in candidates:
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    if removed and logger:
+        log_app_event(logger, "app.daemon.output_sweep", status="done", removed=removed,
+                      retention_days=retention_days, root=str(root))
+    return removed
+
+
+def wait_out_store_outage(error: Exception, *, waiter: store_outage.OutageWaiter,
+                          logger: Any = None) -> int | None:
+    """Seconds to wait before trying the store again, or ``None`` to let the error out.
+
+    The rule is :mod:`dbabrain.lib.store_outage`; this is the half that logs, because a wait nobody
+    can see is indistinguishable from a daemon that has stopped scheduling. Every wait is written
+    to the error log with the code the store sent and the budget left, so the gap in ``job_runs``
+    has an explanation beside it rather than only an absence.
+    """
+    wait = waiter.wait_for(error)
+    if wait is None:
+        return None
+    code = store_outage.sqlstate(error) or "-"
+    detail = (f"store unavailable ({type(error).__name__} {code}): {error}; "
+              f"retry {waiter.attempts} in {wait}s, "
+              f"{waiter.budget_seconds - waiter.waited_seconds}s of budget left")
+    if logger:
+        log_function_error(logger, function_name="app.daemon.store_outage", error_text=detail)
+    print(f"WARNING: {detail}", file=sys.stderr)
+    return wait
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    forwarded_key_args = build_forwarded_key_args(args)
+    ensure_forwarded_secret_key_env(forwarded_key_args)
+    # Before anything else can be left half-done: a SIGTERM arriving during startup must still
+    # unwind through the shutdown path rather than killing the process where it stands.
+    install_shutdown_handlers()
+    logger = None
+    # Bound before the try: a SIGTERM during start-up reaches the handlers below before either is
+    # set, and they raised UnboundLocalError on the way out (review 0.25.0, B2.5).
+    config = None
+    store = None
+    running_commands: dict[str, RunningAppCommand] = {}
+    try:
+        config = load_config(resolve_config_path("jobs", args.config))
+        patch_stdout(config.log_dir / "jobs_runtime.log", app_name="jobs")
+        logger = setup_app_logger(config, app_name="jobs", enable_telegram_alerts=False)
+        store = DbaBrainStore.from_config(config)
+        # A daemon started *during* a store restart must wait for it exactly as a running one does.
+        # Without this the first attempt to bring the estate back up after a store bounce exits on
+        # the same `57P03` that ended 0.18.0, one second before the store would have answered.
+        startup_waiter = store_outage.OutageWaiter()
+        while True:
+            try:
+                store.initialize()
+                break
+            except Exception as exc:  # noqa: BLE001 - re-raised unless it is a store outage.
+                wait = wait_out_store_outage(exc, waiter=startup_waiter, logger=logger)
+                if wait is None:
+                    raise
+                time.sleep(wait)
+        data_dir = Path(args.data_dir).resolve()
+        delay_seconds = max(1, int(args.delay_seconds))
+        log_app_event(logger, "app.daemon.start", status="running", data_dir=str(data_dir), delay_seconds=delay_seconds)
+        # So something that is not this process can say how long DBA Brain has been up here.
+        # `self-status` is asked that and cannot see it: it runs as a separate short-lived process
+        # and deliberately opens no store. One small file in runtime/ answers it for free.
+        # Only a daemon that is going to keep running claims this file. A `--once` pass is a
+        # command, not a daemon: recording here would overwrite the state of a long-running one in
+        # the same root, and the clear on its way out would then delete it.
+        if not getattr(args, "once", False):
+            daemon_state.record_start(
+                config.runtime_dir,
+                version=dbabrain_version,
+                node_role=os.environ.get("DBABRAIN_NODE_ROLE") or "master",
+            )
+        # Before the first claim and the first reap: every run this daemon starts inherits it, and
+        # the startup recovery below is what reads it - a recreated container finds the rows its
+        # predecessor left under another host name and frees them now, not an hour past their
+        # timeout (0.26.0 §1.69). A root that cannot hold the file leaves it unset: no sooner reap.
+        _identity = node_identity.ensure(config.runtime_dir)
+        if _identity:
+            os.environ[node_identity.ENV_VAR] = _identity
+        record_node_timezone(store=store, config=config, logger=logger)
+        _startup_commands = load_app_commands(data_dir / "app_commands.json", logger=logger)
+        recover_stale_running_jobs(store=store, app_commands=_startup_commands, config=config,
+                                   logger=logger, node_role=getattr(config, "node_role", None))
+
+        _db_lock_retries = 0
+        store_waiter = store_outage.OutageWaiter()
+        while True:
+            try:
+                run_scheduler_scan(
+                    config=config,
+                    store=store,
+                    data_dir=data_dir,
+                    logger=logger,
+                    running_commands=running_commands,
+                    forwarded_key_args=forwarded_key_args,
+                    single_pass=bool(args.once),
+                )
+                # After scheduling, never before: a due app command must not wait on cleanup.
+                sweep_job_runs_history(store=store, logger=logger)
+                sweep_output_files(runtime_dir=config.runtime_dir,
+                                   retention_days=config.output_retention_days, logger=logger)
+                _db_lock_retries = 0
+                store_waiter.recovered()
+            except sqlite3.OperationalError as exc:
+                if "database is locked" in str(exc).lower():
+                    _db_lock_retries += 1
+                    backoff = min(30, _db_lock_retries * 2)
+                    if logger:
+                        log_function_error(logger, function_name="app.daemon", error_text=f"database is locked (retry {_db_lock_retries}, backing off {backoff}s)")
+                    print(f"WARNING: database is locked (retry {_db_lock_retries}), backing off {backoff}s", file=sys.stderr)
+                    time.sleep(backoff)
+                    continue
+                raise
+            except Exception as exc:  # noqa: BLE001 - re-raised unless it is a store outage.
+                # The store going away for a moment is not the daemon's failure, and it used to be
+                # treated as one: a two-second container restart raised `FATAL 57P03`, this loop let
+                # it out, `main` logged one line and returned 1, and nothing restarted the process.
+                # Nineteen hours of silence and an abandoned candidate (0.18.0) came from those
+                # two seconds. Anything that is not a store outage still leaves here untouched.
+                wait = wait_out_store_outage(exc, waiter=store_waiter, logger=logger)
+                if wait is None:
+                    raise
+                time.sleep(wait)
+                continue
+            if args.once:
+                while running_commands:
+                    collect_running_commands(store=store, logger=logger, running_commands=running_commands)
+                    time.sleep(0.1)
+                # A single pass is a deliberate stop like any other, so it leaves no state file
+                # behind. Without this the next reader finds one whose pid is gone and reports a
+                # daemon that died, which is the opposite of what happened.
+                daemon_state.clear(config.runtime_dir, pid=os.getpid())
+                return 0
+            time.sleep(delay_seconds)
+    except _DaemonStopped as stop:
+        if config is not None:
+            daemon_state.clear(config.runtime_dir, pid=os.getpid())
+        if store is not None:
+            close_running_on_shutdown(store=store, logger=logger,
+                                      running_commands=running_commands, reason=stop.reason)
+        if logger:
+            log_app_event(logger, "app.daemon.stop", status="stopped", reason=stop.reason)
+        return 0
+    except KeyboardInterrupt:
+        if config is not None:
+            daemon_state.clear(config.runtime_dir, pid=os.getpid())
+        if store is not None:
+            close_running_on_shutdown(store=store, logger=logger,
+                                      running_commands=running_commands, reason="keyboard_interrupt")
+        if logger:
+            log_app_event(logger, "app.daemon.stop", status="stopped", reason="keyboard_interrupt")
+        return 0
+    except Exception as exc:  # noqa: BLE001 - command-line failure path.
+        if logger:
+            log_function_error(logger, function_name="app.daemon", error_text=str(exc))
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def record_node_timezone(*, store: Any, config: Any, logger: Any = None) -> None:
+    """Note in the store which clock this node came up on.
+
+    Master and worker share one store and each reads its own ``config.json``, so nothing in the
+    store could say whether the two agreed about the hour — and a ``time_window`` firing at the
+    wrong time on one of them looks exactly like a schedule that was never due. One row, upserted
+    at start-up, is the whole answer.
+
+    Every failure here is swallowed. It is bookkeeping: a store that is down is already being
+    reported by everything else, and raising would turn "could not note the timezone" into "the
+    daemon did not start".
+    """
+    try:
+        import socket
+
+        from dbabrain.lib import timezone as timezone_lib
+
+        facts = timezone_lib.describe()
+        nodes = getattr(config, "worker" if config.node_role == "worker" else "master", ()) or ()
+        node_id = next((str(n.node_id) for n in nodes if str(n.node_id).strip()), socket.gethostname())
+        store.record_runtime_node(
+            node_id=node_id, node_role=config.node_role, hostname=socket.gethostname(),
+            timezone_name=str(facts["timezone"]),
+            utc_offset_minutes=int(facts["utc_offset_minutes"]),
+            tz_abbreviation=str(facts["tz_abbreviation"]),
+            app_version=dbabrain_version,
+        )
+        log_app_event(logger, "app.daemon.timezone", status="running",
+                      node_id=node_id, timezone=facts["timezone"], utc_offset=facts["utc_offset"])
+    except Exception as exc:  # noqa: BLE001 - see the docstring.
+        if logger:
+            log_function_error(logger, function_name="app.daemon.timezone", error_text=str(exc))
+
+
+def _command_runs_on_node(command: AppCommand, node_role: str) -> bool:
+    """True if this command should run on a node with the given role. ``all`` (and the
+    legacy aliases ``both``/``any``/empty) runs everywhere; otherwise the command's
+    node_role must equal the node role (``master`` runs master+all, ``worker`` runs
+    worker+all)."""
+    return node_role_rule.runs_on(command.node_role, node_role, default="all")
+
+
+def run_scheduler_scan(
+    *,
+    config: DbaBrainConfig,
+    store: DbaBrainStore,
+    data_dir: Path,
+    logger: Any,
+    running_commands: dict[str, RunningAppCommand],
+    forwarded_key_args: ForwardedKeyArgs | None = None,
+    single_pass: bool = False,
+) -> None:
+    collect_running_commands(store=store, logger=logger, running_commands=running_commands)
+    app_commands = load_app_commands(data_dir / "app_commands.json", logger=logger)
+    latest_runs = store.fetch_latest_job_runs_by_job_code()
+    node_role = getattr(config, "node_role", "master")
+    active_commands = [
+        command
+        for command in app_commands.values()
+        if command.active and _command_runs_on_node(command, node_role)
+    ]
+    log_app_event(
+        logger,
+        "app.daemon.tick",
+        status="running",
+        node_role=node_role,
+        active_commands=len(active_commands),
+    )
+
+    # A daemon with nothing to run looks identical to a daemon that is working: the same tick,
+    # forever, with `active_commands=0`. Say which of the three reasons it is, because they have
+    # three different fixes and the reader cannot tell them apart from the outside.
+    #
+    # The third is the one that catches people. `data/app_commands.example.json` is written for a
+    # two-node estate where a `worker` runs the schedule, so a single-machine install copies it,
+    # starts the daemon as `master`, and watches it do nothing — with no line saying that every
+    # command was filtered out by a role it never chose.
+    if not active_commands:
+        inactive = [c for c in app_commands.values() if not c.active]
+        wrong_role = [
+            command for command in app_commands.values()
+            if command.active and not _command_runs_on_node(command, node_role)
+        ]
+        if not app_commands:
+            detail = (f"no commands are defined in {data_dir / 'app_commands.json'} - copy "
+                      f"data/app_commands.example.json and enable what you want scheduled")
+        elif wrong_role:
+            roles = sorted({(c.node_role or "all") for c in wrong_role})
+            detail = (
+                f"{len(wrong_role)} command(s) are defined for node_role {roles} and this node is "
+                f"'{node_role}', so none of them run here. Set DBABRAIN_NODE_ROLE={roles[0]} on this "
+                f"process, or change node_role to 'all' in app_commands.json"
+            )
+        else:
+            detail = f"{len(inactive)} command(s) are defined but none has active=true"
+        log_app_event(
+            logger, "app.daemon.nothing_scheduled", status="warning",
+            node_role=node_role, defined=len(app_commands), detail=detail,
+        )
+
+    sweep_run_requests(store, logger=logger)
+    requests = open_run_requests(store, logger=logger)
+
+    for app_command in active_commands:
+        if single_pass and app_command.timeout_disabled:
+            # `--once` is one pass of every due command and then exit, and it waits for what it
+            # started. A timeout-0 command is a service that never exits, so starting one made the
+            # single pass wait for ever - which is why APP-WEBHOST shipped inactive from v0.4.0 until
+            # 2026-09-11. The flag hid the defect rather than fixing it: every command now ships
+            # active, so the pass skips services and says so instead of hanging.
+            log_app_event(
+                logger,
+                "app.daemon.command.skip_service",
+                app_command=app_command,
+                status="skipped",
+                reason="long_running_service_not_run_by_once",
+            )
+            continue
+        requested = requests.get(app_command.app_command_id)
+        # A request is not a schedule. It deliberately overrides the allowed-hours window and the
+        # repeat interval, because "run it now" is asked at the moment somebody needs the answer —
+        # usually outside the window, usually right after the last run. What it does NOT override
+        # is "already running": starting a second copy of an app that is mid-flight is how two
+        # collectors write the same metric run.
+        in_flight = count_in_flight(running_commands, app_command.app_command_id)
+        if not run_mode_lib.may_start(app_command.run_mode, in_flight=in_flight):
+            # `sync` skips at one, which is what every command did before run_mode existed.
+            # `async` skips only at its cap: the point of that mode is to be called again while a
+            # run is still going, and what stops the same *work* running twice is the claim each
+            # unit takes in the store, not this check.
+            if requested is not None:
+                log_app_event(
+                    logger,
+                    "app.daemon.command.request_waiting",
+                    app_command=app_command,
+                    status="skipped",
+                    reason="already_running",
+                    run_mode=app_command.run_mode.mode,
+                    in_flight=in_flight,
+                )
+            else:
+                log_app_event(
+                    logger,
+                    "app.daemon.command.skip_running",
+                    app_command=app_command,
+                    status="skipped",
+                    reason="already_running" if not app_command.run_mode.is_async else "at_max_parallel",
+                    run_mode=app_command.run_mode.mode,
+                    in_flight=in_flight,
+                    max_parallel=app_command.run_mode.max_parallel,
+                )
+            continue
+        if requested is None:
+            if not app_command_in_schedule_window(app_command):
+                log_app_event(
+                    logger,
+                    "app.daemon.command.skip_window",
+                    app_command=app_command,
+                    status="skipped",
+                    reason="outside_allowed_window",
+                )
+                continue
+            latest = latest_runs.get(app_command.app_command_id)
+            if not app_command_is_due(app_command, latest):
+                _log_command_not_due(logger, app_command, latest)
+                continue
+            log_app_event(logger, "app.daemon.command.due", app_command=app_command, status="due")
+        else:
+            # Claim before starting, never after: the claim is the conditional UPDATE that makes
+            # two daemons on one store unable to both act on the same request.
+            requested = claim_run_request(store, app_command.app_command_id, logger=logger)
+            if requested is None:
+                continue
+            log_app_event(
+                logger,
+                "app.daemon.command.requested",
+                app_command=app_command,
+                status="due",
+                request_id=requested["request_id"],
+                requested_by=requested["requested_by"],
+            )
+        try:
+            start_app_command(
+                config=config,
+                store=store,
+                data_dir=data_dir,
+                logger=logger,
+                running_commands=running_commands,
+                app_command=app_command,
+                forwarded_key_args=forwarded_key_args or ForwardedKeyArgs(),
+                run_request=requested,
+            )
+        except Exception as exc:
+            if requested is not None:
+                # The spawn failed before anything ran. Put the request back rather than leaving
+                # it claimed, or the console shows "queued" forever with nothing happening.
+                release_run_request(store, requested, logger=logger,
+                                    note="Start failed; returned to the queue.")
+            if _is_store_trouble(exc):
+                # The store going away is the loop's to wait out (see main), not this command's.
+                raise
+            # One command that cannot start is that command's failure, recorded against it and
+            # retried on its own retry_interval. Letting it out ended the daemon: a mistyped
+            # working_dir stopped every command listed after it, and `restart: unless-stopped`
+            # turned that into a crash loop that ran nothing past the bad entry.
+            record_start_failure(store, app_command, exc, logger=logger)
+            continue
+
+
+def _is_store_trouble(error: BaseException) -> bool:
+    """Is this the store failing (to be waited out by the loop) rather than the command?"""
+    if isinstance(error, sqlite3.OperationalError) and "database is locked" in str(error).lower():
+        return True
+    return store_outage.is_transient(error)
+
+
+def record_start_failure(store: DbaBrainStore, app_command: AppCommand, error: BaseException, *,
+                         logger: Any = None) -> None:
+    """A ``job_runs`` row saying this command could not be started, and why.
+
+    ``error`` status, so the scheduler retries it after its ``retry_interval`` rather than every
+    scan, and so ops-status and the failure alert see it like any other failed run. A store that
+    cannot take the row costs the row, never the daemon.
+    """
+    now_text = utc_now_text()
+    reason = f"{type(error).__name__}: {error}"
+    try:
+        store.insert_job_run(JobRun(
+            job_code=app_command.app_command_id,
+            level="error",
+            status="error",
+            message=f"App command {app_command.app_command_id} could not be started.",
+            started_at=now_text,
+            finished_at=now_text,
+            duration_ms=0,
+            error_text=f"start failed: {reason}"[:4000],
+            host_name=socket.gethostname(),
+            metadata=app_command_metadata(app_command, start_failed=True),
+        ))
+    except Exception as exc:  # noqa: BLE001 - see the docstring.
+        if logger:
+            log_function_error(logger, function_name="app.daemon.start_failed",
+                               error_text=f"{app_command.app_command_id}: {reason}; not recorded: {exc}")
+    log_app_event(logger, "app.daemon.command.start_failed", app_command=app_command,
+                  level="error", status="error", error=reason[:500])
+
+
+#: The queue lives in its own store class; the daemon reaches it through these four helpers so the
+#: scan reads as scheduling rather than as bookkeeping. Every one of them **fails open**: a queue
+#: that cannot be read must never stop the scheduled work, which is the whole estate's monitoring.
+def _run_request_store(store: Any) -> Any:
+    from dbabrain.db.run_requests import RunRequestStore
+
+    return RunRequestStore(store.target)
+
+
+def open_run_requests(store: Any, *, logger: Any = None) -> dict[str, Any]:
+    """Pending "run now" requests, by app_command_id. Empty when the queue cannot be read."""
+    try:
+        requests = _run_request_store(store)
+        return {code: row for code, row in requests.open_requests().items()
+                if str(row["status"]) == "pending"}
+    except Exception as exc:  # noqa: BLE001 - see the note above: the schedule must still run.
+        if logger is not None:
+            log_app_event(logger, "app.daemon.requests.unavailable", status="warning",
+                          level="warning", error=str(exc)[:200])
+        return {}
+
+
+def claim_run_request(store: Any, app_command_id: str, *, logger: Any = None) -> Any | None:
+    try:
+        return _run_request_store(store).claim(app_command_id)
+    except Exception as exc:  # noqa: BLE001
+        if logger is not None:
+            log_app_event(logger, "app.daemon.requests.claim_failed", status="warning",
+                          level="warning", app_command_id=app_command_id, error=str(exc)[:200])
+        return None
+
+
+def mark_run_request_started(store: Any, request: Any, *, job_run_id: int,
+                             logger: Any = None) -> None:
+    try:
+        _run_request_store(store).mark_started(int(request["request_id"]), job_run_id=job_run_id)
+    except Exception as exc:  # noqa: BLE001 - the command is already running; this is only the note.
+        if logger is not None:
+            log_app_event(logger, "app.daemon.requests.mark_failed", status="warning",
+                          level="warning", error=str(exc)[:200])
+
+
+def finish_run_request(store: Any, request_id: int, *, run_status: str,
+                       logger: Any = None) -> None:
+    """Close the request whose run has just been reaped, so the console stops showing it queued."""
+    try:
+        _run_request_store(store).mark_done(
+            int(request_id), note=f"Run finished with status {run_status}.")
+    except Exception as exc:  # noqa: BLE001 - the run is already recorded; this is only the badge.
+        if logger is not None:
+            log_app_event(logger, "app.daemon.requests.finish_failed", status="warning",
+                          level="warning", error=str(exc)[:200])
+
+
+def sweep_run_requests(store: Any, *, logger: Any = None) -> None:
+    """Expire what nobody picked up and close what has already finished.
+
+    Run once per scan. Both cases exist because the daemon can be stopped at any moment: a request
+    made while it was down must not fire when it returns, and one it started but never reaped must
+    not stay on the dashboard forever.
+    """
+    try:
+        requests = _run_request_store(store)
+        requests.expire_stale()
+        requests.close_finished()
+    except Exception as exc:  # noqa: BLE001 - housekeeping must never cost the scheduled work.
+        if logger is not None:
+            log_app_event(logger, "app.daemon.requests.sweep_failed", status="warning",
+                          level="warning", error=str(exc)[:200])
+
+
+def release_run_request(store: Any, request: Any, *, note: str = "", logger: Any = None) -> None:
+    try:
+        _run_request_store(store).release(int(request["request_id"]), note=note)
+    except Exception as exc:  # noqa: BLE001
+        if logger is not None:
+            log_app_event(logger, "app.daemon.requests.release_failed", status="warning",
+                          level="warning", error=str(exc)[:200])
+
+
+def collect_running_commands(
+    *,
+    store: DbaBrainStore,
+    logger: Any,
+    running_commands: dict[str, RunningAppCommand],
+) -> None:
+    now = datetime.now(timezone.utc)
+    for app_command_id, running in list(running_commands.items()):
+        elapsed_ms = int((now - running.started_at).total_seconds() * 1000)
+        process = running.process
+        returncode = process.poll()
+        # Still running: leave it alone unless it overran its timeout. timeout_disabled
+        # (timeout == 0) marks a long-running service (e.g. the web host) that must never
+        # be timeout-killed — only an actual process exit is acted on.
+        if returncode is None and (
+            running.app_command.timeout_disabled
+            or elapsed_ms <= running.app_command.timeout_seconds * 1000
+        ):
+            continue
+        if returncode is None:
+            terminate_timed_out_command(running)
+            status = "timeout"
+            level = "error"
+            error_text = f"Command timed out after {running.app_command.timeout_seconds} seconds."
+            stdout_summary = read_process_output_summary(running.stdout_file)
+            stderr_summary = read_process_output_summary(running.stderr_file)
+            log_app_event(
+                logger,
+                "app.daemon.command.timeout",
+                app_command=running.app_command,
+                level=level,
+                status=status,
+                pid=process.pid,
+                elapsed_ms=elapsed_ms,
+            )
+            write_command_runtime_event(
+                running.app_command,
+                "app.daemon.command.timeout",
+                logs_dir=running.logs_dir,
+                level=level,
+                pid=process.pid,
+                working_dir=running.working_dir,
+                exit_code=process.returncode,
+                duration_seconds=elapsed_ms / 1000,
+                stdout_summary=stdout_summary,
+                stderr_summary=stderr_summary,
+                status=status,
+            )
+        else:
+            status = "done" if returncode == 0 else "error"
+            level = "logging" if status == "done" else "error"
+            stdout_summary = read_process_output_summary(running.stdout_file)
+            stderr_summary = read_process_output_summary(running.stderr_file)
+            # The exit code alone says a run failed, never why. `job_runs.error_text` held only
+            # "Command exited with return code 1", so diagnosing the PostgreSQL NUL-byte failure
+            # meant reading source comments and correlating deploy timestamps — the traceback the
+            # child had already printed was written to a log file and never linked to the run that
+            # produced it. The tail of stderr is where a Python traceback ends, so it is the part
+            # worth keeping on the row itself.
+            error_text = _failed_run_error_text(returncode, stderr_summary, stdout_summary)                 if status == "error" else None
+            log_app_event(
+                logger,
+                "app.daemon.command.done",
+                app_command=running.app_command,
+                level=level,
+                status=status,
+                pid=process.pid,
+                elapsed_ms=elapsed_ms,
+            )
+            write_command_runtime_event(
+                running.app_command,
+                "app.daemon.command.done",
+                logs_dir=running.logs_dir,
+                level=level,
+                pid=process.pid,
+                working_dir=running.working_dir,
+                exit_code=process.returncode,
+                duration_seconds=elapsed_ms / 1000,
+                stdout_summary=stdout_summary,
+                stderr_summary=stderr_summary,
+                status=status,
+            )
+        store.update_job_run(
+            log_id=running.log_id,
+            level=level,
+            status=status,
+            message=f"App command {running.app_command.app_command_id} finished with status {status}.",
+            finished_at=utc_now_text(),
+            duration_ms=elapsed_ms,
+            error_text=error_text,
+            metadata=app_command_metadata(running.app_command, pid=process.pid,
+                                          returncode=process.returncode,
+                                          **running.request_metadata),
+        )
+        if running.run_request_id is not None:
+            finish_run_request(store, running.run_request_id, run_status=status, logger=logger)
+        close_process_output_files(running)
+        running_commands.pop(app_command_id, None)
+
+
+def terminate_timed_out_command(running: RunningAppCommand) -> None:
+    # The whole tree, not the shell: `terminate()` reached `/bin/sh` or `cmd.exe` and the app under
+    # it - and its `common.cli` children - kept running after the run was closed as a timeout, with
+    # the claim released for a duplicate (review 0.25.0, B2.3, F1.1). A process stuck in
+    # uninterruptible I/O (a hung SMB/NFS mount) exits when the I/O returns; nothing here raises or
+    # waits past the grace, and subprocess reaps the zombie later.
+    stop_process_tree(running.process.pid, started=getattr(running, "start_marker", None),
+                      process=running.process)
+
+
+def running_slot_key(app_command_id: str, pid: int) -> str:
+    """The key one live run occupies in ``running_commands``.
+
+    A ``sync`` command has at most one, so its own id would do; an ``async`` command may have
+    several at once and a dict cannot hold two values under one key. One spelling for both, so
+    nothing has to know which mode it is looking at.
+    """
+    return f"{app_command_id}#{pid}"
+
+
+def count_in_flight(running_commands: dict[str, "RunningAppCommand"], app_command_id: str) -> int:
+    """How many processes of this app command this daemon currently has."""
+    return sum(1 for running in running_commands.values()
+               if running.app_command.app_command_id == app_command_id)
+
+
+def start_app_command(
+    *,
+    config: DbaBrainConfig,
+    store: DbaBrainStore,
+    data_dir: Path,
+    logger: Any,
+    running_commands: dict[str, RunningAppCommand],
+    app_command: AppCommand,
+    forwarded_key_args: ForwardedKeyArgs | None = None,
+    run_request: Any | None = None,
+) -> None:
+    working_dir = resolve_working_dir(app_command.working_dir, data_dir=data_dir)
+    started = datetime.now(timezone.utc)
+    stdout_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+    stderr_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+    env = os.environ.copy()
+    env[LOG_SCOPE_ENV_VAR] = app_command.log_scope
+    # The timeout this child will be killed at, so it can stop on its own first - see
+    # dbabrain.lib.app_timeout. Never inherited: a daemon started from inside another app's child
+    # must not pass that child's number on as this command's.
+    env.pop(app_timeout.APP_TIMEOUT_ENV_VAR, None)
+    if not app_command.timeout_disabled and app_command.timeout_seconds > 0:
+        env[app_timeout.APP_TIMEOUT_ENV_VAR] = str(int(app_command.timeout_seconds))
+    if forwarded_key_args and forwarded_key_args.supplied:
+        # **Assigned, not `setdefault`.** The daemon was started with `--key-base64`, which is a
+        # statement; an inherited `DBABRAIN_SECRET_KEY` is whatever happened to be in the shell that
+        # launched it. `setdefault` let the ambient value win, so the flag silently did nothing
+        # and every child decrypted with a key nobody had passed — the failure being a wrong
+        # passphrase that does not match the one on the command line, which is close to
+        # undiagnosable. Same order as `resolve_password` and `resolve_tool_root`: what the
+        # operator stated, first.
+        forwarded = forwarded_secret_key(forwarded_key_args)
+        if forwarded:
+            env[SECRET_KEY_ENV_VAR] = forwarded
+    # The key travels in the environment only (DBABRAIN_SECRET_KEY above), never on the command
+    # line: argv is readable by every user on the host (`ps`, /proc/<pid>/cmdline), and with the
+    # Telegram and metrics commands starting every second the passphrase was in the process table
+    # almost permanently (review 0.25.0, B2.4). Every key-aware CLI falls back to the variable.
+    command_text = use_this_interpreter(app_command.command_text)
+    try:
+        process = subprocess.Popen(
+            command_text,
+            cwd=working_dir,
+            shell=True,
+            text=True,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            env=env,
+            # The head of a tree of its own, so a timeout stops the app and everything it started,
+            # not only the shell that launched it (review 0.25.0, B2.3).
+            **own_group_kwargs(),
+        )
+    except Exception:
+        close_file_quietly(stdout_file)
+        close_file_quietly(stderr_file)
+        write_command_runtime_event(
+            app_command,
+            "app.daemon.command.error",
+            logs_dir=config.log_dir,
+            level="error",
+            working_dir=working_dir,
+            exit_code="start_failed",
+            duration_seconds=0,
+            exception=traceback.format_exc(),
+            status="error",
+        )
+        raise
+    start_marker = child_start_marker(process.pid)
+    metadata = app_command_metadata(app_command, working_dir=working_dir, pid=process.pid, sqlite_path=config.sqlite_path)
+    if run_request is not None:
+        # Stamped into the run itself, so "why did this run at 03:00" is answerable from job_runs
+        # alone — without it a requested run is indistinguishable from a scheduled one.
+        metadata["run_request_id"] = int(run_request["request_id"])
+        metadata["requested_by"] = str(run_request["requested_by"] or "")
+    try:
+        log_id = store.insert_job_run(
+            JobRun(
+                job_code=app_command.app_command_id,
+                # A `sync` command claims its own id, so a second daemon on this host - or a child
+                # that outlived its daemon - cannot start a duplicate. An `async` command claims
+                # nothing: being started again while one is running is what it is for.
+                claim_key=(None if app_command.run_mode.is_async else app_command.app_command_id),
+            level="logging",
+            status="running",
+            message=(f"App command {app_command.app_command_id} started"
+                     + (f" on request from {run_request['requested_by'] or 'the console'}."
+                        if run_request is not None else ".")),
+            started_at=started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                host_name=socket.gethostname(),
+                metadata=metadata,
+            )
+        )
+    except RunAlreadyClaimed as exc:
+        # Somebody on this host already holds this app command's key — a second daemon, or a child
+        # of a daemon that was restarted while the child kept working. The child just spawned is
+        # the duplicate, so it is the one that stops: a claim that arrives second must never turn
+        # into two processes doing the same work, which is the whole point of the index.
+        stop_process_tree(process.pid, started=start_marker, process=process)
+        close_file_quietly(stdout_file)
+        close_file_quietly(stderr_file)
+        log_app_event(logger, "app.daemon.command.claim_refused", status="skipped",
+                      app_command_id=app_command.app_command_id, reason=str(exc))
+        write_command_runtime_event(
+            app_command, "app.daemon.command.claim_refused", logs_dir=config.log_dir,
+            level="logging", working_dir=working_dir, exit_code="already_running",
+            duration_seconds=0, status="skipped")
+        return
+    running_commands[running_slot_key(app_command.app_command_id, process.pid)] = RunningAppCommand(
+        app_command=app_command,
+        process=process,
+        started_at=started,
+        log_id=log_id,
+        working_dir=working_dir,
+        logs_dir=config.log_dir,
+        stdout_file=stdout_file,
+        stderr_file=stderr_file,
+        run_request_id=int(run_request["request_id"]) if run_request is not None else None,
+        requested_by=str(run_request["requested_by"] or "") if run_request is not None else "",
+        start_marker=start_marker,
+    )
+    if run_request is not None:
+        mark_run_request_started(store, run_request, job_run_id=log_id, logger=logger)
+    write_command_runtime_event(
+        app_command,
+        "app.daemon.command.start",
+        logs_dir=config.log_dir,
+        pid=process.pid,
+        working_dir=working_dir,
+        exit_code="running",
+        duration_seconds=0,
+        status="running",
+    )
+    log_app_event(
+        logger,
+        "app.daemon.command.start",
+        app_command=app_command,
+        status="running",
+        pid=process.pid,
+    )
+
+
+def app_command_due(app_command: AppCommand, latest_run: Any | None,
+                    now: datetime | None = None) -> DueVerdict:
+    """Whether this command runs now, with the reason when it does not.
+
+    One call into :func:`dbabrain.lib.time_window.due_from_row`, which reads the anchor off the row
+    and applies the rule. The daemon's two defaults are stated here and nowhere else: a failed
+    command retries after 60 s and an unstated ``timeout`` is 300 s.
+    """
+    return due_from_row(
+        time_window=app_command.time_window,
+        row=latest_run,
+        now=now or datetime.now(timezone.utc),
+        retry_default=60,
+        timeout_default=300,
+        # An `async` command's own run in flight is not a reason to withhold the next one - that is
+        # what the field means, and `max_parallel` is the cap. Without this the store-side due check
+        # answered "running within timeout" and the concurrency never happened: measured
+        # 2026-09-19, where one scan ran two long tasks one after the other for three minutes while
+        # the daemon started nothing beside it. What keeps the *work* from doubling is the claim,
+        # not this check.
+        running_blocks=not app_command.run_mode.is_async,
+    )
+
+
+def app_command_is_due(app_command: AppCommand, latest_run: Any | None, now: datetime | None = None) -> bool:
+    """The boolean face of :func:`app_command_due`, for the scan that only branches on it."""
+    return app_command_due(app_command, latest_run, now).due
+
+
+def app_command_in_schedule_window(app_command: AppCommand, now_local: datetime | None = None) -> bool:
+    # The configured display zone, not the host's. `datetime.now().astimezone()` made a
+    # schedule mean whatever clock the machine was set to, so the same app_commands.json
+    # fired at 01:00 Vietnam on the master and 01:00 UTC in the container - and the only
+    # thing holding the two together was a TZ line in docker-compose.yml.
+    current = now_local or display_now()
+    return is_time_window_open(app_command.time_window, current)
+
+
+#: A stale RUNNING row older than this is history, not news. The daemon has restarted many times
+#: since; nothing about it needs doing now, so reconciling it is bookkeeping and belongs in the log.
+STALE_RECOVERY_ALERT_MAX_AGE_SECONDS = 24 * 3600
+
+
+def _alert_stale_recovery(*, store: Any, fresh_crashes: list[str], backlog: int) -> None:
+    """Alert about workflows that actually died recently; count the rest.
+
+    The alert answers "did something crash", and only a recent row answers it. This used to push
+    one Telegram message per reconciled row, which was survivable only while recovery could see a
+    single row per job code — it silently skipped every older one. Fixing that made the sweep find
+    the real backlog and alert 171 times in a burst, including rows from two weeks earlier, each
+    formatted as a fresh incident.
+
+    Two different things were being conflated, so they are separated here: a workflow that died in
+    the last day is an incident worth a message; a pile of rows nobody ever closed is a number.
+    An operator's phone is not a log file, and an alert channel that floods is one nobody reads
+    the next day.
+    """
+    if not fresh_crashes:
+        # Backlog only: nothing happened, the books were just balanced. The log has the detail.
+        return
+    shown = fresh_crashes[:10]
+    lines = [
+        "Stale running workflows recovered on startup.",
+        f"recent_crashes={len(fresh_crashes)}",
+        *shown,
+    ]
+    if len(fresh_crashes) > len(shown):
+        lines.append(f"...and {len(fresh_crashes) - len(shown)} more")
+    if backlog:
+        lines.append(f"older_rows_reconciled_silently={backlog}")
+    lines.append("action=marked_timeout_retry_will_resume")
+    _push_daemon_telegram(
+        store=store,
+        level="error",
+        message="\n".join(lines),
+        metadata={"stale_recovery": True, "recent_crashes": len(fresh_crashes),
+                  "backlog_rows": backlog},
+    )
+
+
+class _DaemonStopped(BaseException):
+    """The daemon was asked to stop. Not an error, and deliberately not an ``Exception``.
+
+    ``BaseException`` so the broad ``except Exception`` handlers scattered through the loop cannot
+    swallow a shutdown and keep running - the same reason ``KeyboardInterrupt`` is one.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def install_shutdown_handlers() -> None:
+    """Turn SIGTERM into something the loop can unwind from.
+
+    ``docker stop`` sends SIGTERM and Python's default action is to die on the spot, so every
+    deploy killed the daemon mid-run and left its app-command rows at ``running``. The next
+    startup then found them, could not tell a deliberate stop from a crash, and alerted:
+    "Stale running workflows recovered on startup. recent_crashes=2" - at error level, to the
+    alert chat, on every single deploy. Eight of those went out on 2026-08-08 alone, none of
+    them true.
+
+    Handling the signal is what makes the *remaining* alerts mean something: after this, an open
+    row at startup really is a crash or a SIGKILL, because a clean stop closes its own rows.
+    """
+    import signal
+
+    def _stop(signum, _frame):
+        raise _DaemonStopped(f"signal_{signum}")
+
+    for name in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, _stop)
+            except (ValueError, OSError):
+                # Not the main thread, or a platform without it: the daemon still runs, it just
+                # goes back to being reported as a crash on the next start.
+                pass
+
+
+def close_running_on_shutdown(
+    *,
+    store: DbaBrainStore,
+    logger: Any,
+    running_commands: dict[str, RunningAppCommand],
+    reason: str,
+) -> int:
+    """Close the rows this daemon still owns, so the next startup has nothing to cry wolf about.
+
+    Closed as ``timeout`` on purpose: :func:`job_due` resumes a run after ``retry_interval`` only
+    for a status in :data:`ERROR_STATUSES`, so any friendlier word would read as "finished, never
+    repeat" and the command would never come back. What changes is the *message*, which now says
+    the daemon stopped rather than implying the command hung.
+
+    Every failure is swallowed. A daemon that cannot tidy up must still exit.
+    """
+    closed = 0
+    for app_command_id, running in list(running_commands.items()):
+        # Stopped before its row is closed (review 0.25.0, B2.5): the row says "interrupted, resumes
+        # on the next scan" and releases the claim, so a child left running would be the duplicate
+        # the next daemon starts beside it.
+        try:
+            stop_process_tree(running.process.pid, started=getattr(running, "start_marker", None),
+                              process=running.process)
+        except Exception:  # noqa: BLE001 - tidying up must not stop the daemon exiting.
+            pass
+        try:
+            store.update_job_run(
+                log_id=running.log_id,
+                level="logging",
+                status="timeout",
+                message=(f"App command {running.app_command.app_command_id} was interrupted: the daemon stopped "
+                         f"({reason}). It resumes on the next scan."),
+                finished_at=utc_now_text(),
+                error_text=None,
+                metadata=app_command_metadata(
+                    running.app_command, shutdown=True, reason=reason,
+                ),
+            )
+            closed += 1
+        except Exception:  # noqa: BLE001 - tidying up must not stop the daemon exiting.
+            continue
+    if closed and logger:
+        log_app_event(logger, "app.daemon.stop.closed_running", level="logging",
+                      closed=closed, reason=reason)
+    return closed
+
+
+def recover_stale_running_jobs(
+    *,
+    store: DbaBrainStore,
+    app_commands: dict[str, AppCommand],
+    config: Any,
+    logger: Any,
+    node_role: str | None = None,
+) -> None:
+    """
+    On daemon startup, detect job_runs rows with status='running' that have elapsed longer
+    than the command's configured timeout. Mark them 'timeout' to unblock retry logic.
+
+    This handles: daemon crash, host reboot, SIGKILL — any scenario where the subprocess
+    kept a 'running' row in SQLite but the daemon lost in-memory tracking of the process.
+
+    **Every** open row is reconciled, not just the newest one per job code. Reading only the
+    latest row meant a stale run that had already been overtaken by a newer one could never be
+    closed again: it is no longer the latest for its job_code, but it is still open. They
+    accumulated — 177 job_runs and 104 metric_runs were still RUNNING on the worker, the oldest
+    from 2026-05-18 — which makes every "is anything running now" question unanswerable.
+
+    A command with ``timeout_seconds <= 0`` is a **long-running service**, not a job: APP-WEBHOST
+    serves HTTP until the daemon stops. Its row is still closed here — this runs at startup, when
+    the daemon owns no children yet, so every open row belongs to a life that has ended — but it
+    is closed **quietly**, because a service ending when its daemon ended is not a crash. The old
+    code compared ``elapsed < 0``, which is never true for a service, so the web host was reported
+    stale, logged as an error and alerted on Telegram at every single startup; simply skipping it
+    instead leaked one unclosed row per restart.
+
+    It is closed as ``timeout`` specifically: :func:`job_due` restarts a run-once entry whose last
+    status is an error status after ``retry_interval``, which is 0 for the web host. Any other
+    status would read as "finished successfully, never repeat" and the service would never come
+    back up.
+
+    **Only this node's rows** (0.27.0 item 1.96). ``node_role`` names the commands this daemon runs;
+    a row of a command for another role is another node's, and is left to it. On 2026-09-30 a
+    daemon started on the master against the worker's store closed the worker's live web host and
+    two runs that had started two seconds earlier. A row of a command this file no longer holds is
+    left alone when its claim names another node, for the same reason.
+    """
+    now = datetime.now(timezone.utc)
+    this_host = socket.gethostname()
+    recovered = 0
+    fresh_crashes: list[str] = []
+    backlog = 0
+    for row in store.fetch_running_job_runs():
+        try:
+            app_command_id = str(row["job_code"] or "").strip()
+            status = str(row["status"] or "").strip().lower()
+        except Exception:
+            continue
+        if status != "running":
+            continue
+        app_command = app_commands.get(app_command_id)
+        if app_command is None:
+            # A daemon row (its metadata names the app command) whose command is gone from
+            # app_commands.json. The comment here promised a sweep that would close it; none
+            # existed, so it stayed `running` until it was archived (review 0.25.0, B2.5). This is
+            # start-up - its daemon is gone - so it is closed now. Rows other apps write into
+            # job_runs (a backup's, a restore's) carry no `app_command_id` and are left to them.
+            # A row whose claim names ANOTHER node is that node's: a master's file need not hold
+            # the worker's commands. A row with no identity is closed as before - it is what a
+            # recreated container of this node left under its old host name.
+            claimed_by = run_claim.claim_node(run_claim.row_metadata(row))
+            another_node = bool(claimed_by) and claimed_by != node_identity.current()
+            if (not another_node and app_command_id
+                    and str(run_claim.row_metadata(row).get("app_command_id") or "") == app_command_id):
+                try:
+                    store.update_job_run(
+                        log_id=int(row["log_id"]),
+                        level="error",
+                        status="timeout",
+                        message=(f"App command {app_command_id} recovered from a RUNNING state on daemon "
+                                 "startup: it is no longer in app_commands.json."),
+                        finished_at=utc_now_text(),
+                        error_text="The app command was removed from app_commands.json while this run was open.",
+                        metadata={"stale_recovery": True, "app_command_removed": True},
+                    )
+                    recovered += 1
+                except Exception:  # noqa: BLE001 - one row that cannot be closed stops nothing.
+                    pass
+            continue
+        if node_role is not None and not _command_runs_on_node(app_command, node_role):
+            continue   # another role's command: its rows are another node's (docstring)
+
+        last_run = row_time(row)
+        if last_run is None:
+            continue
+        elapsed_seconds = int((now - last_run).total_seconds())
+        # A service has no timeout to be "within": its row is open because the daemon that owned
+        # it is gone, whatever the elapsed time. Saying so explicitly rather than leaning on
+        # `elapsed < 0` being false, which is true only by accident of the sentinel value.
+        # **Is the process that owns this row still there?** A daemon that has just started owns no
+        # children, so an open row on this host was left by a life that has ended - unless its
+        # recorded pid is alive, which happens when a child outlives the daemon that started it.
+        # Waiting for the timeout instead costs exactly what the timeout is worth: a restart on
+        # 2026-09-19 left APP-SQL_TASKS blocked for 30 minutes and APP-METRICS for 40, on rows
+        # whose processes had been gone the whole time. Another host's row is still judged on age.
+        metadata = run_claim.row_metadata(row)
+        row_host = run_claim.row_host(row)
+        owner_pid, owner_host = run_claim.claim_owner(metadata, host_fallback=row_host)
+        verdict = run_claim.startup_verdict(
+            metadata=metadata,
+            this_host=this_host,
+            elapsed_seconds=elapsed_seconds,
+            timeout_seconds=0 if app_command.timeout_disabled else app_command.timeout_seconds,
+            pid_alive=(process_liveness.is_pid_alive(owner_pid)
+                       if owner_pid is not None and owner_host == this_host else None),
+            this_node=node_identity.current(),
+            host_fallback=row_host,
+        )
+        # A service (timeout 0) left by THIS host is closed whatever its age: this is startup, and
+        # its daemon is gone - the verdict says so. Only a live pid holds it, and another host's
+        # row is that host's: closing a service regardless of the verdict is what closed the
+        # worker's live web host from the master's daemon (0.27.0 item 1.96).
+        if not verdict.reap:
+            log_app_event(
+                logger,
+                "app.daemon.startup.running_within_timeout",
+                app_command=app_command,
+                level="logging",
+                started_at=last_run.isoformat(),
+                elapsed_seconds=elapsed_seconds,
+                timeout_seconds=app_command.timeout_seconds,
+                reason=verdict.reason,
+            )
+            continue
+        elapsed_minutes = elapsed_seconds // 60
+        timeout_minutes = app_command.timeout_seconds // 60
+        store.update_job_run(
+            log_id=int(row["log_id"]),
+            level="error",
+            status="timeout",
+            message=(
+                f"App command {app_command_id} recovered from stale RUNNING state on daemon startup "
+                f"after {elapsed_seconds}s (timeout={app_command.timeout_seconds}s)."
+            ),
+            finished_at=utc_now_text(),
+            error_text=(
+                f"Stale running job detected on startup. "
+                f"elapsed={elapsed_seconds}s timeout={app_command.timeout_seconds}s. "
+                f"Marked timeout to unblock retry."
+            ),
+            metadata=app_command_metadata(
+                app_command,
+                stale_recovery=True,
+                elapsed_seconds=elapsed_seconds,
+                timeout_seconds=app_command.timeout_seconds,
+            ),
+        )
+        log_app_event(
+            logger,
+            "app.daemon.startup.stale_running_recovered",
+            app_command=app_command,
+            level="error",
+            started_at=last_run.isoformat(),
+            elapsed_seconds=elapsed_seconds,
+            elapsed_minutes=elapsed_minutes,
+            timeout_seconds=app_command.timeout_seconds,
+            action="marked_timeout_retry_will_resume",
+        )
+        recovered += 1
+        # A service's row is expected to be open at every startup: that is what "runs until the
+        # daemon stops" means. Closing it is bookkeeping; alerting on it is crying wolf.
+        if app_command.timeout_disabled:
+            backlog += 1
+        elif elapsed_seconds <= STALE_RECOVERY_ALERT_MAX_AGE_SECONDS:
+            fresh_crashes.append(
+                f"{app_command_id} started {last_run.isoformat()} ({elapsed_minutes} min ago)")
+        else:
+            backlog += 1
+    if recovered:
+        log_app_event(
+            logger, "app.daemon.startup.stale_recovery_complete", level="logging",
+            recovered=recovered, fresh=len(fresh_crashes), backlog=backlog,
+        )
+        _alert_stale_recovery(store=store, fresh_crashes=fresh_crashes, backlog=backlog)
+
+
+def _log_command_not_due(logger: Any, app_command: AppCommand, latest: Any | None) -> None:
+    """Log diagnostics explaining why an app command is not scheduled this tick."""
+    if logger is None:
+        return
+    now = datetime.now(timezone.utc)
+    # The reason comes from the rule that made the decision, not from a second reading of the
+    # same row beside it. Those two disagreed for as long as both existed: this line printed
+    # `last_run + timeout` as the next attempt for a `running` row while the rule was still
+    # measuring the interval (see lib.time_window.DueVerdict).
+    verdict = app_command_due(app_command, latest, now)
+    try:
+        status = str(latest["status"] or "").strip().lower() if latest is not None else "never_run"
+    except Exception:
+        status = "unknown"
+    log_app_event(
+        logger,
+        "app.daemon.command.not_due",
+        app_command=app_command,
+        level="logging",
+        workflow_state=status,
+        reason=verdict.reason,
+        last_run=verdict.last_run.isoformat() if verdict.last_run else None,
+        next_retry_at=verdict.next_due_at.isoformat() if verdict.next_due_at else None,
+        retry_interval_seconds=app_command.retry_interval_seconds,
+        timeout_seconds=app_command.timeout_seconds,
+    )
+
+
+def _push_daemon_telegram(
+    *,
+    store: Any,
+    level: str,
+    message: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Queue a daemon notification, if the shared router says this level may alert.
+
+    No ``config``: the daemon holds no Telegram settings of its own — taking one here is what
+    let it drift (it gated on ``alert_levels`` while every other app asked the router).
+    """
+    try:
+        # Routing is the Telegram app's answer, not this one's, and `alert` already means
+        # "Telegram is on AND this level may alert AND it has a chat" - act on that flag rather
+        # than re-deriving it from config.telegram, which is how the daemon used to drift from
+        # every other app.
+        from dbabrain.lib.notify_route import chat_from_route
+        from dbabrain.lib.telegram_route import telegram_route
+
+        chat_id = chat_from_route(telegram_route(level))
+        if not chat_id:
+            return
+        text = f"{level.upper()}|{socket.gethostname()}|{message}"
+        if len(text) > 3900:
+            text = text[:3897] + "..."
+        from dbabrain.db.queue_message import queue_message, store_block_from
+
+        # The store states its own connection: this helper deliberately takes no config, so the
+        # live store is the only thing that can say where the row goes.
+        queue_message({
+            "store": store_block_from(store),
+            "chat_id": chat_id,
+            "text": text,
+            "level": level,
+            "note": "Daemon stale recovery notification",
+            "source_type": "daemon_events",
+            "source_id": "stale_recovery",
+            "metadata": metadata or {},
+        }, fallback_store=store)
+    except Exception as exc:
+        print(f"daemon telegram push failed: {exc}", file=sys.stderr)
+
+
+def row_time(row: Any | None) -> datetime | None:
+    """When a ``job_runs`` row started — :func:`dbabrain.lib.time_window.run_anchor` under the name
+    this module has always called it, kept because `jobs.status` imports it."""
+    return run_anchor(row)
+
+
+def resolve_working_dir(value: str, *, data_dir: Path) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+
+    # "tools/dbabrain" is the logical alias for the tool root, independent of where the
+    # project physically lives (a flat dev checkout, or /app/tools/dbabrain in the image).
+    if value.replace("\\", "/") == "tools/dbabrain":
+        return TOOL_ROOT
+
+    for candidate in (REPO_ROOT / path, TOOL_ROOT / path, data_dir / path):
+        resolved = candidate.resolve()
+        if resolved.exists():
+            return resolved
+    raise FileNotFoundError(f"working_dir not found: {value}")
+
+
+def build_forwarded_key_args(args: argparse.Namespace) -> ForwardedKeyArgs:
+    if getattr(args, "key", None) and getattr(args, "key_base64", None):
+        raise errors.InvalidRequest("Use only one of --key or --key-base64.")
+    if getattr(args, "key_base64", None):
+        return ForwardedKeyArgs("--key-base64", str(args.key_base64))
+    if getattr(args, "key", None):
+        return ForwardedKeyArgs("--key", str(args.key))
+    return ForwardedKeyArgs()
+
+
+def forwarded_secret_key(forwarded_key_args: ForwardedKeyArgs) -> str:
+    if not forwarded_key_args.supplied:
+        return ""
+    if forwarded_key_args.option in {"--key-base64", "--key_base64"}:
+        return resolve_cli_key(None, forwarded_key_args.value)
+    if forwarded_key_args.option == "--key":
+        return resolve_cli_key(forwarded_key_args.value, None)
+    return ""
+
+
+def ensure_forwarded_secret_key_env(forwarded_key_args: ForwardedKeyArgs) -> None:
+    """Put the key the daemon was *given* into its own environment, overriding any inherited one.
+
+    The same precedence as the child environment above, and for the same reason: a flag on the
+    command line is a decision, and an inherited variable is an accident of the shell.
+    """
+    if not forwarded_key_args.supplied:
+        return
+    secret_key = forwarded_secret_key(forwarded_key_args)
+    if secret_key:
+        os.environ[SECRET_KEY_ENV_VAR] = secret_key
+
+
+#: Words a command may start with that mean "the Python I am running under".
+_INTERPRETER_WORDS = ("python", "python3", "python.exe", "python3.exe")
+
+
+def use_this_interpreter(command_text: str) -> str:
+    """Rewrite a leading bare ``python`` to the interpreter this daemon is running under.
+
+    Every scheduled command in `data/app_commands.example.json` begins ``python -m dbabrain...``,
+    which resolves through `PATH` — and `PATH` is not where the toolkit is installed. After
+    `pip install dbabrain` into a virtualenv (the documented way), `dbabrain daemon` starts from the
+    venv while its children get whatever `python` means on that machine: a system Python without
+    the package, or another project's venv entirely.
+
+    The symptom is the worst kind. Every command a reader ran by hand works; the moment the daemon
+    runs the same commands they all fail with ``ModuleNotFoundError: No module named 'dbabrain'``,
+    once a minute, in a child process whose output nobody is watching. Measured on 2026-08-23 in a
+    clean `pip install`: three scheduled commands, three failures, and a manual run of each that
+    succeeded.
+
+    `sys.executable` is the answer to the question the config was really asking. A command naming
+    a *specific* interpreter — an absolute path, or a different runtime — is left exactly as
+    written, because that is someone being deliberate.
+    """
+    stripped = command_text.lstrip()
+    if not stripped:
+        return command_text
+    try:
+        first = shlex.split(stripped, posix=True)[0]
+    except ValueError:  # unbalanced quotes; not ours to repair
+        return command_text
+    if first.lower() not in _INTERPRETER_WORDS:
+        return command_text
+    leading = command_text[: len(command_text) - len(stripped)]
+    # These run through `shell=True`, so the quoting has to match the shell that will parse it.
+    # `shlex.quote` emits single quotes, which cmd.exe does not treat as quoting at all — it would
+    # hand the child a path with literal apostrophes around it. Only bites when the interpreter
+    # path contains a space, which is exactly where `C:\Program Files\...` lives.
+    quoted = f'"{sys.executable}"' if os.name == "nt" else shlex.quote(sys.executable)
+    return leading + quoted + stripped[len(first):]
+
+
+def append_forwarded_key_args(command_text: str, forwarded_key_args: ForwardedKeyArgs) -> str:
+    """The command with the key added to its argv. **Not used by the scheduler any more** (B2.4):
+    kept for callers outside it; the daemon hands the key over in ``DBABRAIN_SECRET_KEY``."""
+    if not forwarded_key_args.supplied:
+        return command_text
+    # Only forward to CLIs that actually declare --key/--key-base64. Injecting the key into
+    # a CLI that lacks the option (reports, sla) makes argparse read the key VALUE
+    # as the positional subcommand and abort with exit code 2.
+    if not command_accepts_forwarded_key(command_text):
+        return command_text
+    tokens = shlex.split(command_text, posix=True)
+    if any(token in {"--key", "--key-base64", "--key_base64"} for token in tokens):
+        return command_text
+    insert_at = forwarded_key_insert_index(tokens)
+    updated = [
+        *tokens[:insert_at],
+        forwarded_key_args.option,
+        forwarded_key_args.value,
+        *tokens[insert_at:],
+    ]
+    return " ".join(shell_quote_arg(token) for token in updated)
+
+
+def command_accepts_forwarded_key(command_text: str) -> bool:
+    """True only when the target CLI declares the shared --key/--key-base64 options.
+
+    Every key-aware dbabrain CLI registers them through ``secret_text.add_key_argument``;
+    the CLIs that don't (reports, sla) must never receive the key, otherwise argparse
+    consumes the value as the positional subcommand and exits with code 2.
+
+    This is read from the target's **source**, never from a list, which is why `webhost`
+    started receiving the key by itself the moment its console needed the store: declaring the
+    option is the whole registration. A hand-kept list would have needed editing in the same
+    pass, and the failure for forgetting is a login page that cannot reach its own accounts.
+    """
+    source = forwarded_key_target_source(command_text)
+    return source is not None and "add_key_argument" in source
+
+
+def forwarded_key_target_source(command_text: str) -> str | None:
+    """Return the source text of the ``python -m dbabrain.<...>`` module a command runs,
+    or None when the command is not a recognizable ``-m dbabrain`` invocation. The module
+    file is read from disk only — it is never imported, so this has no side effects."""
+    try:
+        tokens = shlex.split(command_text, posix=True)
+    except ValueError:
+        return None
+    if len(tokens) < 3 or tokens[1] != "-m":
+        return None
+    module = tokens[2]
+    if not module.startswith("dbabrain."):
+        return None
+    module_path = TOOL_ROOT.joinpath(*module.split("."))
+    for candidate in (module_path.with_suffix(".py"), module_path / "__main__.py"):
+        if candidate.is_file():
+            try:
+                return candidate.read_text(encoding="utf-8")
+            except OSError:
+                return None
+    return None
+
+
+def forwarded_key_insert_index(tokens: list[str]) -> int:
+    if len(tokens) < 3 or tokens[1] != "-m":
+        return len(tokens)
+    index = 3
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            return index
+        if not token.startswith("-"):
+            return index
+        index += 1
+        if "=" not in token and index < len(tokens) and not tokens[index].startswith("-"):
+            index += 1
+    return index
+
+
+def shell_quote_arg(value: str) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline([value])
+    return shlex.quote(value)
+
+
+def load_app_commands(path: Path, *, logger: Any = None) -> dict[str, AppCommand]:
+    data = load_json_file(path)
+    commands: list[AppCommand] = []
+    for item in data.get("app_commands", []):
+        app_command_id = str(item["app_command_id"])
+        parsed_time_window = parse_time_window_config(
+            item,
+            context=f"app_commands.{app_command_id}",
+            defaults={
+                "from_day": 1,
+                "to_day": 31,
+                "from_hour": 0,
+                "to_hour": 23,
+                "retry_interval": 60,
+                "timeout": 300,
+            },
+        )
+        log_deprecated_time_window_warnings(logger, parsed_time_window.warnings)
+        commands.append(
+            AppCommand(
+                app_command_id=app_command_id,
+                app_code=str(item.get("app_code") or item["app_command_id"]),
+                app_name=str(item.get("app_name") or item.get("app_code") or item["app_command_id"]),
+                display_name=str(item.get("display_name") or item.get("command_name") or item.get("app_name") or item["app_command_id"]),
+                log_scope=validate_app_command_log_scope(item),
+                working_dir=str(item.get("working_dir", "")),
+                command_text=str(item.get("command_text", "")),
+                time_window=parsed_time_window.time_window,
+                active=bool(item.get("active", True)),
+                node_role=(str(item.get("node_role", "all")).strip().lower() or "all"),
+                run_mode=run_mode_lib.parse(item),
+            )
+        )
+    return {command.app_command_id: command for command in commands}
+
+
+def log_deprecated_time_window_warnings(logger: Any, warnings: tuple[str, ...]) -> None:
+    if logger is None:
+        return
+    for message in warnings:
+        log_event(logger, level="warning", message=f"app.daemon.config.deprecated_time_window|scope=jobs|message={format_log_value(message)}")
+
+
+def validate_app_command_log_scope(item: dict[str, Any]) -> str:
+    try:
+        return validate_log_scope(str(item.get("log_scope") or ""))
+    except RuntimeError as exc:
+        app_command_id = str(item.get("app_command_id", "<missing>"))
+        raise errors.InvalidConfig(f"app_commands.json app_command_id={app_command_id} missing required log_scope.") from exc
+
+
+def app_command_metadata(app_command: AppCommand, **extra: Any) -> dict[str, Any]:
+    metadata = {
+        "scope": app_command.log_scope,
+        "app_command_id": app_command.app_command_id,
+        "app_code": app_command.app_code,
+        "app_name": app_command.app_name,
+        "display_name": app_command.display_name,
+        "command_text": app_command.command_text,
+        "retry_interval_seconds": app_command.retry_interval_seconds,
+        "timeout_seconds": app_command.timeout_seconds,
+    }
+    metadata.update({key: str(value) if isinstance(value, Path) else value for key, value in extra.items()})
+    return metadata
+
+
+def write_command_runtime_event(
+    app_command: AppCommand,
+    event_name: str,
+    *,
+    logs_dir: Path,
+    level: str = "logging",
+    **fields: Any,
+) -> None:
+    _main_log_path, runtime_log_path = build_log_paths(logs_dir, app_command.log_scope)
+    archive_yesterday_if_missing(runtime_log_path)
+    ensure_current_log_file(runtime_log_path)
+    event_fields = {
+        "scope": app_command.log_scope,
+        "app_command_id": app_command.app_command_id,
+        "app_name": app_command.app_name,
+        "display_name": app_command.display_name,
+        "command_text": app_command.command_text,
+        "timeout_seconds": app_command.timeout_seconds,
+        **fields,
+    }
+    timestamp = f"{display_now():%Y-%m-%d %H:%M:%S}"
+    hostname = socket.gethostname()
+    parts = [event_name]
+    for key, value in event_fields.items():
+        if value is None:
+            continue
+        parts.append(f"{key}={format_log_value(value)}")
+    with runtime_log_path.open("a", encoding="utf-8") as file:
+        file.write(f"{timestamp}|{level.upper()}|{app_command.log_scope}|{hostname}|{'|'.join(parts)}\n")
+
+
+#: How much of a failed child's output to keep on its job_runs row. Enough for a Python
+#: traceback's final frames and its exception line; not so much that the column becomes a log.
+FAILED_RUN_ERROR_TEXT_CHARS = 2000
+
+
+def _failed_run_error_text(returncode: int | None, stderr_summary: str, stdout_summary: str) -> str:
+    """Exit code plus the tail of what the child actually said before dying.
+
+    The tail, not the head: a traceback ends with the exception, and a command that logged 300
+    lines before failing has its cause in the last few. Falls back to stdout because several
+    dbabrain CLIs print their failure there.
+    """
+    detail = (stderr_summary or "").strip() or (stdout_summary or "").strip()
+    text = f"Command exited with return code {returncode}."
+    if detail:
+        tail = detail[-FAILED_RUN_ERROR_TEXT_CHARS:]
+        if len(detail) > FAILED_RUN_ERROR_TEXT_CHARS:
+            tail = f"...[{len(detail) - FAILED_RUN_ERROR_TEXT_CHARS} earlier chars omitted]...{tail}"
+        text = f"{text}\n{tail}"
+    return text
+
+
+def read_process_output_summary(output_file: IO[str]) -> str:
+    try:
+        output_file.flush()
+        output_file.seek(0)
+        return trim_output(output_file.read())
+    except Exception as exc:  # noqa: BLE001 - summary logging must not crash collection.
+        return f"<failed to read output summary: {exc}>"
+
+
+def close_process_output_files(running: RunningAppCommand) -> None:
+    close_file_quietly(running.stdout_file)
+    close_file_quietly(running.stderr_file)
+
+
+def close_file_quietly(file_obj: IO[str]) -> None:
+    try:
+        file_obj.close()
+    except Exception:
+        return
+
+
+def log_app_event(logger: Any, event_name: str, *, level: str = "logging", app_command: AppCommand | None = None, **fields: Any) -> None:
+    if logger is None:
+        return
+    parts = [event_name]
+    if app_command is not None:
+        fields = {
+            "scope": app_command.log_scope,
+            "app_command_id": app_command.app_command_id,
+            "app_name": app_command.app_name,
+            "display_name": app_command.display_name,
+            **fields,
+        }
+    for key, value in fields.items():
+        if value is None:
+            continue
+        parts.append(f"{key}={format_log_value(value)}")
+    log_event(logger, level=level, message="|".join(parts))
+
+
+
+
+def trim_output(value: str | None) -> str:
+    text = value or ""
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text
+    return text[-MAX_OUTPUT_CHARS:]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

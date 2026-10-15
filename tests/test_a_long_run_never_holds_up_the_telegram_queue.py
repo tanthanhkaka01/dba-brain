@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 
-from db_ops.backup_restore import events
+from dbabrain.backup_restore import events
 
 
 def _restore_latest_end(databases: int = 13) -> dict:

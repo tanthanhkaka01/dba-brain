@@ -1,4 +1,4 @@
-"""Reaching an Oracle 8i host, which db_ops cannot connect to at all.
+"""Reaching an Oracle 8i host, which dbabrain cannot connect to at all.
 
 No modern driver speaks to 8.1.7, so the SQL is handed to a separate Win32 Python 2.7 tool —
 either as a child process or over the HTTP bridge that runs it on another host. What these
@@ -14,14 +14,14 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.common import oracle_bridge, sql_run
-from db_ops.lib import data_sources
-from db_ops.lib.target_profile import TargetProfile
-from db_ops.metrics import executor
-from db_ops.metrics.models import MetricTarget
-from db_ops.common.sql_execution import SqlParameterError
-from db_ops.sql_tasks import runner
-from db_ops.sql_tasks.runner import SqlCommand, SqlTarget
+from dbabrain.common import oracle_bridge, sql_run
+from dbabrain.lib import data_sources
+from dbabrain.lib.target_profile import TargetProfile
+from dbabrain.metrics import executor
+from dbabrain.metrics.models import MetricTarget
+from dbabrain.common.sql_execution import SqlParameterError
+from dbabrain.sql_tasks import runner
+from dbabrain.sql_tasks.runner import SqlCommand, SqlTarget
 
 from conftest import patch_telegram, patch_sql_runner
 
@@ -182,7 +182,7 @@ def test_a_metrics_row_cap_reaches_the_legacy_tool_like_it_reaches_every_other_e
 
     # The bridge call is made in `common.cli metric-batch` since 0.24.0 (in this process, by
     # conftest): the cap has to survive the request as well as reach the tool.
-    from db_ops.common import oracle_bridge
+    from dbabrain.common import oracle_bridge
 
     monkeypatch.setattr(oracle_bridge, "run_bridge_query", fake_run_bridge_query)
 
@@ -407,7 +407,7 @@ def _command(**overrides):
 
 
 def _target(**overrides):
-    from db_ops.lib.time_window import TimeWindow
+    from dbabrain.lib.time_window import TimeWindow
 
     base = dict(
         sql_id=19, target_no=1, server_id="ACME-192-0-2-236", db_type="oracle",
@@ -533,7 +533,7 @@ def _run_sql_task_command(monkeypatch, declared_names):
     test still passed because none of them ran the real lookup. (The boundary was a process until
     0.24.0, when the reader moved into `lib.sql_task_catalog`; rules R42.)
     """
-    from db_ops.lib import sql_task_catalog
+    from dbabrain.lib import sql_task_catalog
 
     def fake_collect(_data_dir, *, sql_id=None, include_inactive=False):
         if sql_id != 19:
@@ -563,21 +563,21 @@ def test_a_task_that_declares_parameters_is_asked_about_them(monkeypatch):
     """The failure this exists for: task 19 requires job_no, the optional `task_params` was never
     prompted, so the run went out with params=[] and failed telling the operator to pass a
     --param they were never asked for."""
-    from db_ops.telegram import command_processor
+    from dbabrain.telegram import command_processor
 
     parameters = _run_sql_task_command(monkeypatch, ["job_no"])
     assert command_processor.prompt_condition_holds(parameters[1], parameters, ["19"]) is True
 
 
 def test_a_task_with_no_parameters_is_not_asked_and_runs_as_before(monkeypatch):
-    from db_ops.telegram import command_processor
+    from dbabrain.telegram import command_processor
 
     parameters = _run_sql_task_command(monkeypatch, ["job_no"])
     assert command_processor.prompt_condition_holds(parameters[1], parameters, ["8"]) is False
 
 
 def test_the_prompt_names_the_parameters_instead_of_leaving_the_operator_to_guess(monkeypatch):
-    from db_ops.telegram import command_processor
+    from dbabrain.telegram import command_processor
 
     parameters = _run_sql_task_command(monkeypatch, ["job_no", "ou_code"])
     text = command_processor.render_prompt_text(parameters[1], parameters, ["19"])
@@ -585,8 +585,8 @@ def test_the_prompt_names_the_parameters_instead_of_leaving_the_operator_to_gues
 
 
 def test_the_prompt_flow_stops_on_the_conditional_parameter(monkeypatch):
-    from db_ops.telegram import command_processor
-    from db_ops.telegram.command_processor import SupportCommand
+    from dbabrain.telegram import command_processor
+    from dbabrain.telegram.command_processor import SupportCommand
 
     parameters = _run_sql_task_command(monkeypatch, ["job_no"])
     command = SupportCommand(
@@ -674,8 +674,8 @@ def test_the_bot_reads_the_parameters_out_of_the_task_configuration(monkeypatch,
     bot reads the catalog in-process since 0.24.0 (rules R42)."""
     import subprocess
 
-    from db_ops.lib import paths
-    from db_ops.telegram import command_processor
+    from dbabrain.lib import paths
+    from dbabrain.telegram import command_processor
 
     def no_process(*_args, **_kwargs):
         raise AssertionError("the bot started a process to learn a task's parameters")
@@ -689,8 +689,8 @@ def test_the_bot_reads_the_parameters_out_of_the_task_configuration(monkeypatch,
 def test_a_listing_that_fails_does_not_wedge_the_conversation(monkeypatch):
     """No prompt is the behaviour every task had before parameters existed; a broken listing must
     not stop the bot answering."""
-    from db_ops.lib import sql_task_catalog
-    from db_ops.telegram import command_processor
+    from dbabrain.lib import sql_task_catalog
+    from dbabrain.telegram import command_processor
 
     def unreadable(*_args, **_kwargs):
         raise ValueError("sql_commands.json is not valid JSON")
@@ -702,7 +702,7 @@ def test_a_listing_that_fails_does_not_wedge_the_conversation(monkeypatch):
 
 def test_the_listing_command_reports_a_cli_failure_instead_of_an_empty_list(monkeypatch):
     """An empty list reads as "there are no SQL tasks", which is a different and wrong answer."""
-    from db_ops.telegram import command_processor
+    from dbabrain.telegram import command_processor
 
     patch_telegram(monkeypatch, "sql_tasks_listing",
                         lambda *a, **k: {"ok": False, "error": "config unreadable"})
@@ -822,7 +822,7 @@ def test_nothing_is_queued_when_no_chat_asked(monkeypatch):
 def test_the_log_line_drops_the_table_once_the_requester_has_it(monkeypatch):
     """Otherwise the same rows go out twice for one run."""
     messages = _queued(monkeypatch)
-    from db_ops.lib.notify import NotifyRule
+    from dbabrain.lib.notify import NotifyRule
 
     runner.enqueue_sql_task_message(
         store=None, telegram_groups={"sql": "-100111"},

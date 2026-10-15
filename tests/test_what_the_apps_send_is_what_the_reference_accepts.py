@@ -45,12 +45,12 @@ from typing import Any
 
 import pytest
 
-from db_ops.lib import request_check
-from db_ops.lib.time_window import TimeWindow
-from db_ops.sql_tasks import runner
+from dbabrain.lib import request_check
+from dbabrain.lib.time_window import TimeWindow
+from dbabrain.sql_tasks import runner
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BOT_COMMANDS = REPO_ROOT / "db_ops" / "telegram" / "catalogue" / "telegram_support_commands.json"
+BOT_COMMANDS = REPO_ROOT / "dbabrain" / "telegram" / "catalogue" / "telegram_support_commands.json"
 
 #: `{server_id}` - what the bot replaces with a person's answer before it runs the command.
 _PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
@@ -110,9 +110,9 @@ def _bot_requests() -> list[tuple[str, str, dict[str, Any]]]:
     found = []
     for entry in document["telegram_support_commands"]:
         argv = (entry.get("action_config") or {}).get("command_argv") or []
-        if "db_ops.common.cli" not in argv:
+        if "dbabrain.common.cli" not in argv:
             continue
-        at = argv.index("db_ops.common.cli")
+        at = argv.index("dbabrain.common.cli")
         if len(argv) <= at + 2 or not str(argv[at + 2]).lstrip().startswith("{"):
             continue
         request = json.loads(_parseable(str(argv[at + 2])))

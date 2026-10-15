@@ -23,7 +23,7 @@ size on PostgreSQL. Only the rows that name a `tablespace=` are Oracle's, and th
 below that stops this section inventing Oracle storage on a server that has none.
 """
 
-from db_ops.reports.server_report import build_tablespaces
+from dbabrain.reports.server_report import build_tablespaces
 
 
 def _tablespace(name, message, status="OK"):
@@ -94,7 +94,7 @@ def test_a_sql_server_data_file_row_is_not_filed_under_a_tablespace():
         _datafile("Ledger:Ledger",
                   "database=Ledger, file=Ledger, used_pct=92.67, size_mb=11616.25, "
                   "free_mb=851.25, growth_mb=10%, is_percent_growth=1, max_size_mb=UNLIMITED"),
-        _datafile("db_ops", "database=db_ops, size=8537 MB"),
+        _datafile("dbabrain", "database=db_ops, size=8537 MB"),
     ])
 
     assert section["tablespaces"] == []

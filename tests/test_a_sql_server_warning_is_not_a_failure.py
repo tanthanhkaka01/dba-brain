@@ -10,7 +10,7 @@ with `autocommit` - had run to its end and committed. pyodbc raises it out of `n
 result loop called `nextset()` bare, so the warning failed the run exactly as an error would.
 
 What pyodbc does at that moment was measured on a lab SQL Server rather than assumed (see
-`db_ops/lib/driver_warnings.py`): the statement is closed, the rest of the batch still runs on the
+`dbabrain/lib/driver_warnings.py`): the statement is closed, the rest of the batch still runs on the
 server, and nothing after that point - result sets or errors - reaches the client. So these hold both
 halves: a warning no longer fails the run, and the run does not claim to have seen what it could
 not. Under a wrapping transaction that means a rollback with the reason; under autocommit, `done`
@@ -21,10 +21,10 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.common import sql_run
-from db_ops.lib import driver_warnings
-from db_ops.lib.telegram_severity import classify_message
-from db_ops.sql_tasks import runner
+from dbabrain.common import sql_run
+from dbabrain.lib import driver_warnings
+from dbabrain.lib.telegram_severity import classify_message
+from dbabrain.sql_tasks import runner
 from tests.test_common_sql_run import _STATED, FakeConn, FakeCursor, _patch
 
 from conftest import patch_sql_runner
@@ -145,7 +145,7 @@ def test_a_run_with_no_warning_answers_an_empty_list(monkeypatch):
 def test_a_metric_past_a_warning_keeps_what_came_before_it(monkeypatch):
     """A metric reads through `run-sql`'s reader since 0.25.0 and never commits: the rows before the
     warning are its answer, and the warning does not fail it."""
-    from db_ops.common import metric_batch
+    from dbabrain.common import metric_batch
 
     conn = FakeConn(RaisingCursor([FIRST_SET, SECOND_SET], error=WARNING_8153))
     monkeypatch.setattr(metric_batch, "_connect", lambda *_a, **_k: conn)

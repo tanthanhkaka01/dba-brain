@@ -2,11 +2,11 @@
     "schema_version": 1,
     "notes": [
         "The pointers BETWEEN config files, as data. data/ is a small relational database with no foreign keys: a backup job names a server_id, a SQL target names a credential_name, an instance names the OS login that reaches its host - and until 2026-09-19 nothing compared either side, so the first report of a broken pointer was the run that needed it.",
-        "Read by db_ops/lib/config_references.py and checked by 'python -m db_ops.common.cli check-references'. Each rule says where the pointer is ('from': file, path, field, and the field that marks the record active) and what it must land in ('to': file, path, field). Paths use the same notation as shared_config_objects.json: a dotted path where [] means 'each item of this list'.",
+        "Read by dbabrain/lib/config_references.py and checked by 'python -m dbabrain.common.cli check-references'. Each rule says where the pointer is ('from': file, path, field, and the field that marks the record active) and what it must land in ('to': file, path, field). Paths use the same notation as shared_config_objects.json: a dotted path where [] means 'each item of this list'.",
         "ONLY ACTIVE RECORDS FAIL. An inactive entry pointing at something that is gone is how an estate retires a target; failing it would teach the reader to ignore the report. Those are listed under 'inactive' instead, because an entry somebody re-enables is the next outage.",
-        "A password_ref is deliberately NOT a rule here. The secret store is one encrypted blob, so 'does this ref exist' needs the passphrase: that is 'python -m db_ops.common.cli check-secret', which answers it by authenticating rather than by looking. A check that pretended to verify a secret without the key would be worse than no check at all.",
+        "A password_ref is deliberately NOT a rule here. The secret store is one encrypted blob, so 'does this ref exist' needs the passphrase: that is 'python -m dbabrain.common.cli check-secret', which answers it by authenticating rather than by looking. A check that pretended to verify a secret without the key would be worse than no check at all.",
         "Adding a pointer: add the rule here, and add a test to tests/test_config_references.py only if the rule needs a shape the checker does not yet walk. The point of the file is that a new pointer is a data change.",
-        "THREE COPIES, identical bytes: db_ops/common/catalogue/ (the seed init writes from), data/ (this node's) and data/*.example.json (what the public tree ships)."
+        "THREE COPIES, identical bytes: dbabrain/common/catalogue/ (the seed init writes from), data/ (this node's) and data/*.example.json (what the public tree ships)."
     ],
     "config_references": [
         {

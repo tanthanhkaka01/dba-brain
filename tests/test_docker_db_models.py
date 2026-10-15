@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.lib.docker_db_spec import (
+from dbabrain.lib.docker_db_spec import (
     ENGINE_META,
     HA_SUPPORTED_ENGINES,
     VALID_ENGINES,
@@ -55,7 +55,10 @@ def test_every_engine_supports_ha_lab():
     replication, MySQL async primary/replica, SQL Server an Always On availability group with
     CLUSTER_TYPE = NONE (manual failover, no listener — no cluster manager exists in a lab)."""
     for engine, version in (("postgres", "18"), ("mysql", "8.4"), ("mssql", "2022-latest")):
-        _spec(name=f"lab_{engine}", engine=engine, version=version, mode="ha-lab").validate()
+        # No mount asked for: which folder a SQL Server lab mounts is the node's to state, and
+        # this is about the replication, not the backups.
+        _spec(name=f"lab_{engine}", engine=engine, version=version, mode="ha-lab",
+              backup_mount="").validate()
 
 
 def test_password_env_required_and_validated():

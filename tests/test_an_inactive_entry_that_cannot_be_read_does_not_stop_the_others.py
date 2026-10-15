@@ -28,8 +28,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.backup_restore import cli, registration, restore_by_id, restore_script, workflow
-from db_ops.backup_restore import config as config_module
+from dbabrain.backup_restore import cli, registration, restore_by_id, restore_script, workflow
+from dbabrain.backup_restore import config as config_module
 
 
 def _entry(restore_id: str, **fields) -> dict:

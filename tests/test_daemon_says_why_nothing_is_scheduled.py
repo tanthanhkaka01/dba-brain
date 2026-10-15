@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.jobs.daemon import _command_runs_on_node, load_app_commands
+from dbabrain.jobs.daemon import _command_runs_on_node, load_app_commands
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "data" / "app_commands.example.json"
 

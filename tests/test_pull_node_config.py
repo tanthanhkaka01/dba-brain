@@ -1,6 +1,6 @@
 """What a node creates for itself has to come back, or it dies with the node.
 
-`db_ops` is the origin for code and for deliberate configuration, and every runtime node is a copy
+`dbabrain` is the origin for code and for deliberate configuration, and every runtime node is a copy
 of it. One flow runs the other way and it is not optional: the bot and the web console *create*
 config on whichever node is running. A `/spbot_create_db_docker` run registers a lab container and
 stores its SA password there — and if that node is replaced, the container survives with a
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.control import worker_data
+from dbabrain.control import worker_data
 
 
 def write(path: Path, payload: dict) -> None:

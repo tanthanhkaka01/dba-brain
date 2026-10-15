@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from db_ops.common import cli
+from dbabrain.common import cli
 
 SOURCE = Path(cli.__file__).read_text(encoding="utf-8")
 
@@ -42,7 +42,7 @@ def _listed() -> set[str]:
 def test_every_dispatched_command_is_listed_in_the_usage_text():
     missing = _dispatched() - _listed() - DELEGATED
     assert not missing, (
-        f"dispatched but not listed by `python -m db_ops.common.cli`: {sorted(missing)}. "
+        f"dispatched but not listed by `python -m dbabrain.common.cli`: {sorted(missing)}. "
         "A command that only the source mentions is one nobody can find."
     )
 

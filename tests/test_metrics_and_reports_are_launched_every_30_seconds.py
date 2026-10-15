@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SHIPPED = ("db_ops/jobs/catalogue/app_commands.json", "data/app_commands.example.json")
+SHIPPED = ("dbabrain/jobs/catalogue/app_commands.json", "data/app_commands.example.json")
 
 
 def _app(copy: str, app_id: str) -> dict:

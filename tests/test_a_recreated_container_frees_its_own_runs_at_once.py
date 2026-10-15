@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.db import DbOpsStore
-from db_ops.lib import node_identity, run_claim
+from dbabrain.db import DbaBrainStore
+from dbabrain.lib import node_identity, run_claim
 
 REPO = Path(__file__).resolve().parents[1]
 NODE = "3f2a9c0d5e6b4a7c8d9e0f1a2b3c4d5e"
@@ -140,7 +140,7 @@ def test_a_root_that_cannot_hold_the_file_has_no_identity_rather_than_a_new_one_
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
 def store(tmp_path):
-    built = DbOpsStore(tmp_path / "db_ops.sqlite")
+    built = DbaBrainStore(tmp_path / "dbabrain.sqlite")
     built.initialize()
     return built
 
@@ -173,7 +173,7 @@ def test_a_claim_made_by_hand_records_no_node(store, monkeypatch):
 def test_every_reaper_passes_this_node():
     """A reaper that forgets it silently falls back to the hour's grace - the bug, back."""
     missing = []
-    for path in (REPO / "db_ops").rglob("*.py"):
+    for path in (REPO / "dbabrain").rglob("*.py"):
         if path.name == "run_claim.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -198,7 +198,7 @@ def _open_run(store) -> int:
 
 
 def test_closing_a_run_by_hand_releases_its_target(store):
-    from db_ops.sql_tasks.runner import close_orphaned_run
+    from dbabrain.sql_tasks.runner import close_orphaned_run
 
     run_id = _open_run(store)
     answer = close_orphaned_run(store=store, sql_run_id=run_id, reason="killed by the upgrade",
@@ -211,7 +211,7 @@ def test_closing_a_run_by_hand_releases_its_target(store):
 
 
 def test_closing_by_hand_needs_an_explicit_yes(store):
-    from db_ops.sql_tasks.runner import close_orphaned_run
+    from dbabrain.sql_tasks.runner import close_orphaned_run
 
     run_id = _open_run(store)
     answer = close_orphaned_run(store=store, sql_run_id=run_id, reason="r", confirm="")
@@ -221,7 +221,7 @@ def test_closing_by_hand_needs_an_explicit_yes(store):
 
 
 def test_a_run_that_is_not_running_is_left_with_its_own_ending(store):
-    from db_ops.sql_tasks.runner import close_orphaned_run
+    from dbabrain.sql_tasks.runner import close_orphaned_run
 
     run_id = _open_run(store)
     store.update_sql_run(sql_run_id=run_id, status="done", level="logging", message="m",

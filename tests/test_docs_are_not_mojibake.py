@@ -24,7 +24,7 @@ import pytest
 
 #: Everything a reader or an installer receives. `audits/` is excluded because it is not shipped
 #: and because an audit must not be edited after the fact — a corrupted one is reported, not fixed.
-SHIPPED_ROOTS = ("README.md", "CHANGELOG.md", "CONTRIBUTING.md", "docs", "data", "db_ops",
+SHIPPED_ROOTS = ("README.md", "CHANGELOG.md", "CONTRIBUTING.md", "docs", "data", "dbabrain",
                  "examples")
 
 TEXT_SUFFIXES = {".md", ".py", ".json", ".yml", ".yaml", ".sql", ".ps1", ".html", ".toml", ".txt",

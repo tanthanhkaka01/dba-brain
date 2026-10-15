@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from db_ops.lib.listing import active_only, hidden_note, is_active
+from dbabrain.lib.listing import active_only, hidden_note, is_active
 from conftest import shipped_config
 
 

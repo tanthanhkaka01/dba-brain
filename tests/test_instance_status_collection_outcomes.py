@@ -17,10 +17,10 @@ tests/test_metric_error_severity.py for the per-phase grading rules themselves.
 
 import pytest
 
-from db_ops.metrics.collector import _collect_one_metric
+from dbabrain.metrics.collector import _collect_one_metric
 from conftest import shipped_config
-from db_ops.metrics.definitions import load_metric_definitions
-from db_ops.metrics.models import MetricTarget
+from dbabrain.metrics.definitions import load_metric_definitions
+from dbabrain.metrics.models import MetricTarget
 
 
 COLLECTED_AT = "2026-08-14T09:00:00Z"
@@ -76,9 +76,9 @@ def _target():
         ip="192.0.2.250",
         db_type="sqlserver",
         db_name="SALESDB-PROD",
-        credential_name="sqlserver_db_ops",
+        credential_name="sqlserver_dbabrain",
         port=1433,
-        credential={"username": "db_ops", "password": "not-a-real-password"},
+        credential={"username": "dbabrain", "password": "not-a-real-password"},
     )
 
 
@@ -95,7 +95,7 @@ def _collect(monkeypatch, *, connect_error=None, execute_error=None, rows=()):
             raise connect_error
         return connection
 
-    monkeypatch.setattr("db_ops.common.metric_batch.db_connect.connect_engine", fake_connect_engine)
+    monkeypatch.setattr("dbabrain.common.metric_batch.db_connect.connect_engine", fake_connect_engine)
     results = _collect_one_metric(
         metric=_instance_status_definition(),
         target=_target(),
@@ -177,7 +177,7 @@ def test_the_same_two_failures_on_a_non_availability_metric_stay_warnings(monkey
             raise failure["connect_error"]
         return _FakeConnection(cursor)
 
-    monkeypatch.setattr("db_ops.common.metric_batch.db_connect.connect_engine", fake_connect_engine)
+    monkeypatch.setattr("dbabrain.common.metric_batch.db_connect.connect_engine", fake_connect_engine)
     results = _collect_one_metric(
         metric=backup_age,
         target=_target(),

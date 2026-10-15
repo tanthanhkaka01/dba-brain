@@ -40,7 +40,7 @@ from pathlib import Path
 import pytest
 
 
-COMMON_ROOT = Path(__file__).resolve().parents[1] / "db_ops" / "common"
+COMMON_ROOT = Path(__file__).resolve().parents[1] / "dbabrain" / "common"
 
 #: The resolver tier: modules that read `config.json`, `data/*.json`, or the runtime store.
 #: Each maps to why it cannot answer its question without them.
@@ -84,11 +84,11 @@ READS_LOCAL_CONFIG: dict[str, str] = {
                           "inventory, and the two disagree the first time somebody adds a server.",
     # metric_store.py, sla_store.py, backup_restore_history.py and telegram_queue.py were here
     # until 2026-08-15. They read store_config.json because they *are* stores — which is what
-    # finally moved them out of `common` entirely, into db_ops/db/ where ORD 01 owns the runtime
+    # finally moved them out of `common` entirely, into dbabrain/db/ where ORD 01 owns the runtime
     # store. `common` writes to no database now, so it needs no entry for one.
-    # "notify.py" left this list on 2026-08-15 when it moved to db_ops/lib/: apps parse notify
+    # "notify.py" left this list on 2026-08-15 when it moved to dbabrain/lib/: apps parse notify
     # blocks in-process, so it could not be a CLI call. Its one config read (the notify-level
-    # vocabulary) is lazy and fails open, and the parser is lib's own (db_ops.lib.config).
+    # vocabulary) is lazy and fails open, and the parser is lib's own (dbabrain.lib.config).
     "password_rotation.py": "changes a password on the server AND in the secret store; the store "
                             "is half the operation.",
     # "remote_exec.py" and "ssh.py" left in 0.24.0 (R09): a bare key name was found under
@@ -97,7 +97,7 @@ READS_LOCAL_CONFIG: dict[str, str] = {
     # the rule they ask - opens no store; lib.data_sources.resolve_secret_value does, for apps.
     # "report_archive.py" left on 2026-08-15: the only part of it that read the data folder
     # was `report_base_url`, which is now data_sources' own; the stamping and copying are
-    # pure and moved to db_ops/lib/report_archive.py.
+    # pure and moved to dbabrain/lib/report_archive.py.
     "secret_check.py": "audits the secret store - the store is its subject - and, since 0.24.0, "
                        "whether every configured target resolves to a login (check-credentials, "
                        "moved from the root package, R41): the configuration is that one's subject.",
@@ -112,8 +112,8 @@ READS_LOCAL_CONFIG: dict[str, str] = {
 _MARKERS = {
     # The same parser under its 0.24.0 address: moving it into `lib` made the import legal for
     # `common` (R04), not the read (R09).
-    "db_ops.lib.config": "imports the configuration parser (db_ops.lib.config)",
-    "db_ops.db": "imports the runtime store (db_ops.db)",
+    "dbabrain.lib.config": "imports the configuration parser (dbabrain.lib.config)",
+    "dbabrain.db": "imports the runtime store (dbabrain.db)",
     "data_sources": "imports the data-folder loader",
 }
 
@@ -121,9 +121,9 @@ LIB_ROOT = COMMON_ROOT.parent / "lib"
 
 
 def _lib_file(dotted: str) -> Path | None:
-    """The file behind `db_ops.lib.x.y`, if it is a module of `lib`."""
+    """The file behind `dbabrain.lib.x.y`, if it is a module of `lib`."""
     parts = dotted.split(".")
-    if parts[:2] != ["db_ops", "lib"] or len(parts) < 3:
+    if parts[:2] != ["dbabrain", "lib"] or len(parts) < 3:
         return None
     base = LIB_ROOT.joinpath(*parts[2:])
     for candidate in (base.with_suffix(".py"), base / "__init__.py"):
@@ -152,12 +152,12 @@ def _lib_reads(dotted: str, seen: frozenset[str] = frozenset()) -> bool:
     if path is None or dotted in seen:
         return False
     imported = _lib_imports(path)
-    if any(name.split(".")[-1] == "data_sources" or name.startswith("db_ops.lib.data_sources")
-           or name.startswith("db_ops.lib.config")
+    if any(name.split(".")[-1] == "data_sources" or name.startswith("dbabrain.lib.data_sources")
+           or name.startswith("dbabrain.lib.config")
            for name in imported):
         return True
     return any(_lib_reads(name, seen | {dotted}) for name in imported
-               if name.startswith("db_ops.lib.") and not name.startswith(dotted + "."))
+               if name.startswith("dbabrain.lib.") and not name.startswith(dotted + "."))
 
 
 def _module_files() -> list[Path]:
@@ -177,7 +177,7 @@ def _reads_local_state(path: Path) -> list[str]:
             for prefix, label in _MARKERS.items():
                 if node.module == prefix or node.module.startswith(prefix + "."):
                     found.add(label)
-            # `from db_ops.lib.data_sources import _resolve_data_dir` — the loader named as
+            # `from dbabrain.lib.data_sources import _resolve_data_dir` — the loader named as
             # the module rather than imported from its package. Same dependency, and the form
             # report_archive.py used, so matching only the package prefix missed it.
             if node.module.split(".")[-1] == "data_sources":
@@ -186,16 +186,16 @@ def _reads_local_state(path: Path) -> list[str]:
             for alias in node.names:
                 if alias.name.split(".")[-1] == "data_sources":
                     found.add(_MARKERS["data_sources"])
-            # `from db_ops.lib import config` - the parser named as the module.
-            if (isinstance(node, ast.ImportFrom) and node.module == "db_ops.lib"
+            # `from dbabrain.lib import config` - the parser named as the module.
+            if (isinstance(node, ast.ImportFrom) and node.module == "dbabrain.lib"
                     and any(alias.name == "config" for alias in node.names)):
-                found.add(_MARKERS["db_ops.lib.config"])
+                found.add(_MARKERS["dbabrain.lib.config"])
         # The default-argument form: a constant pointing at this repo's data folder.
         if isinstance(node, ast.Name) and node.id == "DEFAULT_DATA_DIR":
             found.add("defaults an argument to this repo's data/ folder (DEFAULT_DATA_DIR)")
     # One import away: a `lib` module that reads is a read by whoever imports it.
     for name in sorted(_lib_imports(path)):
-        named_above = name.startswith(("db_ops.lib.data_sources", "db_ops.lib.config"))
+        named_above = name.startswith(("dbabrain.lib.data_sources", "dbabrain.lib.config"))
         if not named_above and name.split(".")[-1] != "data_sources" and _lib_reads(name):
             found.add(f"imports {name}, which reads the data folder or the config")
     return sorted(found)
@@ -293,7 +293,7 @@ def _config_free_files() -> list[Path]:
 
 
 def _resolver_modules() -> set[str]:
-    """`db_ops.common.x` names of the resolver tier, packages included."""
+    """`dbabrain.common.x` names of the resolver tier, packages included."""
     names = set()
     for relative in READS_LOCAL_CONFIG:
         dotted = relative[:-3].replace("/", ".")
@@ -325,14 +325,14 @@ def test_a_backup_restore_or_docker_module_reaches_no_resolver(path: Path) -> No
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             parts = node.module.split(".")
-            if parts[:2] == ["db_ops", "common"]:
+            if parts[:2] == ["dbabrain", "common"]:
                 inner = ".".join(parts[2:])
                 reached |= {inner} if inner else {alias.name for alias in node.names}
                 reached |= {f"{inner}.{alias.name}" for alias in node.names} if inner else set()
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.startswith("db_ops.common."):
-                    reached.add(alias.name[len("db_ops.common."):])
+                if alias.name.startswith("dbabrain.common."):
+                    reached.add(alias.name[len("dbabrain.common."):])
     offenders = sorted(name for name in reached if name in resolvers
                        or any(name.startswith(r + ".") for r in resolvers))
     assert not offenders, f"common/{_relative(path)} imports the resolver tier: {offenders}"

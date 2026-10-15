@@ -1,6 +1,6 @@
 """Login must be safe to expose and impossible to sidestep, and a session must outlive the browser.
 
-The console is the first part of db_ops a person reaches without a shell, so the properties that
+The console is the first part of dbabrain a person reaches without a shell, so the properties that
 matter here are not the happy path — they are the ones that go wrong quietly:
 
 * **A password is never stored, and a session token is never stored.** Whoever reads these tables
@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.db.web_auth_store import (
+from dbabrain.db.web_auth_store import (
     recall_password,
     remember_password,
     secret_ref_for,
@@ -38,7 +38,7 @@ from db_ops.db.web_auth_store import (
     utc_now,
     utc_text,
 )
-from db_ops.lib import web_auth
+from dbabrain.lib import web_auth
 
 PASSWORD = "correct-horse-battery"
 
@@ -60,7 +60,7 @@ def cheap_kdf(monkeypatch):
 
 @pytest.fixture()
 def auth(tmp_path: Path) -> WebAuthStore:
-    return WebAuthStore(tmp_path / "db_ops.sqlite")
+    return WebAuthStore(tmp_path / "dbabrain.sqlite")
 
 
 @pytest.fixture()
@@ -88,7 +88,7 @@ def test_the_production_cost_is_the_one_the_secret_store_already_uses() -> None:
     The number matters: it is what makes a stolen hash table expensive to attack, and one KDF
     setting for the whole tool is why it has to be the secret store's number and not a second one.
     """
-    from db_ops.lib import secret_text
+    from dbabrain.lib import secret_text
 
     assert PRODUCTION_ITERATIONS == 200_000
     assert PRODUCTION_ITERATIONS == secret_text._PBKDF2_ITERATIONS
@@ -324,7 +324,7 @@ def test_has_any_user_answers_whether_the_console_is_usable_yet(tmp_path: Path) 
 # --------------------------------------------------------------------------- #
 def _secret_dir(tmp_path: Path) -> Path:
     """A secret store with one existing ref, so the tests also prove nothing else is lost."""
-    from db_ops.lib import secret_text
+    from dbabrain.lib import secret_text
 
     data = tmp_path / "data"
     data.mkdir(exist_ok=True)
@@ -351,7 +351,7 @@ def test_a_remembered_password_can_be_read_back(tmp_path: Path) -> None:
 
 def test_remembering_a_password_keeps_every_other_secret(tmp_path: Path) -> None:
     """The whole store is decrypted, updated and re-encrypted; losing a ref here loses a login."""
-    from db_ops.lib import secret_text
+    from dbabrain.lib import secret_text
 
     data = _secret_dir(tmp_path)
     remember_password("thanh", PASSWORD, data_dir=data, key="passphrase",
@@ -404,8 +404,8 @@ def test_authenticating_never_consults_the_secret_store(tmp_path: Path, monkeypa
     def explode(*args, **kwargs):
         raise AssertionError("authenticate must not read the secret store")
 
-    monkeypatch.setattr("db_ops.db.web_auth_store.recall_password", explode)
-    store = WebAuthStore(tmp_path / "db_ops.sqlite")
+    monkeypatch.setattr("dbabrain.db.web_auth_store.recall_password", explode)
+    store = WebAuthStore(tmp_path / "dbabrain.sqlite")
     store.create_user(username="thanh", password=PASSWORD, level=100,
                       password_ref="WEB_CONSOLE_THANH")
 

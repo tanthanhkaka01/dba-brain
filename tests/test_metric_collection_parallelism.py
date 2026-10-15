@@ -17,10 +17,10 @@ import time
 
 import pytest
 
-from db_ops.lib.config import DbOpsConfig
-from db_ops.metrics.collector import collect_metrics
-from db_ops.metrics.definitions import load_max_parallel_servers
-from db_ops.metrics.models import MetricDefinition, MetricTarget
+from dbabrain.lib.config import DbaBrainConfig
+from dbabrain.metrics.collector import collect_metrics
+from dbabrain.metrics.definitions import load_max_parallel_servers
+from dbabrain.metrics.models import MetricDefinition, MetricTarget
 
 
 def _target(server_id, suffix=""):
@@ -48,7 +48,7 @@ def _definition(metric_code="INSTANCE_STATUS"):
 
 
 def _config(tmp_path):
-    return DbOpsConfig(
+    return DbaBrainConfig(
         log_dir=tmp_path / "logs",
         runtime_dir=tmp_path / "runtime",
         sqlite_path=tmp_path / "runtime.sqlite",
@@ -56,15 +56,15 @@ def _config(tmp_path):
 
 
 def _wire(monkeypatch, *, targets, definitions, collect_one, max_parallel):
-    monkeypatch.setattr("db_ops.metrics.collector.load_metric_definitions", lambda *_, **__: definitions)
-    monkeypatch.setattr("db_ops.metrics.collector.load_metric_importance_overrides", lambda *_, **__: [])
-    monkeypatch.setattr("db_ops.metrics.collector.load_metric_targets", lambda **_: targets)
-    monkeypatch.setattr("db_ops.metrics.collector.data_sources.load_secret_text", lambda *_, **__: {})
-    monkeypatch.setattr("db_ops.metrics.collector.load_max_parallel_servers", lambda *_, **__: max_parallel)
+    monkeypatch.setattr("dbabrain.metrics.collector.load_metric_definitions", lambda *_, **__: definitions)
+    monkeypatch.setattr("dbabrain.metrics.collector.load_metric_importance_overrides", lambda *_, **__: [])
+    monkeypatch.setattr("dbabrain.metrics.collector.load_metric_targets", lambda **_: targets)
+    monkeypatch.setattr("dbabrain.metrics.collector.data_sources.load_secret_text", lambda *_, **__: {})
+    monkeypatch.setattr("dbabrain.metrics.collector.load_max_parallel_servers", lambda *_, **__: max_parallel)
     # Since 0.24.0 a target's due metrics run as one `metric-batch`; the fake still sees them one
     # metric at a time, in order, on the worker the target was handed to.
     monkeypatch.setattr(
-        "db_ops.metrics.collector._collect_metric_batch",
+        "dbabrain.metrics.collector._collect_metric_batch",
         lambda *, target, planned, secrets: [collect_one(target=target, metric=metric)
                                              for metric, _importance in planned])
 
@@ -216,7 +216,7 @@ def test_one_targets_config_error_does_not_end_the_pass(tmp_path, monkeypatch, m
     """A mistyped `disabled_collector_types` raises by design. It used to fail the whole pass: every
     other server's tally was lost and `target_health` was never rebuilt for anyone (review 0.25.0,
     F3.1). Now it is that target's error, named in the run message, and the pass is DONE."""
-    import db_ops.metrics.collector as collector
+    import dbabrain.metrics.collector as collector
 
     collected: list[str] = []
 

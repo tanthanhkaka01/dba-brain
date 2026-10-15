@@ -25,13 +25,13 @@ from pathlib import Path
 
 import pytest
 
-from db_ops.control import deploy, worker_data, worker_status
-from db_ops.lib import docker_db_registry
-from db_ops.lib.secret_text import encrypt_secret_text, write_secret_file
+from dbabrain.control import deploy, worker_data, worker_status
+from dbabrain.lib import docker_db_registry
+from dbabrain.lib.secret_text import encrypt_secret_text, write_secret_file
 
 KEY = "a-test-only-passphrase"
-SPACED_DIR = "/opt/db ops/worker"
-CONTAINER = "db_ops daemon"
+SPACED_DIR = "/opt/dba brain/worker"
+CONTAINER = "dbabrain daemon"
 
 
 def test_the_deploy_s_secret_merge_writes_both_files_through_the_secret_writer(tmp_path, monkeypatch):
@@ -90,7 +90,7 @@ def test_a_deploy_into_a_directory_with_a_space_keeps_it_one_word(tmp_path, monk
     deploy.copy_bundle(host="192.0.2.10", user="ops", password="pw", remote_dir=SPACED_DIR, bundle=bundle)
     deploy.reclaim_worker_files(host="192.0.2.10", user="ops", password="pw", remote_dir=SPACED_DIR)
 
-    naming = [command for command in commands if "db ops" in command]
+    naming = [command for command in commands if "dba brain" in command]
     assert naming, commands
     assert all(_one_word(command, SPACED_DIR) for command in naming), naming
 
@@ -100,13 +100,13 @@ def test_a_container_name_reaches_docker_as_one_word(monkeypatch):
 
     def capture(client, command, **_kwargs):
         commands.append(command)
-        return (0, "db_ops | Up", "") if command.startswith("docker ps") else (0, "", "")
+        return (0, "dbabrain | Up", "") if command.startswith("docker ps") else (0, "", "")
 
     monkeypatch.setattr(worker_status, "ssh_connect", lambda *a, **k: _Client())
     monkeypatch.setattr(worker_status, "ssh_capture", capture)
 
     worker_status.run_worker_status(host="192.0.2.10", user="ops", password="pw", container=CONTAINER)
 
-    naming = [command for command in commands if "db_ops daemon" in command]
+    naming = [command for command in commands if "dbabrain daemon" in command]
     assert len(naming) >= 3, commands
     assert all(_one_word(command, CONTAINER) for command in naming), naming

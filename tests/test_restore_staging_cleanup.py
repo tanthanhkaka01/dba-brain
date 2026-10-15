@@ -18,7 +18,7 @@ silent — the cleanup kept reporting success while doing the wrong thing:
 
 from __future__ import annotations
 
-from db_ops.backup_restore.delete_backup import obsolete_only
+from dbabrain.backup_restore.delete_backup import obsolete_only
 
 
 def _f(name, stamp, size=100):

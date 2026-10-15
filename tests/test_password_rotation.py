@@ -1,7 +1,7 @@
 """Why password rotation is one operation instead of two.
 
 A password lives in two places — the server and the secret store — and a rotation that updates one
-without the other is worse than no rotation at all: db_ops keeps authenticating with a value the
+without the other is worse than no rotation at all: dbabrain keeps authenticating with a value the
 server has forgotten, and the failure surfaces hours later as a metric that stopped collecting. The
 tests below pin the ordering that keeps the two together, and the refusals that stop a half-applied
 change from being recorded as done.
@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from db_ops.common import password_rotation as rot
+from dbabrain.common import password_rotation as rot
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +307,7 @@ def test_a_request_still_asking_for_the_name_host_is_refused_not_ignored():
 def test_persist_writes_the_plaintext_source_as_well_as_the_encrypted_blob(tmp_path, monkeypatch):
     """The deploy regenerates encrypted_secret_text.json from the gitignored plaintext source, so a
     rotation that only updated the encrypted blob would be silently reverted on the next deploy."""
-    from db_ops.lib import secret_text
+    from dbabrain.lib import secret_text
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -316,7 +316,7 @@ def test_persist_writes_the_plaintext_source_as_well_as_the_encrypted_blob(tmp_p
         _write_json(tmp_path / "src.json", {"A_DBA": "old-a", "B_DBA": "old-b"}),
         data_dir / secret_text.ENCRYPTED_SECRET_TEXT_FILENAME, key)
     plain = _write_json(tmp_path / "secret_text.json", {"A_DBA": "old-a", "B_DBA": "old-b"})
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", key)
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", key)
 
     outcome = {"results": [
         {"password_ref": "A_DBA", "status": "SUCCESS", "_new_password": "new-a"},
@@ -332,14 +332,14 @@ def test_persist_writes_the_plaintext_source_as_well_as_the_encrypted_blob(tmp_p
 
 def test_persist_never_leaves_the_new_password_on_the_result(tmp_path, monkeypatch):
     """The result object is what gets printed and logged next; the value must not survive the write."""
-    from db_ops.lib import secret_text
+    from dbabrain.lib import secret_text
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     secret_text.encrypt_secret_text_file(
         _write_json(tmp_path / "src.json", {"A_DBA": "old-a"}),
         data_dir / secret_text.ENCRYPTED_SECRET_TEXT_FILENAME, "passphrase")
-    monkeypatch.setenv("DB_OPS_SECRET_KEY", "passphrase")
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "passphrase")
 
     outcome = {"results": [{"password_ref": "A_DBA", "status": "SUCCESS", "_new_password": "new-a"}]}
     rot.persist_rotated(outcome, data_dir=data_dir)

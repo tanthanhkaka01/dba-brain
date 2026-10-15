@@ -10,15 +10,24 @@ That is how MSSQL25 on 192.0.2.11 was created on 2026-08-10: a named volume for
 `/var/opt/mssql` and nothing else, while the proven target on 192.0.2.249 had
 `/opt/mssql2025/backup -> /opt/mssql2025/backup` added by hand. These tests pin the mount into the
 template so the next lab instance does not need the same hour.
+
+Which folder is mounted is the node's to state (0.29.0): the code held one as a constant until
+then, and a constant is a folder nobody chose. A SQL Server lab that states none is refused by
+name; an empty string still asks for no mount.
 """
 
-from db_ops.common.docker_db import templates as t
-from db_ops.lib.docker_db_spec import DEFAULT_BACKUP_MOUNT, ENGINE_META, DockerDbSpec
+import pytest
+
+from dbabrain.common.docker_db import templates as t
+from dbabrain.lib.docker_db_spec import ENGINE_META, DockerDbSpec
+
+#: The folder this node states for its labs' backups (sre.docker_db.backup_mount).
+LAB_BACKUP = "/opt/acme/backup"
 
 
 def _spec(engine="mssql", **overrides):
     values = dict(name="MSSQL25", engine=engine, version="2025-latest", mode="single",
-                  host_port=1433, password_env="MSSQL25_PASSWORD")
+                  host_port=1433, password_env="MSSQL25_PASSWORD", backup_mount=LAB_BACKUP)
     values.update(overrides)
     return DockerDbSpec(**values)
 
@@ -32,7 +41,7 @@ def test_a_sqlserver_lab_is_mounted_at_the_same_path_on_both_sides():
     A mount at a *different* container path would look fine and fail at RESTORE time."""
     compose = _compose(_spec())
 
-    assert f'- "{DEFAULT_BACKUP_MOUNT}:{DEFAULT_BACKUP_MOUNT}"' in compose
+    assert f'- "{LAB_BACKUP}:{LAB_BACKUP}"' in compose
 
 
 def test_the_data_volume_is_still_a_named_volume():
@@ -45,10 +54,12 @@ def test_the_data_volume_is_still_a_named_volume():
 
 
 def test_a_caller_can_ask_for_no_mount_at_all():
-    """An explicit empty value is "none", distinct from "not stated" which takes the default."""
-    compose = _compose(_spec(backup_mount=""))
+    """An explicit empty value is "none", distinct from "not stated", which is refused."""
+    spec = _spec(backup_mount="")
+    spec.validate()
+    compose = _compose(spec)
 
-    assert DEFAULT_BACKUP_MOUNT not in compose
+    assert LAB_BACKUP not in compose
     assert "- MSSQL25_data:/var/opt/mssql" in compose
 
 
@@ -56,26 +67,31 @@ def test_a_caller_can_point_the_mount_somewhere_else():
     compose = _compose(_spec(backup_mount="/srv/restore_in"))
 
     assert '- "/srv/restore_in:/srv/restore_in"' in compose
-    assert DEFAULT_BACKUP_MOUNT not in compose
+    assert LAB_BACKUP not in compose
 
 
-def test_not_stating_a_mount_takes_the_engine_default():
-    assert _spec().resolved_backup_mount == DEFAULT_BACKUP_MOUNT
-    assert _spec(backup_mount=None).resolved_backup_mount == DEFAULT_BACKUP_MOUNT
+def test_a_sqlserver_lab_that_states_no_mount_is_refused_by_name():
+    """Until 0.29.0 "not stated" took a folder the code held as a constant. Which folder is a
+    fact of the node, so the spec names the field instead of assuming one."""
+    with pytest.raises(ValueError, match="backup_mount is not stated.*sre.docker_db.backup_mount"):
+        _spec(backup_mount=None).validate()
+    assert _spec(backup_mount=None).resolved_backup_mount == "", "nothing stated is no folder"
+    _spec().validate()
 
 
-def test_only_sqlserver_carries_a_default_mount():
+def test_only_sqlserver_needs_a_mount_stated():
     """PostgreSQL and Oracle restores move files by other means; a mount there would be an empty
-    directory on every lab host and nothing else."""
-    assert ENGINE_META["mssql"].backup_mount == DEFAULT_BACKUP_MOUNT
+    directory on every lab host and nothing else - so a lab of theirs that states none is built."""
+    assert ENGINE_META["mssql"].mounts_backup is True
     for engine in ("postgres", "mysql", "oracle"):
-        assert ENGINE_META[engine].backup_mount == ""
+        assert ENGINE_META[engine].mounts_backup is False
+    _spec(engine="postgres", version="18", host_port=5433, backup_mount=None).validate()
 
 
 def test_a_postgres_lab_compose_is_unchanged_by_this():
-    compose = _compose(_spec(engine="postgres", version="18", host_port=5433))
+    compose = _compose(_spec(engine="postgres", version="18", host_port=5433, backup_mount=None))
 
-    assert DEFAULT_BACKUP_MOUNT not in compose
+    assert LAB_BACKUP not in compose and "backup" not in compose.split("volumes:")[1].split("healthcheck:")[0]
 
 
 def test_the_mount_line_does_not_disturb_the_rest_of_the_file():
@@ -97,7 +113,7 @@ def test_run_cmd_exposes_one_privileged_path_instead_of_inlined_passwords():
     in on stdin."""
     import inspect
 
-    from db_ops.common import cli, host_ops
+    from dbabrain.common import cli, host_ops
 
     assert callable(host_ops.run_privileged)
     source = inspect.getsource(cli._run_cmd_command)

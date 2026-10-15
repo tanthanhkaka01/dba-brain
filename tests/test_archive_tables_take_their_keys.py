@@ -14,9 +14,9 @@ import sqlite3
 
 import pytest
 
-from db_ops.db import DbOpsStore, archive_keys
-from db_ops.db.metric_store import SCHEMA_SQL as METRIC_SCHEMA_SQL, MetricStore
-from db_ops.db.store import SCHEMA_SQL as STORE_SCHEMA_SQL
+from dbabrain.db import DbaBrainStore, archive_keys
+from dbabrain.db.metric_store import SCHEMA_SQL as METRIC_SCHEMA_SQL, MetricStore
+from dbabrain.db.store import SCHEMA_SQL as STORE_SCHEMA_SQL
 
 SCHEMAS = {"job_runs_history": STORE_SCHEMA_SQL, "metric_results_archive": METRIC_SCHEMA_SQL}
 
@@ -24,8 +24,8 @@ SCHEMAS = {"job_runs_history": STORE_SCHEMA_SQL, "metric_results_archive": METRI
 @pytest.fixture()
 def old_store(tmp_path):
     """A store as 0.23.0 built it: both archives without a key, holding rows."""
-    path = tmp_path / "db_ops.sqlite"
-    DbOpsStore(path).initialize()
+    path = tmp_path / "dbabrain.sqlite"
+    DbaBrainStore(path).initialize()
     MetricStore(path).initialize()
     with sqlite3.connect(path) as conn:
         for table, key in archive_keys.ARCHIVE_KEYS.items():
@@ -41,16 +41,16 @@ def old_store(tmp_path):
 
 
 def _plan(path, **kwargs):
-    store = DbOpsStore(path)
+    store = DbaBrainStore(path)
     with store.connect() as conn:
         return {entry["table"]: entry for entry in archive_keys.plan(conn, backend="sqlite", **kwargs)}
 
 
 def _apply(path):
-    store = DbOpsStore(path)
+    store = DbaBrainStore(path)
     with store.connect() as conn:
         report = archive_keys.apply(conn, backend="sqlite", schema_sql=SCHEMAS)
-    DbOpsStore(path).initialize(force=True)
+    DbaBrainStore(path).initialize(force=True)
     MetricStore(path).initialize(force=True)
     return {entry["table"]: entry for entry in report}
 
@@ -61,8 +61,8 @@ def _keyed(path, table):
 
 
 def test_a_new_store_declares_both_keys(tmp_path):
-    path = tmp_path / "db_ops.sqlite"
-    DbOpsStore(path).initialize()
+    path = tmp_path / "dbabrain.sqlite"
+    DbaBrainStore(path).initialize()
     MetricStore(path).initialize()
     assert _keyed(path, "job_runs_history") and _keyed(path, "metric_results_archive")
     assert {e["state"] for e in _plan(path).values()} == {"keyed"}
@@ -105,7 +105,7 @@ def test_running_it_again_changes_nothing(old_store):
 
 def test_archiving_still_works_into_a_keyed_table(old_store):
     _apply(old_store)
-    store = DbOpsStore(old_store)
+    store = DbaBrainStore(old_store)
     with store.connect() as conn:
         conn.execute("INSERT INTO job_runs_history (log_id, archived_at) VALUES (4, 'later')")
         with pytest.raises(sqlite3.IntegrityError):

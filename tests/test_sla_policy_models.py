@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import pytest
 
-from db_ops.sla import compliance
-from db_ops.sla.models import SlaPolicy
-from db_ops.sla.policies import parse_sla_policy
+from dbabrain.sla import compliance
+from dbabrain.sla.models import SlaPolicy
+from dbabrain.sla.policies import parse_sla_policy
 
 WINDOW = ("2026-08-04T00:00:00Z", "2026-08-05T00:00:00Z")
 

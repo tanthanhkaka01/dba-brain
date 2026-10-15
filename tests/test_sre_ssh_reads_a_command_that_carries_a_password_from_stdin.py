@@ -1,7 +1,7 @@
 """`sre ssh --stdin` keeps a command that carries a password out of every argument list.
 
 The lab AG tool runs commands on the SQL nodes that carry their password (``SSHPASS=...``). Batch 3
-quoted them; they still went to ``python -m db_ops.sre.cli ssh`` as arguments, so the password sat in
+quoted them; they still went to ``python -m dbabrain.sre.cli ssh`` as arguments, so the password sat in
 the process table here and on the bastion for as long as the command ran (review 0.25.0, B8.1, the
 residual). ``sre ssh --stdin`` reads the command from stdin and sends it as a ``run-cmd`` script,
 stdin all the way to the node, and the tool uses it.
@@ -15,9 +15,9 @@ import logging
 import sys
 from pathlib import Path
 
-from db_ops.sre import cli as sre_cli
-from db_ops.sre.config import SreOperationalConfig
-from db_ops.sre.service import run_ssh_command
+from dbabrain.sre import cli as sre_cli
+from dbabrain.sre.config import SreOperationalConfig
+from dbabrain.sre.service import run_ssh_command
 
 SECRET = "N0de-Pa55word"
 COMMAND = f"SSHPASS='{SECRET}' sshpass -e ssh node1 hostname"
@@ -52,7 +52,7 @@ def test_the_cli_reads_the_command_from_stdin(monkeypatch):
 
 
 def test_the_lab_ag_tool_hands_its_command_over_stdin(monkeypatch):
-    tool = importlib.import_module("db_ops.sre.data_folder.deploy_sqlserver_ag")
+    tool = importlib.import_module("dbabrain.sre.data_folder.deploy_sqlserver_ag")
     calls: list[tuple[list, str | None]] = []
     monkeypatch.setattr(tool, "_run", lambda cmd, timeout=0, cwd=None, stdin_text=None:
                         calls.append((cmd, stdin_text)) or (0, "", ""))

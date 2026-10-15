@@ -19,11 +19,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_ops.backup_restore import backup as backup_module
-from db_ops.backup_restore import schedule, workflow
-from db_ops.backup_restore.server_metadata import ServerMetadataPlan
-from db_ops.db.store import RunAlreadyClaimed, utc_now_text
-from db_ops.lib.time_window import TimeWindow
+from dbabrain.backup_restore import backup as backup_module
+from dbabrain.backup_restore import schedule, workflow
+from dbabrain.backup_restore.server_metadata import ServerMetadataPlan
+from dbabrain.db.store import RunAlreadyClaimed, utc_now_text
+from dbabrain.lib.time_window import TimeWindow
 
 from conftest import patch_sql_runner
 
@@ -83,7 +83,7 @@ def _backup_job(backup_id):
 def _run_backups(monkeypatch, *, force):
     long_a, short_b = _backup_job("LONG_A"), _backup_job("SHORT_B")
     executed: list[str] = []
-    monkeypatch.setattr(backup_module, "DbOpsStore", _Store)
+    monkeypatch.setattr(backup_module, "DbaBrainStore", _Store)
     monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: None)
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
@@ -123,7 +123,7 @@ def test_a_scheduled_restore_does_not_repeat_a_restore_another_run_finished(monk
                             time_window=SimpleNamespace(timeout=7200))
             for rid in ("LONG_ORA", "SHORT_PG")]
     restored: list[str] = []
-    monkeypatch.setattr(workflow, "DbOpsStore", _Store)
+    monkeypatch.setattr(workflow, "DbaBrainStore", _Store)
     monkeypatch.setattr(workflow, "emit_backup_restore_event", lambda **k: None)
     monkeypatch.setattr(workflow.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(workflow, "load_restore_configs", lambda _p: [])
@@ -136,7 +136,7 @@ def test_a_scheduled_restore_does_not_repeat_a_restore_another_run_finished(monk
             _other_run_does(jobs[1].job_code)
         return {"restore_id": request["restore_id"], "db_type": "postgresql", "steps": []}
 
-    monkeypatch.setattr("db_ops.backup_restore.restore_by_id.restore_by_id", restore)
+    monkeypatch.setattr("dbabrain.backup_restore.restore_by_id.restore_by_id", restore)
 
     summary = workflow.run_scheduled_restores(app_config=SimpleNamespace(sqlite_path=":memory:"),
                                               config_path="x.json")
@@ -151,7 +151,7 @@ def test_a_scheduled_sql_scan_does_not_repeat_a_task_another_scan_finished(tmp_p
     it; when this scan reaches task 2, it must see that."""
     import json
 
-    from db_ops.sql_tasks import runner
+    from dbabrain.sql_tasks import runner
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()

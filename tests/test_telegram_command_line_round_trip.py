@@ -17,7 +17,7 @@ costs, so the cost stays chosen rather than rediscovered.
 
 from __future__ import annotations
 
-from db_ops.lib.telegram_command_text import (
+from dbabrain.lib.telegram_command_text import (
     parse_command_message,
     render_command_line,
     split_with_verbatim_tail,

@@ -23,9 +23,9 @@ from pathlib import Path
 import pytest
 
 from conftest import shipped_data_dir
-from db_ops.db import config_sync
-from db_ops.lib.data_files import known_names
-from db_ops.db.config_store import DOCUMENT_COLLECTION, DOCUMENT_KEY, ConfigStore
+from dbabrain.db import config_sync
+from dbabrain.lib.data_files import known_names
+from dbabrain.db.config_store import DOCUMENT_COLLECTION, DOCUMENT_KEY, ConfigStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -64,7 +64,7 @@ def data_copy(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def store(tmp_path: Path) -> ConfigStore:
-    return ConfigStore(tmp_path / "db_ops.sqlite")
+    return ConfigStore(tmp_path / "dbabrain.sqlite")
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -101,13 +101,13 @@ def test_every_catalogued_app_code_is_a_real_package() -> None:
     describes the whole toolkit, and seven of its fourteen apps do not ship in the public tree.
     Only names that belong to no component at all are wrong, which is the mistake this catches.
     """
-    from db_ops.lib.distribution import PRIVATE_PACKAGES
+    from dbabrain.lib.distribution import PRIVATE_PACKAGES
 
-    packages = {p.name for p in (REPO_ROOT / "db_ops").iterdir()
+    packages = {p.name for p in (REPO_ROOT / "dbabrain").iterdir()
                 if p.is_dir() and not p.name.startswith("__")}
     catalogued = {spec.app_code for spec in config_sync.load_catalog(DATA_DIR)}
     unknown = sorted(catalogued - packages - set(PRIVATE_PACKAGES))
-    assert not unknown, f"config_catalog.json names app_code(s) with no db_ops/ package: {unknown}"
+    assert not unknown, f"config_catalog.json names app_code(s) with no dbabrain/ package: {unknown}"
 
 
 def test_the_catalog_keys_every_record_uniquely() -> None:
@@ -262,7 +262,7 @@ def test_two_active_rows_cannot_share_a_key(store: ConfigStore, data_copy: Path)
     """The uniqueness is the database's, not the sync's — a UI writing directly must hit it too."""
     import sqlite3
 
-    from db_ops.db.config_store import ConfigItem
+    from dbabrain.db.config_store import ConfigItem
 
     config_sync.sync(store, data_dir=data_copy, files=["telegram_users.json"])
     existing = store.list_items(source_file="telegram_users.json", collection="telegram_users")[0]
@@ -344,30 +344,30 @@ def test_every_catalogued_file_is_read_by_something() -> None:
     nothing, which is a trap: the save succeeds, the page says so, and the estate ignores it. Both
     were deleted on 2026-08-21.
 
-    The search is by filename across ``db_ops/``. A file whose path is built at runtime would trip
+    The search is by filename across ``dbabrain/``. A file whose path is built at runtime would trip
     this without being dead, which is what ``READ_INDIRECTLY`` is for — but adding to it should mean
     "I checked and it is read", never "make the test stop".
     """
-    from db_ops.lib.distribution import PRIVATE_PACKAGES
+    from dbabrain.lib.distribution import PRIVATE_PACKAGES
 
     unread = []
     for spec in config_sync.load_catalog(DATA_DIR):
         if spec.file in READ_INDIRECTLY:
             continue
         # A file whose owning component is not in this distribution has no reader here by
-        # construction — `webhost_config.json` is read by `db_ops/webhost/`, which the public tree
+        # construction — `webhost_config.json` is read by `dbabrain/webhost/`, which the public tree
         # withholds. That is a missing component, not an orphaned config file, and the two need
         # different answers.
-        if spec.app_code in PRIVATE_PACKAGES and not (REPO_ROOT / "db_ops" / spec.app_code).is_dir():
+        if spec.app_code in PRIVATE_PACKAGES and not (REPO_ROOT / "dbabrain" / spec.app_code).is_dir():
             continue
         stem = spec.file.replace(".json", "")
-        readers = [path for path in (REPO_ROOT / "db_ops").rglob("*.py")
+        readers = [path for path in (REPO_ROOT / "dbabrain").rglob("*.py")
                    if "__pycache__" not in path.parts
                    and stem in path.read_text(encoding="utf-8")]
         if not readers:
             unread.append(spec.file)
     assert not unread, (
-        "catalogued but read by no code in db_ops/: " + ", ".join(unread) +
+        "catalogued but read by no code in dbabrain/: " + ", ".join(unread) +
         ". Either it is dead and should go, or it is loaded by a path built at runtime and "
         "belongs in READ_INDIRECTLY with that noted.")
 
@@ -394,7 +394,7 @@ def test_the_packaged_catalog_decides_the_same_as_the_operator_s() -> None:
     """Three copies of the catalog exist, and only this holds them together.
 
     `data/config_catalog.json` is what this estate runs, `data/config_catalog.example.json` ships
-    in place of it publicly, and `db_ops/db/catalogue/config_catalog.json` is the one `db-ops init`
+    in place of it publicly, and `dbabrain/db/catalogue/config_catalog.json` is the one `dbabrain init`
     writes into a fresh tool root. The third is the one that drifts, because nothing an operator
     does touches it: on 2026-08-26 it was two entries behind — `network_reservations.json` since
     the network guard landed, so a fresh install's console never showed it at all.
@@ -404,7 +404,7 @@ def test_the_packaged_catalog_decides_the_same_as_the_operator_s() -> None:
     """
     import json
 
-    from db_ops.lib.paths import PACKAGE_DIR
+    from dbabrain.lib.paths import PACKAGE_DIR
 
     packaged = json.loads(
         (PACKAGE_DIR / "db" / "catalogue" / "config_catalog.json").read_bytes()

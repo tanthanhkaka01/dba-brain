@@ -27,14 +27,14 @@ import pytest
 
 from conftest import patch_telegram
 
-from db_ops.db import DbOpsStore
-from db_ops.lib.process_liveness import is_pid_alive, process_start_marker
-from db_ops.telegram import command_processor
+from dbabrain.db import DbaBrainStore
+from dbabrain.lib.process_liveness import is_pid_alive, process_start_marker
+from dbabrain.telegram import command_processor
 
 
 def _task(tmp_path: Path, *, pid: int, started: str | None, age_seconds: int = 0, timeout: int = 60):
-    sqlite_path = tmp_path / "db_ops.sqlite"
-    store = DbOpsStore(sqlite_path)
+    sqlite_path = tmp_path / "dbabrain.sqlite"
+    store = DbaBrainStore(sqlite_path)
     store.initialize()
     stdout_path = tmp_path / "task.stdout.txt"
     stdout_path.write_text("", encoding="utf-8")
@@ -103,7 +103,7 @@ def test_stopping_a_task_stops_the_command_under_its_wrapper(tmp_path):
         kwargs["creationflags"] = 0x00000008 | 0x00000200   # as the launch: detached, own group
     else:
         kwargs["start_new_session"] = True
-    wrapper = subprocess.Popen([sys.executable, "-m", "db_ops.telegram.detached_exit",
+    wrapper = subprocess.Popen([sys.executable, "-m", "dbabrain.telegram.detached_exit",
                                 str(tmp_path / "rc"), "--", sys.executable, "-c", command], **kwargs)
     deadline = time.monotonic() + 30
     while not child_pid_file.exists() and time.monotonic() < deadline:
