@@ -39,6 +39,8 @@ NOT_A_HOST_REACH: dict[str, tuple[int, str]] = {
     "sql_tasks/python_source.py": (1, "a SQL task's input: the operator's own Python script"),
     "control/export_public.py": (2, "git over the maintainers' own tree, while exporting it"),
     "control/_support.py": (1, "the deploy tool building the image on this machine (docker build / save)"),
+    "control/deploy_code.py": (1, "deploy-code reading the id of the image it built, on this machine "
+                                  "(docker image inspect) - the worker is reached through its client"),
     "sre/service.py": (1, "the operator's VMware PowerShell scripts, run on this machine and streamed "
                           "live - the tool sre drives, not a host it reaches"),
     "sre/data_folder/deploy_sqlserver_ag.py": (1, "the lab orchestrator's one runner: ssh-keygen on this "
