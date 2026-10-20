@@ -77,3 +77,19 @@ id = "generic-api-key"
     '''c2VjcmV0LXBocmFzZQ==''',
     '''abc123notmasked''',
   ]
+
+  [[rules.allowlists]]
+  description = """
+  An SLA policy id, in a test that keys a state map by `"<policy> @ <target>"`. The variable that
+  held it was named `key`, and `generic-api-key` read `key = "INSTANCE_AVAILABILITY_30D @ ..."` as
+  a credential - the rule working on a string that is a name, not a secret.
+
+  Found by the whole-tree scan of the v0.30.0 release (2026-10-20) and fixed in the file at once -
+  the variable is `policy_target` now - but the release's first export commit had already carried
+  the old line to GitHub, and the CI job, scanning that push range, reported it from history.
+  Rewriting a published `main` to launder a policy name is the worse trade, as it was on
+  2026-08-24.
+
+  Scoped to the policy id itself, so a real secret in the same file is still found.
+  """
+  regexes = ['''INSTANCE_AVAILABILITY_30D''']
