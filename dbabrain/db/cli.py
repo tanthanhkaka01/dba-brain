@@ -768,9 +768,10 @@ def _restore_drill_command(argv: list[str]) -> int:
 
     try:
         store = DbaBrainStore.from_config(load_config(resolve_config_path("backup_restore", config_path)))
+        from dbabrain.db.backup_restore_history import drill_rows
+
         with store.connect() as conn:
-            rows = [dict(row) for row in conn.execute(
-                "SELECT database_name, status, restore_start FROM backup_restore_history")]
+            rows = drill_rows(conn)
     except Exception as exc:  # noqa: BLE001 - report as a response like every other command.
         return response.emit(response.fail("restore-drill-status", str(exc)))
 

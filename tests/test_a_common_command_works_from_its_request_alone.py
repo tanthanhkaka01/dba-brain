@@ -71,6 +71,10 @@ CONFIGURATION_IS_ITS_JOB = frozenset({
     # file and nothing else - `metric-severity` a remap into db_instances.json, `lift-example` a
     # data/*.example.json from its source, refused when a real name would cross.
     "metric-severity", "lift-example",
+    # 2026-10-19: an instance's `active` written into db_instances.json, nothing else.
+    "instance-active",
+    # 2026-10-19: an instance's metrics.collector_env written into db_instances.json, nothing else.
+    "metric-env",
     # 0.24.0, the same review: it reports this node - what app_commands.json schedules here - so
     # its configuration is part of what it answers.
     "self-status",
@@ -363,6 +367,10 @@ def _on_a_root_init_wrote(work: Path, root: Path) -> dict[str, list[tuple[str, d
                             ("metric-severity", {"server_id": _INSTANCE["server_id"],
                                                  "metric_code": "BACKUP_AGE",
                                                  "severity_map": {"CRITICAL": "WARNING"}})],
+        "instance-active": [("instance-add", _INSTANCE),
+                            ("instance-active", {"server_id": _INSTANCE["server_id"], "active": False})],
+        "metric-env": [("instance-add", _INSTANCE),
+                       ("metric-env", {"server_id": _INSTANCE["server_id"], "env": {"PG_BACKUP_DIR": "/backup"}})],
         "sql-target-add": [("instance-add", _INSTANCE),
                            ("sql-command-add", {"display_name": "count", "db_type": "sqlserver",
                                                 "sql_text": "select 1"}),

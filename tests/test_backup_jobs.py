@@ -371,6 +371,13 @@ def test_every_engine_script_job_states_its_level_and_its_days():
     So the level is now stated in the job, and the day is ``time_window.weekdays``. A job that states
     neither would silently take an incremental for ever, which is the failure this holds the config
     to: nothing weekly, and nothing saying so.
+
+    Two shapes are allowed, because the estate runs both. The nightly one splits the **week**: a
+    full on one day, the incremental on the other six, between 01:00 and 05:00. A lab's soak cycle
+    (the release procedure's hourly backup and restore drill) splits the **hour** instead: every
+    level runs every day, each in minutes of its own. That one still states its days - all seven -
+    so an absent ``weekdays`` is never a reader's guess between "every day" and "forgotten"; the
+    0.29.0 full suite caught the lab entries without it.
     """
     from dbabrain.backup_restore.backup import load_backup_jobs
 
@@ -385,19 +392,33 @@ def test_every_engine_script_job_states_its_level_and_its_days():
     for job in jobs:
         assert job.env.get("BACKUP_LEVEL"), f"{job.label} states no BACKUP_LEVEL"
         assert job.time_window.weekdays, f"{job.label} states no weekdays"
-        assert job.time_window.from_hour == 1 and job.time_window.to_hour == 5
         # weekdays says WHICH day; repeat_interval still says whether it is due. An interval of a
         # day or more lets the due moment walk past the window and skip whole cycles.
         assert job.time_window.repeat_interval < 86400, f"{job.label} repeats less often than daily"
         by_entry.setdefault(job.backup_id, []).append(job)
 
     for backup_id, entry_jobs in by_entry.items():
+        levels = {job.env["BACKUP_LEVEL"] for job in entry_jobs}
+        assert len(levels) == len(entry_jobs), f"{backup_id} repeats a level across its jobs"
+
+        windows = [job.time_window for job in entry_jobs]
+        if all(w.from_hour is None and w.from_minute is not None and w.to_minute is not None
+               for w in windows):
+            # The hourly cycle: every level every day, and no two levels in the same minutes - an
+            # overlap is two levels racing for the same slot.
+            for job in entry_jobs:
+                assert sorted(job.time_window.weekdays) == [1, 2, 3, 4, 5, 6, 7], \
+                    f"{job.label} runs hourly but not every day"
+            minutes = [minute for w in windows for minute in range(w.from_minute, w.to_minute + 1)]
+            assert len(minutes) == len(set(minutes)), f"{backup_id} overlaps its minute windows"
+            continue
+
+        for job in entry_jobs:
+            assert job.time_window.from_hour == 1 and job.time_window.to_hour == 5, job.label
         # Together they must cover all seven days exactly once: a gap is a day with no backup, and
         # an overlap is two levels racing for the same night.
         covered = [day for job in entry_jobs for day in job.time_window.weekdays]
         assert sorted(covered) == [1, 2, 3, 4, 5, 6, 7], f"{backup_id} covers {sorted(covered)}"
-        levels = {job.env["BACKUP_LEVEL"] for job in entry_jobs}
-        assert len(levels) == len(entry_jobs), f"{backup_id} repeats a level across its jobs"
 
 
 def test_force_skips_the_schedule_but_not_a_run_already_in_flight():

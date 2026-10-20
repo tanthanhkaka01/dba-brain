@@ -52,6 +52,10 @@ ALL_COMMANDS = [
     # correspond to code that exists, so it changes a schedule and refuses to invent a tenth.
     "app-command-set",
     "probe-host", "self-status", "metric-severity", "trace-session",
+    # 2026-10-19. An instance switched on or off for every app; there was no command for it.
+    "instance-active",
+    # 2026-10-19. A collector script's inputs on one instance; the .251 PostgreSQL lab lacked one.
+    "metric-env",
     "inventory-summary", "list-backup-files",
     "pack-backup", "pull-file", "push-file",
     "restore-full", "restore-diff", "restore-log", "restore-key", "restore-metadata",

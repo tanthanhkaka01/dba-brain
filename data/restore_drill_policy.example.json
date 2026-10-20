@@ -21,6 +21,11 @@
         "_note": "Small, and the one nobody can work without. Drilled daily.",
         "database_name": "FINDB",
         "max_age_hours": 24
+      },
+      {
+        "_note": "Retired: its restore entry was switched off when the database was decommissioned. The history keeps its last success for ever; without this it would read as a stale drill every run.",
+        "database_name": "LEGACYDB",
+        "required": false
       }
     ]
   }

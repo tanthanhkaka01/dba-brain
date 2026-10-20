@@ -4,7 +4,7 @@
     "This is the file dbabrain init writes, not a sample: it is read as it stands. data/restore_drill_policy.example.json carries worked examples of the parts that ship empty.",
     "A drill proves the whole recovery path still works: the backup format, the credentials, the destination, the free space and the script itself. Only an actual restore proves it, which is why the age of the last successful one is a monitored fact rather than a note in a runbook.",
     "One week is short enough that a break is found before a month-end close depends on it, and long enough not to thrash a large database nightly. Past twice 'max_age_hours' the verdict escalates to critical, because evidence that stale is no evidence.",
-    "'overrides' ships empty. They name a database exactly as the restore history records it - a multi-terabyte database is often drilled fortnightly, a small critical one daily."
+    "'overrides' ships empty. They name a database exactly as the restore history records it - a multi-terabyte database is often drilled fortnightly, a small critical one daily. An override with \"required\": false retires a database whose drill was switched off - the history keeps its last success for ever, and without it that reads as a stale drill every run."
   ],
   "restore_drill_policy": {
     "defaults": {

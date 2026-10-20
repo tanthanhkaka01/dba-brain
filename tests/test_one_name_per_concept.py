@@ -79,11 +79,26 @@ def test_a_command_menu_is_ordered_under_either_name():
     assert menu_order_of({}) == float("inf")
 
 
+def _app_command_under_the_old_name() -> dict:
+    """A whole app command - every field is required since 0.30.0 (1.173), so `app-command-set`
+    refuses an edit that leaves a record invalid - with its order under the old name, `app_ord`."""
+    return {
+        "app_command_id": "1", "app_ord": 1, "app_code": "APP-X", "app_name": "x",
+        "display_name": "An app command for the test", "log_scope": "x", "working_dir": "tools/dbabrain",
+        "command_text": "python -m dbabrain.db.cli store-info", "active": True, "node_role": "all",
+        "run_mode": "sync", "max_parallel": 1,
+        "time_window": {"from_year": None, "to_year": None, "from_month": None, "to_month": None,
+                        "from_day": 1, "to_day": 31, "from_hour": 0, "to_hour": 23,
+                        "from_minute": None, "to_minute": None, "repeat_interval": 60,
+                        "retry_interval": 30, "timeout": 120},
+        "note": "",
+    }
+
+
 def test_a_writer_writes_the_standard_name_and_takes_the_old_one_off(tmp_path):
     """An edit through the standard name on a record still carrying the old one leaves ONE field."""
     (tmp_path / "app_commands.json").write_text(json.dumps({"app_commands": [
-        {"app_command_id": "1", "app_ord": 1, "app_code": "APP-X", "log_scope": "x",
-         "active": True},
+        _app_command_under_the_old_name(),
     ]}), encoding="utf-8")
 
     outcome = app_command_admin.set_app_command({"app_code": "APP-X", "sort_order": 7},
@@ -98,7 +113,7 @@ def test_a_writer_writes_the_standard_name_and_takes_the_old_one_off(tmp_path):
 def test_renaming_the_old_spelling_to_the_same_value_is_still_written(tmp_path):
     """`sort_order: 1` over `app_ord: 1` changes no value, and must still move the name."""
     (tmp_path / "app_commands.json").write_text(json.dumps({"app_commands": [
-        {"app_command_id": "1", "app_ord": 1, "app_code": "APP-X", "log_scope": "x"},
+        _app_command_under_the_old_name(),
     ]}), encoding="utf-8")
     app_command_admin.set_app_command({"app_code": "APP-X", "sort_order": 1}, data_dir=tmp_path)
     row = json.loads((tmp_path / "app_commands.json").read_text())["app_commands"][0]

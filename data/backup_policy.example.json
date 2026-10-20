@@ -12,12 +12,22 @@
   "backup_policy": {
     "description": "Per-database backup requirements, evaluated one type at a time.",
     "defaults": {
+      "data_backup": {
+        "of_types": [
+          "FULL",
+          "DIFF"
+        ],
+        "required": true,
+        "warn_hours": 30,
+        "critical_hours": 48,
+        "note": "Weekly FULL plus daily DIFF is a normal plan; what matters is the newest data backup, so FULL and DIFF are judged together at 48 hours."
+      },
       "types": {
         "FULL": {
           "required": true,
-          "warn_hours": 24,
-          "critical_hours": 48,
-          "note": "Worst-case data loss when no differential or log backup exists."
+          "warn_hours": 192,
+          "critical_hours": 240,
+          "note": "FULL keeps a bound of its own so a DIFF chain cannot rest on a base weeks old."
         },
         "DIFF": {
           "required": false,
@@ -27,9 +37,9 @@
         },
         "LOG": {
           "required_for_recovery_models": ["FULL", "BULK_LOGGED"],
-          "warn_hours": 2,
-          "critical_hours": 6,
-          "note": "The recovery point objective of a full-recovery database. A stale log backup proves an RPO gap; it does not by itself prove the chain is broken."
+          "warn_hours": 1.5,
+          "critical_hours": 2,
+          "note": "The recovery point objective of a full-recovery database: critical at 120 minutes, warning at 90 - not 60, which a log backup taken every hour reaches just before each run and would flap on. A stale log backup proves an RPO gap; it does not by itself prove the chain is broken."
         }
       }
     },

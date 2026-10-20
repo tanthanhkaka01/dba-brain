@@ -89,6 +89,7 @@
   .area .val{font-family:var(--mono); font-weight:700; font-size:13.5px}
   .area .val.crit{color:var(--crit)} .area .val.warn{color:var(--warn)} .area .val.ok{color:var(--ok)} .area .val.unk{color:var(--faint)}
   .area .thr{font-size:11px; color:var(--muted); font-family:var(--mono); margin-top:3px}
+  .area .cap{font-size:11.5px; font-family:var(--mono); margin-top:4px; color:var(--text)}
   .area .why{font-size:11.5px; color:var(--muted); margin-top:5px}
   .area .src{font-size:10.5px; color:var(--faint); margin-top:4px}
   /* A tile whose value crossed the rule printed on it, and whose alert config removed. Dashed in
@@ -120,6 +121,7 @@
   table.rpt tr.warn td{background:var(--warn-bg)}
   table.rpt .metric{font-weight:650; white-space:nowrap}
   table.rpt .code{display:block; font-size:10px; color:var(--faint); font-family:var(--mono); font-weight:400}
+  table.rpt .metric .wl-src{white-space:normal; max-width:340px}
   table.rpt .mono{font-family:var(--mono)}
   table.rpt .nowrap{white-space:nowrap}
   /* A long server-role list used to sit in a nowrap cell, so the Access table grew past the
@@ -417,6 +419,8 @@ function areaGrid(areas){
     return `<div class="area ${c}${down?` sil sil-${dc}`:""}">
       <div class="top"><span class="name">${esc(a.label)}${
         down?`<span class="sil-tag ${dc}">silenced</span>`:""}</span><span class="val ${c}">${esc(a.value)}</span></div>
+      ${a.capacity?`<div class="cap">${esc(a.capacity)}</div>`:""}
+      ${a.capacityNote?`<div class="why">${esc(a.capacityNote)}</div>`:""}
       <div class="thr">${esc(a.threshold)}</div>
       <div class="why">${esc(a.note)}</div>
       ${down?`<div class="sil-why ${dc}">This reading grades <b>${esc(down)}</b> against the rule above.
@@ -537,8 +541,37 @@ const wlSpan = s => s == null ? "—"
   : s >= 5400   ? (s/3600).toFixed(1) + "h"
   : Math.round(s/60) + " min";
 
+/* "· 48 of 60 CPUs online" where the engine may use fewer CPUs than the host has, "· 60 CPUs"
+   where it may use them all. The bare "· 60 CPU" this replaced was the host's count on an instance
+   licensed for 48 of them, read by everyone as the engine's. */
+const wlCpuHead = c => !c || !c.total ? ""
+  : c.online && c.online < c.total ? ` · ${c.online} of ${c.total} CPUs online` : ` · ${c.total} CPUs`;
+function wlCpuFacts(w){
+  const c = w.cpu || {};
+  const parts = [];
+  if (c.total && c.online && c.online < c.total) {
+    parts.push(`<b>${esc(c.label || c.edition || c.engine || "This instance")}</b> runs on <b>${c.online}</b> of
+      this host's <b>${c.total}</b> logical CPUs${c.limit?` — ${esc(c.limit)}`:""}. Database CPU is a
+      percentage of those ${c.online}: 100% is the engine saturated, while the host's CPU reads about
+      ${Math.round(c.online*100/c.total)}% at that moment.`);
+  }
+  if (w.cpuNote) parts.push(esc(w.cpuNote));
+  return parts.length ? `<p class="sec-note">${parts.join(" ")}</p>` : "";
+}
+
 function workloadBlock(w){
   if (!w) return "";
+  if (!w.available && !w.samples) {
+    /* Nothing collected at all is a different statement from "one collection so far": an engine
+       with no counters for this section must not be told to wait half an hour. */
+    return `<details class="fold"><summary>Workload — not collected for this server${wlCpuHead(w.cpu)}</summary><div class="in">
+      <p class="sec-note">No workload counters have been collected here. SQL Server and Oracle report
+      them through <span class="mono">PERFORMANCE_WORKLOAD_COUNTERS</span>; the CPU of a PostgreSQL
+      instance, which keeps no CPU total of its own, is counted from the host by
+      <span class="mono">OS_CPU_COUNTERS</span> where host collectors run.${
+      w.cpuNote?" "+esc(w.cpuNote):""}</p>
+    </div></details>`;
+  }
   if (!w.available) {
     /* Not a failure, and it must not read as one. Two collections 15 minutes apart is the
        earliest an interval can exist at all. */
@@ -554,12 +587,16 @@ function workloadBlock(w){
   const cells = (row) => wins.map(x=>{
     const c = (row.values||{})[x.key];
     if (!c) return `<td class="mono muted">—</td>`;
-    return `<td class="mono nowrap" title="${esc(String(c.total))}">${esc(wlUnit(c.total, row.unit))}${wlRate(c, row.unit)}</td>`;
+    /* "≈" on a figure built from per-minute samples rather than a counter, and the minutes it
+       sampled under it: a reader comparing two servers must see which number is exact. */
+    return `<td class="mono nowrap" title="${esc(String(c.total))}">${c.estimate?"≈ ":""}${esc(wlUnit(c.total, row.unit))}${wlRate(c, row.unit)}${
+      c.sub?`<span class="code">${esc(c.sub)}</span>`:""}</td>`;
   }).join("");
 
   const groups = (w.groups||[]).map(g=>
     `<tr class="wl-group"><td colspan="${wins.length+1}">${esc(g.name)}</td></tr>`
-    + g.rows.map(r=>`<tr><td class="metric">${esc(r.label)}</td>${cells(r)}</tr>`).join("")
+    + g.rows.map(r=>`<tr><td class="metric">${esc(r.label)}${
+        r.source?`<span class="code wl-src">${esc(r.source)}</span>`:""}</td>${cells(r)}</tr>`).join("")
   ).join("");
 
   const waits = (w.waits||[]).map(x=>`<tr><td class="metric mono">${esc(x.item)}</td>${
@@ -575,8 +612,9 @@ function workloadBlock(w){
       to.</b> <span class="mono">sys.dm_exec_query_stats</span> only holds plans that are still
       cached: an evicted plan takes its totals with it, and a batch that was never cached was never
       counted. So these are a <i>sample</i> of the interval and always an undercount — use them to
-      find the statements to tune, never to total the instance. The CPU row above, taken from the
-      resource pools, is the one that misses nothing; the share below is these two divided.
+      find the statements to tune, never to total the instance. The Database CPU row above is the
+      one that misses nothing; the share below is these two divided, and is left blank where that
+      row is itself an estimate.
       ${(w.cache.evicted||[]).length?`<b>${esc(w.cache.evicted.join(", "))}</b> fell during a window 
         because the cache dropped a plan, so ${w.cache.evicted.length>1?"those figures are":"that figure is"} 
         left blank rather than shown as negative work.`:""}
@@ -600,11 +638,12 @@ function workloadBlock(w){
       <thead><tr><th>Wait type</th>${head}</tr></thead><tbody>${waits}</tbody></table></div>` : "";
 
   return `<details class="fold" open><summary>Workload — what this instance actually did${
-      w.cpuCount?` · ${w.cpuCount} CPU`:""}</summary><div class="in">
+      wlCpuHead(w.cpu)}</summary><div class="in">
+    ${wlCpuFacts(w)}
     <p class="sec-note">Counters differenced between two collections, so every figure is work done
       <b>during</b> the interval — not a total since the engine started${
       w.countersSince?` (<span class="mono">${esc(w.countersSince)}</span>)`:""}, which is what
-      those DMVs report and what makes them useless read once. The small grey line under a value is
+      the engine's own views report and what makes them useless read once. The small grey line under a value is
       the rate per second. A column is missing when there is no honest pair of samples to subtract:
       counters that went backwards mean a restart, and a delta across one would show as work that
       never happened.</p>
@@ -957,6 +996,186 @@ function queryStoreFindingsBlock(q){
       <tbody>${rows}</tbody></table></div>
     </div></details>`;
 }
+
+/* Latency percentiles — Query Store, Oracle wait event histograms, and PostgreSQL statement totals.
+   Arithmetic across collections is evaluated by dbabrain/lib/latency_percentiles.py. */
+function latencyBlock(l){
+  if (!l) return "";
+  if (!l.collected){
+    return `<details class="fold"><summary>Latency percentiles — not collected</summary><div class="in">
+      <p class="sec-note">Nothing was collected for latency percentiles on this server in the window.</p>
+    </div></details>`;
+  }
+
+  const ms = v => v == null ? "—" : Number(v).toFixed(2);
+  const count = v => v == null ? "—" : Number(v).toLocaleString();
+  const bound = v => v == null ? "—" : "&lt;= " + (Number.isInteger(v) ? v : Number(v).toFixed(2)) + " ms";
+
+  const blocks = [];
+
+  const pr = l.probe;
+  if (pr && pr.collected){
+    if (pr.available){
+      const rows = (pr.targets || []).map(t => `<tr>
+        <td class="metric">${esc(t.target)}</td>
+        <td class="nowrap mono">${count(t.samples)}</td>
+        <td class="nowrap mono">${count(t.failed)}</td>
+        <td class="nowrap mono">${ms(t.p50_ms)}</td>
+        <td class="nowrap mono">${ms(t.p95_ms)}</td>
+        <td class="nowrap mono">${ms(t.p99_ms)}</td>
+        <td class="nowrap mono">${ms(t.max_ms)}</td>
+      </tr>`).join("");
+      blocks.push(`<h3 class="sub">Connection probe (last 24 h)</h3>
+        <p class="sec-note">${esc(pr.nature)}</p>
+        <div class="tbl-wrap"><table class="rpt">
+          <thead><tr><th>Instance</th><th>Probes</th><th>Failed</th><th>p50 (ms)</th><th>p95 (ms)</th>
+            <th>p99 (ms)</th><th>Max (ms)</th></tr></thead>
+          <tbody>${rows}</tbody></table></div>`);
+    } else {
+      blocks.push(`<h3 class="sub">Connection probe (last 24 h)</h3>
+        <p class="sec-note">${esc(pr.reason || "No timed probe yet.")}</p>`);
+    }
+  }
+
+  if (l.sqlserver && l.sqlserver.collected){
+    if (l.sqlserver.available && l.sqlserver.databases && l.sqlserver.databases.length){
+      const rows = [];
+      l.sqlserver.databases.forEach(db => {
+        (db.intervals || []).forEach(it => {
+          rows.push(`<tr>
+            <td class="metric">${esc(db.database || db.name)}</td>
+            <td class="nowrap mono">${when(it.interval_start_utc || it.interval_start) || "—"}</td>
+            <td class="nowrap mono">${when(it.interval_end_utc || it.interval_end) || "—"}</td>
+            <td class="nowrap mono">${count(it.executions)}</td>
+            <td class="nowrap mono">${count(it.plans)}</td>
+            <td class="nowrap mono">${ms(it.p50_ms)}</td>
+            <td class="nowrap mono">${ms(it.p95_ms)}</td>
+            <td class="nowrap mono">${ms(it.p99_ms)}</td>
+            <td class="nowrap mono">${ms(it.avg_ms)}</td>
+            <td class="nowrap mono">${ms(it.max_ms)}</td>
+          </tr>`);
+        });
+      });
+      blocks.push(`<h3 class="sub">SQL Server Query Store latency</h3>
+        <p class="sec-note">${esc(l.sqlserver.nature)}</p>
+        <div class="tbl-wrap"><table class="rpt">
+          <thead><tr><th>Database</th><th>Interval start</th><th>Interval end</th>
+            <th>Executions</th><th>Plans</th><th>p50 (ms)</th><th>p95 (ms)</th><th>p99 (ms)</th>
+            <th>Avg (ms)</th><th>Max (ms)</th></tr></thead>
+          <tbody>${rows.join("")}</tbody></table></div>`);
+    } else {
+      blocks.push(`<h3 class="sub">SQL Server Query Store latency</h3>
+        <p class="sec-note">${esc(l.sqlserver.reason || "No completed intervals in the window.")}</p>`);
+    }
+  }
+
+  if (l.oracle && l.oracle.collected){
+    if (l.oracle.available && l.oracle.events && l.oracle.events.length){
+      const rows = l.oracle.events.map(e => `<tr>
+        <td class="metric">${esc(e.event)}</td>
+        <td class="nowrap mono">${count(e.waits)}</td>
+        <td class="nowrap mono">${bound(e.p50_ms_le)}</td>
+        <td class="nowrap mono">${bound(e.p95_ms_le)}</td>
+        <td class="nowrap mono">${bound(e.p99_ms_le)}</td>
+      </tr>`).join("");
+      blocks.push(`<h3 class="sub">Oracle wait event latency</h3>
+        <p class="sec-note">${esc(l.oracle.nature)}</p>
+        <div class="tbl-wrap"><table class="rpt">
+          <thead><tr><th>Wait event</th><th>Waits</th><th>p50</th><th>p95</th><th>p99</th></tr></thead>
+          <tbody>${rows}</tbody></table></div>`);
+    } else {
+      blocks.push(`<h3 class="sub">Oracle wait event latency</h3>
+        <p class="sec-note">${esc(l.oracle.reason || "An interval needs two collections with no restart between them.")}</p>`);
+    }
+  }
+
+  const pg = l.postgresql;
+  if (pg && pg.collected){
+    if (pg.available && pg.interval){
+      const it = pg.interval;
+      blocks.push(`<h3 class="sub">PostgreSQL statement latency</h3>
+        <p class="sec-note">${esc(pg.nature)}</p>
+        <div class="tbl-wrap"><table class="rpt">
+          <thead><tr><th>Calls</th><th>Calls covered</th><th>Statements</th><th>Mean (ms)</th><th>p50 (ms)</th><th>p95 (ms)</th><th>p99 (ms)</th></tr></thead>
+          <tbody><tr>
+            <td class="nowrap mono">${count(it.calls)}</td>
+            <td class="nowrap mono">${count(it.covered_calls)}</td>
+            <td class="nowrap mono">${count(it.statements)}</td>
+            <td class="nowrap mono">${ms(it.mean_ms)}</td>
+            <td class="nowrap mono">${ms(it.p50_ms)}</td>
+            <td class="nowrap mono">${ms(it.p95_ms)}</td>
+            <td class="nowrap mono">${ms(it.p99_ms)}</td>
+          </tr></tbody></table></div>`);
+    } else {
+      blocks.push(`<h3 class="sub">PostgreSQL statement latency</h3>
+        <p class="sec-note">${esc(pg.reason || "An interval needs two collections with no restart between them.")}</p>`);
+    }
+  }
+
+  if (!blocks.length){
+    return `<details class="fold"><summary>Latency percentiles — not collected</summary><div class="in">
+      <p class="sec-note">${esc(l.reason || "Nothing was collected.")}</p>
+    </div></details>`;
+  }
+
+  const isOpen = Boolean(l.available);
+  const head = l.available ? "measured intervals"
+    : (pg && pg.state === "not_installed" ? "pg_stat_statements not configured"
+       : "no interval yet");
+
+  return `<details class="fold"${isOpen ? " open" : ""}>
+    <summary>Latency percentiles — ${esc(head)}</summary>
+    <div class="in">
+      ${blocks.join("")}
+    </div></details>`;
+}
+
+/* Operational diagnostics — newest error log / alert log readings, ADR incidents,
+   memory dumps and sp_server_diagnostics, PostgreSQL server log, and suspect pages corruption.
+   An older collection's finding that cleared is not shown. */
+function diagnosticsBlock(d){
+  if (!d || !d.sources || !d.sources.length) return "";
+
+  const isOpen = d.worst === "CRITICAL" || d.worst === "WARNING";
+  const head = isOpen
+    ? `Diagnostics — ${esc(d.worst)} · ${d.findingCount} finding(s)`
+    : "Diagnostics — clean";
+
+  const rows = [];
+  d.sources.forEach(s => {
+    if (s.findings && s.findings.length) {
+      s.findings.forEach(f => {
+        const c = cls(f.status);
+        rows.push(`<tr class="${c === "ok" ? "" : c}">
+          <td class="metric">${esc(s.label || s.code)}</td>
+          <td><span class="sev ${c}">${esc(f.status)}</span></td>
+          <td class="nowrap mono">${when(s.collectedAt)}</td>
+          <td class="mono">${esc(f.item || "-")}</td>
+          <td class="wrapcell">${esc(f.message || "-")}</td>
+        </tr>`);
+      });
+    } else {
+      rows.push(`<tr>
+        <td class="metric">${esc(s.label || s.code)}</td>
+        <td><span class="sev ok">OK</span></td>
+        <td class="nowrap mono">${when(s.collectedAt)}</td>
+        <td class="mono">-</td>
+        <td class="muted">no finding in the newest reading</td>
+      </tr>`);
+    }
+  });
+
+  return `<details class="fold"${isOpen ? " open" : ""}>
+    <summary>${head}</summary>
+    <div class="in">
+    <p class="sec-note">Newest operational diagnostic readings across error logs, incidents, dumps,
+      server logs and corruption checks. An older finding that cleared is not shown.</p>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th>Source</th><th>Status</th><th>When</th><th>Item</th><th>Detail</th></tr></thead>
+      <tbody>${rows.join("")}</tbody></table></div>
+    </div></details>`;
+}
+
 
 /* Oracle storage — one row per tablespace, its datafiles folded underneath.
 
@@ -1970,6 +2189,8 @@ async function select(slug){
     + linkedServerBlock(d.linkedServers)
     + queryStoreFindingsBlock(d.queryStoreFindings)
     + queryStoreBlock(d.queryStore)
+    + latencyBlock(d.latency)
+    + diagnosticsBlock(d.diagnostics)
     + jobsBlock(d.jobs)
     /* Instance health, then what is broken inside it, then the statements doing the damage —
        the order an Oracle problem is actually worked through. */

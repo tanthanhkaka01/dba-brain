@@ -544,3 +544,36 @@ def test_a_metric_stores_what_it_stored_before_the_batch(lowest_layer_faked, tmp
 
 def test_every_scenario_has_an_expectation(tmp_path):
     assert [name for name, _m, _t in scenarios(tmp_path)] == list(EXPECTED)
+
+
+def test_a_sql_metric_stores_how_long_it_took(lowest_layer_faked, tmp_path):
+    """0.30.0: a SQL metric's rows carry the item's wall time - connect, statement, close - as
+    `metric-batch` timed it. Until then `execution_time` was written for scripts only, so the
+    INSTANCE_STATUS taken every 30 s measured whether an instance answered and never how fast; now
+    the server page shows the p50 / p95 / p99 of that connection probe. A SQL row still has no
+    streams and no exit code - the outcomes above hold that unchanged."""
+    by_name = {name: (metric, target) for name, metric, target in scenarios(tmp_path)}
+    for name in ("sql rows", "postgres per database"):
+        metric, target = by_name[name]
+        store = _Store()
+        collector._collect_target(
+            target=target, definitions=[metric], overrides=NO_OVERRIDES, secrets=SECRETS,
+            store=store, run_id=1, started=STARTED, dry_run=False, force=True,
+            include_windowed=True, tally=collector._Tally())
+
+        assert store.results, name
+        assert all(isinstance(r.execution_time, float) and r.execution_time >= 0
+                   for r in store.results), name
+
+
+def test_a_failed_item_says_how_long_it_tried(lowest_layer_faked):
+    """A refused connect answers with its own duration - how long the client waited to be told no."""
+    from dbabrain.common import metric_batch
+
+    failed = metric_batch._run_item(
+        {"id": "1", "kind": "sql", "sql": "SELECT 1", "timeout_seconds": 5},
+        {"db_type": "sqlserver", "host": "10.0.0.3", "port": 1433, "username": "m", "password": "pw"}, {})
+
+    assert failed["error"]["kind"] == "connect"
+    assert isinstance(failed["error"]["duration_seconds"], float)
+    assert failed["duration_seconds"] == failed["error"]["duration_seconds"]

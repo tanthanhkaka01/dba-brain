@@ -62,6 +62,7 @@ _PHASE_TYPES = {
     "ERROR": "failed",
     "FAIL": "failed",
     "FAILED": "failed",
+    "BURNING": "failed",
     # A command rejected for bad input still failed from the operator's side — they asked for
     # something and did not get it. This one reached production as NULL.
     "VALIDATION_ERROR": "failed",

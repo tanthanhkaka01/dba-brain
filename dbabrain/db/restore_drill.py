@@ -71,13 +71,35 @@ def max_age_hours(policy: dict | None = None, *, database: str = "",
     policy = policy if policy is not None else load_restore_drill_policy()
     hours = float((policy.get("defaults") or {}).get("max_age_hours", DEFAULT_MAX_AGE_HOURS)
                   or DEFAULT_MAX_AGE_HOURS)
+    entry = _override_for(policy, database)
+    if entry is not None:
+        hours = float(entry.get("max_age_hours", hours) or hours)
+    return hours
+
+
+def is_drilled(policy: dict | None = None, *, database: str = "") -> bool:
+    """Whether this database is still meant to be drilled - False when its override says
+    ``"required": false``.
+
+    The history keeps every database ever drilled, and a drill retired from ``restore_config.json``
+    keeps its last success there for ever. Judged as before, it read as a stale drill each run once
+    a week had passed: on 2026-10-16 four databases whose restore entries had been off since June
+    to August were the whole of the SLA's restore drill breach. The history cannot say which drills
+    are retired (its ``restore_id`` is its own row number, and a whole-instance restore names no
+    database in its entry), so the policy says it, by name.
+    """
+    policy = policy if policy is not None else load_restore_drill_policy()
+    entry = _override_for(policy, database)
+    return entry is None or entry.get("required", True) is not False
+
+
+def _override_for(policy: dict, database: str) -> dict | None:
     for entry in policy.get("overrides") or []:
         wanted = str(field_names.read(entry, "restore_drill_override", "database_name", "")
                      or "").strip().lower()
         if wanted and wanted == str(database or "").strip().lower():
-            hours = float(entry.get("max_age_hours", hours) or hours)
-            break
-    return hours
+            return entry
+    return None
 
 
 # `_epoch` is `dbabrain.lib.coerce.as_utc_datetime` since 2026-08-16; see there for why an
@@ -89,7 +111,8 @@ def evaluate(rows: list[dict[str, Any]], *, policy: dict | None = None,
     """One verdict per database from ``backup_restore_history`` rows.
 
     ``rows`` need ``database_name``, ``status`` and ``restore_start``. Returns one entry per
-    database, worst first.
+    database, worst first. A database the policy marks ``"required": false`` is left out
+    (:func:`is_drilled`).
     """
     policy = policy if policy is not None else load_restore_drill_policy()
     now = now or datetime.now(timezone.utc)
@@ -98,7 +121,7 @@ def evaluate(rows: list[dict[str, Any]], *, policy: dict | None = None,
     for row in rows:
         database = str(row.get("database_name") or "").strip()
         started = as_utc_datetime(row.get("restore_start"))
-        if not database or started is None:
+        if not database or started is None or not is_drilled(policy, database=database):
             continue
         status = str(row.get("status") or "").strip().upper()
         entry = latest.setdefault(database, {"success": None, "attempt": None, "attempt_status": ""})

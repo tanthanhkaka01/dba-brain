@@ -175,6 +175,22 @@ from dbabrain.reports.server_oracle import (  # noqa: F401 - re-exported: every 
     build_oracle_top_sql,
     build_tablespaces,
 )
+from dbabrain.reports.server_latency import (  # noqa: F401 - re-exported: every name kept its address
+    LATENCY_CODES,
+    LATENCY_DAYS,
+    PROBE_CODE,
+    PROBE_DAYS,
+    ORACLE_WAIT_HISTOGRAM_CODE,
+    POSTGRES_STATEMENT_TOTALS_CODE,
+    QUERY_LATENCY_PERCENTILES_CODE,
+    build_latency,
+)
+from dbabrain.reports.server_diagnostics import (  # noqa: F401 - re-exported: every name kept its address
+    DIAGNOSTICS_CODES,
+    DIAGNOSTICS_DAYS,
+    build_diagnostics,
+)
+
 
 
 TEMPLATE_HTML = Path(__file__).resolve().parent / "templates" / "server_report.html"
@@ -212,7 +228,10 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
                   volume_rows: list[dict] | None = None,
                   oracle_rows: list[dict] | None = None,
                   workload_rows: list[dict] | None = None,
-                  database_code_map: dict | None = None) -> dict:
+                  database_code_map: dict | None = None,
+                  latency_rows: list[dict] | None = None,
+                  probe_rows: list[dict] | None = None,
+                  diagnostics_rows: list[dict] | None = None) -> dict:
     """Everything the page renders for one server.
 
     ``backup`` and ``freshness`` are computed from the raw store rows rather than from ``series``
@@ -239,7 +258,7 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
     workload = workload_block.build_workload(workload_rows or [])
     return {
         "health": build_health(series, problems, now=now, freshness=freshness),
-        "areas": build_areas(series, backup=backup, freshness=freshness),
+        "areas": build_areas(series, backup=backup, freshness=freshness, workload=workload),
         "problems": problems,
         "timeline": build_timeline(series),
         "cards": cards,
@@ -268,6 +287,12 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
         # own codes and ignores the rest.
         "attribution": workload_attribution.build_attribution(workload_rows or [],
                                                               workload=workload),
+        # Latency percentiles across Query Store intervals, Oracle wait event histograms,
+        # and PostgreSQL statement totals.
+        "latency": build_latency(latency_rows or [], probe_rows=probe_rows or []),
+        # Operational diagnostics across error logs, ADR incidents, memory dumps, server logs,
+        # and suspect pages corruption.
+        "diagnostics": build_diagnostics(diagnostics_rows or []),
         "jobs": build_jobs(job_rows or []),
         "series": charts,
         "omitted": omitted,
@@ -360,6 +385,25 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
     query_store_rows: dict[str, list[dict]] = {}
     for row in store.fetch_health_metrics(codes=[QUERY_STORE_CODE], days=int(days), as_of=as_of):
         query_store_rows.setdefault(str(row.get("server_id") or ""), []).append(row)
+    # Latency percentiles: Query Store intervals, Oracle wait event histograms, PG statement totals.
+    # Capped at LATENCY_DAYS whatever the window: an interval is the newest two collections.
+    latency_rows: dict[str, list[dict]] = {}
+    for row in store.fetch_health_metrics(codes=LATENCY_CODES, days=min(int(days), LATENCY_DAYS),
+                                          as_of=as_of):
+        latency_rows.setdefault(str(row.get("server_id") or ""), []).append(row)
+    # The connection probe: a day of INSTANCE_STATUS times, narrow rows - not fetch_health_metrics,
+    # which would carry ~2,900 messages a target with them.
+    probe_rows: dict[str, list[dict]] = {}
+    for row in store.fetch_execution_times(codes=[PROBE_CODE], days=min(int(days), PROBE_DAYS),
+                                           as_of=as_of):
+        probe_rows.setdefault(str(row.get("server_id") or ""), []).append(row)
+    # Operational diagnostics: error/alert log, ADR incidents, dumps, server log, corruption.
+    # Capped at DIAGNOSTICS_DAYS whatever the window: these are current-state readings.
+    diagnostics_rows: dict[str, list[dict]] = {}
+    for row in store.fetch_health_metrics(codes=list(DIAGNOSTICS_CODES),
+                                          days=min(int(days), DIAGNOSTICS_DAYS),
+                                          as_of=as_of):
+        diagnostics_rows.setdefault(str(row.get("server_id") or ""), []).append(row)
     # Query Store findings: one row per regressed or heavy query plan over the last day, each
     # marked still-happening or cleared against the newest collection.
     # A day of them, not the page's window and not the newest run alone: see
@@ -448,7 +492,10 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
                                 # Not latest_snapshot: this is the one section that needs the
                                 # history, because a rate is two samples subtracted.
                                 workload_rows=workload_rows.get(server_id, []),
-                                database_code_map=database_index.get(server_id, [None, {}])[1])
+                                database_code_map=database_index.get(server_id, [None, {}])[1],
+                                latency_rows=latency_rows.get(server_id, []),
+                                probe_rows=probe_rows.get(server_id, []),
+                                diagnostics_rows=diagnostics_rows.get(server_id, []))
         file_name = series_file_name(server_id)
         # archive_only is a backfill: it produces the dated copy of a past day and must leave the
         # live file alone. Writing the stable name would publish 1 August's data as "now".

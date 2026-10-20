@@ -17,7 +17,7 @@ The SLA/SLO Compliance App turns the metric history already collected by the Met
 - **SLO** = `objective_percent` sustained over `window_hours`.
 - **Error budget** = `100 - objective_percent`. `budget_remaining_percent` shows how much of that tolerance is left (clamped to `[0, 100]`; undefined/`0` for NO_DATA).
 - **Per-instance by default**: a policy is evaluated **once per `target_id`** (one monitored instance/database). Scope (`db_types` or `target_ids`) only selects *which* instances the policy applies to; results are never lumped together unless `aggregate: true` is set.
-- **Statuses**: `PASSED` (meets SLO), `AT_RISK` (still meets SLO but `budget_remaining_percent <= at_risk_budget_percent`), `FAILED` (below SLO), `NO_DATA` (no samples in scope). A run's overall status is `FAILED` if any result is `FAILED` or `NO_DATA`.
+- **Statuses**: `PASSED` (meets SLO), `AT_RISK` (still meets SLO but `budget_remaining_percent <= at_risk_budget_percent`), `BURNING` (a fast multi-window burn rate alert has fired; ranked immediately after FAILED for notifications and web display; does not fail overall run), `FAILED` (below SLO), `NO_DATA` (no samples in scope). A run's overall status is `FAILED` if any result is `FAILED` or `NO_DATA`.
 - **`NOT_CONFIGURED` is the run-level answer when there is no policy at all** (2026-09-16): `data/sla_policies.json` absent, empty, or every policy in it inactive. With nothing to evaluate there is nothing to fail, and the summary used to fall out of that as **`PASSED`** — a green SLA page over an estate nobody had written a single objective for. A missing config file must never make a page say something false, the same rule `backup_policy.json` follows: *"no rule required this" and "no rule exists" must never produce the same sentence.* The summary's `reason` names the file and the word **unjudged**, the page draws `NO_DATA`'s blank marker rather than a green tick, and the command still exits 0 — `APP-SLA-VALIDATE` is in the shipped schedule, and a correct install logging a failure every cycle teaches its reader to ignore the log. A policy file the caller **names** on the command line still raises when it is missing; only the default path is a configuration state.
 
 ## Runtime Tables
@@ -76,7 +76,7 @@ python -m dbabrain.sla.cli --config config.json history --run-id 2
 
 `validate` flags: `--policies <path>`, `--window-end <iso>`, `--format json|text`, `--no-store`, `--notify`, `--notify-always`, `--publish-web`, `--web-dir <dir>`, `--allow-fail`.
 
-`data/app_commands.json` runs `APP-SLA-VALIDATE` on the **worker**, hourly (`repeat_interval: 3600`):
+`data/app_commands.json` runs `APP-SLA-VALIDATE` on the **worker**, every 5 minutes (`repeat_interval: 300`):
 
 ```text
 python -m dbabrain.sla.cli --config config.json validate --format text --notify --publish-web --allow-fail
@@ -127,9 +127,11 @@ The page also states how the run differs from the previous one (`newly failing /
 
 | Model | Reads | Actual value | Use for |
 | --- | --- | --- | --- |
-| `time_slo` (default) | the whole window | % of good samples | availability, connectivity, saturation, backup RPO, latency |
+| `time_slo` (default) | the whole window | % of good samples | availability, connectivity, saturation, latency |
 | `current_state` | the newest cycle per metric | binary: `compliant` / `not compliant` | reboot pending, security configuration, service state, latest CHECKDB |
 | `finding_inventory` | the newest cycle per metric | count of distinct affected objects | stale statistics, fragmented indexes, risky roles, configuration exceptions |
+| `backup_rpo` | the newest cycle of backup rows per target | count of breaches | backup RPO evaluated against data/backup_policy.json |
+| `restore_drill` | the whole of backup_restore_history | count of databases in breach | restore drill freshness and RTO evaluated against data/restore_drill_policy.json and rto_target_seconds |
 
 Why the split — measured on production, 2026-08-05:
 
@@ -140,11 +142,31 @@ Why the split — measured on production, 2026-08-05:
 Constraints the parser enforces, because both failure modes are silent:
 
 - An unrecognised `policy_model` **fails the config**. A typo that fell back to `time_slo` would restore the old misreporting without a log line.
-- A `finding_inventory` **must** set `comparison_operator` to `<=` or `<` and **must** set `target_value`. Left at the default `>= 99`, a backlog of 1,631 objects compares as `1631 >= 99` and reports PASSED — healthy precisely when it is worst.
+- A `finding_inventory`, `backup_rpo`, or `restore_drill` policy **must** set `comparison_operator` to `<=` or `<` and **must** set `target_value`. Left at the default `>= 99`, a backlog or breach count compares as count `>= 99` and reports PASSED — healthy precisely when it is worst.
+- A `restore_drill` policy **must** specify `rto_target_seconds` as a positive integer.
 
-Coverage, freshness, `NO_DATA` and `minimum_sample_count` are always judged on the **full window**, never on the narrowed cycle: they are questions about the collector, not about the verdict. Error budget and burn rate apply to `time_slo` only — a count of objects has no budget to burn.
+Coverage, freshness, `NO_DATA` and `minimum_sample_count` are always judged on the **full window**, never on the narrowed cycle: they are questions about the collector, not about the verdict. Error budget and burn rate apply to `time_slo` only — a count of objects or breaches has no budget to burn.
 
-**Telegram (`--notify`) — notifies on state change, not on schedule.** The run is hourly; the message is not. Each run's `{policy @ target: status}` map is compared against the previous stored run (`SlaStore.fetch_previous_state`) and a message is queued only when something crossed a line:
+#### Backup RPO (`backup_rpo`)
+
+- **What it reads**: The newest cycle of backup rows (`BACKUP_LAST_RESULT` for SQL Server and Oracle, `POSTGRES_BACKUP_LAST_RESULT` for PostgreSQL) for each target instance.
+- **The rule it reuses**: Reuses `dbabrain.lib.backup_policy` (`evaluate_backup_policy`, `collect_evidence`, `policy_is_configured`) with the policy loaded from `data/backup_policy.json` via `dbabrain.lib.data_sources.load_backup_policy`.
+- **Why backups are judged here**: Operator decision (2026-10-15): backups are graded against `data/backup_policy.json` in the SLA app; the metrics collectors only gather and report ages without grading them. Under the earlier `time_slo` policy `ALL_BACKUP_HEALTH_7D`, only sample statuses were counted, and `BACKUP_LAST_RESULT` reported status `OK` regardless of age — allowing a 133-day-old log backup to read as compliant. `backup_rpo` directly grades required backup types against warning and critical hours. Data protection is judged as the newest of FULL or DIFF under the `data_backup` objective (allowing weekly-FULL plus daily-DIFF plans to meet SLA), while FULL, DIFF, and LOG are bounded by their per-type thresholds. Each required database and backup type beyond its critical hours, or required with no backup on record, is a breach. If any breach exists, the result is `FAILED`; if only warnings exist, `AT_RISK`; otherwise `PASSED`. Missing policy (`NOT_CONFIGURED`) and missing backup samples (`NO_DATA`) remain distinct from `PASSED`. Findings name the database, backup type, age, and threshold limit. The counts are of databases - `total_count` the databases judged, `bad_count` those with at least one breach - while `actual_value` stays the number of breaches the policy compares with `target_value`: until 2026-10-19 the breaches of every (database, type) pair were subtracted from the cycle's rows, and a server whose databases each missed two or three types read `good_count` -14.
+
+#### Restore drill (`restore_drill`)
+
+- **What it reads**: every row of `backup_restore_history` (`dbabrain.db.backup_restore_history.drill_rows`, the
+  query `db.cli restore-drill-status` uses too) - not the policy's window: "never drilled" and "drilled too long
+  ago" are different verdicts, and a window would turn the second into the first. A store that is down fails
+  the run; a table that cannot be read is `NO_DATA` with the reason. The backup RPO policy reads its rows through
+  `SlaStore.fetch_metric_samples(..., with_message=True)` - the message carries each backup's recovery model and
+  finish time.
+- **The rule it reuses**: Reuses `dbabrain.db.restore_drill.evaluate` and `load_restore_drill_policy` from `dbabrain.db.restore_drill`.
+- **Why restore drills are per database**: The `backup_restore_history` table records drills at database level with `database_name` and has no `server_id` (a single database can be restored to different hosts). The policy is therefore evaluated per database at fleet scope (`target_id = "*"`), matching how `restore-drill-status` reports.
+- **A retired drill is named, not inferred**: an override in `restore_drill_policy.json` with `"required": false` leaves that database out (`restore_drill.is_drilled`), here and in `restore-drill-status`. The history keeps a switched-off drill's last success for ever, and cannot say which drills are retired - its `restore_id` is its own row number, and a whole-instance restore entry names no database. Reviewed against the estate on 2026-10-16: four databases whose entries had been off since June to August were the whole of the breach; named retired, the policy passes on the drills that run.
+- **Breach criteria**: A database breaches when `restore_drill.evaluate` marks its drill as never-done, stale, or newest-attempt-failed, or when its newest successful drill took longer than the policy's `rto_target_seconds`. The `rto_target_seconds` field is required and validated as a positive integer for `restore_drill`. `actual_value` is the count of databases in breach, compared `<= 0`. Findings name the database, last success timestamp, restore duration, and RTO target.
+
+**Telegram (`--notify`) — notifies on state change, not on schedule.** The run is every 5 minutes; the message is not. Each run's `{policy @ target: status}` map is compared against the previous stored run (`SlaStore.fetch_previous_state`) and a message is queued only when something crossed a line:
 
 | Situation | Sent? | Message kind |
 | --- | --- | --- |
@@ -216,10 +238,30 @@ connection code.
 
 `collector -> metric_results -> historical aggregation -> SLI -> SLO evaluation -> SLA rollup -> report`
 
-**Aggregation.** Status success ratio, plus numeric `average`, `minimum`, `maximum`, `sum`,
+**Aggregation.** Status success ratio, `minutes` (availability in whole UTC minutes), plus numeric `average`, `minimum`, `maximum`, `sum`,
 `count`, `latest`, and p95 `percentile`; comparison operators; rolling-hour windows; minimum
 samples; expected collection interval; freshness threshold; maintenance exclusions;
 required/optional SLIs; and the missing-data policies `unknown`, `bad`, `good`, `ignore`.
+
+**Availability counted in minutes (`minutes` aggregation).** The cloud SLA rule for uptime: a minute is considered good as long as at least one check within that UTC minute succeeded (`OK` or `LOGGING`), and bad only when every attempt within that minute failed. A minute with no observations is not judged as up or down — it forms the coverage gap (`expected_count = window_hours * 60`, `coverage = observed_minutes / expected * 100`).
+Minutes are counted directly in the database store (`SlaStore.minute_counts` and `SlaStore.minute_details`), rather than retrieving raw rows into Python memory. This allows 30-day windows (~1.4 million samples) and closed previous months to be evaluated efficiently in standard SQL. Collection failures (`COLLECTION_FAILURE_TYPES`) and scheduled maintenance windows are excluded inside the query.
+
+**Multi-window multi-burn-rate alerts (Google SRE Workbook, ch. 5).** Policies with `time_slo` and `minutes` aggregation can opt into `burn_rate_alerts`, specifying pairs of short and long windows:
+- A pair fires when **both** its short and long windows burn at or above its factor (`error_rate / error_budget >= factor`).
+- Fast burns (`severity: "page"`, e.g. 14.4x over 1h/5m or 6x over 6h/30m) escalate `PASSED` or `AT_RISK` policies to **`BURNING`** status. `BURNING` is ranked immediately after `FAILED` for Telegram critical routing and web presentation, alerting on call immediately when active burn begins and recovering when burn subsides. It does not fail the overall run or exit code.
+- Slow burns (`severity: "ticket"`, e.g. 1x over 3d/6h) are reported on the SLA page without changing policy status.
+- The shipped policy `INSTANCE_AVAILABILITY_30D` (720 hours, 99.9% target, 1440 minimum samples) configures the three standard SRE burn pairs, and `APP-SLA-VALIDATE` runs every 300 seconds (`repeat_interval: 300`) to evaluate 5-minute windows promptly.
+
+**Calendar month availability reporting.** Policies with `calendar_month_report: true` generate an **Availability by calendar month** table on the published web report, detailing availability %, down minutes, and coverage % for both "this month to date" and "previous closed month". Month boundaries follow the local display timezone (`dbabrain.lib.timezone.display_zone()`). Because older data moves to `metric_results_archive` (which lacks secondary indexes), the closed previous month is computed once with `include_archive=True` and cached in `<runtime_dir>/sla/months/<policy_id>_<YYYY-MM>.json`; later runs read the cache file. A month with no measured minute is not cached (a store that holds none of its rows would otherwise fix it at nothing for ever), and nothing is cached when no runtime folder is named - there is no default folder. Moving a month's file away makes the next run count it again. The month table, the 30-day policy and the five burn windows read their minutes in two queries a policy; on the estate's store the 30-day pair took ~10 s, so a 5-minute run takes ~35-40 s.
+
+**A latency SLO is a share of good samples, not a percentile of mixed rows** (1.155, 0.30.0).
+`SQLSERVER_IO_LATENCY_24H` reads `PERFORMANCE_IO_LATENCY_INTERVAL`, which grades each 10-second sample
+by file type (log writes 20 / 50 ms, data reads 50 / 200 ms), and asks that 99 % of samples be good -
+the form Google's SRE book gives a latency SLO. A `percentile` over that metric's values would put a
+log write and a data read in one number against one threshold, because a policy cannot filter items;
+`percentile` stays for a metric whose rows all mean the same thing. The policy is its own, not part
+of `SQLSERVER_PERFORMANCE_24H`: a time-SLO pools rows, and up to two per database every 300 s would
+outweigh every other metric there.
 
 **Missing observations are not automatically downtime.** `NO_DATA`, `STALE`,
 `INSUFFICIENT_DATA`, and maintenance-excluded observations stay distinct — collapsing them into
@@ -233,7 +275,7 @@ standalone, primary with two replicas, standby, Docker, HA lab, target/database 
 maintenance, heavy scheduling, OS exclusions, and Telegram summary configuration.
 
 A primary with `expected_replica_count=0` is healthy with no replicas; a configured expected
-count that is not met is critical. Calendar week/month windows remain future work.
+count that is not met is critical.
 
 ## Standalone Mode vs Full-Suite Mode
 

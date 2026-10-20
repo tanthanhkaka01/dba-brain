@@ -22,6 +22,7 @@ to call from the Telegram worker without side effects beyond the three files.
 from __future__ import annotations
 
 from dbabrain.lib import errors
+from dbabrain.lib.target_flags import is_target_enabled
 import argparse
 import json
 import os
@@ -36,6 +37,7 @@ from dbabrain.lib import response
 from dbabrain.lib.json_io import (  # noqa: F401 - one definition, see that module
     atomic_write_text as _atomic_write,
     dump_json_text as _dump_json,
+    indent_of,
     looks_like_json_request,
 )
 
@@ -533,8 +535,9 @@ def set_metric_toggle(
         scope_label = metric_code
 
     if changes:
-        # db_instances.json is kept in its existing 1-space-indent shape.
-        _atomic_write(instances_path, _dump_json(data, indent=1))
+        # In the file's own indent. A hard 1 rewrote every line of a 2-space file, and 49
+        # remaps read as an 8,290-line diff (2026-10-19).
+        _atomic_write(instances_path, _dump_json(data, indent=indent_of(instances_path, default=2)))
 
     return {
         "ok": True,
@@ -579,16 +582,81 @@ def set_metric_severity_map(
     Passing ``severity_map=None`` (or an empty mapping) removes the remap and restores the
     metric's own grading.
     """
+    answer = set_metric_severity_maps(
+        [{"server_id": server_id, "metric_code": metric_code, "severity_map": severity_map,
+          "metric_item": metric_item, "note": note}],
+        data_dir=data_dir,
+    )
+    return answer["items"][0]
+
+
+#: The fields one remap of a list may carry. `data_dir` is the list's, stated once beside it.
+SEVERITY_ITEM_FIELDS = frozenset({"server_id", "metric_code", "metric_item", "severity_map", "note"})
+
+
+def set_metric_severity_maps(items: Any, *, data_dir: str | Path | None = None) -> dict[str, Any]:
+    """Several remaps of ``db_instances.json`` in one write: every one of them, or none.
+
+    49 standing alerts were lowered on 2026-10-19 by 49 calls of the one-remap form, fed by a
+    script - the missing command this is. Each remap is checked before anything is written, and
+    the first that is refused names its place in the list and leaves the file as it was; a file
+    half-changed by a list that stopped in the middle is a second job for whoever reads it.
+    """
+    if not isinstance(items, list) or not items:
+        raise ConfigAdminError("items must be a non-empty list of remaps.")
+    data_root = Path(data_dir).resolve() if data_dir else DEFAULT_DATA_DIR
+    known_codes = known_metric_codes(data_root)
+    instances_path = data_root / "db_instances.json"
+    data = _read_json(instances_path)
+    results: list[dict[str, Any]] = []
+    for index, entry in enumerate(items):
+        where = f"items[{index}]" if len(items) > 1 else ""
+        try:
+            if not isinstance(entry, dict):
+                raise ConfigAdminError("a remap is an object.")
+            unknown = sorted(set(entry) - SEVERITY_ITEM_FIELDS)
+            if unknown:
+                raise ConfigAdminError(f"unknown field(s) {unknown}; a remap takes {sorted(SEVERITY_ITEM_FIELDS)}.")
+            results.append(_apply_severity_map(
+                data,
+                known_codes=known_codes,
+                server_id=entry.get("server_id"),
+                metric_code=entry.get("metric_code"),
+                severity_map=entry.get("severity_map"),
+                metric_item=str(entry.get("metric_item") or ""),
+                note=str(entry.get("note") or ""),
+            ))
+        except ConfigAdminError as exc:
+            raise ConfigAdminError(f"{where}: {exc}" if where else str(exc)) from None
+    changed = any(result["changed"] for result in results)
+    if changed:
+        # In the file's own indent. A hard 1 rewrote every line of a 2-space file, and 49
+        # remaps read as an 8,290-line diff (2026-10-19).
+        _atomic_write(instances_path, _dump_json(data, indent=indent_of(instances_path, default=2)))
+    return {"ok": True, "changed": changed, "items": results}
+
+
+def _apply_severity_map(
+    data: dict[str, Any],
+    *,
+    known_codes: set[str],
+    server_id: Any,
+    metric_code: Any,
+    severity_map: Any,
+    metric_item: str,
+    note: str,
+) -> dict[str, Any]:
+    """One remap, applied to the loaded ``db_instances.json`` in memory; the caller writes."""
     server_id = str(server_id or "").strip()
     if not server_id:
         raise ConfigAdminError("server_id is required.")
     metric_code = str(metric_code or "").strip().upper()
     if not metric_code:
         raise ConfigAdminError("metric_code is required.")
-
-    data_root = Path(data_dir).resolve() if data_dir else DEFAULT_DATA_DIR
-    if metric_code not in known_metric_codes(data_root):
+    if metric_code not in known_codes:
         raise ConfigAdminError(f"Unknown metric_code: {metric_code}")
+    if severity_map is not None and not isinstance(severity_map, dict):
+        raise ConfigAdminError("severity_map is an object {from: to}, or null to remove the remap.")
 
     normalized: dict[str, str] = {}
     for source, destination in (severity_map or {}).items():
@@ -602,8 +670,6 @@ def set_metric_severity_map(
             raise ConfigAdminError(f"Unknown target status {destination!r}; expected one of {list(SEVERITY_STATUSES)}.")
         normalized[src] = dst
 
-    instances_path = data_root / "db_instances.json"
-    data = _read_json(instances_path)
     instances = data.get("db_instances")
     if not isinstance(instances, list):
         raise ConfigAdminError("db_instances.json has no db_instances list.")
@@ -666,16 +732,159 @@ def set_metric_severity_map(
         if not overrides:
             metrics_cfg.pop("metric_overrides", None)
 
-    if changes:
-        # db_instances.json is kept in its existing 1-space-indent shape.
-        _atomic_write(instances_path, _dump_json(data, indent=1))
-
     return {
         "ok": True,
         "server_id": str(instance.get("server_id") or server_id),
         "metric_code": metric_code,
         "metric_item": item,
         "severity_map": normalized,
+        "changed": bool(changes),
+        "changes": changes,
+    }
+
+
+def set_instance_active(*, server_id: str, active: Any, data_dir: str | Path | None = None) -> dict[str, Any]:
+    """Switch one ``server_id`` in ``db_instances.json`` on or off for every app: its ``active``.
+
+    ``metrics.enabled`` is the metrics app's own switch under it (``metric-toggle``); this is the
+    record's. Turning the ``.251`` lab instances on for 0.30.0's soak (2026-10-19) found no command
+    for it - ``instance-add`` with ``replace`` rewrites the whole record and its credential.
+    Only ``active`` is written: the standard name wins over the older ``enabled`` wherever both
+    are read (``lib.target_flags.is_target_enabled``).
+    """
+    server_id = str(server_id or "").strip()
+    if not server_id:
+        raise ConfigAdminError("server_id is required.")
+    if not isinstance(active, bool):
+        raise ConfigAdminError("active is required: true or false.")
+    data_root = Path(data_dir).resolve() if data_dir else DEFAULT_DATA_DIR
+    instances_path = data_root / "db_instances.json"
+    data = _read_json(instances_path)
+    instances = data.get("db_instances")
+    if not isinstance(instances, list):
+        raise ConfigAdminError("db_instances.json has no db_instances list.")
+    instance = next(
+        (item for item in instances
+         if isinstance(item, dict) and str(item.get("server_id") or "").strip().lower() == server_id.lower()),
+        None,
+    )
+    if instance is None:
+        raise ConfigAdminError(f"Unknown server_id: {server_id}")
+    # The value every reader sees, the older `enabled` included: a record that says it only under
+    # that name and already means `active` is not changed, and not reported as changed.
+    previous = is_target_enabled(instance)
+    changes: list[str] = []
+    warnings: list[str] = []
+    if previous is not active or ("active" in instance and instance["active"] is not active):
+        instance["active"] = active
+        changes.append(f"active: {previous} -> {active}")
+        _atomic_write(instances_path, _dump_json(data, indent=indent_of(instances_path, default=2)))
+    metrics_cfg = instance.get("metrics")
+    if active and isinstance(metrics_cfg, dict) and metrics_cfg.get("enabled") is False:
+        warnings.append("note: metrics.enabled is false for this target - nothing collects until "
+                        "metric-toggle switches scope 'all' on.")
+    return {
+        "ok": True,
+        "server_id": str(instance.get("server_id") or server_id),
+        "active": active,
+        "changed": bool(changes),
+        "changes": changes,
+        "warnings": warnings,
+    }
+
+
+#: An environment variable's name, as a collector script reads it.
+_ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+#: Words a name carrying a secret has. collector_env is committed config; a passphrase belongs in
+#: env_secrets, which maps the variable to a ref in the encrypted store.
+_SECRET_WORDS = ("PASSWORD", "PASSWD", "SECRET", "TOKEN", "PASSPHRASE", "PRIVATE_KEY", "API_KEY")
+
+
+def set_metric_collector_env(
+    *, server_id: str, env: Any, metric_code: str = "", data_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Set or remove variables of one ``server_id``'s ``metrics.collector_env`` in ``db_instances.json``.
+
+    The inputs a collector script reads from its target - a folder, a service list, a port. With
+    ``metric_code`` the variables go to that metric's own block
+    (``metric_overrides.<CODE>.collector_env``), which wins over the target's. A value of ``None``
+    removes the variable. The `.251` PostgreSQL lab read *never backed up* for a day because its
+    record named no ``PG_BACKUP_DIR`` (2026-10-19, item 1.183): the folder is the metrics app's
+    own input, stated in its own configuration, and there was no command to state it.
+    """
+    server_id = str(server_id or "").strip()
+    if not server_id:
+        raise ConfigAdminError("server_id is required.")
+    if not isinstance(env, dict) or not env:
+        raise ConfigAdminError("env is required: an object {NAME: value}, a value of null removing NAME.")
+    for name, value in env.items():
+        if not isinstance(name, str) or not _ENV_NAME.match(name):
+            raise ConfigAdminError(f"{name!r} is not a variable name (A-Z, 0-9 and _, not starting with a digit).")
+        if any(word in name for word in _SECRET_WORDS):
+            raise ConfigAdminError(f"{name} names a secret: collector_env is committed config - map it in "
+                                   "metrics.env_secrets to a ref in the encrypted store instead.")
+        if value is not None and not (isinstance(value, str) and value.strip()):
+            raise ConfigAdminError(f"{name}: a value is non-empty text, or null to remove it.")
+    data_root = Path(data_dir).resolve() if data_dir else DEFAULT_DATA_DIR
+    metric_code = str(metric_code or "").strip().upper()
+    if metric_code and metric_code not in known_metric_codes(data_root):
+        raise ConfigAdminError(f"Unknown metric_code: {metric_code}")
+    instances_path = data_root / "db_instances.json"
+    data = _read_json(instances_path)
+    instances = data.get("db_instances")
+    if not isinstance(instances, list):
+        raise ConfigAdminError("db_instances.json has no db_instances list.")
+    instance = next(
+        (item for item in instances
+         if isinstance(item, dict) and str(item.get("server_id") or "").strip().lower() == server_id.lower()),
+        None,
+    )
+    if instance is None:
+        raise ConfigAdminError(f"Unknown server_id: {server_id}")
+    metrics_cfg = instance.setdefault("metrics", {})
+    if not isinstance(metrics_cfg, dict):
+        raise ConfigAdminError(f"{server_id}: metrics is not an object.")
+    if metric_code:
+        overrides = metrics_cfg.setdefault("metric_overrides", {})
+        holder = overrides.setdefault(metric_code, {}) if isinstance(overrides, dict) else None
+        scope_label = f"metric_overrides.{metric_code}.collector_env"
+    else:
+        holder = metrics_cfg
+        scope_label = "collector_env"
+    if not isinstance(holder, dict):
+        raise ConfigAdminError(f"{server_id}: the block holding {scope_label} is not an object.")
+    current = holder.get("collector_env")
+    if current is not None and not isinstance(current, dict):
+        raise ConfigAdminError(f"{server_id}: {scope_label} is not an object.")
+    current = dict(current or {})
+    changes: list[str] = []
+    for name, value in env.items():
+        if value is None:
+            if name in current:
+                changes.append(f"{scope_label}.{name} removed (was {current.pop(name)!r})")
+        elif current.get(name) != value:
+            changes.append(f"{scope_label}.{name}: {current.get(name)!r} -> {value!r}")
+            current[name] = value
+    if changes:
+        if current:
+            holder["collector_env"] = current
+        else:
+            holder.pop("collector_env", None)
+        # Leave nothing behind that means "default", as metric-severity does.
+        if metric_code and not holder:
+            metrics_cfg["metric_overrides"].pop(metric_code, None)
+            if not metrics_cfg["metric_overrides"]:
+                metrics_cfg.pop("metric_overrides", None)
+        _atomic_write(instances_path, _dump_json(data, indent=indent_of(instances_path, default=2)))
+    elif metric_code and not holder:
+        metrics_cfg["metric_overrides"].pop(metric_code, None)
+        if not metrics_cfg["metric_overrides"]:
+            metrics_cfg.pop("metric_overrides", None)
+    return {
+        "ok": True,
+        "server_id": str(instance.get("server_id") or server_id),
+        "metric_code": metric_code,
+        "collector_env": current,
         "changed": bool(changes),
         "changes": changes,
     }

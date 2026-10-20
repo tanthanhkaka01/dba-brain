@@ -97,6 +97,20 @@
         "a task that writes writes for real - a forced run is not a rehearsal",
         "an inactive task runs too: --force ignores the active flag"
       ]
+    },
+    "run-sql-adhoc": {
+      "level": 50,
+      "effects": [
+        "SQL that is not a registered task runs on the instance, and what it changed is kept",
+        "nothing scheduled or reviewed it: the request is the whole of what runs"
+      ]
+    },
+    "run-cmd-adhoc": {
+      "level": 50,
+      "effects": [
+        "one shell command runs on the host as its configured OS login",
+        "nothing classifies the command: what it does is what it says"
+      ]
     }
   }
 }

@@ -1010,7 +1010,7 @@
                 "app_ord": "sort_order"
             },
             "field_count": 14,
-            "required_field_count": 2,
+            "required_field_count": 14,
             "fields": [
                 {
                     "field": "app_command_id",
@@ -1030,12 +1030,12 @@
                 {
                     "field": "sort_order",
                     "type": "integer",
-                    "required": false,
-                    "default": "none",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "0 and up",
                     "constraint": {
                         "kind": "integer",
-                        "nullable": true,
+                        "nullable": false,
                         "min": 0
                     },
                     "measured_against": "not a time value",
@@ -1045,12 +1045,12 @@
                 {
                     "field": "app_code",
                     "type": "string",
-                    "required": false,
-                    "default": "app_command_id",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "any non-empty string",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "A short code for the app this command belongs to, so several commands of one app group."
@@ -1058,12 +1058,12 @@
                 {
                     "field": "app_name",
                     "type": "string",
-                    "required": false,
-                    "default": "app_code, then app_command_id",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "any non-empty string",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "The app's own name, as the logs and the console show it."
@@ -1071,12 +1071,12 @@
                 {
                     "field": "display_name",
                     "type": "string",
-                    "required": false,
-                    "default": "command_name, then app_name, then app_command_id",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "any non-empty string",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "What a person reads in Telegram and on the console: a sentence saying what this does.",
@@ -1100,12 +1100,13 @@
                 {
                     "field": "working_dir",
                     "type": "string",
-                    "required": false,
-                    "default": "empty (the tool root)",
+                    "required": true,
+                    "default": "none - required; empty string for the tool root",
                     "range_text": "a path, or the logical alias tools/dbabrain",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true
+                        "nullable": false,
+                        "allow_empty": true
                     },
                     "measured_against": "not a time value",
                     "purpose": "Where command_text is run from.",
@@ -1114,12 +1115,12 @@
                 {
                     "field": "command_text",
                     "type": "string",
-                    "required": false,
-                    "default": "empty (nothing runs)",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "a command line for the node's own shell",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "The process the daemon starts.",
@@ -1128,12 +1129,12 @@
                 {
                     "field": "active",
                     "type": "boolean",
-                    "required": false,
-                    "default": "true",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether the daemon schedules this command at all.",
@@ -1142,12 +1143,12 @@
                 {
                     "field": "node_role",
                     "type": "string",
-                    "required": false,
-                    "default": "all",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "master | worker | all",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true,
+                        "nullable": false,
                         "enum": [
                             "master",
                             "worker",
@@ -1161,12 +1162,12 @@
                 {
                     "field": "run_mode",
                     "type": "string",
-                    "required": false,
-                    "default": "sync",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "sync | async",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true,
+                        "nullable": false,
                         "enum": [
                             "sync",
                             "async"
@@ -1174,17 +1175,17 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether the daemon waits for one run to finish before starting the next.",
-                    "rule": "async starts the command whenever it is due, in flight or not - SAFE ONLY IF THE APP REFUSES ITS OWN DUPLICATE WORK through the store claim (ux_sql_runs_claim, ux_job_runs_claim). Declaring async on an app with no claim runs the same unit of work twice. sync is the default and is exactly what every command did before the field existed"
+                    "rule": "async starts the command whenever it is due, in flight or not - SAFE ONLY IF THE APP REFUSES ITS OWN DUPLICATE WORK through the store claim (ux_sql_runs_claim, ux_job_runs_claim). Declaring async on an app with no claim runs the same unit of work twice. sync was the historical default before every field was required"
                 },
                 {
                     "field": "max_parallel",
                     "type": "integer",
-                    "required": false,
-                    "default": "4 when run_mode is async and it is unstated; 1 when sync",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "1 to 32; only with run_mode async",
                     "constraint": {
                         "kind": "integer",
-                        "nullable": true,
+                        "nullable": false,
                         "min": 1,
                         "max": 32
                     },
@@ -1195,13 +1196,13 @@
                 {
                     "field": "time_window",
                     "type": "time_window",
-                    "required": false,
-                    "default": "from_day 1, to_day 31, from_hour 0, to_hour 23, retry_interval 60, timeout 300 - applied by load_app_commands, not by lib/time_window",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "a time_window object; see that entry for all of its fields",
                     "constraint": {
                         "kind": "object",
                         "object": "time_window",
-                        "nullable": true,
+                        "nullable": false,
                         "checked_by": "time_window's own entry, whose used_in already lists app_commands.json:app_commands[]. Declared here as a non-recursing kind so one mistake is not reported twice"
                     },
                     "measured_against": "the previous run's START; the bounds are read in the configured timezone",
@@ -1211,12 +1212,13 @@
                 {
                     "field": "note",
                     "type": "string",
-                    "required": false,
-                    "default": "none",
+                    "required": true,
+                    "default": "none - required",
                     "range_text": "free text, ENGLISH - it is read back through Telegram and the console",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true
+                        "nullable": false,
+                        "allow_empty": true
                     },
                     "measured_against": "not a time value",
                     "purpose": "Why this command is configured the way it is.",
@@ -3467,7 +3469,7 @@
                 "retry_interval_seconds": "time_window",
                 "default_timeout": "time_window"
             },
-            "field_count": 18,
+            "field_count": 20,
             "required_field_count": 5,
             "fields": [
                 {
@@ -3730,6 +3732,34 @@
                     "rule": "Each name must be declared in the SQL file exactly once as DECLARE @name <type> = <number>; and only a number is written into it (lib.sql_text.apply_sql_settings). A name the file does not declare fails the metric instead of being ignored."
                 },
                 {
+                    "field": "target_env",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - the script is told only DBABRAIN_TARGET_HOST",
+                    "range_text": "any of DBABRAIN_DB_TYPE, DBABRAIN_DB_PORT, DBABRAIN_DB_CONTAINER",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which facts about the database a cmd or docker collector is handed as environment variables beside DBABRAIN_TARGET_HOST.",
+                    "rule": "Only those three names, from the target (definitions.TARGET_ENV_NAMES): the credential is on the same object, so a catalogue cannot hand a script a field nobody reviewed. An empty fact is left out, so a script tells 'not set' by presence. OS_CPU_COUNTERS declares all three to find the database process on the host."
+                },
+                {
+                    "field": "host_fallback",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether a docker metric runs its script on the host, through an SSH cmd_access, on a target with no container_name instead of being skipped.",
+                    "rule": "A docker metric only - the loader refuses it on another. The host run has no DOCKER_CONTAINER and is switched off with the target's cmd collectors, since it logs into the host. POSTGRES_SERVER_LOG declares it: a container's docker logs, a host install's log files."
+                },
+                {
                     "field": "report_policy",
                     "type": "object",
                     "required": false,
@@ -3796,7 +3826,7 @@
             "legacy_fields": {
                 "sql_file": "file"
             },
-            "field_count": 9,
+            "field_count": 11,
             "required_field_count": 1,
             "fields": [
                 {
@@ -3941,6 +3971,36 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Run once per database instead of once per instance."
+                },
+                {
+                    "field": "sql_settings",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - the metric's sql_settings, if any",
+                    "range_text": "{name: number} - each name a DECLARE of this variant's file",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Numbers only this variant's file takes, written over the metric's own sql_settings when this variant runs.",
+                    "rule": "As the metric's sql_settings: each name declared in this variant's file exactly once as DECLARE @name <type> = <number>;. A number that is one engine's goes here, not on the metric, where every variant would have to declare it."
+                },
+                {
+                    "field": "repeat_interval",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - the metric's time_window.repeat_interval",
+                    "range_text": "seconds, 1 or more",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1
+                    },
+                    "measured_against": "the end of this metric's last collection on the target, as the metric's own interval is",
+                    "purpose": "How often this variant runs when it is not how often the metric does.",
+                    "rule": "Read for the target the variant runs on, by the scheduler only (collector._repeat_interval_for). For a source dearer than the metric's cheapest engine: LOCK_DEADLOCK_RECENT is 150 s on SQL Server's ring buffer and 3600 s on Oracle's v$diag_alert_ext, a scan of the whole alert log."
                 }
             ]
         },
@@ -6360,15 +6420,15 @@
                     "type": "object",
                     "required": true,
                     "default": "none",
-                    "range_text": "{types: {FULL|DIFF|LOG: backup_type_rule}}",
+                    "range_text": "{types: {FULL|DIFF|LOG: backup_type_rule}, optional data_backup: {of_types, required, warn_hours, critical_hours, note}}",
                     "constraint": {
                         "kind": "object",
                         "nullable": false,
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The rules every database is held to unless an override says otherwise.",
-                    "rule": "An empty policy judges nothing and says so - it is not read as 'everything compliant'"
+                    "purpose": "The rules every database is held to unless an override says otherwise. Contains per-type rules under 'types', and an optional 'data_backup' objective ({of_types: ['FULL', 'DIFF'], required: bool, warn_hours: int, critical_hours: int, note: str}) judging data backup age as the newest of of_types.",
+                    "rule": "An empty policy judges nothing and says so - it is not read as 'everything compliant'. Under data_backup the newest of of_types is judged; absent = per-type only."
                 },
                 {
                     "field": "overrides",
@@ -6420,7 +6480,7 @@
             "legacy_fields": {
                 "database": "database_name"
             },
-            "field_count": 4,
+            "field_count": 5,
             "required_field_count": 1,
             "fields": [
                 {
@@ -6465,6 +6525,21 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The rules that replace the defaults for this match."
+                },
+                {
+                    "field": "data_backup",
+                    "type": "object|null",
+                    "required": false,
+                    "default": "null",
+                    "range_text": "{of_types: [FULL, DIFF], required: boolean, warn_hours: number, critical_hours: number, note?: string}",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Override for the data backup objective. The newest of of_types is judged; absent = follows defaults.",
+                    "rule": "Replaces or disables defaults.data_backup for matching databases."
                 },
                 {
                     "field": "note",
@@ -6800,8 +6875,8 @@
             "legacy_fields": {
                 "database": "database_name"
             },
-            "field_count": 2,
-            "required_field_count": 2,
+            "field_count": 3,
+            "required_field_count": 1,
             "fields": [
                 {
                     "field": "database_name",
@@ -6820,8 +6895,8 @@
                 {
                     "field": "max_age_hours",
                     "type": "number",
-                    "required": true,
-                    "default": "none",
+                    "required": false,
+                    "default": "the defaults' max_age_hours",
                     "range_text": "hours, 1 and up",
                     "constraint": {
                         "kind": "number",
@@ -6829,7 +6904,22 @@
                         "min": 1
                     },
                     "measured_against": "hours since its last successful restore",
-                    "purpose": "The limit for this database."
+                    "purpose": "The limit for this database.",
+                    "rule": "Left out on a retired database (required false), which has no limit to keep"
+                },
+                {
+                    "field": "required",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "true",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether this database is still meant to be drilled.",
+                    "rule": "false retires it: its drills stay in backup_restore_history, and neither the SLA's restore_drill policy nor restore-drill-status judges it any more. The history cannot say which drills are retired - its restore_id is its own row number, and a whole-instance restore names no database - so the policy says it, by name"
                 }
             ],
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported."
@@ -7482,8 +7572,8 @@
                 "aggregation_method": "aggregation",
                 "operator": "comparison_operator"
             },
-            "field_count": 26,
-            "required_field_count": 2,
+            "field_count": 29,
+            "required_field_count": 1,
             "fields": [
                 {
                     "field": "policy_id",
@@ -7584,7 +7674,7 @@
                 {
                     "field": "metric_codes",
                     "type": "array",
-                    "required": true,
+                    "required": false,
                     "default": "none",
                     "range_text": "metric codes",
                     "constraint": {
@@ -7593,26 +7683,29 @@
                         "item_kind": "string"
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Which metrics are the evidence."
+                    "purpose": "Which metrics are the evidence.",
+                    "rule": "Required by every model but restore_drill, which reads backup_restore_history rather than metrics"
                 },
                 {
                     "field": "policy_model",
                     "type": "string",
                     "required": false,
                     "default": "time_slo",
-                    "range_text": "time_slo | current_state | finding_inventory",
+                    "range_text": "time_slo | current_state | finding_inventory | backup_rpo | restore_drill",
                     "constraint": {
                         "kind": "string",
                         "nullable": true,
                         "enum": [
                             "time_slo",
                             "current_state",
-                            "finding_inventory"
+                            "finding_inventory",
+                            "backup_rpo",
+                            "restore_drill"
                         ]
                     },
                     "measured_against": "not a time value",
                     "purpose": "How evidence becomes a verdict.",
-                    "rule": "An unknown model fails the config rather than falling back"
+                    "rule": "An unknown model fails the config rather than falling back. backup_rpo judges backup ages against backup_policy.json; restore_drill judges backup_restore_history against restore_drill_policy.json and rto_target_seconds"
                 },
                 {
                     "field": "objective_percent",
@@ -7678,7 +7771,7 @@
                     "type": "string",
                     "required": false,
                     "default": "success_ratio",
-                    "range_text": "success_ratio | average | minimum | maximum | sum | count | latest | percentile",
+                    "range_text": "success_ratio | average | minimum | maximum | sum | count | latest | percentile | minutes",
                     "constraint": {
                         "kind": "string",
                         "nullable": true,
@@ -7690,12 +7783,13 @@
                             "sum",
                             "count",
                             "latest",
-                            "percentile"
+                            "percentile",
+                            "minutes"
                         ]
                     },
                     "measured_against": "not a time value",
                     "purpose": "How samples combine.",
-                    "rule": "Was also `aggregation_method`"
+                    "rule": "Was also `aggregation_method`. minutes is accepted only with policy_model time_slo and counts observed minutes where any sample was good"
                 },
                 {
                     "field": "aggregate",
@@ -7876,6 +7970,49 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Periods excluded from the judgement."
+                },
+                {
+                    "field": "rto_target_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none",
+                    "range_text": "seconds, 1 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1
+                    },
+                    "measured_against": "seconds a restore drill took, restore start to end",
+                    "purpose": "The recovery time objective a restore_drill policy holds each database's newest successful drill to.",
+                    "rule": "Required, and only read, by policy_model restore_drill"
+                },
+                {
+                    "field": "burn_rate_alerts",
+                    "type": "array",
+                    "required": false,
+                    "default": "empty",
+                    "range_text": "list of {severity, factor, short_window_minutes, long_window_minutes} objects",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": false,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Multi-window multi-burn-rate alerts (Google SRE Workbook ch. 5) evaluated against the policy error budget.",
+                    "rule": "Only accepted for policy_model time_slo with aggregation minutes. Each object specifies severity ('page' or 'ticket'), factor (number > 0), short_window_minutes, and long_window_minutes (where short < long). Fires when both windows burn at or above factor."
+                },
+                {
+                    "field": "calendar_month_report",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether to publish an availability by calendar month table for this policy on the SLA web report."
                 }
             ],
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported."
@@ -12871,7 +13008,7 @@
                         "item_kind": "object"
                     },
                     "measured_against": "not a time value",
-                    "purpose": "In request order: {id, kind, started_at (epoch seconds), and rows | databases + database_count + skipped | exit_code + stdout + stderr + duration_seconds, truncated, or error: {message, failure_phase (connect | execute | \"\"), kind, stdout, stderr, exit_code, duration_seconds}}. A failed item answers with error; the batch still succeeds."
+                    "purpose": "In request order: {id, kind, started_at (epoch seconds), duration_seconds (the item's wall time - for sql the connect, the statement and the close; a script's own when it states one), and rows | databases + database_count + skipped | exit_code + stdout + stderr, truncated, or error: {message, failure_phase (connect | execute | \"\"), kind, stdout, stderr, exit_code, duration_seconds - how long it tried}}. A failed item answers with error; the batch still succeeds."
                 }
             ],
             "field_count": 2,
@@ -14059,12 +14196,14 @@
             "commands": [
                 "app-command-set",
                 "metric-toggle",
-                "metric-severity"
+                "metric-severity",
+                "instance-active",
+                "metric-env"
             ],
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 14,
+            "field_count": 17,
             "required_field_count": 0,
             "fields": [
                 {
@@ -14134,6 +14273,19 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "metric-toggle: the state it was set to."
+                },
+                {
+                    "field": "active",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "instance-active: the flag written."
                 },
                 {
                     "field": "metric_code",
@@ -14257,6 +14409,34 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "One line for a person."
+                },
+                {
+                    "field": "items",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "metric-severity with items: one answer per remap, in the order given."
+                },
+                {
+                    "field": "collector_env",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "metric-env: the block as written."
                 }
             ]
         },
@@ -22972,7 +23152,7 @@
             "object": "input_metric_severity",
             "kind": "input",
             "required": false,
-            "one_line": "How one metric's statuses are remapped for one instance.",
+            "one_line": "How one metric's statuses are remapped for one instance - or a list of such remaps, written together.",
             "parsed_in": "dbabrain/common/cli.py",
             "parsers": [
                 "dbabrain/common/cli.py"
@@ -22983,13 +23163,13 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 6,
-            "required_field_count": 2,
+            "field_count": 7,
+            "required_field_count": 0,
             "fields": [
                 {
                     "field": "server_id",
                     "type": "string",
-                    "required": true,
+                    "required": false,
                     "default": "none - optional",
                     "range_text": "text",
                     "constraint": {
@@ -22998,12 +23178,12 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The instance."
+                    "purpose": "The instance. Required in the one-remap form; absent beside items."
                 },
                 {
                     "field": "metric_code",
                     "type": "string",
-                    "required": true,
+                    "required": false,
                     "default": "none - optional",
                     "range_text": "text",
                     "constraint": {
@@ -23012,7 +23192,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The metric."
+                    "purpose": "The metric. Required in the one-remap form; absent beside items."
                 },
                 {
                     "field": "metric_item",
@@ -23055,6 +23235,157 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Why."
+                },
+                {
+                    "field": "items",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Several remaps written together, every one or none: each {server_id, metric_code, metric_item, severity_map, note}. With items, the request carries nothing else but data_dir."
+                },
+                {
+                    "field": "data_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Another data/ folder to read."
+                }
+            ]
+        },
+        {
+            "object": "input_instance_active",
+            "kind": "input",
+            "required": false,
+            "one_line": "One instance switched on or off for every app - its active flag.",
+            "parsed_in": "dbabrain/common/cli.py",
+            "parsers": [
+                "dbabrain/common/cli.py"
+            ],
+            "commands": [
+                "instance-active"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 2,
+            "fields": [
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - required",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The instance, as written in db_instances.json."
+                },
+                {
+                    "field": "active",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "none - required",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "true switches the record on for every app, false off. metrics.enabled is metric-toggle's."
+                },
+                {
+                    "field": "data_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Another data/ folder to read."
+                }
+            ]
+        },
+        {
+            "object": "input_metric_env",
+            "kind": "input",
+            "required": false,
+            "one_line": "The inputs a collector script reads from one instance, set or removed.",
+            "parsed_in": "dbabrain/common/cli.py",
+            "parsers": [
+                "dbabrain/common/cli.py"
+            ],
+            "commands": [
+                "metric-env"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 2,
+            "fields": [
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - required",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The instance, as written in db_instances.json."
+                },
+                {
+                    "field": "env",
+                    "type": "object",
+                    "required": true,
+                    "default": "none - required",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": false,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "{NAME: value}: written to metrics.collector_env; a value of null removes NAME. A name carrying a secret is refused - metrics.env_secrets maps it to a ref."
+                },
+                {
+                    "field": "metric_code",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The variables go to that metric's own block (metric_overrides.<CODE>.collector_env), which wins over the target's."
                 },
                 {
                     "field": "data_dir",
@@ -25728,8 +26059,8 @@
                         "min": 1
                     },
                     "measured_against": "not a time value",
-                    "purpose": "How many server_id groups one pass walks at once.",
-                    "rule": "One server's metrics always run one at a time, so a machine never gets two sessions at once"
+                    "purpose": "How many batches - one category of one server - one collect pass runs at once.",
+                    "rule": "A server may get one session per category at once; 1 still means a fully serial pass"
                 },
                 {
                     "field": "note",

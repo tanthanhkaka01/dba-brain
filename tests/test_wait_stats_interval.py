@@ -106,12 +106,17 @@ def test_an_instance_that_is_doing_nothing_cannot_raise_a_warning(path):
 
 @BOTH
 def test_worker_starvation_is_graded_before_either_gate(path):
-    """THREADPOOL on an idle-looking instance is still THREADPOOL: the next symptom is refused logins."""
+    """THREADPOOL on an idle-looking instance is still THREADPOOL: the next symptom is refused logins.
+
+    Since 1.142 it is graded on its own `threadpool` row, at any rank, and no gate of the top-wait
+    row reaches that row; the top-wait row stopped paging for it, so one condition is one alert.
+    """
     sql = _sql(path)
 
-    threadpool = sql.index("WHEN d.wait_type = 'THREADPOOL' THEN 'CRITICAL'")
-    assert threadpool < sql.index("@idle_floor_seconds THEN 'OK'")
-    assert threadpool < sql.index("@avg_waiting_tasks < @busy_floor_tasks")
+    row = sql[sql.index("CAST('threadpool' AS varchar(256))"):]
+    assert "@idle_floor_seconds" not in row
+    assert "@busy_floor_tasks" not in row
+    assert "WHEN d.wait_type = 'THREADPOOL' THEN 'CRITICAL'" not in sql
 
 
 @BOTH

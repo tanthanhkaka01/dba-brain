@@ -12,13 +12,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dbabrain.lib import engine_sections, page_banner, page_style
-from dbabrain.sla.models import SlaPolicyResult, SlaValidationSummary, state_key
+from dbabrain.sla.models import SlaPolicy, SlaPolicyResult, SlaValidationSummary, state_key
+from dbabrain.sla.storage import SlaStore
 from dbabrain.lib.timezone import file_stamp, format_display
 
 
 # Status -> (emoji, css class) used in both the Telegram text and the HTML page.
 STATUS_DISPLAY = {
     "PASSED": ("✅", "ok"),
+    "BURNING": ("🔥", "bad"),
     "AT_RISK": ("⚠️", "warn"),
     "FAILED": ("❌", "bad"),
     "NO_DATA": ("⬜", "nodata"),
@@ -52,7 +54,7 @@ def summary_notify_level(summary: SlaValidationSummary, groups: dict[str, str] |
             groups = {}
     if str((groups or {}).get(SLA_NOTIFY_LEVEL) or "").strip():
         return SLA_NOTIFY_LEVEL
-    if summary.status == "FAILED" or summary.failed_count > 0:
+    if summary.status in ("FAILED", "BURNING") or summary.failed_count > 0 or getattr(summary, "burning_count", 0) > 0:
         return "critical"
     if summary.at_risk_count > 0 or summary.no_data_count > 0:
         return "warning"
@@ -106,12 +108,13 @@ def build_transition_message(summary: SlaValidationSummary, diff, decision, *, r
             moves.append(f"{counts['improved']} better")
         headline = "SLA changes — " + ", ".join(moves)
 
+    burn_fleet = f"{summary.burning_count} burning · " if getattr(summary, "burning_count", 0) else ""
     lines = [
         headline,
         f"Window end: {summary.window_end}",
         f"❌ {counts['new_failed']} new failed · ✅ {counts['recovered']} recovered · "
         f"➖ {counts['unchanged']} unchanged",
-        f"Fleet now: {summary.passed_count} passed · {summary.at_risk_count} at risk · "
+        f"Fleet now: {summary.passed_count} passed · {burn_fleet}{summary.at_risk_count} at risk · "
         f"{summary.failed_count} failed · {summary.no_data_count} no-data",
     ]
 
@@ -163,7 +166,12 @@ def _transition_block(title: str, keys, by_key: dict, *, detail: bool = True) ->
     for key in keys[:TRANSITION_DETAIL_LIMIT]:
         result = by_key.get(key)
         if result is not None and detail:
-            lines.append(f"• {key}: {result.status} {result.actual_percent}% / SLO {result.objective_percent}%")
+            if result.policy_model in ("backup_rpo", "restore_drill", "finding_inventory"):
+                reading = _reading(result)
+                extra = f" ({result.reason})" if result.reason and result.status != "PASSED" else ""
+                lines.append(f"• {key}: {result.status} {reading}{extra}")
+            else:
+                lines.append(f"• {key}: {result.status} {result.actual_percent}% / SLO {result.objective_percent}%")
         else:
             lines.append(f"• {key}")
     if len(keys) > TRANSITION_DETAIL_LIMIT:
@@ -186,7 +194,12 @@ UNMEASURABLE_QUALITY = ("NO_DATA", "COLLECTION_FAILED", "STALE", "INSUFFICIENT_D
 
 def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
                 previous_state: dict[str, str] | None = None, history_limit: int = 0,
-                report_dir: Path | None = None) -> str:
+                report_dir: Path | None = None,
+                policies: list[SlaPolicy] | None = None,
+                store: SlaStore | None = None,
+                runtime_dir: Path | str | None = None,
+                data_dir: Path | str | None = None,
+                calendar_month_html: str | None = None) -> str:
     generated_at = format_display()
     # Three levels, the way an SLO dashboard is read: the estate, each engine, each instance. The
     # page used to have one level only - a list of SLI codes per question ("AVAILABILITY_SUCCESS_
@@ -200,6 +213,30 @@ def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
     serving_bad = sum(1 for result in summary.results if result.current_status == "BAD")
     quality_bad = sum(1 for result in summary.results
                       if result.data_quality_status in UNMEASURABLE_QUALITY)
+    burning_cnt = getattr(summary, "burning_count", 0)
+
+    if calendar_month_html is None:
+        if policies and store:
+            try:
+                from dbabrain.sla.months import render_calendar_month_section
+
+                calendar_month_html = render_calendar_month_section(
+                    policies,
+                    store,
+                    runtime_dir=runtime_dir,
+                    window_end=summary.window_end,
+                    data_dir=data_dir,
+                )
+            except Exception as exc:  # noqa: BLE001 - the month table must not cost the whole page.
+                # The page is the answer to "is the estate meeting its objectives"; a month
+                # table that cannot be read (an archive scan that failed, an unwritable cache) says
+                # so in its own place rather than taking every other section down with it.
+                calendar_month_html = ('<section><div class="sec-head"><h2>Availability by calendar '
+                                       'month</h2></div><p class="muted">Not available this run: '
+                                       f'{html.escape(type(exc).__name__)}: {html.escape(str(exc))}</p></section>')
+        else:
+            calendar_month_html = ""
+
     return _PAGE_TEMPLATE.format(
         banner_css=page_banner.CSS,
         page_css=page_style.CSS,
@@ -218,9 +255,11 @@ def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
         passed=summary.passed_count,
         at_risk=summary.at_risk_count,
         failed=summary.failed_count,
+        burning=burning_cnt,
         serving_bad=serving_bad,
         serving_bad_class=page_style.kpi_class(serving_bad, "alert"),
         failed_class=page_style.kpi_class(summary.failed_count, "alert"),
+        burning_class=page_style.kpi_class(burning_cnt, "alert"),
         at_risk_class=page_style.kpi_class(summary.at_risk_count, "warnum"),
         quality_class=page_style.kpi_class(quality_bad, "warnum"),
         debt_objects=sum(result.affected_objects for result in summary.results
@@ -232,6 +271,7 @@ def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
         engine_cards=_engine_cards(instances),
         matrix=_instance_matrix(instances, _area_columns(summary)),
         attention=_attention_table(instances),
+        calendar_month_section=calendar_month_html,
         rows=_server_sections(summary, instances=instances),
         history=history,
     )
@@ -265,7 +305,7 @@ def _delta_note(summary: SlaValidationSummary, previous_state: dict[str, str] | 
     from dbabrain.lib.state_transition import diff_states
 
     current = {state_key(result.policy_id, result.target_id): result.status for result in summary.results}
-    diff = diff_states(previous_state, current, severity_order=("FAILED", "AT_RISK", "NO_DATA", "NOT_CONFIGURED", "PASSED"),
+    diff = diff_states(previous_state, current, severity_order=("FAILED", "BURNING", "AT_RISK", "NO_DATA", "NOT_CONFIGURED", "PASSED"),
                        healthy=("PASSED",))
     counts = diff.counts
     text = (f"Since the previous run: {counts['new_failed']} newly failing, "
@@ -294,13 +334,20 @@ def _history_note(recent_runs: list[dict], history_limit: int) -> str:
 
 
 def publish_html(summary: SlaValidationSummary, *, recent_runs: list[dict], out_dir: str | Path,
-                 previous_state: dict[str, str] | None = None, history_limit: int = 0) -> Path:
+                 previous_state: dict[str, str] | None = None, history_limit: int = 0,
+                 policies: list[SlaPolicy] | None = None,
+                 store: SlaStore | None = None,
+                 runtime_dir: Path | str | None = None,
+                 data_dir: Path | str | None = None,
+                 calendar_month_html: str | None = None) -> Path:
     """Write the stable ``sla.html`` (served at /report_dba/sla.html) plus a dated archive
     copy, refresh the ``index.html`` landing hub, and return the stable page path."""
     directory = Path(out_dir)
     directory.mkdir(parents=True, exist_ok=True)
     page = render_html(summary, recent_runs=recent_runs, previous_state=previous_state,
-                       history_limit=history_limit, report_dir=directory)
+                       history_limit=history_limit, report_dir=directory,
+                       policies=policies, store=store, runtime_dir=runtime_dir,
+                       data_dir=data_dir, calendar_month_html=calendar_month_html)
     stable_path = directory / "sla.html"
     stable_path.write_text(page, encoding="utf-8")
     # One archive per DAY, overwritten, via the shared helper — not one per run. Stamping every
@@ -330,9 +377,10 @@ def render_index_html(summary: SlaValidationSummary | None, *, directory: Path) 
     generated_at = format_display()
     if summary is not None:
         emoji, css = STATUS_DISPLAY.get(summary.status, ("", "nodata"))
+        burn_part = f" / {summary.burning_count} burning" if getattr(summary, "burning_count", 0) else ""
         sla_status = (
             f'<span class="badge {css}">{emoji} {html.escape(summary.status)}</span> '
-            f"· {summary.passed_count} passed / {summary.at_risk_count} at risk / "
+            f"· {summary.passed_count} passed / {summary.at_risk_count} at risk{burn_part} / "
             f"{summary.failed_count} failed / {summary.no_data_count} no-data"
         )
     else:
@@ -380,9 +428,9 @@ def _index_card(*, href: str, emoji: str, title: str, note: str, disabled: bool)
 
 
 #: Worst first. A check nobody could measure sorts above one merely at risk: "we cannot see it" is
-#: the reading an operator can least afford to scroll past.
-_STATUS_ORDER = {"FAILED": 0, "NO_DATA": 1, "STALE": 1, "INSUFFICIENT_DATA": 1, "NOT_CONFIGURED": 1,
-                 "AT_RISK": 2, "PASSED": 3}
+#: the reading an operator can least afford to scroll past. BURNING ranks immediately after FAILED.
+_STATUS_ORDER = {"FAILED": 0, "BURNING": 1, "NO_DATA": 2, "STALE": 2, "INSUFFICIENT_DATA": 2, "NOT_CONFIGURED": 2,
+                 "AT_RISK": 3, "PASSED": 4}
 
 #: STATUS_DISPLAY's class, in this page's palette (the inventory page's): ok / warn / crit / idle.
 _PAGE_CLASS = {"ok": "ok", "warn": "warn", "bad": "crit", "nodata": "idle"}
@@ -455,16 +503,17 @@ def _instances(summary) -> list[dict]:
             "results": results,
             "status": _worst_status(results),
             "failed": sum(1 for r in results if r.status == "FAILED"),
+            "burning": sum(1 for r in results if r.status == "BURNING"),
             "at_risk": sum(1 for r in results if r.status == "AT_RISK"),
             "passed": sum(1 for r in results if r.status == "PASSED"),
-            "no_data": sum(1 for r in results if _status_rank(r.status) == 1),
+            "no_data": sum(1 for r in results if r.status in ("NO_DATA", "STALE", "INSUFFICIENT_DATA", "NOT_CONFIGURED")),
             "bad_now": sum(1 for r in results if getattr(r, "current_status", "") == "BAD"),
         })
 
     def rank(entry) -> tuple:
         # Fleet-wide rows last: they belong to no machine, so they answer no per-server question.
         engine_rank = engine_sections.section_rank(entry["engine"]) if entry["server"] else 99
-        return (engine_rank, -entry["failed"], -entry["no_data"], -entry["at_risk"], entry["server"])
+        return (engine_rank, -entry["failed"], -entry.get("burning", 0), -entry["no_data"], -entry["at_risk"], entry["server"])
 
     return sorted(instances, key=rank)
 
@@ -575,6 +624,10 @@ def _reading(result) -> str:
         return f"{result.affected_objects} obj"
     if result.policy_model == "current_state":
         return "ok" if result.actual_value else "not ok"
+    if result.policy_model in ("backup_rpo", "restore_drill"):
+        count = int(result.actual_value) if result.actual_value is not None else 0
+        word = "breach" if count == 1 else "breaches"
+        return f"{count} {word}"
     if _status_rank(result.status) == 1:
         return "no data"
     value = result.actual_value if result.actual_value is not None else result.actual_percent
@@ -647,7 +700,7 @@ def _attention_table(instances: list[dict]) -> str:
             f"<td>{_badge(result.status)}</td>"
             f"<td>{html.escape(engine)}</td>"
             f'<td class="srv">{_instance_link(entry)}</td>'
-            f"<td>{html.escape(result.policy_id)}</td>"
+            f"<td>{html.escape(result.policy_id)}{_burn_rates_html(result)}</td>"
             f"<td>{_now_cell(result)}</td>"
             f'<td class="num-cell">{_actual_cell(result)}</td>'
             f'<td class="num-cell">{html.escape(result.comparison_operator)} {objective}</td>'
@@ -720,6 +773,10 @@ def _actual_cell(result: SlaPolicyResult) -> str:
         if result.affected_objects and not result.actual_value:
             return f"{html.escape(verdict)} ({result.affected_objects} affected)"
         return html.escape(verdict)
+    if result.policy_model in ("backup_rpo", "restore_drill"):
+        count = int(result.actual_value) if result.actual_value is not None else 0
+        word = "breach" if count == 1 else "breaches"
+        return f"{count} {word}"
     value = result.actual_value if result.actual_value is not None else result.actual_percent
     return _number_with_unit(value, result.unit)
 
@@ -744,12 +801,27 @@ def _target_cell(result) -> str:
     return html.escape(target.split("/", 1)[1] if "/" in target else target)
 
 
+def _burn_rates_html(result: SlaPolicyResult) -> str:
+    parts: list[str] = []
+    burn_alert = getattr(result, "burn_alert", "")
+    if burn_alert:
+        badge_cls = "b-crit" if burn_alert == "page" else "b-warn"
+        parts.append(f'<span class="badge {badge_cls}">🔥 {html.escape(burn_alert)}</span>')
+    burn_rates = getattr(result, "burn_rates", None)
+    if burn_rates:
+        rate_strs = [f"{w} {val:.1f}x" if val is not None else f"{w} &mdash;" for w, val in burn_rates.items()]
+        parts.append(f'<span class="muted" style="font-size:11px;">{" &middot; ".join(rate_strs)}</span>')
+    if not parts:
+        return ""
+    return '<div class="burn-rates">' + " ".join(parts) + "</div>"
+
+
 def _html_policy_row(result: SlaPolicyResult) -> str:
     objective = result.objective_value if result.objective_value is not None else result.objective_percent
     return (
         "<tr>"
         f"<td>{_badge(result.status)}</td>"
-        f"<td>{html.escape(result.policy_id)}</td>"
+        f"<td>{html.escape(result.policy_id)}{_burn_rates_html(result)}</td>"
         f'<td class="srv">{_target_cell(result)}</td>'
         f"<td>{html.escape(result.category or '')}</td>"
         f"<td>{_now_cell(result)}</td>"
@@ -821,6 +893,7 @@ _PAGE_TEMPLATE = """<!doctype html>
   details.inst .iname {{ font-family:var(--mono); font-weight:650; }}
   details.inst .icount {{ font-size:12px; color:var(--muted); margin-left:auto; }}
   details.inst .tbl-scroll {{ border:none; border-top:1px solid var(--line); border-radius:0 0 10px 10px; margin:0; }}
+  .burn-rates {{ margin-top:4px; font-size:11px; }}
   @media print {{ details.inst {{ break-inside:avoid; }} }}
 {banner_css}
 </style>
@@ -835,6 +908,7 @@ _PAGE_TEMPLATE = """<!doctype html>
   <div class="kpi-strip">
     <div class="kpi {serving_bad_class}"><div class="num">{serving_bad}</div><div class="lbl">Bad right now</div></div>
     <div class="kpi {failed_class}"><div class="num">{failed}</div><div class="lbl">Window breach</div></div>
+    <div class="kpi {burning_class}"><div class="num">{burning}</div><div class="lbl">Burning</div></div>
     <div class="kpi {at_risk_class}"><div class="num">{at_risk}</div><div class="lbl">At risk</div></div>
     <div class="kpi {quality_class}"><div class="num">{quality_bad}</div><div class="lbl">Cannot measure</div></div>
     <div class="kpi"><div class="num">{debt_objects}</div><div class="lbl">Objects in backlog</div></div>
@@ -864,6 +938,8 @@ _PAGE_TEMPLATE = """<!doctype html>
       <span class="hint">Every check that did not pass, worst first. <b>Now</b> is the newest collection; the status is the rolling window.</span></div>
     {attention}
   </section>
+
+{calendar_month_section}
 
   <section>
     <div class="sec-head"><h2>Instance detail</h2>

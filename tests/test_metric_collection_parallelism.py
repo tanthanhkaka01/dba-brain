@@ -1,4 +1,4 @@
-"""How a collect pass is ordered: parallel across servers, serial inside one.
+"""How a collect pass is ordered: parallel across batches of one server and one category, serial inside one.
 
 A pass used to walk every target in a single queue, so its cadence was the sum of all of them
 and one unresponsive host set the pace for the estate. That is not a tidiness problem: a WinRM
@@ -6,10 +6,12 @@ call to an ERP application server was measured holding a pass for 490 of its 598
 during that window the ERP *database* went unsampled — a lock chain grew from 21s to 570s and no
 CRITICAL was ever raised, because the metric that would have raised it never got to run.
 
-Fanning out per target would trade that for a different fault: several targets can name the same
-machine (a database instance and the OS metrics reached through its ``cmd_access``), and stacking
-two WinRM/SSH sessions or two metric queries on one box is exactly what a monitoring tool must
-not do. So the unit of parallelism is ``server_id``, and these tests pin both halves of that.
+Grouping by server_id fixed that between servers and kept it inside one: on 2026-10-16 the nightly
+index-fragmentation scan ran 1009 s on the largest instance, and the pass - and with it
+INSTANCE_STATUS of every server - waited for it. Since 0.30.0 the unit is ``(server_id, category)``
+(the operator's choice of the existing `category` field): a server's metrics of one category still
+run one at a time, so one kind of work never stacks sessions on a machine, while different
+categories and different servers run at once and never wait for each other.
 """
 
 import threading
@@ -69,11 +71,11 @@ def _wire(monkeypatch, *, targets, definitions, collect_one, max_parallel):
                                              for metric, _importance in planned])
 
 
-def test_two_metrics_of_one_server_are_never_in_flight_at_the_same_time(tmp_path, monkeypatch):
-    """The guarantee that makes the fan-out safe: one machine is still touched one call at a time.
+def test_two_metrics_of_one_server_and_one_category_are_never_in_flight_at_the_same_time(tmp_path, monkeypatch):
+    """The guarantee that makes the fan-out safe: one machine and category is touched one call at a time.
 
-    Two targets here share a server_id — the shape of a database instance plus the OS metrics
-    read over the same host's cmd_access.
+    Two targets here share a server_id and both definitions share the 'availability' category —
+    the shape of a database instance plus the OS metrics read over the same host's cmd_access.
     """
     lock = threading.Lock()
     in_flight: dict[str, int] = {}
@@ -101,6 +103,63 @@ def test_two_metrics_of_one_server_are_never_in_flight_at_the_same_time(tmp_path
     collect_metrics(config=_config(tmp_path), dry_run=False, force=True)
 
     assert overlaps == []
+
+
+def test_two_categories_of_one_server_do_run_at_the_same_time(tmp_path, monkeypatch):
+    """The reason for category batching: a slow category must not hold another category of the same server.
+
+    A slow maintenance query on server-a must not prevent server-a's quick availability check from
+    running concurrently.
+    """
+    slow_started = threading.Event()
+    slow_finished = threading.Event()
+    fast_done = threading.Event()
+    ran_while_slow_hung = []
+
+    def collect_one(**kwargs):
+        metric = kwargs["metric"]
+        if metric.category == "maintenance":
+            slow_started.set()
+            fast_done.wait(timeout=5)
+            slow_finished.set()
+        else:
+            assert slow_started.wait(timeout=5), "the slow category should have started first"
+            ran_while_slow_hung.append(not slow_finished.is_set())
+            fast_done.set()
+        return []
+
+    _wire(
+        monkeypatch,
+        targets=[_target("server-a")],
+        definitions=[
+            MetricDefinition(
+                metric_code="MAINTENANCE_INDEX_FRAGMENTATION",
+                db_type="sqlserver",
+                category="maintenance",
+                default_importance=5,
+                active=True,
+                collector_type="sql",
+                default_timeout=5,
+            ),
+            MetricDefinition(
+                metric_code="INSTANCE_STATUS",
+                db_type="sqlserver",
+                category="availability",
+                default_importance=5,
+                active=True,
+                collector_type="sql",
+                default_timeout=5,
+            ),
+        ],
+        collect_one=collect_one,
+        max_parallel=16,
+    )
+
+    began = time.monotonic()
+    collect_metrics(config=_config(tmp_path), dry_run=False, force=True)
+
+    assert ran_while_slow_hung == [True], "the fast category waited for the slow one to finish"
+    assert time.monotonic() - began < 5, "the pass took the slow category's full stall"
 
 
 def test_a_slow_server_no_longer_holds_the_others_behind_it(tmp_path, monkeypatch):

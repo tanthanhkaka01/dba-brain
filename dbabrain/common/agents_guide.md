@@ -133,7 +133,7 @@ dbabrain metrics summary-latest                 # reads the result back
 
 | File in `data/` | What it holds | Registrar |
 | --- | --- | --- |
-| `db_instances.json` | the inventory: one record per database or host, and per-server metric switches | `instance-add`, `metric-toggle`, `metric-severity` |
+| `db_instances.json` | the inventory: one record per database or host, and per-server metric switches | `instance-add`, `instance-active`, `metric-toggle`, `metric-severity`, `metric-env` |
 | `users.json` | logins per server (references only, no passwords) | `instance-add`, `remote-credential-add` |
 | `encrypted_secret_text.json` | every secret, encrypted | `secret-set`, `instance-add` |
 | `app_commands.json` | which apps the daemon runs, and when | `app-command-set` |

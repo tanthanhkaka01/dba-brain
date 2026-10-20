@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -18,8 +19,8 @@ class SlaPolicy:
 
     policy_id: str
     name: str
-    metric_codes: tuple[str, ...]
-    objective_percent: float
+    metric_codes: tuple[str, ...] = ()
+    objective_percent: float = 99.0
     target_ids: tuple[str, ...] = ()
     db_types: tuple[str, ...] = ()
     window_hours: int = 24
@@ -31,12 +32,12 @@ class SlaPolicy:
     description: str = ""
     sli_code: str = ""
     aggregation: str = "success_ratio"
-    #: Which question this policy answers. One row-weighted ratio cannot answer all three, and
-    #: using it for all of them is how "one superuser role warning plus one good row" became
+    #: Which question this policy answers. One row-weighted ratio cannot answer every question,
+    #: and using it for all of them is how "one superuser role warning plus one good row" became
     #: "50% security compliance", and how 3,377 stale-statistics rows became "4.09% maintenance".
     #:
     #: * ``time_slo`` — the fraction of the window the service was good. Availability,
-    #:   connectivity, saturation, backup RPO, latency. The only model where a percentage of
+    #:   connectivity, saturation, latency. The only model where a percentage of
     #:   samples means anything, because the samples are time.
     #: * ``current_state`` — is it compliant *now*? Only the newest cycle is read. Reboot pending,
     #:   security configuration, service state, latest CHECKDB. A config that was wrong for six
@@ -46,6 +47,12 @@ class SlaPolicy:
     #:   fragmented indexes, risky roles, failed jobs. Counts distinct ``metric_item`` values in
     #:   the newest cycle, so repeated snapshots of the same 1,503 objects count once, not
     #:   3,377 times.
+    #: * ``backup_rpo`` — are backups fresh enough against data/backup_policy.json? Evaluates the
+    #:   newest cycle of backup rows per database and required backup type against warn and
+    #:   critical RPO limits.
+    #: * ``restore_drill`` — have backups been proven restorable within target RTO? Evaluates
+    #:   backup_restore_history rows per database against data/restore_drill_policy.json and
+    #:   an rto_target_seconds threshold.
     policy_model: str = "time_slo"
     comparison_operator: str = ">="
     target_value: float | None = None
@@ -57,6 +64,9 @@ class SlaPolicy:
     required: bool = True
     maintenance_windows: tuple[tuple[str, str], ...] = ()
     percentile: float = 95.0
+    rto_target_seconds: int | None = None
+    burn_rate_alerts: tuple[dict[str, Any], ...] = ()
+    calendar_month_report: bool = False
 
 
 # SlaPolicyResult, SlaValidationSummary and state_key moved to dbabrain/common/sla_results.py when

@@ -121,6 +121,9 @@ def run(command: Literal['import-data'], request: t.ImportDataRequest | dict[str
 def run(command: Literal['init'], request: t.InitRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.InitAnswer: ...
 
 @overload
+def run(command: Literal['instance-active'], request: t.InstanceActiveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.ConfigEditAnswer: ...
+
+@overload
 def run(command: Literal['instance-add'], request: t.InstanceAddRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.RegistrationAnswer: ...
 
 @overload
@@ -149,6 +152,9 @@ def run(command: Literal['list-targets'], request: t.ListingRequest | dict[str, 
 
 @overload
 def run(command: Literal['metric-batch'], request: t.MetricBatchRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.MetricBatchAnswer: ...
+
+@overload
+def run(command: Literal['metric-env'], request: t.MetricEnvRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.ConfigEditAnswer: ...
 
 @overload
 def run(command: Literal['metric-severity'], request: t.MetricSeverityRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.ConfigEditAnswer: ...
@@ -376,6 +382,9 @@ def run_allowing_failure(command: Literal['import-data'], request: t.ImportDataR
 def run_allowing_failure(command: Literal['init'], request: t.InitRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.InitAnswer, str]: ...
 
 @overload
+def run_allowing_failure(command: Literal['instance-active'], request: t.InstanceActiveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.ConfigEditAnswer, str]: ...
+
+@overload
 def run_allowing_failure(command: Literal['instance-add'], request: t.InstanceAddRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.RegistrationAnswer, str]: ...
 
 @overload
@@ -404,6 +413,9 @@ def run_allowing_failure(command: Literal['list-targets'], request: t.ListingReq
 
 @overload
 def run_allowing_failure(command: Literal['metric-batch'], request: t.MetricBatchRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.MetricBatchAnswer, str]: ...
+
+@overload
+def run_allowing_failure(command: Literal['metric-env'], request: t.MetricEnvRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.ConfigEditAnswer, str]: ...
 
 @overload
 def run_allowing_failure(command: Literal['metric-severity'], request: t.MetricSeverityRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.ConfigEditAnswer, str]: ...

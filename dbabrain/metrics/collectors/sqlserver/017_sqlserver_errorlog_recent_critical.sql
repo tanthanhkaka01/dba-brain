@@ -16,6 +16,32 @@ CREATE TABLE #errorlog
 -- for days and the server was effectively unmonitored for I/O errors and stack dumps. Filtering
 -- inside the XP reads the same 24 hours in 18 seconds.
 --
+-- Severities 19 and 20 join the critical class alongside 21-25, engine corruption, stack dumps
+-- and out-of-memory errors, but an error that occurred hours ago must not page all day on an
+-- hourly metric. The short recent window (@critical_recent_minutes) decides CRITICAL: only errors
+-- that occurred within that window trigger paging alerts. Errors from the critical class that
+-- are older than the recent window, as well as any other matched errors within 24 hours, alert
+-- as WARNING so they remain visible on daily dashboards without waking on-call staff.
+DECLARE @critical_recent_minutes int = 120;
+
+-- The critical class: what pages (inside the window above). Listed once; both counts below
+-- read it, so a type added here is critical in both.
+DECLARE @critical_types TABLE (error_type varchar(32) PRIMARY KEY);
+INSERT INTO @critical_types (error_type) VALUES
+    ('ERROR_823_IO'),
+    ('ERROR_824_LOGICAL_IO'),
+    ('ERROR_825_RETRY_IO'),
+    ('STACK_DUMP'),
+    ('CORRUPTION'),
+    ('OUT_OF_MEMORY'),
+    ('SEVERITY_19'),
+    ('SEVERITY_20'),
+    ('SEVERITY_21'),
+    ('SEVERITY_22'),
+    ('SEVERITY_23'),
+    ('SEVERITY_24'),
+    ('SEVERITY_25');
+
 -- The WHERE below keeps its own LogDate test: this bounds the read, that one is the contract.
 DECLARE @since_hours int = 24;
 DECLARE @since datetime = DATEADD(hour, -@since_hours, GETDATE());
@@ -132,29 +158,22 @@ INSERT INTO #matched (LogDate, ProcessInfo, [Text], error_type)
 (
     SELECT
         COUNT(*) AS error_count_24h,
-        MAX(LogDate) AS last_error_time,
+        MAX(m.LogDate) AS last_error_time,
+        SUM(CASE WHEN c.error_type IS NOT NULL THEN 1 ELSE 0 END) AS critical_count_24h,
         SUM
         (
             CASE
-                WHEN error_type IN
-                (
-                    'ERROR_823_IO',
-                    'ERROR_824_LOGICAL_IO',
-                    'ERROR_825_RETRY_IO',
-                    'STACK_DUMP',
-                    'CORRUPTION',
-                    'OUT_OF_MEMORY',
-                    'SEVERITY_21',
-                    'SEVERITY_22',
-                    'SEVERITY_23',
-                    'SEVERITY_24',
-                    'SEVERITY_25'
-                )
+                WHEN c.error_type IS NOT NULL
+                 AND m.LogDate >= DATEADD(minute, -@critical_recent_minutes, GETDATE())
                 THEN 1
                 ELSE 0
             END
-        ) AS critical_count_24h
-    FROM #matched
+        ) AS critical_count_recent
+    FROM #matched AS m
+    -- Joined, not an IN list inside each SUM: the class is written once, and SQL Server refuses
+    -- a subquery inside an aggregate (error 130), which is what reading it twice would need.
+    LEFT JOIN @critical_types AS c
+        ON c.error_type = m.error_type
 ),
 by_type AS
 (
@@ -207,7 +226,8 @@ SELECT
     CAST(ISNULL(a.error_count_24h, 0) AS varchar(32)) AS metric_value,
     CAST('errors_24h' AS varchar(32)) AS metric_unit,
     CASE
-        WHEN ISNULL(a.critical_count_24h, 0) > 0 THEN 'CRITICAL'
+        WHEN ISNULL(a.critical_count_recent, 0) > 0 THEN 'CRITICAL'
+        WHEN ISNULL(a.critical_count_24h, 0) > 0 THEN 'WARNING'
         WHEN ISNULL(a.error_count_24h, 0) > 0 THEN 'WARNING'
         ELSE 'OK'
     END AS status,
@@ -217,6 +237,10 @@ SELECT
         + CAST(ISNULL(a.error_count_24h, 0) AS varchar(20))
         + ', critical_errors_24h='
         + CAST(ISNULL(a.critical_count_24h, 0) AS varchar(20))
+        + ', critical_errors_recent='
+        + CAST(ISNULL(a.critical_count_recent, 0) AS varchar(20))
+        + ', recent_window_minutes='
+        + CAST(@critical_recent_minutes AS varchar(20))
         + ', last_error_time='
         + ISNULL(CONVERT(varchar(19), a.last_error_time, 120), 'NULL')
         + ', breakdown=['

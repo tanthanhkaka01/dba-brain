@@ -275,8 +275,10 @@ def test_a_diff_the_policy_does_not_require_is_not_missing():
 
 
 def test_a_simple_recovery_database_is_not_held_to_a_log_rpo():
-    rows = [_row("BACKUP_LAST_RESULT", "ReportServerTempDB / FULL", "7",
-                 message="database=ReportServerTempDB, recovery_model=SIMPLE, backup_type=D, "
+    # Not ReportServerTempDB, which this was until the shipped policy excluded it (2026-10-16):
+    # an excluded database is not judged at all, and the test is about one that is.
+    rows = [_row("BACKUP_LAST_RESULT", "StagingDB / FULL", "7",
+                 message="database=StagingDB, recovery_model=SIMPLE, backup_type=D, "
                          "backup_finish_date=2026-08-01 00:00:01")]
 
     record = backup_policy.evaluate_backup_policy(rows, server_id=SERVER, policy=_SHIPPED_POLICY)["databases"][0]

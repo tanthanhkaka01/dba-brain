@@ -37,6 +37,70 @@
       "missing_data_policy": "unknown"
     },
     {
+      "policy_id": "INSTANCE_AVAILABILITY_24H",
+      "display_name": "Instance availability (minutes)",
+      "description": "Every managed instance must be available across the last 24h, measured in whole UTC minutes where any successful check counts the minute as up.",
+      "category": "availability",
+      "active": true,
+      "db_types": ["sqlserver", "oracle", "postgresql"],
+      "metric_codes": ["INSTANCE_STATUS"],
+      "aggregation": "minutes",
+      "objective_percent": 99.9,
+      "window_hours": 24,
+      "at_risk_budget_percent": 25.0,
+      "good_statuses": ["OK", "LOGGING"],
+      "expected_collection_interval_seconds": 60,
+      "freshness_threshold_seconds": 300,
+      "minimum_sample_count": 60
+    },
+    {
+      "policy_id": "INSTANCE_AVAILABILITY_30D",
+      "display_name": "Instance availability (30-day)",
+      "description": "Every managed instance must be available across the last 30 days, measured in whole UTC minutes where any successful check counts the minute as up. The burn pairs are calibrated for a 30-day budget (2 % of it in one hour at 14.4x, 5 % in six hours at 6x, 10 % in three days at 1x). metric_results keeps 30 days live, so the window's oldest minutes may already be archived - a coverage gap, never downtime.",
+      "category": "availability",
+      "active": true,
+      "db_types": [
+        "sqlserver",
+        "oracle",
+        "postgresql"
+      ],
+      "metric_codes": [
+        "INSTANCE_STATUS"
+      ],
+      "aggregation": "minutes",
+      "objective_percent": 99.9,
+      "window_hours": 720,
+      "at_risk_budget_percent": 25.0,
+      "good_statuses": [
+        "OK",
+        "LOGGING"
+      ],
+      "expected_collection_interval_seconds": 60,
+      "freshness_threshold_seconds": 300,
+      "minimum_sample_count": 1440,
+      "burn_rate_alerts": [
+        {
+          "severity": "page",
+          "factor": 14.4,
+          "short_window_minutes": 5,
+          "long_window_minutes": 60
+        },
+        {
+          "severity": "page",
+          "factor": 6.0,
+          "short_window_minutes": 30,
+          "long_window_minutes": 360
+        },
+        {
+          "severity": "ticket",
+          "factor": 1.0,
+          "short_window_minutes": 360,
+          "long_window_minutes": 4320
+        }
+      ],
+      "calendar_month_report": true
+    },
+    {
       "policy_id": "RECOVERABILITY",
       "sli_code": "BACKUP_FRESHNESS",
       "display_name": "Backup freshness",
@@ -105,6 +169,43 @@
       "objective_percent": 100,
       "window_hours": 24,
       "_note": "One hundred percent, deliberately. Some objectives have no acceptable failure rate, and this is one of them: the failure mode is the cluster refusing to accept writes."
+    },
+    {
+      "policy_id": "ALL_BACKUP_RPO_24H",
+      "sli_code": "ALL_BACKUP_RPO_24H",
+      "display_name": "Backup RPO compliance",
+      "description": "Every required backup is within its RPO threshold; backup ages are evaluated against data/backup_policy.json.",
+      "active": true,
+      "required": true,
+      "category": "recoverability",
+      "policy_model": "backup_rpo",
+      "db_types": [
+        "sqlserver",
+        "oracle",
+        "postgresql",
+        "postgres"
+      ],
+      "metric_codes": [
+        "BACKUP_LAST_RESULT",
+        "POSTGRES_BACKUP_LAST_RESULT"
+      ],
+      "comparison_operator": "<=",
+      "target_value": 0,
+      "window_hours": 24
+    },
+    {
+      "policy_id": "RESTORE_DRILL_RTO_30D",
+      "sli_code": "RESTORE_DRILL_RTO_30D",
+      "display_name": "Restore drill RTO compliance",
+      "description": "Every database's newest restore drill succeeded, is no older than restore_drill_policy.json allows, and finished within rto_target_seconds; backup_restore_history is read whole, so a database drilled long ago reads as stale, not as never drilled.",
+      "active": true,
+      "required": true,
+      "category": "recoverability",
+      "policy_model": "restore_drill",
+      "comparison_operator": "<=",
+      "target_value": 0,
+      "window_hours": 720,
+      "rto_target_seconds": 7200
     }
   ]
 }

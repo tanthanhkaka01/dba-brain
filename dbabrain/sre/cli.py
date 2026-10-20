@@ -6,8 +6,10 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 from dbabrain.lib.config import load_config, resolve_config_path
+from dbabrain.lib.paths import TOOL_ROOT
 from dbabrain.logging_ops import (
     LOG_SCOPE_ENV_VAR,
     build_log_paths,
@@ -17,6 +19,7 @@ from dbabrain.logging_ops import (
     setup_app_logger,
 )
 from dbabrain.logging_ops.runtime_stdout import patch_stdout
+from dbabrain.sre import adhoc_cmd
 from dbabrain.sre.automation import list_known_workflows
 from dbabrain.sre.config import SreOperationalConfig, load_sre_operational_config
 from dbabrain.lib.docker_db_spec import (
@@ -449,6 +452,21 @@ def build_parser() -> argparse.ArgumentParser:
     rdc.add_argument("--dry-run", action="store_true")
     rdc.set_defaults(handler=_handle_register_db_connection)
 
+    rca = subparsers.add_parser(
+        "run-cmd-adhoc",
+        help="Run one shell command on a host named by server_id, the login resolved by the app.",
+        description=adhoc_cmd.USAGE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    rca.add_argument("request", metavar="REQUEST", help="One JSON object: inline, @file or -.")
+    rca.add_argument("--data-dir", default=None, help="Override data/ directory.")
+    rca.add_argument("--key", default=None, help="Secret passphrase (resolves the host login).")
+    rca.add_argument("--key-base64", dest="key_base64", default=None, help="Base64 secret passphrase.")
+    rca.add_argument("--dry-run", action="store_true",
+                     help="Print the request run-cmd would receive, the password masked; "
+                          "asks nothing, runs nothing.")
+    rca.set_defaults(handler=None)
+
     return parser
 
 
@@ -458,6 +476,9 @@ def main(argv: list[str] | None = None) -> int:
     if not hasattr(args, "handler"):
         parser.print_help()
         return 0
+
+    if args.command == "run-cmd-adhoc":
+        return _run_cmd_adhoc(args)
 
     logger = None
     try:
@@ -1004,6 +1025,32 @@ def _handle_register_db_connection(args: argparse.Namespace, logger, *, sre_conf
     log_event(logger, level="logging",
               message=f"sre.register_db_connection|name={args.name} action={action}")
     return 0
+
+
+def _run_cmd_adhoc(args: argparse.Namespace) -> int:
+    """``run-cmd-adhoc``, routed before the app's own start: the key and this node's data/, a log
+    line if the configuration allows one, and stdout left alone - the command's output is the
+    answer, and teeing it into the runtime log would keep whatever the command printed."""
+    from dbabrain.lib.secret_text import set_key_env
+
+    try:
+        set_key_env(args.key, args.key_base64)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    logger = None
+    data_dir = Path(args.data_dir) if args.data_dir else TOOL_ROOT / "data"
+    try:
+        config_path = str(resolve_config_path("sre", args.config))
+        if not args.data_dir:
+            data_dir = Path(_resolve_data_dir(config_path, None))
+        config = load_config(config_path)
+        logger = setup_app_logger(config, app_name="dbabrain_sre",
+                                  log_scope=os.getenv(LOG_SCOPE_ENV_VAR) or "sre")
+    except Exception as exc:  # noqa: BLE001 - the run does not depend on its log line.
+        print(f"WARNING: no log for this run: {exc}", file=sys.stderr)
+    return adhoc_cmd.main(args.request, data_dir=data_dir.resolve(), dry_run=bool(args.dry_run),
+                          logger=logger, log=log_event)
 
 
 def _emit_results(results, *, dry_run: bool) -> int:

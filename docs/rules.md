@@ -256,9 +256,10 @@ The four row shapes in `db` (`job_runs`, `metric_results`, `metric_definitions`,
 
 **Mark:** absolute since 0.24.0.
 
-- **By command.** The guard runs the real CLI against an empty root and a poisoned one (every configuration file present and unreadable). Every command is in one of the two kinds - `CONFIGURATION_IS_ITS_JOB` names the first (30), and every other command is held to its request (56). None looks a fact up (`STILL_LOOKS_UP` is empty; 22 did when 0.24.0 opened, plus four lookup doors - `run-sql`, `run-cmd`, `probe-host` and the file transfers resolved a bare `server_id` until they took `connection` / `access` / `host`).
+- **By command.** The guard runs the real CLI against an empty root and a poisoned one (every configuration file present and unreadable). Every command is in one of the two kinds - `CONFIGURATION_IS_ITS_JOB` names the first (31), and every other command is held to its request (55). None looks a fact up (`STILL_LOOKS_UP` is empty; 22 did when 0.24.0 opened, plus four lookup doors - `run-sql`, `run-cmd`, `probe-host` and the file transfers resolved a bare `server_id` until they took `connection` / `access` / `host`).
 - **By module.** 9 of `common`'s 90 modules read configuration (`READS_LOCAL_CONFIG`), each named with its reason, and every one is the first kind: `cli.py`, which routes those commands, 5 registrars, and the audits of the store and of the estate's names (`password_rotation`, `secret_check`, `identifier_scan`). The list may only shrink. The scan follows an import into `lib`, so a read moved one import away still counts: that is how `remote_exec` read the store through `lib.secret_value` until 0.24.0.
 - **The transports read nothing** since 0.24.0: `sql_run`, `remote_exec` and `ssh` found a key name under `data/ssh_keys/`, a `password_ref` in the store or a `server_id` in the inventory when the caller passed nothing. A caller states the login; the store-backed lookup is `lib.data_sources`' (`resolve_secret_value`, `ssh_login`, `request_fill`), for the apps.
+- **Added 2026-10-19:** `instance-active` writes one instance's `active` flag and `metric-env` its `metrics.collector_env` into `db_instances.json` - the first kind, as `metric-toggle` is.
 - **Reviewed against the restated rule (2026-09-26):** `metric-severity` writes a remap into `db_instances.json` and `lift-example` writes a `data/*.example.json` - the first kind, as they were classed; `self-status` and `timezone` report this node, its configuration included - moved to the first kind. `rotate-password` and `check-secret` find a ref's server in the inventory because the store is their job - they fill that target the way the apps do.
 - Backup, restore and the lab-docker commands are config-free by name, without exception.
 
@@ -542,7 +543,7 @@ A shared config object (`time_window`, `notify`, `cleanup_retention`) is parsed 
 
 - `tests/test_a_machine_has_one_server_id.py::test_every_record_has_a_server_id_and_none_is_used_twice`
 - `tests/test_instance_add.py::test_a_duplicate_server_id_is_refused_rather_than_overwritten`
-- `tests/test_metric_collection_parallelism.py::test_two_metrics_of_one_server_are_never_in_flight_at_the_same_time`
+- `tests/test_metric_collection_parallelism.py::test_two_metrics_of_one_server_and_one_category_are_never_in_flight_at_the_same_time`
 
 **Mark:** absolute - for the inventory and the registrar (guarded since 0.24.0). *Never joining on an ip* is R46's, read in review.
 

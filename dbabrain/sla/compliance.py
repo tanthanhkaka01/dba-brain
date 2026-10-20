@@ -4,6 +4,7 @@ import sqlite3
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from dbabrain.lib.rows import row_text
 from dbabrain.sla.models import SlaPolicy, SlaPolicyResult, SlaValidationSummary
@@ -58,7 +59,8 @@ def validate_sla_policies(
     at_risk_count = sum(1 for result in results_tuple if result.status == "AT_RISK")
     failed_count = sum(1 for result in results_tuple if result.status == "FAILED")
     no_data_count = sum(1 for result in results_tuple if result.status == "NO_DATA")
-    required_failure = any(result.required and result.status in {"FAILED", "NO_DATA", "STALE", "INSUFFICIENT_DATA"} for result in results_tuple)
+    burning_count = sum(1 for result in results_tuple if result.status == "BURNING")
+    required_failure = any(result.required and result.status in {"FAILED", "NO_DATA", "STALE", "INSUFFICIENT_DATA", "NOT_CONFIGURED"} for result in results_tuple)
     status = "FAILED" if required_failure else "PASSED"
 
     # An install with no targets has nothing to be compliant about, and saying FAILED there is the
@@ -86,6 +88,7 @@ def validate_sla_policies(
         no_data_count=no_data_count,
         window_end=end_text,
         results=results_tuple,
+        burning_count=burning_count,
     )
 
 
@@ -107,10 +110,25 @@ def _no_targets_configured(data_dir: str | Path | None = None) -> bool:
 
 def _evaluate_policy(*, store: SlaStore, policy: SlaPolicy, window_end: datetime,
                      data_dir: str | Path | None = None) -> list[SlaPolicyResult]:
+    if policy.policy_model == "restore_drill":
+        return _evaluate_restore_drill_policy(store=store, policy=policy, window_end=window_end, data_dir=data_dir)
+    if policy.policy_model == "backup_rpo":
+        return _evaluate_backup_rpo_policy(store=store, policy=policy, window_end=window_end, data_dir=data_dir)
     window_start = window_end - timedelta(hours=policy.window_hours)
     start_text = _format_time(window_start)
     end_text = _format_time(window_end)
     expected, expected_servers = _expected_scope(policy, data_dir=data_dir)
+    if policy.aggregation == "minutes":
+        return _evaluate_minutes_policy(
+            store=store,
+            policy=policy,
+            window_start=window_start,
+            window_end=window_end,
+            start_text=start_text,
+            end_text=end_text,
+            expected=expected,
+            expected_servers=expected_servers,
+        )
     rows = store.fetch_metric_samples(
         target_ids=policy.target_ids,
         server_ids=tuple(expected_servers),
@@ -282,6 +300,154 @@ def _latest_cycle(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
     return [row for row in rows if row_text(row, "collected_at") == newest.get(row_text(row, "metric_code"))]
 
 
+def _window_label(minutes: int) -> str:
+    """Format minutes to the largest whole unit: days, hours, or minutes."""
+    if minutes >= 1440 and minutes % 1440 == 0:
+        return f"{minutes // 1440}d"
+    if minutes >= 60 and minutes % 60 == 0:
+        return f"{minutes // 60}h"
+    return f"{minutes}m"
+
+
+def _evaluate_minutes_policy(
+    *,
+    store: SlaStore,
+    policy: SlaPolicy,
+    window_start: datetime,
+    window_end: datetime,
+    start_text: str,
+    end_text: str,
+    expected: list[str],
+    expected_servers: list[str],
+) -> list[SlaPolicyResult]:
+    window_starts = {"policy": start_text}
+    unique_burn_windows: dict[str, int] = {}
+    for pair in policy.burn_rate_alerts:
+        long_m = pair["long_window_minutes"]
+        short_m = pair["short_window_minutes"]
+        unique_burn_windows[_window_label(long_m)] = long_m
+        unique_burn_windows[_window_label(short_m)] = short_m
+
+    for label, minutes in unique_burn_windows.items():
+        w_start_dt = window_end - timedelta(minutes=minutes)
+        window_starts[label] = _format_time(w_start_dt)
+
+    minute_counts = store.minute_counts(
+        target_ids=policy.target_ids,
+        server_ids=tuple(expected_servers),
+        db_types=policy.db_types,
+        metric_codes=policy.metric_codes,
+        good_statuses=policy.good_statuses,
+        excluded_error_types=COLLECTION_FAILURE_TYPES,
+        window_end=end_text,
+        window_starts=window_starts,
+        maintenance_windows=policy.maintenance_windows,
+    )
+
+    minute_details = store.minute_details(
+        target_ids=policy.target_ids,
+        server_ids=tuple(expected_servers),
+        db_types=policy.db_types,
+        metric_codes=policy.metric_codes,
+        good_statuses=policy.good_statuses,
+        excluded_error_types=COLLECTION_FAILURE_TYPES,
+        window_start=start_text,
+        window_end=end_text,
+        maintenance_windows=policy.maintenance_windows,
+    )
+
+    if expected:
+        target_ids = list(expected)
+    else:
+        found_targets = sorted(set(minute_counts.keys()) | set(minute_details.keys()))
+        target_ids = found_targets if found_targets else [AGGREGATE_TARGET]
+
+    budget_fraction = 1.0 - (policy.objective_percent / 100.0)
+
+    results: list[SlaPolicyResult] = []
+    for target_id in sorted(target_ids):
+        t_counts = minute_counts.get(target_id, {})
+        t_details = minute_details.get(target_id, {})
+
+        obs_minutes, good_minutes = t_counts.get("policy", (0, 0))
+        total_count = obs_minutes
+        good_count = good_minutes
+        bad_count = obs_minutes - good_minutes
+
+        expected_count = int(policy.window_hours * 60)
+        coverage = round(min(100.0, (total_count / expected_count * 100.0)), 2) if expected_count else 0.0
+        no_data = (total_count == 0)
+
+        actual_value = (good_count / total_count * 100.0) if total_count else None
+        actual_percent = round(actual_value, 4) if actual_value is not None else 0.0
+
+        collection_rows = int(t_details.get("collection_rows") or 0)
+        newest = t_details.get("newest")
+        newest_minute_up = t_details.get("newest_minute_up")
+        failures_by_status = dict(t_details.get("failures_by_status") or {})
+
+        freshness = None
+        if newest is not None:
+            freshness = max(0.0, (window_end - _parse_time(str(newest))).total_seconds())
+
+        current_status = (
+            "" if newest_minute_up is None
+            else "OK" if newest_minute_up
+            else "BAD"
+        )
+        affected_objects = 1 if bad_count > 0 else 0
+        samples_for_sufficiency = total_count
+
+        burn_rates: dict[str, float | None] = {}
+        for label, minutes in sorted(unique_burn_windows.items(), key=lambda x: x[1]):
+            w_obs, w_good = t_counts.get(label, (0, 0))
+            if w_obs == 0 or budget_fraction <= 0:
+                burn_rates[label] = None
+            else:
+                w_err_rate = (w_obs - w_good) / w_obs
+                burn = w_err_rate / budget_fraction
+                burn_rates[label] = round(burn, 4)
+
+        firing_severities: set[str] = set()
+        for pair in policy.burn_rate_alerts:
+            long_label = _window_label(pair["long_window_minutes"])
+            short_label = _window_label(pair["short_window_minutes"])
+            long_burn = burn_rates.get(long_label)
+            short_burn = burn_rates.get(short_label)
+            factor = pair["factor"]
+            if long_burn is not None and short_burn is not None:
+                if long_burn >= factor and short_burn >= factor:
+                    firing_severities.add(pair["severity"])
+
+        burn_alert = "page" if "page" in firing_severities else ("ticket" if "ticket" in firing_severities else "")
+
+        result = _judge_verdict(
+            policy=policy,
+            target_id=target_id,
+            window_start=start_text,
+            window_end=end_text,
+            total_count=total_count,
+            good_count=good_count,
+            bad_count=bad_count,
+            actual_value=actual_value,
+            actual_percent=actual_percent,
+            expected_count=expected_count,
+            coverage=coverage,
+            no_data=no_data,
+            collection_rows_count=collection_rows,
+            failures_by_status=failures_by_status,
+            affected_objects=affected_objects,
+            current_status=current_status,
+            freshness=freshness,
+            samples_for_sufficiency=samples_for_sufficiency,
+            burn_rates=burn_rates,
+            burn_alert=burn_alert,
+        )
+        results.append(result)
+
+    return results
+
+
 def _build_result(
     policy: SlaPolicy,
     target_id: str,
@@ -323,9 +489,14 @@ def _build_result(
     if policy.policy_model in ("current_state", "finding_inventory"):
         measured_rows = latest_rows
 
+    # No measured sample is NO_DATA even when collection rows exist - especially then. A policy
+    # whose every sample was an auth failure knows nothing about the service, and reporting that
+    # as 100% compliant would be worse than the old behaviour, not better.
+    no_data = not window_rows
     total_count = len(measured_rows)
     good_count = sum(1 for row in measured_rows if str(row["status"] or "").upper() in good_statuses)
     bad_rows = [row for row in measured_rows if str(row["status"] or "").upper() not in good_statuses]
+    bad_count = len(bad_rows)
     # Distinct objects, not observations. On 192.0.2.115 the maintenance backlog was 1,503
     # statistics seen across repeated collections, reported as 3,377 bad rows; an operator has
     # 1,503 things to fix, and the larger number only measures how often we looked.
@@ -341,10 +512,7 @@ def _build_result(
         # percentage objective is what turned a real backlog into "4.09% maintenance compliance".
         actual_value = float(affected_objects)
     actual_percent = round(actual_value, 4) if actual_value is not None else 0.0
-    # No measured sample is NO_DATA even when collection rows exist - especially then. A policy
-    # whose every sample was an auth failure knows nothing about the service, and reporting that
-    # as 100% compliant would be worse than the old behaviour, not better.
-    no_data = not window_rows
+
     # Coverage counts COLLECTION CYCLES, not rows. One collection writes one row per database,
     # index or login it found, so MAINTENANCE_INDEX_USAGE on 192.0.2.8 is 6,685 rows from three
     # cycles: comparing rows against expected cycles reads as 100% covered on a metric that ran
@@ -370,14 +538,64 @@ def _build_result(
         coverage = round(len(window_rows) / attempted * 100, 2) if attempted else 0.0
     else:
         coverage = 100.0 if window_rows else 0.0
+
     freshness = None
     if rows:
         freshness = max(0.0, (_parse_time(window_end) - max(_parse_time(str(row["collected_at"])) for row in rows)).total_seconds())
+
+    samples_for_sufficiency = len(window_rows)
+    failures_by_status = _count_by_status(bad_rows)
+
+    return _judge_verdict(
+        policy=policy,
+        target_id=target_id,
+        window_start=window_start,
+        window_end=window_end,
+        total_count=total_count,
+        good_count=good_count,
+        bad_count=bad_count,
+        actual_value=actual_value,
+        actual_percent=actual_percent,
+        expected_count=expected_count,
+        coverage=coverage,
+        no_data=no_data,
+        collection_rows_count=len(collection_rows),
+        failures_by_status=failures_by_status,
+        affected_objects=affected_objects,
+        current_status=current_status,
+        freshness=freshness,
+        samples_for_sufficiency=samples_for_sufficiency,
+    )
+
+
+def _judge_verdict(
+    *,
+    policy: SlaPolicy,
+    target_id: str,
+    window_start: str,
+    window_end: str,
+    total_count: int,
+    good_count: int,
+    bad_count: int,
+    actual_value: float | None,
+    actual_percent: float,
+    expected_count: int,
+    coverage: float,
+    no_data: bool,
+    collection_rows_count: int,
+    failures_by_status: dict[str, int],
+    affected_objects: int,
+    current_status: str,
+    freshness: float | None,
+    samples_for_sufficiency: int,
+    burn_rates: dict[str, float | None] | None = None,
+    burn_alert: str = "",
+) -> SlaPolicyResult:
     stale = bool(policy.freshness_threshold_seconds is not None and freshness is not None and freshness > policy.freshness_threshold_seconds)
     # Sample sufficiency is about the window too: a current_state policy reads one cycle by
     # design, and judging that single cycle against a 20-sample minimum would mark every one of
     # them INSUFFICIENT_DATA forever.
-    insufficient = bool(window_rows and len(window_rows) < policy.minimum_sample_count)
+    insufficient = bool((not no_data) and samples_for_sufficiency < policy.minimum_sample_count)
     objective_value = policy.target_value if policy.target_value is not None else policy.objective_percent
     compliant = None if no_data or stale or insufficient or actual_value is None else _compare(actual_value, objective_value, policy.comparison_operator)
 
@@ -386,7 +604,7 @@ def _build_result(
     # rather than an unbounded negative number. For NO_DATA the budget is undefined.
     # Only a time SLO has an error budget: the budget is "how much of the window may be bad", and
     # neither a present-tense yes/no nor a count of affected objects is measured in window time.
-    budgeted = policy.aggregation == "success_ratio" and policy.policy_model == "time_slo"
+    budgeted = policy.aggregation in ("success_ratio", "minutes") and policy.policy_model == "time_slo"
     error_budget_percent = round(100.0 - policy.objective_percent, 4) if budgeted else 0.0
     bad_percent = round(100.0 - actual_percent, 4) if budgeted else 0.0
     if no_data:
@@ -405,7 +623,7 @@ def _build_result(
     # above STALE/INSUFFICIENT because being unable to look at all is the more basic problem.
     quality_status = (
         "NO_DATA" if no_data
-        else "COLLECTION_FAILED" if collection_rows
+        else "COLLECTION_FAILED" if collection_rows_count > 0
         else "STALE" if stale
         else "INSUFFICIENT_DATA" if insufficient
         else "OK"
@@ -425,6 +643,12 @@ def _build_result(
         status = "STALE"
     elif insufficient:
         status = "INSUFFICIENT_DATA"
+
+    # A fast burn (page pair) is BURNING when status would otherwise be PASSED or AT_RISK.
+    # An already failed objective stays FAILED; STALE, INSUFFICIENT_DATA and NO_DATA stay what they are.
+    if burn_alert == "page" and status in ("PASSED", "AT_RISK"):
+        status = "BURNING"
+
     burn_rate = round(bad_percent / error_budget_percent, 4) if error_budget_percent > 0 and not no_data else None
     return SlaPolicyResult(
         policy_id=policy.policy_id,
@@ -438,14 +662,14 @@ def _build_result(
         budget_remaining_percent=budget_remaining_percent,
         total_count=total_count,
         good_count=good_count,
-        bad_count=len(bad_rows),
+        bad_count=bad_count,
         no_data=no_data,
         window_hours=policy.window_hours,
         window_start=window_start,
         window_end=window_end,
         scope=_scope_text(policy),
         category=policy.category,
-        failures_by_status=_count_by_status(bad_rows),
+        failures_by_status=failures_by_status,
         sli_code=policy.sli_code or policy.policy_id,
         domain=policy.category,
         aggregation=policy.aggregation,
@@ -461,12 +685,14 @@ def _build_result(
         coverage_percent=coverage,
         data_quality_status=quality_status,
         data_freshness_seconds=freshness,
-        reason=_quality_reason(quality_status, total_count, policy.minimum_sample_count),
+        reason=_quality_reason(quality_status, samples_for_sufficiency, policy.minimum_sample_count),
         required=policy.required,
         error_budget_total=error_budget_percent,
         error_budget_consumed=min(error_budget_percent, bad_percent),
         error_budget_remaining=max(0.0, error_budget_percent - bad_percent),
         burn_rate=burn_rate,
+        burn_rates=burn_rates or {},
+        burn_alert=burn_alert,
     )
 
 
@@ -544,6 +770,8 @@ def _scope_text(policy: SlaPolicy) -> str:
         return "targets:" + ",".join(policy.target_ids)
     if policy.db_types:
         return "db_types:" + ",".join(policy.db_types)
+    if policy.policy_model == "restore_drill":
+        return "fleet"
     return ""
 
 
@@ -564,3 +792,455 @@ def _parse_time(value: str) -> datetime:
 
 def _format_time(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _evaluate_backup_rpo_policy(
+    *,
+    store: SlaStore,
+    policy: SlaPolicy,
+    window_end: datetime,
+    data_dir: str | Path | None = None,
+) -> list[SlaPolicyResult]:
+    """Operator decision (2026-10-15): backup RPO compliance is evaluated in the SLA app against
+    data/backup_policy.json.
+
+    The metrics app only collects and reports raw ages without judging them. Reuses
+    dbabrain.lib.backup_policy for the single definition of backup RPO compliance.
+    """
+    window_start = window_end - timedelta(hours=policy.window_hours)
+    start_text = _format_time(window_start)
+    end_text = _format_time(window_end)
+    expected, expected_servers = _expected_scope(policy, data_dir=data_dir)
+
+    rows = [dict(row) for row in store.fetch_metric_samples(
+        target_ids=policy.target_ids,
+        server_ids=tuple(expected_servers),
+        db_types=policy.db_types,
+        metric_codes=policy.metric_codes or ("BACKUP_LAST_RESULT", "POSTGRES_BACKUP_LAST_RESULT"),
+        window_start=start_text,
+        window_end=end_text,
+        with_message=True,
+    )]
+    if policy.aggregate:
+        return [_build_backup_rpo_result(policy, AGGREGATE_TARGET, rows, start_text, end_text,
+                                         data_dir=data_dir, window_end_dt=window_end)]
+
+    grouped: dict[str, list[dict[str, Any]]] = {target_id: [] for target_id in expected}
+    for row in rows:
+        target_id = str(row.get("target_id") or "")
+        if expected and target_id not in grouped:
+            continue
+        grouped.setdefault(target_id, []).append(row)
+
+    if not grouped:
+        return [_build_backup_rpo_result(policy, AGGREGATE_TARGET, [], start_text, end_text,
+                                         data_dir=data_dir, window_end_dt=window_end)]
+    return [
+        _build_backup_rpo_result(policy, target_id, target_rows, start_text, end_text,
+                                 data_dir=data_dir, window_end_dt=window_end)
+        for target_id, target_rows in sorted(grouped.items())
+    ]
+
+
+def _build_backup_rpo_result(
+    policy: SlaPolicy,
+    target_id: str,
+    rows: list[dict[str, Any]],
+    window_start: str,
+    window_end: str,
+    *,
+    data_dir: str | Path | None = None,
+    window_end_dt: datetime,
+) -> SlaPolicyResult:
+    from dbabrain.lib import backup_policy, data_sources
+
+    policy_doc = data_sources.load_backup_policy(data_dir=data_dir)
+    if not backup_policy.policy_is_configured(policy_doc):
+        # A missing or rule-less backup policy is unjudged, never PASSED.
+        return SlaPolicyResult(
+            policy_id=policy.policy_id,
+            name=policy.name,
+            target_id=target_id,
+            status="NOT_CONFIGURED",
+            objective_percent=policy.objective_percent,
+            actual_percent=0.0,
+            error_budget_percent=0.0,
+            budget_consumed_percent=0.0,
+            budget_remaining_percent=0.0,
+            total_count=len(rows),
+            good_count=0,
+            bad_count=0,
+            no_data=not bool(rows),
+            window_hours=policy.window_hours,
+            window_start=window_start,
+            window_end=window_end,
+            scope=_scope_text(policy),
+            category=policy.category,
+            sli_code=policy.sli_code or policy.policy_id,
+            domain=policy.category,
+            aggregation=policy.aggregation,
+            policy_model=policy.policy_model,
+            comparison_operator=policy.comparison_operator,
+            actual_value=None,
+            objective_value=policy.target_value if policy.target_value is not None else 0.0,
+            unit=policy.unit,
+            compliant=False,
+            data_quality_status="OK" if rows else "NO_DATA",
+            reason="no backup policy configured: data/backup_policy.json is absent or carries no rule, so backup ages are unjudged, not compliant",
+            required=policy.required,
+        )
+
+    rows = [row for row in rows if not _is_maintenance_sample(str(row.get("collected_at") or ""), policy.maintenance_windows)]
+    collection_rows = [row for row in rows if _is_collection_failure(row)]
+    measured_rows = [row for row in rows if not _is_collection_failure(row)]
+
+    latest_rows = _latest_cycle(measured_rows)
+    no_data = not latest_rows
+
+    if no_data:
+        quality_status = "COLLECTION_FAILED" if collection_rows else "NO_DATA"
+        compliant = None
+        if policy.missing_data_policy in {"good", "ignore"}:
+            compliant = True
+            quality_status = "MISSING_EXCLUDED"
+        elif policy.missing_data_policy == "bad":
+            compliant = False
+        status = "NO_DATA" if compliant is None else ("PASSED" if compliant else "FAILED")
+        return SlaPolicyResult(
+            policy_id=policy.policy_id,
+            name=policy.name,
+            target_id=target_id,
+            status=status,
+            objective_percent=policy.objective_percent,
+            actual_percent=0.0,
+            error_budget_percent=0.0,
+            budget_consumed_percent=0.0,
+            budget_remaining_percent=0.0,
+            total_count=len(rows),
+            good_count=0,
+            bad_count=0,
+            no_data=True,
+            window_hours=policy.window_hours,
+            window_start=window_start,
+            window_end=window_end,
+            scope=_scope_text(policy),
+            category=policy.category,
+            sli_code=policy.sli_code or policy.policy_id,
+            domain=policy.category,
+            aggregation=policy.aggregation,
+            policy_model=policy.policy_model,
+            comparison_operator=policy.comparison_operator,
+            actual_value=None,
+            objective_value=policy.target_value if policy.target_value is not None else 0.0,
+            unit=policy.unit,
+            compliant=compliant,
+            data_quality_status=quality_status,
+            reason=_quality_reason(quality_status, len(measured_rows), policy.minimum_sample_count),
+            required=policy.required,
+        )
+
+    server_id = str(latest_rows[0].get("server_id") or "")
+    if not server_id and target_id != AGGREGATE_TARGET:
+        server_id = target_id.split("/", 1)[0]
+
+    # Deliberately naive UTC clock matching evaluate_backup_policy arithmetic
+    now_naive = window_end_dt.astimezone(timezone.utc).replace(tzinfo=None)
+    evaluation = backup_policy.evaluate_backup_policy(
+        latest_rows, server_id=server_id, policy=policy_doc, now=now_naive
+    )
+    databases = evaluation.get("databases", [])
+    if not databases:
+        return SlaPolicyResult(
+            policy_id=policy.policy_id,
+            name=policy.name,
+            target_id=target_id,
+            status="NO_DATA",
+            objective_percent=policy.objective_percent,
+            actual_percent=0.0,
+            error_budget_percent=0.0,
+            budget_consumed_percent=0.0,
+            budget_remaining_percent=0.0,
+            total_count=len(latest_rows),
+            good_count=0,
+            bad_count=0,
+            no_data=True,
+            window_hours=policy.window_hours,
+            window_start=window_start,
+            window_end=window_end,
+            scope=_scope_text(policy),
+            category=policy.category,
+            sli_code=policy.sli_code or policy.policy_id,
+            domain=policy.category,
+            aggregation=policy.aggregation,
+            policy_model=policy.policy_model,
+            comparison_operator=policy.comparison_operator,
+            actual_value=None,
+            objective_value=policy.target_value if policy.target_value is not None else 0.0,
+            unit=policy.unit,
+            compliant=None,
+            data_quality_status="NO_DATA",
+            reason="No database backup evidence found in latest cycle.",
+            required=policy.required,
+        )
+
+    breaches: list[str] = []
+    warnings: list[str] = []
+    # The counts are of databases, the reasons of (database, type) pairs. A row of the cycle is one
+    # type of one database and a type never backed up has no row at all, so counting breaches
+    # against rows gave a good_count of -14 on a server whose databases each missed two or three
+    # types (2026-10-19, 0.30.0's soak).
+    judged_dbs: set[str] = set()
+    breach_dbs: set[str] = set()
+    warning_dbs: set[str] = set()
+    for db_entry in databases:
+        db_name = db_entry.get("database", "")
+        for btype, slot in (db_entry.get("types") or {}).items():
+            if not slot.get("required"):
+                continue
+            judged_dbs.add(db_name)
+            state = slot.get("state")
+            age = slot.get("age_hours")
+            crit_h = slot.get("critical_hours")
+            warn_h = slot.get("warn_hours")
+            if state == "CRITICAL":
+                breach_dbs.add(db_name)
+                if age is None:
+                    breaches.append(f"{db_name} {btype}: required and never backed up (limit {crit_h}h)")
+                else:
+                    breaches.append(f"{db_name} {btype}: {backup_policy._age_text(age)} old (limit {crit_h}h)")
+            elif state == "WARNING":
+                warning_dbs.add(db_name)
+                warnings.append(f"{db_name} {btype}: {backup_policy._age_text(age)} old (warn limit {warn_h}h)")
+        # The data backup - the newest of FULL or DIFF - is its own entry beside the types, and was
+        # not read here until 2026-10-19: with FULL loosened to 240 h because a weekly FULL is
+        # normal, a database whose last FULL was 96 h old and that had no DIFF passed the 48 h
+        # objective the policy exists for (found by a review of 1.175).
+        data = db_entry.get("data_backup") or {}
+        if data.get("required"):
+            judged_dbs.add(db_name)
+            label = " or ".join(data.get("of_types") or ("FULL", "DIFF"))
+            if data.get("state") == "CRITICAL":
+                breach_dbs.add(db_name)
+                if data.get("age_hours") is None:
+                    breaches.append(f"{db_name} data backup ({label}): none on record (limit {data.get('critical_hours')}h)")
+                else:
+                    breaches.append(f"{db_name} data backup ({label}): {backup_policy._age_text(data['age_hours'])} old "
+                                    f"(limit {data.get('critical_hours')}h)")
+            elif data.get("state") == "WARNING":
+                warning_dbs.add(db_name)
+                warnings.append(f"{db_name} data backup ({label}): {backup_policy._age_text(data['age_hours'])} old "
+                                f"(warn limit {data.get('warn_hours')}h)")
+
+    actual_value = float(len(breaches))
+    target_value = policy.target_value if policy.target_value is not None else 0.0
+    compliant = _compare(actual_value, target_value, policy.comparison_operator)
+    if breaches:
+        status = "FAILED"
+        reason = "; ".join(breaches)
+    elif warnings:
+        status = "AT_RISK"
+        reason = "; ".join(warnings)
+    else:
+        status = "PASSED"
+        reason = "Every required backup is within policy thresholds."
+
+    current_status = "BAD" if breaches else "OK"
+    quality_status = "COLLECTION_FAILED" if collection_rows else "OK"
+
+    return SlaPolicyResult(
+        policy_id=policy.policy_id,
+        name=policy.name,
+        target_id=target_id,
+        status=status,
+        objective_percent=policy.objective_percent,
+        actual_percent=0.0 if breaches else 100.0,
+        error_budget_percent=0.0,
+        budget_consumed_percent=100.0 if breaches else 0.0,
+        budget_remaining_percent=0.0 if breaches else 100.0,
+        total_count=len(judged_dbs),
+        good_count=len(judged_dbs - breach_dbs),
+        bad_count=len(breach_dbs),
+        no_data=False,
+        window_hours=policy.window_hours,
+        window_start=window_start,
+        window_end=window_end,
+        scope=_scope_text(policy),
+        category=policy.category,
+        failures_by_status={"CRITICAL": len(breaches), "WARNING": len(warnings)} if (breaches or warnings) else {},
+        sli_code=policy.sli_code or policy.policy_id,
+        domain=policy.category,
+        aggregation=policy.aggregation,
+        policy_model=policy.policy_model,
+        affected_objects=len(breach_dbs | warning_dbs),
+        current_status=current_status,
+        comparison_operator=policy.comparison_operator,
+        actual_value=actual_value,
+        objective_value=target_value,
+        unit=policy.unit,
+        compliant=compliant,
+        expected_sample_count=0,
+        coverage_percent=100.0,
+        data_quality_status=quality_status,
+        reason=reason,
+        required=policy.required,
+    )
+
+
+def _evaluate_restore_drill_policy(
+    *,
+    store: SlaStore,
+    policy: SlaPolicy,
+    window_end: datetime,
+    data_dir: str | Path | None = None,
+) -> list[SlaPolicyResult]:
+    """Evaluates restore drill freshness and RTO compliance from backup_restore_history.
+
+    backup_restore_history records every drill run with database_name, status, restore_start,
+    duration_seconds. Reuses dbabrain.db.restore_drill to grade restore evidence per database.
+    """
+    from dbabrain.db import restore_drill
+
+    window_start = window_end - timedelta(hours=policy.window_hours)
+    start_text = _format_time(window_start)
+    end_text = _format_time(window_end)
+
+    drill_policy_path = (Path(data_dir) / "restore_drill_policy.json") if data_dir else None
+    drill_policy = restore_drill.load_restore_drill_policy(drill_policy_path)
+
+    # The whole history, not the window: restore_drill.evaluate tells "never drilled" from
+    # "drilled too long ago", and a window would make the second read as the first.
+    from dbabrain.db.backup_restore_history import drill_rows
+    from dbabrain.lib import store_outage
+
+    unreadable = ""
+    try:
+        with store.connect() as conn:
+            rows = drill_rows(conn)
+    except Exception as exc:  # noqa: BLE001 - a store that is down is the run's failure, not NO_DATA
+        if store_outage.is_transient(exc):
+            raise
+        rows, unreadable = [], f"backup_restore_history cannot be read: {exc}"
+    if not rows:
+        return [
+            SlaPolicyResult(
+                policy_id=policy.policy_id,
+                name=policy.name,
+                target_id=AGGREGATE_TARGET,
+                status="NO_DATA",
+                objective_percent=policy.objective_percent,
+                actual_percent=0.0,
+                error_budget_percent=0.0,
+                budget_consumed_percent=0.0,
+                budget_remaining_percent=0.0,
+                total_count=0,
+                good_count=0,
+                bad_count=0,
+                no_data=True,
+                window_hours=policy.window_hours,
+                window_start=start_text,
+                window_end=end_text,
+                scope=_scope_text(policy),
+                category=policy.category,
+                sli_code=policy.sli_code or policy.policy_id,
+                domain=policy.category,
+                aggregation=policy.aggregation,
+                policy_model=policy.policy_model,
+                comparison_operator=policy.comparison_operator,
+                actual_value=None,
+                objective_value=policy.target_value if policy.target_value is not None else 0.0,
+                unit=policy.unit,
+                compliant=None,
+                data_quality_status="NO_DATA",
+                reason=unreadable or "No restore drill has ever been recorded in backup_restore_history.",
+                required=policy.required,
+            )
+        ]
+
+    eval_results = restore_drill.evaluate(rows, policy=drill_policy, now=window_end)
+    breaches: list[str] = []
+    target_rto = policy.rto_target_seconds
+
+    for db_eval in eval_results:
+        database = db_eval["database_name"]
+        db_success_rows = [
+            r for r in rows
+            if str(r.get("database_name") or "").strip() == database
+            and str(r.get("status") or "").strip().upper() == "SUCCESS"
+        ]
+        newest_success_duration = None
+        if db_success_rows:
+            db_success_rows.sort(key=lambda r: str(r.get("restore_start") or ""), reverse=True)
+            try:
+                dur = db_success_rows[0].get("duration_seconds")
+                if dur is not None:
+                    newest_success_duration = float(dur)
+            except (TypeError, ValueError):
+                pass
+
+        last_success = db_eval.get("lastSuccess") or "never"
+        dur_text = f"{int(newest_success_duration)}s" if newest_success_duration is not None else "none"
+        rto_text = f"{target_rto}s" if target_rto else "-"
+
+        rto_exceeded = bool(target_rto is not None and newest_success_duration is not None and newest_success_duration > target_rto)
+        drill_bad = db_eval.get("status") != "OK"
+
+        if drill_bad and rto_exceeded:
+            breaches.append(
+                f"{database}: {db_eval['reason']}; duration {dur_text} exceeds target {rto_text} "
+                f"(last success {last_success}, duration {dur_text}, target {rto_text})"
+            )
+        elif rto_exceeded:
+            breaches.append(
+                f"{database}: duration {dur_text} exceeds target {rto_text} "
+                f"(last success {last_success}, duration {dur_text}, target {rto_text})"
+            )
+        elif drill_bad:
+            breaches.append(
+                f"{database}: {db_eval['reason']} "
+                f"(last success {last_success}, duration {dur_text}, target {rto_text})"
+            )
+
+    actual_value = float(len(breaches))
+    target_value = policy.target_value if policy.target_value is not None else 0.0
+    compliant = _compare(actual_value, target_value, policy.comparison_operator)
+    status = "FAILED" if breaches else "PASSED"
+    reason = "; ".join(breaches) if breaches else "Every database has a proven restore drill within policy and RTO target."
+
+    return [
+        SlaPolicyResult(
+            policy_id=policy.policy_id,
+            name=policy.name,
+            target_id=AGGREGATE_TARGET,
+            status=status,
+            objective_percent=policy.objective_percent,
+            actual_percent=0.0 if breaches else 100.0,
+            error_budget_percent=0.0,
+            budget_consumed_percent=100.0 if breaches else 0.0,
+            budget_remaining_percent=0.0 if breaches else 100.0,
+            total_count=len(eval_results),
+            good_count=len(eval_results) - len(breaches),
+            bad_count=len(breaches),
+            no_data=False,
+            window_hours=policy.window_hours,
+            window_start=start_text,
+            window_end=end_text,
+            scope=_scope_text(policy),
+            category=policy.category,
+            sli_code=policy.sli_code or policy.policy_id,
+            domain=policy.category,
+            aggregation=policy.aggregation,
+            policy_model=policy.policy_model,
+            affected_objects=len(breaches),
+            current_status="BAD" if breaches else "OK",
+            comparison_operator=policy.comparison_operator,
+            actual_value=actual_value,
+            objective_value=target_value,
+            unit=policy.unit,
+            compliant=compliant,
+            expected_sample_count=0,
+            coverage_percent=100.0,
+            data_quality_status="OK",
+            reason=reason,
+            required=policy.required,
+        )
+    ]

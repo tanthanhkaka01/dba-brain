@@ -50,9 +50,11 @@ def test_notify_level_routes_by_severity_without_an_sla_group():
     # No "sla" level configured: the original severity routing stands.
     groups = {"logging": "-1", "warning": "-2", "critical": "-3"}
     failed = _summary([_result("A", "FAILED", 50.0, 99.0, 0.0)], status="FAILED", passed=0, at_risk=0, failed=1, no_data=0)
+    burning = _summary([_result("A", "BURNING", 99.0, 99.0, 100.0)], status="BURNING", passed=0, at_risk=0, failed=0, no_data=0)
     at_risk = _summary([_result("A", "AT_RISK", 96.0, 95.0, 20.0)], status="PASSED", passed=0, at_risk=1, failed=0, no_data=0)
     clean = _summary([_result("A", "PASSED", 100.0, 99.0, 100.0)], status="PASSED", passed=1, at_risk=0, failed=0, no_data=0)
     assert summary_notify_level(failed, groups) == "critical"
+    assert summary_notify_level(burning, groups) == "critical"
     assert summary_notify_level(at_risk, groups) == "warning"
     assert summary_notify_level(clean, groups) == "logging"
 

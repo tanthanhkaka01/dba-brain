@@ -522,6 +522,11 @@ def _earlier_defaults(root: Path, *, dry_run: bool, before_write: Any) -> dict[s
         stated(path, document, earlier_defaults.state_backup_certificate(document)
                + earlier_defaults.state_staging_marker(document))
 
+    path = root / "app_commands.json"
+    if path.is_file():
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        stated(path, document, earlier_defaults.state_app_commands(document))
+
     # The lab folders were constants in the code, so every node ran on them. The code holds none
     # now and refuses a lab command that finds none stated: each node is told the two it used. A
     # node with no sre_config.json is given the shipped one, which states them - a file holding

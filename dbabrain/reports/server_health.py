@@ -7,7 +7,9 @@ every name, so no import changes.
 
 from __future__ import annotations
 import datetime
-from dbabrain.lib import health_model
+import re
+from dbabrain.lib import health_model, interval_rates
+from dbabrain.lib.coerce import as_float
 from dbabrain.reports.server_series import (
     SEVERITY_RANK,
     _is_percent_unit,
@@ -134,8 +136,9 @@ AREAS: list[dict] = [
                    {"code": "POSTGRES_REPLICATION_SLOTS"}, {"code": "POSTGRES_WAL_ARCHIVE"}],
      "threshold": "every replica CONNECTED and SYNCHRONIZED / streaming",
      "note": "A replica that stopped synchronising is not a replica: failover would lose data. "
-             "AVAILABILITY_DATABASE_HEALTH reads Always On DMVs only — on a Failover Cluster "
-             "Instance it reports NOT_CONFIGURED, which is not an FCI health verdict."},
+             "AVAILABILITY_DATABASE_HEALTH reads Availability Groups, database mirroring and log "
+             "shipping (2008 R2 too, since 0.30.0) — on a Failover Cluster Instance with none of "
+             "them it reports NOT_CONFIGURED, which is not an FCI health verdict."},
     # --- What an engine measures under its own name (0.28.0) --------------------------------
     #
     # The thirteen areas above are SQL Server's questions, and an Oracle or PostgreSQL page
@@ -247,7 +250,9 @@ ACTIONS: dict[str, str] = {
     "LINKED_SERVER_STATUS": "See the Linked servers table below: it says, per server, whether to "
                             "keep, fix or drop it, and which machine the fix belongs on.",
     "DATABASE_STATUS": "A database is not ONLINE: check the error log, then bring it online or restore it.",
-    "DATABASE_SUSPECT_PAGES": "Suspect pages mean corruption: restore the affected pages from backup and run CHECKDB.",
+    "DATABASE_SUSPECT_PAGES": "Suspect pages mean corruption: restore the affected pages or blocks from "
+                              "backup, then check the whole database - DBCC CHECKDB on SQL Server, RMAN "
+                              "VALIDATE on Oracle, amcheck on PostgreSQL.",
     "OS_CPU_USAGE": "Find the top process (below) and the heaviest queries; check for a runaway job.",
     "OS_MEMORY_USAGE": "Check max server memory against host RAM and what else runs on this host.",
     "OS_DISK_USAGE": "Free space or extend the volume before writes stop.",
@@ -261,7 +266,9 @@ ACTIONS: dict[str, str] = {
     "BACKUP_AGE": "Check the backup job and the recovery model; run a fresh backup and re-establish the log chain.",
     "BACKUP_LAST_RESULT": "The last backup did not succeed: read the job history before trusting any restore.",
     "JOB_FAILED": "Read the job history: a failed job is work that silently did not happen.",
-    "AVAILABILITY_DATABASE_HEALTH": "A replica is not synchronising: failover would lose data. Check the endpoint and the log send queue.",
+    "AVAILABILITY_DATABASE_HEALTH": "A replica, mirror or log-shipped secondary is behind: failover would lose data. "
+                                    "Check the endpoint and the send queue, or the log shipping backup, copy and "
+                                    "restore jobs.",
     "POSTGRES_REPLICATION": "A standby is not streaming: check its connection, slot and WAL retention.",
     "OS_SERVICE_STATUS": "Start the service and find out why it stopped (event log, recovery settings).",
     "OS_EVENTLOG_CRITICAL": "Read the errors in the Windows event log — they usually name the cause.",
@@ -354,7 +361,7 @@ def area_members(spec: dict, series: list[dict]) -> list[tuple[int, dict]]:
 
 
 def build_areas(series: list[dict], *, backup: dict | None = None,
-                freshness: dict | None = None) -> list[dict]:
+                freshness: dict | None = None, workload: dict | None = None) -> list[dict]:
     """Current state of each health area: the worst thing in it, its value, and the rule.
 
     Selection is ``(severity, downgraded severity, selector priority, value)`` in that order.
@@ -363,6 +370,9 @@ def build_areas(series: list[dict], *, backup: dict | None = None,
     priority third so the tile answers its own question; value last so that among equals the
     fullest disk wins. Comparing raw values *first* is what let 53083 KB/s decide an area measured
     in percent.
+
+    ``workload`` is the Workload block, read for one thing: how many of the host's CPUs the engine
+    may use, which the CPU tile states beside its percentage (``capacity``).
     """
     stale_codes = {row["code"] for row in (freshness or {}).get("metrics", [])
                    if row.get("state") in ("LATE", "FAILED")}
@@ -439,8 +449,15 @@ def build_areas(series: list[dict], *, backup: dict | None = None,
         if stale and status == "OK":
             status = "UNKNOWN"
             detail = f"{', '.join(stale)} is late or failing — this area is not current"
+        capacity, capacity_note = (
+            _cpu_capacity(series, workload) if spec["key"] == "cpu"
+            else (_memory_capacity(series), "") if spec["key"] == "memory"
+            else (_disk_capacity(worst, members), "") if spec["key"] == "disk_space"
+            else ("", ""))
         areas.append({
             **base, "status": status, "value": _value_text(worst), "detail": detail,
+            # What the percentage is of, in figures; and, where it changes how to read the tile, why.
+            "capacity": capacity, "capacityNote": capacity_note,
             "sourceCode": worst["code"], "sourceItem": worst["item"],
             "unit": str(worst.get("unit") or ""), "collectedAt": worst.get("lastAt"),
             "stale": bool(stale), "priority": priority,
@@ -450,6 +467,168 @@ def build_areas(series: list[dict], *, backup: dict | None = None,
             "downgradedFrom": series_downgraded(worst),
         })
     return areas
+
+
+# --------------------------------------------------------------------------------------------- #
+# Capacity: what the percentage on a tile is a percentage *of*.
+#
+# "CPU 5.12%" on a 60-CPU host that SQL Server Standard may use 48 of, "Memory 63%" of 400 GB, a
+# disk at 83% that is 172 GB from full - each tile carried the first number and none of the second,
+# so a reader had to open the charts to learn whether 83% was a crisis or a week of headroom. The
+# collectors already state the totals in their messages; these read them back, for every engine.
+# --------------------------------------------------------------------------------------------- #
+
+_CONTAINER_MEMORY = re.compile(r"mem_usage=(\S+)\s*/\s*(\S+)")
+
+
+def _message_fields(entry: dict | None) -> dict[str, str]:
+    if not entry:
+        return {}
+    return interval_rates.message_fields(entry.get("message"))
+
+
+def _series_entry(series: list[dict], code: str, item: str) -> dict | None:
+    return next((entry for entry in series
+                 if entry.get("code") == code and entry.get("item") == item), None)
+
+
+def _size_pair(used_gb: float, total_gb: float) -> str:
+    """``used / total`` in one unit, the one the total reads best in."""
+    if total_gb >= 1024:
+        return f"{used_gb / 1024:.2f} / {total_gb / 1024:.2f} TB"
+    if total_gb >= 100:
+        return f"{used_gb:,.0f} / {total_gb:,.0f} GB"
+    return f"{used_gb:.1f} / {total_gb:.1f} GB"
+
+
+def _size(gb: float) -> str:
+    if gb >= 1024:
+        return f"{gb / 1024:.2f} TB"
+    return f"{gb:,.0f} GB" if gb >= 100 else f"{gb:.1f} GB"
+
+
+def _cpu_topology(sockets: int, cores: int) -> str:
+    """``2 sockets × 16 cores``, or ``3 sockets, 17 cores`` where the cores do not divide.
+
+    Both OS collectors write ``cores`` as the host's total, summed over its sockets. Printed after
+    a ``×`` it read as cores per socket: a 32-CPU host showed ``3 sockets × 17 cores``, 51 cores
+    (2026-10-20). Only a one-socket host had looked right, where the two are one number.
+    """
+    if sockets <= 1:
+        return f"1 socket × {cores} cores"
+    if cores % sockets == 0:
+        return f"{sockets} sockets × {cores // sockets} cores"
+    return f"{sockets} sockets, {cores} cores"
+
+
+def _cpu_capacity(series: list[dict], workload: dict | None) -> tuple[str, str]:
+    """``48 / 60 CPUs online / total``, and - when those differ - what that does to the tile."""
+    host = _message_fields(_series_entry(series, "OS_CPU_USAGE", "cpu_usage"))
+    engine = _message_fields(_series_entry(series, "SYSTEM_CPU_MEMORY", "cpu"))
+    facts = (workload or {}).get("cpu") or {}
+    total = (as_float(host.get("logical_cpus")) or facts.get("total")
+             or as_float(engine.get("sql_visible_cpu_count")))
+    online = facts.get("online") or as_float(engine.get("scheduler_count"))
+    if not total:
+        return "", ""
+    total = int(total)
+    # The pair whenever the engine's count is known, equal or not: "32 CPUs" alone did not say
+    # whether the engine had been asked how many it may use, beside a "48 / 60" on the next server.
+    text = f"{int(online)} / {total} CPUs online / total" if online else f"{total} CPUs"
+    online = int(online) if online else total
+    sockets, cores = as_float(host.get("sockets")), as_float(host.get("cores"))
+    if sockets and cores:
+        text += f" · {_cpu_topology(int(sockets), int(cores))}"
+    note = ""
+    if online < total:
+        who = facts.get("engine") or "the database"
+        reason = facts.get("limit") or f"{who} runs on {online} of them"
+        # The tile is the host's CPU. With the engine held to part of the host, the engine at full
+        # load is this share of the tile - well under the CRITICAL line drawn above it.
+        note = (f"{reason[0].upper()}{reason[1:]}, so {who} saturated reads about "
+                f"{round(online * 100 / total)}% on this tile.")
+    return text, note
+
+
+def _memory_capacity(series: list[dict]) -> str:
+    """``254 / 400 GB used / total`` from the OS, the engine's view, or the container's limit."""
+    os_mem = _message_fields(_series_entry(series, "OS_MEMORY_USAGE", "memory_usage"))
+    sys_mem = _message_fields(_series_entry(series, "SYSTEM_CPU_MEMORY", "system_memory"))
+    sql_mem = _message_fields(_series_entry(series, "SYSTEM_CPU_MEMORY", "sql_memory"))
+    text = ""
+    total, used = as_float(os_mem.get("total_gb")), as_float(os_mem.get("used_gb"))
+    available = as_float(os_mem.get("available_gb"))
+    if not total:
+        total_mb = as_float(sys_mem.get("total_physical_memory_mb"))
+        available_mb = as_float(sys_mem.get("available_physical_memory_mb"))
+        if total_mb and available_mb is not None:
+            total, available = total_mb / 1024, available_mb / 1024
+            used = total - available
+    if total and used is not None:
+        text = f"{_size_pair(used, total)} used / total"
+        if available is not None:
+            text += f" · {_size(available)} available"
+    else:
+        container = next((entry for entry in series if entry.get("code") == "DOCKER_CONTAINER_STATS"
+                          and str(entry.get("item") or "").endswith(":memory")), None)
+        # DOCKER_CONTAINER_STATS separates its fields with spaces, not commas: read the pair itself.
+        usage = _CONTAINER_MEMORY.search(str((container or {}).get("message") or ""))
+        if usage:
+            text = f"{usage.group(1)} / {usage.group(2)} used / container limit"
+    held_mb = as_float(sql_mem.get("sql_physical_memory_in_use_mb"))
+    if text and held_mb:
+        text += f" · SQL Server holds {_size(held_mb / 1024)}"
+    return text
+
+
+def _volume_key(item: str) -> str:
+    return str(item or "").strip().rstrip("\\/").rstrip(":").upper()
+
+
+def _volume_sizes(entry: dict) -> tuple[float, float, float] | None:
+    """``(used, total, free)`` GB of a volume row, from whichever fields its collector wrote."""
+    fields = _message_fields(entry)
+    total = as_float(fields.get("total_gb"))
+    free = as_float(fields.get("free_gb"))
+    used = as_float(fields.get("used_gb"))
+    if not total:
+        return None
+    if used is None and free is not None:
+        used = total - free
+    if free is None and used is not None:
+        free = total - used
+    if used is None or free is None:
+        return None
+    return used, total, free
+
+
+def _disk_capacity(worst: dict, members: list[tuple[int, dict]]) -> str:
+    """The worst volume as ``used / total`` and its free space, then every volume together."""
+    volumes: dict[str, tuple[str, tuple[float, float, float]]] = {}
+    # OS_DISK_USAGE first: where both collectors saw a volume, the host's reading is the one kept.
+    for code in ("OS_DISK_USAGE", "STORAGE_DISK_FREE_SPACE"):
+        for _priority, entry in members:
+            if entry.get("code") != code:
+                continue
+            sizes = _volume_sizes(entry)
+            key = _volume_key(entry.get("item"))
+            if sizes and key and key not in volumes:
+                volumes[key] = (str(entry.get("item") or ""), sizes)
+    if not volumes:
+        return ""
+    worst_key = _volume_key(worst.get("item"))
+    if worst_key in volumes:
+        name, (used, total, free) = volumes[worst_key]
+        text = f"{name} {_size_pair(used, total)} used / total · {_size(free)} free"
+    else:
+        # The worst reading is a file, not a volume - the fullest volume is still worth a line.
+        name, (used, total, free) = max(volumes.values(), key=lambda pair: pair[1][0] / pair[1][1])
+        text = f"fullest volume {name} {_size_pair(used, total)} · {_size(free)} free"
+    if len(volumes) > 1:
+        all_free = sum(sizes[2] for _name, sizes in volumes.values())
+        all_total = sum(sizes[1] for _name, sizes in volumes.values())
+        text += f" · {len(volumes)} volumes, {_size(all_free)} free of {_size(all_total)}"
+    return text
 
 
 def _backup_area_state(backup: dict | None) -> dict:

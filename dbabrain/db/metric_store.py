@@ -4,7 +4,7 @@ from dbabrain.db.store import ensure_sqlite_column  # noqa: F401 - one definitio
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from dbabrain.lib import event_policy, health_model
 from dbabrain.lib.config import StoreConfig
@@ -155,6 +155,32 @@ class MetricStore:
                 + ("AND collected_at <= ? " if ceiling else "")
                 + "ORDER BY collected_at ASC",
                 (*codes, cutoff_text(days, as_of=as_of), *( (ceiling,) if ceiling else () )),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def fetch_execution_times(self, *, codes: list[str], days: int,
+                              as_of: str | None = None) -> list[dict]:
+        """How long each collection of these metrics took, over a day window - five narrow columns.
+
+        For the connection probe on the server page: INSTANCE_STATUS every 30 s is ~2,900 rows a
+        target a day, and :meth:`fetch_health_metrics` would carry each row's message with it.
+        Rows from before 0.30.0 hold no time (``execution_time`` was written for scripts only).
+        """
+        if not codes:
+            return []
+        # The column is one this store adds to an older table (initialize), unlike the ones
+        # fetch_health_metrics reads.
+        self.initialize()
+        placeholders = ",".join("?" for _ in codes)
+        ceiling = as_of_text(as_of)
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT server_id, target_id, metric_code, status, collected_at, execution_time "
+                "FROM metric_results "
+                f"WHERE metric_code IN ({placeholders}) AND collected_at >= ? "
+                + ("AND collected_at <= ? " if ceiling else "")
+                + "ORDER BY collected_at ASC",
+                (*codes, cutoff_text(days, as_of=as_of), *((ceiling,) if ceiling else ())),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -525,17 +551,23 @@ class MetricStore:
     # and called by nothing. The reports app holds a `DbaBrainStore`, so that is where the scoped
     # mark stayed.
 
-    def rebuild_target_health(self, *, run_id: int) -> int:
+    def rebuild_target_health(self, *, run_id: int, since: str | None = None) -> int:
         self.initialize()
+        # The table holds ~15.2 million rows and has no index on run_id (it has an index on
+        # collected_at and on (target_id, metric_code, collected_at DESC)). Without `since`,
+        # every pass ended with a full table scan; bounding by collected_at >= ? lets the
+        # collected_at index answer the query.
+        since_clause = " AND collected_at >= ?" if since else ""
+        params = (run_id, since) if since else (run_id,)
         with self.connect() as conn:
             rows = list(
                 conn.execute(
-                    """
+                    f"""
                     SELECT run_id, target_id, server_id, ip, db_type, db_name, status, importance, message, collected_at
                     FROM metric_results
-                    WHERE run_id = ?;
+                    WHERE run_id = ?{since_clause};
                     """,
-                    (run_id,),
+                    params,
                 )
             )
             conn.execute("DELETE FROM target_health WHERE run_id = ?;", (run_id,))
@@ -631,6 +663,69 @@ class MetricStore:
                 (target_id, metric_code),
             ).fetchone()
         return str(row["collected_at"]) if row else None
+
+    def latest_result_times(
+        self,
+        *,
+        pairs: Iterable[tuple[str, str]],
+    ) -> dict[tuple[str, str], tuple[str | None, str | None]]:
+        """Read the newest and newest successful collected_at for multiple (target_id, metric_code) pairs.
+
+        Executed over a single store connection, chunked in batches of 200 pairs. A CTE with a column
+        list `WITH p(target_id, metric_code) AS (VALUES (?, ?), ...)` and two correlated scalar
+        subqueries lets the `(target_id, metric_code, collected_at DESC)` index answer each pair.
+        Pairs with no matching row map to `(None, None)`. An empty `pairs` returns `{}` without connecting.
+        """
+        clean_pairs = list(dict.fromkeys((str(t), str(m)) for t, m in pairs))
+        if not clean_pairs:
+            return {}
+        self.initialize()
+        results: dict[tuple[str, str], tuple[str | None, str | None]] = {
+            pair: (None, None) for pair in clean_pairs
+        }
+        chunk_size = 200
+        with self.connect() as conn:
+            for i in range(0, len(clean_pairs), chunk_size):
+                chunk = clean_pairs[i:i + chunk_size]
+                values_clause = ", ".join("(?, ?)" for _ in chunk)
+                params: list[str] = []
+                for target_id, metric_code in chunk:
+                    params.extend([target_id, metric_code])
+                stmt = f"""
+                WITH p(target_id, metric_code) AS (
+                    VALUES {values_clause}
+                )
+                SELECT p.target_id,
+                       p.metric_code,
+                       (
+                           SELECT m1.collected_at
+                           FROM metric_results m1
+                           WHERE m1.target_id = p.target_id AND m1.metric_code = p.metric_code
+                           ORDER BY m1.collected_at DESC, m1.result_id DESC
+                           LIMIT 1
+                       ) AS latest_at,
+                       (
+                           SELECT m2.collected_at
+                           FROM metric_results m2
+                           WHERE m2.target_id = p.target_id
+                             AND m2.metric_code = p.metric_code
+                             AND upper(COALESCE(m2.status, '')) <> 'ERROR'
+                             AND NOT (
+                                 upper(COALESCE(m2.status, '')) = 'WARNING'
+                                 AND lower(COALESCE(m2.message, '')) LIKE 'sql execution failed:%'
+                             )
+                           ORDER BY m2.collected_at DESC, m2.result_id DESC
+                           LIMIT 1
+                       ) AS latest_success_at
+                FROM p;
+                """
+                for row in conn.execute(stmt, params):
+                    t_id = str(row["target_id"])
+                    m_code = str(row["metric_code"])
+                    lat = str(row["latest_at"]) if row["latest_at"] is not None else None
+                    lsuc = str(row["latest_success_at"]) if row["latest_success_at"] is not None else None
+                    results[(t_id, m_code)] = (lat, lsuc)
+        return results
 
     def fetch_latest_results(
         self,

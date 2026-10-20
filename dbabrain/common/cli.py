@@ -60,9 +60,11 @@ from dbabrain.common.cli_usage import (  # noqa: F401 - re-exported: every name 
     HOST_FACTS_USAGE,
     HOST_RESTART_USAGE,
     HOST_SERVICE_USAGE,
+    INSTANCE_ACTIVE_USAGE,
     INVENTORY_SUMMARY_USAGE,
     LIFT_EXAMPLE_USAGE,
     LIST_TARGETS_USAGE,
+    METRIC_ENV_USAGE,
     METRIC_SEVERITY_USAGE,
     PROBE_HOST_USAGE,
     ROTATE_PASSWORD_USAGE,
@@ -424,6 +426,26 @@ def _metric_severity_command(argv: list[str]) -> int:
     request, code = _read_json_request(argv[0], METRIC_SEVERITY_USAGE)
     if request is None:
         return code
+    if "items" in request:
+        # The list form: every remap or none, one write. A single remap's fields beside `items`
+        # would say two things at once, so they are refused rather than merged into the list.
+        stray = sorted(set(request) - {"items", "data_dir"})
+        if stray:
+            return response.emit(response.fail(
+                "metric-severity", f"with items, a request takes only items and data_dir; also given: {stray}"))
+        try:
+            answer = config_admin.set_metric_severity_maps(request.get("items"), data_dir=request.get("data_dir"))
+        except config_admin.ConfigAdminError as exc:
+            return response.emit(response.fail("metric-severity", str(exc)))
+        results = answer["items"]
+        change_count = sum(len(result.get("changes") or []) for result in results)
+        changed_count = sum(1 for result in results if result.get("changed"))
+        return response.emit(response.ok(
+            "metric-severity",
+            message=f"{len(results)} remap(s): {changed_count} changed, {len(results) - changed_count} already so.",
+            data={"ok": True, "changed": answer["changed"], "items": results},
+            metrics={"change_count": change_count, "item_count": len(results)},
+        ))
     try:
         result = config_admin.set_metric_severity_map(
             server_id=str(request.get("server_id") or ""),
@@ -440,6 +462,62 @@ def _metric_severity_command(argv: list[str]) -> int:
         "metric-severity",
         message=(f"{result.get('server_id')} {result.get('metric_code')}: "
                  + ("; ".join(str(line) for line in changes) if changes else "no change")),
+        data=result,
+        metrics={"change_count": len(changes)},
+    ))
+
+
+def _metric_env_command(argv: list[str]) -> int:
+    """``metric-env`` - the CLI face of :func:`config_admin.set_metric_collector_env`."""
+    from dbabrain.lib import response
+
+    if not argv or argv[0] in {"-h", "--help"}:
+        print(METRIC_ENV_USAGE, file=sys.stderr)
+        return 2
+    request, code = _read_json_request(argv[0], METRIC_ENV_USAGE)
+    if request is None:
+        return code
+    try:
+        result = config_admin.set_metric_collector_env(
+            server_id=str(request.get("server_id") or ""),
+            env=request.get("env"),
+            metric_code=str(request.get("metric_code") or ""),
+            data_dir=request.get("data_dir"),
+        )
+    except config_admin.ConfigAdminError as exc:
+        return response.emit(response.fail("metric-env", str(exc)))
+    changes = result.get("changes") or []
+    return response.emit(response.ok(
+        "metric-env",
+        message=(f"{result.get('server_id')}: " + ("; ".join(changes) if changes else "no change")),
+        data=result,
+        metrics={"change_count": len(changes)},
+    ))
+
+
+def _instance_active_command(argv: list[str]) -> int:
+    """``instance-active`` - the CLI face of :func:`config_admin.set_instance_active`."""
+    from dbabrain.lib import response
+
+    if not argv or argv[0] in {"-h", "--help"}:
+        print(INSTANCE_ACTIVE_USAGE, file=sys.stderr)
+        return 2
+    request, code = _read_json_request(argv[0], INSTANCE_ACTIVE_USAGE)
+    if request is None:
+        return code
+    try:
+        result = config_admin.set_instance_active(
+            server_id=str(request.get("server_id") or ""),
+            active=request.get("active"),
+            data_dir=request.get("data_dir"),
+        )
+    except config_admin.ConfigAdminError as exc:
+        return response.emit(response.fail("instance-active", str(exc)))
+    changes = result.get("changes") or []
+    return response.emit(response.ok(
+        "instance-active",
+        message=(f"{result.get('server_id')}: "
+                 + ("; ".join(str(line) for line in changes) if changes else f"already active={result['active']}")),
         data=result,
         metrics={"change_count": len(changes)},
     ))
@@ -1086,6 +1164,10 @@ def _dispatch(argv: list[str]) -> int:
         return _trace_session_command(argv[1:])
     if argv[0] == "metric-severity":
         return _metric_severity_command(argv[1:])
+    if argv[0] == "instance-active":
+        return _instance_active_command(argv[1:])
+    if argv[0] == "metric-env":
+        return _metric_env_command(argv[1:])
     if argv[0] == "rotate-password":
         return _rotate_password_command(argv[1:])
     if argv[0] == "check-secret":

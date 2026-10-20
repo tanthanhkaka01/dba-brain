@@ -495,7 +495,7 @@ Both pages render from that one builder, so they cannot describe the same hour d
 
 | Table | What it answers |
 | --- | --- |
-| Measure | CPU (percent of the cores that exist, and the raw ms), requests, logical work, physical I/O with bytes and interval latency, log generated, contention |
+| Measure | CPU (the database's, as a percentage of the CPUs it may use and as ms; the host's, of all its CPUs), requests, logical work, physical I/O with bytes and interval latency, log generated, contention |
 | Wait type | what it waited on over the same intervals, as seconds and as a share of every non-benign wait |
 | Plan cache | what `sys.dm_exec_query_stats` attributes the same work to, and the share of instance CPU that accounts for |
 
@@ -510,6 +510,43 @@ the whole time; 174 ms/s of lock wait is 0.17 sessions blocked at any instant).
 there is one and the newest pair where there is not, headed by the span it measured. It is the
 fleet question ("which of these is doing the work") answered without opening a server page, with
 the top wait beside it because *busy* and *busy waiting on WRITELOG* are different findings.
+
+### CPU: from the source each engine has (2026-10-16)
+
+"CPU used 0.0%" and "CPU time 0 ms" sat on a busy 2019 Standard ERP instance over every window
+while its host read 26% busy. The rows were differenced from the resource pools, and Resource
+Governor is an Enterprise feature: on Standard and Express the DMV lists the internal pool alone and
+its total never moves (0, 0, 0, 1 and 3 ms since startup on the five such instances of the estate).
+So the CPU group no longer comes from one counter. Each row takes the best source the target has,
+and names it in the grey line under its label (`workload._build_cpu`):
+
+| Row | Sources, in order |
+| --- | --- |
+| **Database CPU** (`cpu_pct`) - % of the CPUs the engine may use | the engine's own total (SQL Server resource pools on Enterprise/Developer; Oracle `v$sys_time_model` DB CPU + background, `v$sysstat` on 8i/9i) → the host's account of the database process (`OS_CPU_COUNTERS`: `sqlservr.exe` on Windows, the `sqlservr` / postmaster process tree on Linux) → the scheduler monitor's per-minute samples (`sys.dm_os_ring_buffers`, every SQL Server edition) |
+| **Database CPU time** (`cpu_usage_ms`) - ms, and concurrency | the same source as the row above |
+| **Host CPU** (`host_cpu_pct`) - % of all the host's CPUs, every process | the host's own totals (`OS_CPU_COUNTERS`) → Oracle `v$osstat` BUSY/IDLE → the scheduler monitor (not on Linux, where its idle figure reads 0) |
+
+The first two sources are exact over the window. The scheduler monitor is a sample of every minute
+in it: those cells are prefixed **≈** and say how many minutes they sampled, and the plan cache's
+"share of instance CPU" is left blank against one - a ratio of two approximations quoted to 0.1%
+would be a precision nobody has. A row with no source is absent and the section says why in a
+sentence (`cpuNote`): which edition keeps no CPU total, or what the host could not tell
+(`db_process`, e.g. *three postgres root processes and none names port 5433*).
+
+**The percentage is of the CPUs the engine may use, not the host's.** The same instance runs on 48
+of its host's 60 logical CPUs (Standard stops at the lesser of 4 sockets or 24 cores; Express 1 / 4;
+Oracle SE2 16 threads, Free and Express 2). Taken of 60, the engine saturated read 80%. The
+collectors carry `schedulers_online` beside `cpu_count`, `workload.cpu_facts` turns them into
+`{total, online, label, limit}`, and the header reads **48 of 60 CPUs online** - or **60 CPUs** where
+the engine may use them all - with the reason in the paragraph under it. The fleet page's chips say
+the same, and add **Host CPU**.
+
+Oracle and PostgreSQL fill the same table (1.149's port): transactions, logical and physical reads,
+log generated, logins and deadlocks under the rows SQL Server uses, and rows of their own where the
+meaning differs - Oracle's **User calls** and **Executions**, PostgreSQL's **Rows read / written**,
+**Temp files created** and **Temp written**. PostgreSQL keeps no CPU total, so its CPU rows are the
+host's count of the postmaster's tree. A server where nothing is
+collected says *not collected for this server*, never *no interval yet*.
 
 ### What the section refuses to say
 
@@ -662,6 +699,56 @@ The fleet page (`database-inventory.html`) carries the same fact as one badge pe
 Databases table, so "which databases on this server capture nothing" is answerable without opening
 the server page. Databases on engines with no Query Store (Oracle, PostgreSQL) show `—`, which is
 deliberately distinct from `off`.
+
+## Latency percentiles — execution distributions across collectors (on `server-metrics.html`)
+
+One folded section per server displaying performance distributions from the three non-grading
+latency collectors (`QUERY_LATENCY_PERCENTILES` on SQL Server, `ORACLE_WAIT_LATENCY_HISTOGRAM` on
+Oracle, and `POSTGRES_STATEMENT_TOTALS` on PostgreSQL), evaluated on demand via
+`dbabrain.lib.latency_percentiles`. The section reports what each engine actually captures: SQL Server
+Query Store shows completed intervals per database with execution-weighted p50/p95/p99 of per-plan
+duration means; Oracle wait event histograms show interval deltas across the five watched I/O and sync
+events with discrete bucket upper bounds (`<= N ms`); PostgreSQL shows the latest interval of
+calls-weighted statement means from `pg_stat_statements`. No colour grading or thresholds are
+applied, and unconfigured extensions (`NOT_INSTALLED`), single collections, or intervening restarts
+render cleanly as operational states rather than failures.
+
+PostgreSQL's percentiles cover only the statements present in both collections' top lists: a
+statement seen for the first time carries counters back to the last reset, so counting it from
+zero could credit weeks of calls to one interval. **Calls covered** says how many of the interval's
+calls the percentiles describe; the mean is over all of them - a mean far above p99 with low
+coverage is a new statement worth reading. Only the newest collection decides `NOT_INSTALLED`, so
+a cluster enabled during the day shows its intervals at once. The rows are fetched for at most two
+days whatever the page's window (`LATENCY_DAYS`): an interval needs only the newest two
+collections.
+
+**Connection probe** (0.30.0), first in the section and the same on every engine: the p50 / p95 /
+p99 and maximum of `INSTANCE_STATUS`'s own time over the last day, per instance - the connect, a
+one-row status query and the close, every 30 s, as `metric-batch` timed it
+(`server_latency.build_probe_latency`). It is the one real latency distribution every engine gives
+at no cost: each sample is one connect and one query, nothing averaged first (§2.8 of the 0.30.0
+sheet). Successful probes only; a failed one is counted beside them - a minute the availability SLO
+reads as down. Recorded, never graded: no threshold has been agreed. The rows are read narrow
+(`MetricStore.fetch_execution_times`: five columns, no message - ~2,900 a target a day). Rows from
+before 0.30.0 hold no time, and the block says so.
+
+## Diagnostics — incidents, error logs, dumps and corruption (on `server-metrics.html`)
+
+One folded section per server presenting the newest operational diagnostic findings across all
+engines without requiring the reader to know which engine records incidents where:
+SQL Server error log / Oracle alert log (`LOG_RECENT_CRITICAL`), Oracle ADR incidents and Health
+Monitor findings (`ORACLE_ADR_INCIDENTS`), memory dumps and `sp_server_diagnostics`
+(`SERVER_DIAGNOSTICS`), the PostgreSQL server log (`POSTGRES_SERVER_LOG`: a container's
+`docker logs`, a host install's log files through the host login), and
+page corruption or checksum failures (`DATABASE_SUSPECT_PAGES`).
+
+Only the **newest collection** per metric code is kept: these are current operational states rather
+than cumulative trends, so an incident or error that cleared in a subsequent collection must not
+linger and page the reader for a resolved problem. Itemless "no rows" collection rows are dropped
+when findings exist, but preserved for clean sources so an intact engine confirms that no findings
+were present in the latest reading. Rows are fetched for at most one day (`DIAGNOSTICS_DAYS = 1`).
+The section folds open automatically when any source reports a WARNING or CRITICAL finding, with
+findings ordered worst-first and capped at twenty rows per source.
 
 ## Databases — what is on this instance (on `server-metrics.html`)
 
@@ -1182,6 +1269,20 @@ cannot tell the two apart.
 `(severity, selector priority, value)`. Comparing raw values first is what let disk read
 throughput in KB/s decide an area measured in percent, and SQL memory % stand in for CPU.
 
+**A tile states what its percentage is of (2026-10-16).** The CPU, Memory and Disk space tiles carry
+a `capacity` line read back from the totals their collectors already write, on every engine:
+**48 / 60 CPUs online / total · 1 socket × 30 cores**, and where the two differ what that does to the
+tile (*SQL Server saturated reads about 80% on this tile*, under a CRITICAL line of 90);
+**254 / 400 GB used / total · 146 GB available · SQL Server holds 240 GB** (or a container's usage
+against its limit); **F: 852 / 1,024 GB used / total · 172 GB free · 8 volumes, 3.22 TB free of
+6.50 TB**, a volume seen by both the host and the instance counted once. A tile whose collector
+wrote no totals has no capacity line rather than a guessed one (`server_health._cpu_capacity`,
+`_memory_capacity`, `_disk_capacity`). The CPU pair is printed whenever the engine's scheduler count
+is known - **32 / 32** where it may use them all, a bare **32 CPUs** only where it was not asked. The
+collectors' `cores` is the host's total over its sockets, so it is stated per socket only where it
+divides: **2 sockets × 16 cores**, but **3 sockets, 17 cores** (2026-10-20: printed as per socket it
+read 51 cores on a 32-CPU host).
+
 **A database in a container reads its container's CPU and memory (2026-10-03).** It has no host
 login, so no `OS_*` collector runs for it, and its CPU and Memory tiles read *not collected* - the
 0.26 node's PostgreSQL 5433 did - while `DOCKER_CONTAINER_STATS` collected the container's own CPU
@@ -1193,12 +1294,16 @@ nothing judges it; its memory is percent of the container's limit, WARNING at 90
 problem carries its own action - the docker host, `docker ps -a`, `docker logs` - not the CPU note.
 
 **Backup is judged per database against a policy**, never from the newest backup evidence on the
-instance — see `data/backup_policy.json` and `dbabrain/lib/backup_policy.py`. Each database gets
-the types its recovery model and the policy require, with `compliant/eligible` counts per type; a
-type the policy does not require reads *not required*, not *missing*. A stale LOG backup is
-reported as an **RPO violation**, never as a broken chain: chain continuity needs backup LSNs and
-recovery-fork ids that no collector gathers, and a fresh FULL taken on a false "broken" reading
-discards a working restore path.
+instance — see `data/backup_policy.json` and `dbabrain/lib/backup_policy.py`. Data protection is
+judged as the newest of FULL or DIFF under the `data_backup` objective (at 30h warning, 48h critical
+by default), so a weekly-FULL plus daily-DIFF plan does not flag a 4-day-old FULL as an SLA breach.
+FULL maintains an upper bound of its own (192h warning, 240h critical) so a differential chain cannot
+rest on an ancient base. LOG is 90 minutes to a warning and 120 to a critical (the operator: about 120
+minutes); not 60 to a warning, which an hourly log backup reaches just before each run. Each database gets the types its recovery model and the policy require, with
+`compliant/eligible` counts per type; a type the policy does not require reads *not required*, not
+*missing*. A stale LOG backup is reported as an **RPO violation**, never as a broken chain: chain
+continuity needs backup LSNs and recovery-fork ids that no collector gathers, and a fresh FULL taken
+on a false "broken" reading discards a working restore path.
 
 **And with no policy at all, nothing is graded.** `data/backup_policy.json` absent is not a
 permissive policy, and until 2026-09-14 the two produced the same page: with no rule, every type is

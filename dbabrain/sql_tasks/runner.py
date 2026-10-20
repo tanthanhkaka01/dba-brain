@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from dbabrain.lib import field_names, sql_access
+from dbabrain.sql_tasks import adhoc
 from dbabrain.sql_tasks import python_source as python_source_module
 from dbabrain.sql_tasks.python_source import PythonSource, PythonSourceError, batches
 from dbabrain.lib.sql_task_catalog import (  # noqa: F401 - re-exported for this module's callers
@@ -191,6 +192,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     close_run.add_argument("--confirm", default="", metavar="yes",
                            help="Must be `yes`. Closing a row whose process is in fact alive lets "
                                 "the next scan start a second copy on top of it. Never prompted.")
+
+    run_sql_adhoc = subparsers.add_parser(
+        "run-sql-adhoc",
+        help="Run SQL that is not a registered task against one server_id, the login resolved "
+             "from this node's data/. Rolled back unless the request says commit or autocommit.",
+        description=adhoc.USAGE, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    run_sql_adhoc.add_argument("request", metavar="REQUEST",
+                               help="One JSON object: inline, @file or -.")
     return parser.parse_args(argv)
 
 
@@ -305,6 +315,16 @@ def main(argv: list[str]) -> int:
 
     set_key_env(args.key, args.key_base64)
     logger = None
+    if getattr(args, "command", None) == "run-sql-adhoc":
+        # The key and this node's data/, and nothing of the runtime store: an operator reading a
+        # server's state must not be blocked by the store being down. Logged to the app's file.
+        try:
+            config = load_config(resolve_config_path("sql_tasks", args.config))
+            logger = setup_app_logger(config, app_name="sql_tasks", enable_telegram_alerts=False)
+        except Exception as exc:  # noqa: BLE001 - the run does not depend on its log line.
+            print(f"WARNING: no log for this run: {exc}", file=sys.stderr)
+        return adhoc.main(args.request, data_dir=Path(args.data_dir).resolve(),
+                          dry_run=bool(args.dry_run), logger=logger, log=log_event)
     try:
         config = load_config(resolve_config_path("sql_tasks", args.config))
         patch_stdout(config.log_dir / "sql_tasks_runtime.log", app_name="sql_tasks")

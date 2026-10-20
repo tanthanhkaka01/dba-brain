@@ -11,6 +11,9 @@ So the unit of judgement here is ``(database, backup type)``:
 
 * what the policy in ``data/backup_policy.json`` requires for that database, given its recovery
   model — a DIFF that policy does not require is reported **not required**, never "missing";
+* whether the newest data backup (the newest of FULL or DIFF) meets the ``data_backup``
+  objective when configured — so a weekly-FULL plus daily-DIFF plan does not flag a 4-day-old
+  FULL as an SLA breach while daily DIFFs are healthy;
 * how old the newest backup of that type is, or that there has never been one;
 * the worst required state per database, and ``compliant / eligible`` counts per type.
 
@@ -85,6 +88,36 @@ def _type_rule(policy: dict, *, server_id: str, database: str, backup_type: str)
     return rule
 
 
+def _data_backup_rule(policy: dict, *, server_id: str, database: str) -> dict | None:
+    """The data backup objective: the first matching override, else the default.
+
+    A weekly-FULL plus daily-DIFF plan needs the newest data backup judged as a unit,
+    rather than grading FULL on its own at 48 hours. When neither defaults nor any
+    matching override specifies ``data_backup``, returns None so an older policy
+    document evaluates exactly as it did before.
+    """
+    defaults_rule = (policy.get("defaults") or {}).get("data_backup")
+    rule: dict[str, Any] | None = dict(defaults_rule) if defaults_rule is not None else None
+    for override in policy.get("overrides") or []:
+        wanted_server = str(override.get("server_id") or "").strip().lower()
+        wanted_db = str(field_names.read(override, "backup_policy_override", "database_name", "")
+                        or "").strip().lower()
+        if wanted_server and wanted_server != str(server_id or "").strip().lower():
+            continue
+        if wanted_db and wanted_db != str(database or "").strip().lower():
+            continue
+        if "data_backup" in override:
+            override_rule = override.get("data_backup")
+            if override_rule is not None:
+                if rule is None:
+                    rule = {}
+                rule.update(override_rule)
+            else:
+                rule = None
+        break
+    return rule
+
+
 def _is_required(rule: dict, recovery_model: str) -> bool:
     models = rule.get("required_for_recovery_models")
     if models is not None:
@@ -106,9 +139,13 @@ def policy_is_configured(policy: dict | None) -> bool:
     like, and the two must not read the same.
     """
     policy = policy or {}
-    if (policy.get("defaults") or {}).get("types"):
+    defaults = policy.get("defaults") or {}
+    if defaults.get("types") or defaults.get("data_backup"):
         return True
-    return any((override.get("types") or {}) for override in (policy.get("overrides") or []))
+    return any(
+        bool(override.get("types") or override.get("data_backup"))
+        for override in (policy.get("overrides") or [])
+    )
 
 
 
@@ -244,7 +281,57 @@ def evaluate_backup_policy(rows: list[dict], *, server_id: str = "",
                 "latest_finish": slot["latest_finish"],
                 "warn_hours": rule.get("warn_hours"), "critical_hours": rule.get("critical_hours"),
             }
-        databases.append({
+        data_rule = _data_backup_rule(policy, server_id=server_id, database=database)
+        data_backup_entry = None
+        if data_rule is not None:
+            of_types = tuple(data_rule.get("of_types") or ("FULL", "DIFF"))
+            data_req = _is_required(data_rule, recovery)
+            candidates: list[tuple[float, str, str]] = []
+            for t in of_types:
+                t_slot = types.get(t)
+                if t_slot and t_slot.get("age_hours") is not None:
+                    candidates.append((float(t_slot["age_hours"]), t, str(t_slot.get("latest_finish") or "")))
+            if candidates:
+                candidates.sort(key=lambda c: (c[0], c[1]))
+                data_age, from_type, data_finish = candidates[0]
+            else:
+                data_age = None
+                from_type = None
+                data_finish = ""
+
+            warn_h = data_rule.get("warn_hours")
+            crit_h = data_rule.get("critical_hours")
+            types_label = " or ".join(of_types)
+
+            if not data_req:
+                data_state = "NOT_REQUIRED"
+            elif data_age is None:
+                data_state = "CRITICAL"
+                reasons.append(f"no {types_label} backup on record")
+            elif crit_h is not None and data_age >= float(crit_h):
+                data_state = "CRITICAL"
+                reasons.append(f"data backup ({types_label}) {_age_text(data_age)} old")
+            elif warn_h is not None and data_age >= float(warn_h):
+                data_state = "WARNING"
+                reasons.append(f"data backup ({types_label}) {_age_text(data_age)} old")
+            else:
+                data_state = "OK"
+
+            if _SEVERITY_RANK[data_state] > _SEVERITY_RANK[worst]:
+                worst = data_state
+
+            data_backup_entry = {
+                "state": data_state,
+                "required": data_req,
+                "age_hours": data_age,
+                "of_types": list(of_types),
+                "from_type": from_type,
+                "latest_finish": data_finish,
+                "warn_hours": warn_h,
+                "critical_hours": crit_h,
+            }
+
+        db_entry = {
             "database": database,
             "recovery_model": recovery,
             "status": worst,
@@ -252,7 +339,10 @@ def evaluate_backup_policy(rows: list[dict], *, server_id: str = "",
             "reason": "; ".join(reasons),
             "types": types,
             "as_of": record["as_of"],
-        })
+        }
+        if data_backup_entry is not None:
+            db_entry["data_backup"] = data_backup_entry
+        databases.append(db_entry)
 
     summary = _summarize(databases)
     summary["configured"] = True
@@ -331,7 +421,7 @@ def _summarize(databases: list[dict]) -> dict:
     if failing:
         reason = (f"{len(failing)} of {eligible} database(s) outside policy — "
                   f"{failing[0]['database']}: {failing[0]['reason']}")
-    return {
+    summary = {
         "status": worst,
         "compliant": compliant,
         "eligible": eligible,
@@ -340,6 +430,21 @@ def _summarize(databases: list[dict]) -> dict:
         "collectedAt": max((record["as_of"] for record in databases), default=""),
         "worstDatabases": [record["database"] for record in failing[:8]],
     }
+    if any("data_backup" in record for record in databases):
+        # Some databases only: an override with "data_backup": null (a database the policy holds
+        # no data objective for) leaves its record without the key, beside ones that have it.
+        data_req = [record for record in databases
+                    if (record.get("data_backup") or {}).get("required")]
+        data_ok = [record for record in data_req if record["data_backup"]["state"] == "OK"]
+        data_ages = [record["data_backup"]["age_hours"] for record in data_req
+                     if record["data_backup"]["age_hours"] is not None]
+        summary["dataBackup"] = {
+            "required": len(data_req),
+            "compliant": len(data_ok),
+            "state": "NOT_REQUIRED" if not data_req else ("OK" if len(data_ok) == len(data_req) else "VIOLATED"),
+            "worstAgeHours": max(data_ages) if data_ages else None,
+        }
+    return summary
 
 
 def coverage_text(summary: dict) -> str:

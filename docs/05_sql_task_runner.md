@@ -737,6 +737,48 @@ process is in fact alive lets the next scan start a second copy on top of it. Pr
 (`closed`, `sql_code`, `target_no`, the claim's pid and host, the reason written); exit code 1 when
 nothing was closed. Until 0.26.0 this was a script calling `update_sql_run` (2026-09-30).
 
+### `run-sql-adhoc` — SQL that is not a task, against one `server_id` (0.30.0)
+
+```bash
+python -m dbabrain.sql_tasks.cli run-sql-adhoc @q.json
+# q.json: {"server_id": "<server_id>", "database": "master", "sql_file": "q.sql"}
+python -m dbabrain.sql_tasks.cli --dry-run run-sql-adhoc @q.json   # the request run-sql would get
+```
+
+For reading a server by hand - its DMVs during an incident, say. `common.cli run-sql` takes a
+`connection` with the password in it and reads no secret store (rules R09), so reading one server
+used to take a scratch wrapper that decrypted the password; that is a missing command, and it cannot
+be `common`'s. This app finishes the request from this node's `data/` - the instance in
+`db_instances.json`, its `default_credential_name` or the `credential_name` the request names, the
+password from the secret store - and calls `run-sql` over `dbabrain.transport`, the password on
+stdin. Global options (`--key`, `--key-base64`, `--data-dir`, `--dry-run`) go before the command.
+
+| Field | |
+| --- | --- |
+| `server_id` | required |
+| `database` | where it runs; omitted, `run-sql`'s own choice (`master` on SQL Server) |
+| `credential_name` | the login; omitted, the instance's `default_credential_name` |
+| `sql_text` / `sql_file` | exactly one. `sql_file` is read **here** (a leading `@` is allowed), so the request `run-sql` receives is the whole of what runs |
+| `commit` / `autocommit` | `true` keeps what the SQL changed. **Omitted, everything is rolled back** - `run-sql`'s contract, and what it does not undo is in `dbabrain/common/sql_run.py` |
+| `confirm`, `assume_yes`, `reason` | the answer to the write's question, when nobody is at a terminal |
+| `format`, `output_path`, `max_rows`, `capture`, `timeout_seconds`, `connect_timeout_seconds`, `max_result_sets` | passed to `run-sql` as they are |
+
+Any other field is refused: a misspelt `comit` read as "not asked" would roll back what the operator
+meant to keep, and still say success.
+
+**A write costs one typed `yes`.** `commit` or `autocommit` asks `common.cli authorize` for the
+operation `run-sql-adhoc` - level 50 in `emergency_operations.json`, the ladder `run-sql-task` is
+priced on - at the terminal, or answered by `"confirm": "yes"` / waived by `"assume_yes": true`
+(`"confirm": true` is intent only: the terminal still asks). A node whose own ladder does not list
+`run-sql-adhoc` prices it strictest (two answers). A refused write answers `success: false`,
+`error_kind: refused`, exit 1, and nothing ran. A read asks nothing.
+
+The answer is `run-sql`'s own, passed through: its JSON envelope on stdout (exit 0 on success), or
+the rendering `format` asked for. Nothing is written to the runtime store, which it does not open -
+an operator reading a server must not be blocked by the store being down; the start and the end are
+lines in the app's log file. `--dry-run` resolves the login and prints the request with the password
+masked, runs nothing and asks nothing.
+
 ### Oracle 8i targets (`sql_access`)
 
 A target whose db_instance declares `sql_access.method` = `api`/`subprocess` does not get a

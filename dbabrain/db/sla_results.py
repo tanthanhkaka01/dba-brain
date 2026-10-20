@@ -66,6 +66,8 @@ class SlaPolicyResult:
     error_budget_consumed: float = 0.0
     error_budget_remaining: float = 0.0
     burn_rate: float | None = None
+    burn_rates: dict[str, float | None] = field(default_factory=dict)
+    burn_alert: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,7 @@ class SlaValidationSummary:
     #: configured to measure against. Empty on an ordinary run: a verdict explains itself
     #: through its results, and a sentence beside it would be one more thing to keep true.
     reason: str = ""
+    burning_count: int = 0
 
 
 def state_key(policy_id: object, target_id: object) -> str:

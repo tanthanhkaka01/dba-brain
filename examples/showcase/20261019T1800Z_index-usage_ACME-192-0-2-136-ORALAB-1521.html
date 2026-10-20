@@ -1,0 +1,893 @@
+<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Index Usage — ACME-192-0-2-136-ORALAB-1521</title><style>
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --surface-2:#fafbfc;
+  --ink:#1b2430; --muted:#64748b; --faint:#94a3b8; --line:#e5e9ef;
+  --brand:#0f2540; --brand-2:#1d3b5e; --link:#1d4ed8;
+  --crit:#dc2626; --crit-bg:#fef2f2; --crit-line:#fecaca;
+  --warn:#c2700a; --warn-bg:#fff8ed; --warn-line:#fde3bf;
+  --ok:#15803d; --ok-bg:#f0fdf4; --ok-line:#bbf7d0;
+  --idle-bg:#f1f5f9;
+  --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+
+*{box-sizing:border-box}
+html{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.5}
+a{color:var(--link)}
+.wrap{max-width:none; margin:0; padding:0 22px 64px}
+header.masthead{background:linear-gradient(135deg,var(--brand),var(--brand-2)); color:#fff; padding:26px 0 24px; margin-bottom:22px}
+header.masthead .wrap{padding-bottom:0}
+h1.title{font-size:26px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em}
+.subtitle{color:#c7d6e8; font-size:13px; margin:0}
+.subtitle a{color:#c7d6e8}
+.verdict{display:inline-flex; gap:10px; align-items:baseline; flex-wrap:wrap; margin-top:16px; padding:8px 14px; border-radius:9px; font-weight:650; font-size:15px}
+.verdict .scope{font-weight:500; font-size:13px; opacity:.9}
+.verdict.ok{background:#14532d; color:#bbf7d0} .verdict.warn{background:#713f12; color:#fde68a}
+.verdict.crit{background:#7f1d1d; color:#fecaca} .verdict.idle{background:#334155; color:#e2e8f0}
+.kpi-strip{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; margin-top:18px}
+.kpi{background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:11px 14px}
+.kpi .num{font-size:24px; font-weight:700; line-height:1}
+.kpi .lbl{font-size:11px; color:#a9c0db; margin-top:5px}
+.kpi.alert .num{color:#ffb4ad} .kpi.warnum .num{color:#ffd79b} .kpi.good .num{color:#9be8b5}
+.notes p{margin:4px 0; font-size:12.5px; color:var(--muted)}
+section{margin-top:30px}
+.sec-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid var(--line)}
+.sec-head h2{font-size:18px; font-weight:700; margin:0}
+.sec-head .hint{font-size:12.5px; color:var(--muted)}
+h3.part{font-size:15px; font-weight:700; margin:26px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--line)}
+.callout{margin:16px 0; padding:12px 16px; border-left:5px solid var(--warn); background:var(--warn-bg); border-radius:6px; color:#7c2d12; font-weight:600}
+.tbl-scroll{overflow-x:auto; max-width:100%; border:1px solid var(--line); border-radius:10px; background:var(--surface); margin:8px 0 14px}
+table{border-collapse:collapse; width:100%; font-size:12.5px}
+thead th{background:var(--surface-2); text-align:left; font-weight:650; color:#475569; padding:8px 11px; border-bottom:1px solid var(--line); white-space:nowrap; font-size:11.5px}
+tbody td{padding:8px 11px; border-bottom:1px solid var(--line); vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--surface-2)}
+td.srv{font-family:var(--mono); font-size:11.5px}
+td.prose{white-space:normal; min-width:220px; color:#3a4757}
+.num-cell{font-family:var(--mono); text-align:right}
+.center{text-align:center}
+.badge,.cell{display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; white-space:nowrap; border:1px solid transparent}
+.b-ok{background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line)}
+.b-warn{background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line)}
+.b-crit{background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line)}
+.b-idle{background:var(--idle-bg); color:var(--muted); border-color:var(--line)}
+.dot{display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--faint)}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.crit{background:var(--crit)}
+.legend{display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; font-size:12px; color:var(--muted)}
+.muted{color:var(--muted); font-size:12px}
+.meta{display:flex; flex-wrap:wrap; gap:6px 18px; font-size:12.5px; color:var(--muted); margin:4px 0 8px}
+.meta b{color:var(--ink); font-weight:600}
+.picker{display:grid; grid-template-columns:max-content 1fr; gap:8px 12px; align-items:start;
+  margin:0 0 18px; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:10px}
+.picker-title{grid-column:1/-1; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); font-weight:700}
+.picker-label{font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--brand); font-weight:700; padding-top:4px; white-space:nowrap}
+.picker-label b{font-weight:600; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:0 6px; letter-spacing:0}
+.picker-row{display:flex; flex-wrap:wrap; gap:6px}
+.chip{border:1px solid var(--line); border-radius:999px; padding:4px 12px; font-size:12px; color:var(--muted); text-decoration:none; background:var(--surface)}
+a.chip:hover{border-color:var(--link); color:var(--link)}
+.chip.on{background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600}
+.chip .dot{width:6px; height:6px; margin-right:6px; vertical-align:middle}
+@media (max-width:760px){.kpi-strip{grid-template-columns:repeat(3,1fr)}}
+.banner{font-size:17px;font-weight:700;line-height:1.35;margin:18px 0 6px;padding:13px 16px;border-left:6px solid var(--warn);background:var(--warn-bg);color:#7c2d12;border-radius:6px}.content > p{margin:6px 0;font-size:13px;color:#3a4757}.content thead th,.content tbody td{padding:7px 8px}.content thead th:first-child,.content tbody td:first-child{width:34%}.content tbody td:first-child{overflow-wrap:anywhere;min-width:200px}
+.dbo-banner{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;
+  margin:0 0 18px;padding:14px 16px;border-radius:6px;
+  background:#0f2540;color:#e8eef7;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+.dbo-banner .dbo-product{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:#7fa6d9;font-weight:700}
+.dbo-banner .dbo-title{font-size:17px;font-weight:700;color:#fff}
+.dbo-banner .dbo-scope{font-size:13px;color:#b9cbe4;font-family:ui-monospace,SFMono-Regular,
+  "Cascadia Mono",Consolas,monospace}
+.dbo-banner .dbo-stamp{font-size:12px;color:#8fb0d8;margin-left:auto;white-space:nowrap}
+.dbo-banner .dbo-links{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.dbo-banner .dbo-links a{font-size:12px;color:#cfe0f5;text-decoration:none;
+  border:1px solid #2c4a70;border-radius:999px;padding:3px 11px;cursor:pointer}
+.dbo-banner .dbo-links a:hover{border-color:#7fa6d9;color:#fff}
+.dbo-banner .dbo-links a.dbo-here{background:#e8eef7;color:#0f2540;font-weight:600;
+  border-color:#e8eef7}
+@media print{.dbo-banner{background:#fff;color:#000;border:1px solid #000}
+  .dbo-banner .dbo-title,.dbo-banner .dbo-product,.dbo-banner .dbo-scope,
+  .dbo-banner .dbo-stamp{color:#000}.dbo-banner .dbo-links{display:none}}
+</style></head><body><header class="masthead"><div class="wrap"><div class="dbo-banner"><span class="dbo-product">DBA Brain</span><span class="dbo-title">Index Usage</span><span class="dbo-scope">ACME-192-0-2-136-ORALAB-1521</span><span class="dbo-stamp">snapshot 2026-10-20 01:00:35 +07</span><span class="dbo-links"><a href="20261020T0506Z_database-inventory.html">Fleet inventory</a><a href="20261020T0536Z_server-metrics.html">Server metrics</a><a href="20261020T0537Z_sla.html">SLA</a><a class="dbo-here" aria-current="page">Index usage</a></span></div><h1 class="title">ACME-192-0-2-136-ORALAB-1521</h1><p class="subtitle">Oracle · index inventory</p><div class="kpi-strip"><div class="kpi "><div class="num">575</div><div class="lbl">indexes total</div></div><div class="kpi "><div class="num">0</div><div class="lbl">unusable</div></div><div class="kpi "><div class="num">496</div><div class="lbl">unique indexes</div></div><div class="kpi warnum"><div class="num">318</div><div class="lbl">never analyzed</div></div><div class="kpi warnum"><div class="num">216</div><div class="lbl">stale stats 30d</div></div></div></div></header><div class="wrap content"><div class="picker"><span class="picker-title">Index reports</span><span class="picker-label">SQL Server <b>13</b></span><span class="picker-row"><a class="chip" href="20261019T1804Z_index-usage_ACME-203-0-113-170.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-170</a><a class="chip" href="20261019T1804Z_index-usage_ACME-198-51-100-45.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-45</a><a class="chip" href="20261019T1800Z_index-usage_ACME-192-0-2-15-MSSQL25-1433.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-15-MSSQL25-1433</a><a class="chip" href="20261019T1800Z_index-usage_ACME-198-51-100-66.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-66</a><a class="chip" href="20261019T1800Z_index-usage_ACME-192-0-2-136-MSSQLLAB-1433.html"><span class="dot" style="background:#15803d"></span>ACME-192-0-2-136-MSSQLLAB-1433</a><a class="chip" href="20261019T1800Z_index-usage_ACME-198-51-100-210.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-210</a><a class="chip" href="20261019T1800Z_index-usage_ACME-198-51-100-60.html"><span class="dot" style="background:#c2700a"></span>ACME-198-51-100-60</a><a class="chip" href="20261019T1803Z_index-usage_ACME-192-0-2-243.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-243</a><a class="chip" href="20261019T1800Z_index-usage_ACME-203-0-113-99.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-99</a><a class="chip" href="20261019T1800Z_index-usage_ACME-203-0-113-69.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-69</a><a class="chip" href="20261019T1816Z_index-usage_ACME-192-0-2-97.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-97</a><a class="chip" href="20261019T1800Z_index-usage_ACME-192-0-2-242.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-242</a><a class="chip" href="20261019T1800Z_index-usage_ACME-203-0-113-155.html"><span class="dot" style="background:#c2700a"></span>ACME-203-0-113-155</a></span><span class="picker-label">Oracle <b>3</b></span><span class="picker-row"><span class="chip on"><span class="dot" style="background:#15803d"></span>ACME-192-0-2-136-ORALAB-1521</span><a class="chip" href="20261019T1800Z_index-usage_ACME-192-0-2-120.html"><span class="dot" style="background:#15803d"></span>ACME-192-0-2-120</a><a class="chip" href="20261019T1800Z_index-usage_ACME-198-51-100-125.html"><span class="dot" style="background:#15803d"></span>ACME-198-51-100-125</a></span><span class="picker-label">PostgreSQL <b>2</b></span><span class="picker-row"><a class="chip" href="20261019T1800Z_index-usage_ACME-192-0-2-15-PG-5433.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-15-PG-5433</a><a class="chip" href="20261019T1800Z_index-usage_ACME-192-0-2-136-PGLAB-5432.html"><span class="dot" style="background:#c2700a"></span>ACME-192-0-2-136-PGLAB-5432</a></span></div><script>(function(){var d=new URLSearchParams(location.search).get('date');if(!d)return;document.querySelectorAll('.picker a.chip,a[data-keep-date]').forEach(function(a){var h=a.getAttribute('href');a.setAttribute('href',h+(h.indexOf('?')<0?'?':'&')+'date='+encodeURIComponent(d));});})();</script><p>Host: 192.0.2.136</p>
+<p>Collected: 2026-10-19T18:00:35Z</p>
+<p>Server dashboard: <a href="20261020T0536Z_server-metrics.html">http://192.0.2.15:8080/report_dba/server-metrics.html?server=ACME-192-0-2-136-ORALAB-1521</a></p>
+<p>Fleet inventory: <a href="20261020T0506Z_database-inventory.html">http://192.0.2.15:8080/report_dba/database-inventory.html</a></p>
+<div class="banner">This instance does not record index usage</div>
+<p>Oracle keeps no per-index seek/scan counters unless each index is placed into ALTER INDEX ... MONITORING USAGE, which is a change to the database rather than to the monitor. So there are no usage columns and no drop candidates here: an index that is never read looks exactly like one read a thousand times a minute. Everything below is what Oracle states on its own — what exists, its size, whether it is still usable, and how old its statistics are.</p>
+<div class="tbl-scroll"><table><thead><tr><th>Metric</th><th>Count</th><th>Meaning</th></tr></thead><tbody>
+<tr><td>indexes_total</td><td>575</td><td>every index on a user table</td></tr>
+<tr><td>unusable</td><td>0</td><td>UNUSABLE — queries full-scan, DML raises ORA-01502</td></tr>
+<tr><td>unique_indexes</td><td>496</td><td>enforcing uniqueness; never drop candidates</td></tr>
+<tr><td>never_analyzed</td><td>318</td><td>no statistics at all</td></tr>
+<tr><td>stale_stats_30d</td><td>216</td><td>statistics older than 30 days</td></tr>
+</tbody></table></div>
+<h3 class="part">Never analyzed (283)</h3>
+<p>No statistics were ever gathered for these, so the optimizer is costing them from defaults. On 8i that is the rule-based path in practice.</p>
+<div class="tbl-scroll"><table><thead><tr><th>Index</th><th>Table</th><th>Recommend action</th></tr></thead><tbody>
+<tr><td>AUDSYS.SYS_IL0000023255C00030$$</td><td>AUDSYS.AUD$UNIFIED</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>AUDSYS.SYS_IL0000023255C00031$$</td><td>AUDSYS.AUD$UNIFIED</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>AUDSYS.SYS_IL0000023255C00097$$</td><td>AUDSYS.AUD$UNIFIED</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>AUDSYS.SYS_IL0000023255C00113$$</td><td>AUDSYS.AUD$UNIFIED</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>DVSYS.SYS_IL0000072285C00041$$</td><td>DVSYS.SIMULATION_LOG$</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000025984C00008$$</td><td>GSMADMIN_INTERNAL.CLOUD</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000025984C00009$$</td><td>GSMADMIN_INTERNAL.CLOUD</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026070C00002$$</td><td>GSMADMIN_INTERNAL.FILES</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026105C00005$$</td><td>GSMADMIN_INTERNAL.CHUNKS</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026105C00006$$</td><td>GSMADMIN_INTERNAL.CHUNKS</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026105C00015$$</td><td>GSMADMIN_INTERNAL.CHUNKS</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026117C00003$$</td><td>GSMADMIN_INTERNAL.PARTITION_SET</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026117C00004$$</td><td>GSMADMIN_INTERNAL.PARTITION_SET</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026117C00006$$</td><td>GSMADMIN_INTERNAL.PARTITION_SET</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026117C00007$$</td><td>GSMADMIN_INTERNAL.PARTITION_SET</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026144C00006$$</td><td>GSMADMIN_INTERNAL.MOVE_DATA</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026148C00036$$</td><td>GSMADMIN_INTERNAL.CHANGE_LOG_QUEUE_TABLE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026175C00012$$</td><td>GSMADMIN_INTERNAL.BACKUP_CONFIG_INFO</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026194C00022$$</td><td>GSMADMIN_INTERNAL.GWM$_APPLY_LCRS</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026194C00039$$</td><td>GSMADMIN_INTERNAL.GWM$_APPLY_LCRS</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>VECSYS.SYS_IL0000002005C00007$$</td><td>VECSYS.VECTOR$INDEX</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>VECSYS.SYS_IL0000002005C00008$$</td><td>VECSYS.VECTOR$INDEX</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>VECSYS.SYS_IL0000002005C00010$$</td><td>VECSYS.VECTOR$INDEX</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>VECSYS.SYS_IL0000002020C00003$$</td><td>VECSYS.CANDIDATE_QUERY_VECTORS$</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>VECSYS.SYS_IL0000002024C00012$$</td><td>VECSYS.VECTOR$INDEX$BUILD$</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>VECSYS.SYS_IL0000002029C00009$$</td><td>VECSYS.VECTOR$INDEX$CHECKPOINTS</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>VECSYS.SYS_IL0000002039C00005$$</td><td>VECSYS.VECTOR_TABLE_METADATA</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>VECSYS.SYS_IL0000002039C00006$$</td><td>VECSYS.VECTOR_TABLE_METADATA</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026318C00001$$</td><td>XDB.XDB$XDB_READY</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026327C00005$$</td><td>XDB.XDB$H_INDEX</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00004$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00005$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00007$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00011$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00016$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00017$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00018$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00019$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00024$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00025$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00026$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00027$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00032$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00033$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00034$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00035$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00040$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00041$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00042$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00043$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00048$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00049$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00050$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00051$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00056$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00057$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00058$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00059$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00064$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00065$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00066$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00067$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00072$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00073$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00074$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00075$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00080$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00081$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00082$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00083$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00088$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00089$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00090$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00091$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00096$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00097$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00098$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00099$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00104$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00105$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00106$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00107$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00112$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00113$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00114$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00115$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00116$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00119$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00120$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00121$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00122$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00128$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00129$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00130$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00131$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00134$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00135$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00136$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00137$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00138$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00004$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00005$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00007$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00015$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00016$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00017$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00022$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00024$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00027$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00028$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00029$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00034$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00035$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00036$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00039$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00042$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00043$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00044$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00049$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00050$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00051$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00054$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00055$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00056$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00059$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00060$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00061$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00066$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00068$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00069$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00074$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00075$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00076$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00077$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00078$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00079$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00081$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00082$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00083$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00084$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00089$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00090$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00091$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00092$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00097$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00098$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00099$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00100$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00105$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00106$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00107$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00108$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00113$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00114$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00115$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00116$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00121$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00122$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00123$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00124$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00129$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00130$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00131$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00132$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00137$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00138$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00139$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00140$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00145$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00146$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00147$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00148$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00153$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00154$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00155$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00156$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00157$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00158$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00163$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00164$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00165$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00166$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00171$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00172$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00173$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00174$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00179$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00183$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00184$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00185$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00186$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00187$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00188$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00190$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00191$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00192$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00004$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00005$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00007$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00011$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00012$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00013$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00014$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00015$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00016$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00017$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00018$$</td><td>XDB.XDB$ALL_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00004$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00005$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00007$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00011$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00012$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00013$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00014$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00015$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00016$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00017$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00018$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00004$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00005$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00007$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00011$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00012$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00013$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00014$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00015$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00016$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00017$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00018$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00004$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00005$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00007$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00031$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00032$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00033$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00059$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00068$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00069$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00070$$</td><td>XDB.XDB$ELEMENT</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00004$$</td><td>XDB.XDB$ATTRIBUTE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00005$$</td><td>XDB.XDB$ATTRIBUTE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00007$$</td><td>XDB.XDB$ATTRIBUTE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00031$$</td><td>XDB.XDB$ATTRIBUTE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00032$$</td><td>XDB.XDB$ATTRIBUTE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00033$$</td><td>XDB.XDB$ATTRIBUTE</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00004$$</td><td>XDB.XDB$ANYATTR</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00005$$</td><td>XDB.XDB$ANYATTR</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00007$$</td><td>XDB.XDB$ANYATTR</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00031$$</td><td>XDB.XDB$ANYATTR</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00032$$</td><td>XDB.XDB$ANYATTR</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00033$$</td><td>XDB.XDB$ANYATTR</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00004$$</td><td>XDB.XDB$ANY</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00005$$</td><td>XDB.XDB$ANY</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00007$$</td><td>XDB.XDB$ANY</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00031$$</td><td>XDB.XDB$ANY</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00032$$</td><td>XDB.XDB$ANY</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00033$$</td><td>XDB.XDB$ANY</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00004$$</td><td>XDB.XDB$GROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00005$$</td><td>XDB.XDB$GROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00007$$</td><td>XDB.XDB$GROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00013$$</td><td>XDB.XDB$GROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00014$$</td><td>XDB.XDB$GROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00015$$</td><td>XDB.XDB$GROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00004$$</td><td>XDB.XDB$GROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00005$$</td><td>XDB.XDB$GROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00007$$</td><td>XDB.XDB$GROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00014$$</td><td>XDB.XDB$GROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00015$$</td><td>XDB.XDB$GROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00016$$</td><td>XDB.XDB$GROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00004$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00005$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00007$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00010$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00011$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00012$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00013$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00014$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00015$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00004$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00005$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00007$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00012$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00013$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>ANALYZE INDEX ... COMPUTE STATISTICS</td></tr>
+</tbody></table></div>
+<h3 class="part">All indexes (499)</h3>
+<p>Every index on the instance, largest first.</p>
+<div class="tbl-scroll"><table><thead><tr><th>Index</th><th>Table</th><th>Type</th><th>Uniq</th><th>PK</th><th>Constr</th><th>Unusable</th><th>Size MB</th><th>Extents</th><th>last_stats_update</th></tr></thead><tbody>
+<tr><td>XDB.SYS_C007463</td><td>XDB.XDB$ELEMENT</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.13</td><td>2</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.CODE$_PK1</td><td>DVSYS.CODE$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.CODE$_UK1</td><td>DVSYS.CODE$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.CODE_T$_UK1</td><td>DVSYS.CODE_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.COMMAND_RULE$_FK1_IDX</td><td>DVSYS.COMMAND_RULE$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.COMMAND_RULE$_FK_IDX</td><td>DVSYS.COMMAND_RULE$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.COMMAND_RULE$_PK1</td><td>DVSYS.COMMAND_RULE$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.COMMAND_RULE$_UK1</td><td>DVSYS.COMMAND_RULE$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR$_FK1_IDX</td><td>DVSYS.FACTOR$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR$_FK_IDX</td><td>DVSYS.FACTOR$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR$_PK1</td><td>DVSYS.FACTOR$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR$_UK1</td><td>DVSYS.FACTOR$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR_LINK$_FK1_IDX</td><td>DVSYS.FACTOR_LINK$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR_LINK$_FK_IDX</td><td>DVSYS.FACTOR_LINK$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR_LINK$_PK1</td><td>DVSYS.FACTOR_LINK$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR_LINK$_UK1</td><td>DVSYS.FACTOR_LINK$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR_T$_UK1</td><td>DVSYS.FACTOR_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR_TYPE$_PK1</td><td>DVSYS.FACTOR_TYPE$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR_TYPE_T$_UK1</td><td>DVSYS.FACTOR_TYPE_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.FACTOR_TYPE_T$_UK2</td><td>DVSYS.FACTOR_TYPE_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY$_FK_IDX</td><td>DVSYS.IDENTITY$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY$_PK1</td><td>DVSYS.IDENTITY$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY$_UK1</td><td>DVSYS.IDENTITY$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.POLICY$_PK1</td><td>DVSYS.POLICY$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.POLICY$_UK1</td><td>DVSYS.POLICY_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.POLICY$_UK2</td><td>DVSYS.POLICY_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.POLICY_OBJECT$_PK1</td><td>DVSYS.POLICY_OBJECT$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.POLICY_OBJECT$_UK1</td><td>DVSYS.POLICY_OBJECT$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.REALM$_PK1</td><td>DVSYS.REALM$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.REALM_AUTH$_FK1_IDX</td><td>DVSYS.REALM_AUTH$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.REALM_AUTH$_FK_IDX</td><td>DVSYS.REALM_AUTH$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.REALM_AUTH$_PK1</td><td>DVSYS.REALM_AUTH$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.REALM_AUTH$_UK1</td><td>DVSYS.REALM_AUTH$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.REALM_OBJECT$_FK_IDX</td><td>DVSYS.REALM_OBJECT$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.REALM_OBJECT$_PK1</td><td>DVSYS.REALM_OBJECT$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.REALM_OBJECT$_UK1</td><td>DVSYS.REALM_OBJECT$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.REALM_T$_UK1</td><td>DVSYS.REALM_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.REALM_T$_UK2</td><td>DVSYS.REALM_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.RULE$_PK1</td><td>DVSYS.RULE$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.RULE_SET$_PK1</td><td>DVSYS.RULE_SET$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.RULE_SET_RULE$_FK1_IDX</td><td>DVSYS.RULE_SET_RULE$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.RULE_SET_RULE$_FK_IDX</td><td>DVSYS.RULE_SET_RULE$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.RULE_SET_RULE$_PK1</td><td>DVSYS.RULE_SET_RULE$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.RULE_SET_RULE$_UK1</td><td>DVSYS.RULE_SET_RULE$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.RULE_SET_T$_UK1</td><td>DVSYS.RULE_SET_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.RULE_SET_T$_UK2</td><td>DVSYS.RULE_SET_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>DVSYS.RULE_T$_UK1</td><td>DVSYS.RULE_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.RULE_T$_UK2</td><td>DVSYS.RULE_T$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_C008436</td><td>DVSYS.CONFIG$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_C008437</td><td>DVSYS.ENFORCE$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007337</td><td>GSMADMIN_INTERNAL.SHARD_TS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007361</td><td>GSMADMIN_INTERNAL.CHANGE_LOG_QUEUE_TABLE</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007364</td><td>GSMADMIN_INTERNAL.AQ$_CHANGE_LOG_QUEUE_TABLE_S</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IOT_TOP_26157</td><td>GSMADMIN_INTERNAL.AQ$_CHANGE_LOG_QUEUE_TABLE_T</td><td>IOT - TOP</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IOT_TOP_26159</td><td>GSMADMIN_INTERNAL.AQ$_CHANGE_LOG_QUEUE_TABLE_H</td><td>IOT - TOP</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IOT_TOP_26162</td><td>GSMADMIN_INTERNAL.AQ$_CHANGE_LOG_QUEUE_TABLE_G</td><td>IOT - TOP</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IOT_TOP_26165</td><td>GSMADMIN_INTERNAL.AQ$_CHANGE_LOG_QUEUE_TABLE_I</td><td>IOT - TOP</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_PK_LP</td><td>LBACSYS.OLS$PROPS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>VECSYS.HNSW_IND_ACCURACY_MAP$_ACC#</td><td>VECSYS.HNSW_IND_ACCURACY_MAP$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.HNSW_IND_ACCURACY_MAP$_OBJ#</td><td>VECSYS.HNSW_IND_ACCURACY_MAP$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.HNSW_IND_STATS$_OBJ#</td><td>VECSYS.HNSW_IND_STATS$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.HNSW_IND_STATS$_OPT#</td><td>VECSYS.HNSW_IND_STATS$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.IVF_IDX_OBJ#</td><td>VECSYS.IVF_IDX_STATS$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.IVF_IDX_OBJ_ACCU_TOPK</td><td>VECSYS.IVF_IDX_STATS$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SNGLEROW</td><td>XDB.XDB$DBFS_VIRTUAL_FOLDER</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007455</td><td>XDB.XDB$TTSET</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>XDB.SYS_C007457</td><td>XDB.XDB$H_LINK</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007458</td><td>XDB.XDB$SIMPLE_TYPE</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>XDB.SYS_C007459</td><td>XDB.XDB$COMPLEX_TYPE</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>XDB.SYS_C007460</td><td>XDB.XDB$ALL_MODEL</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>XDB.SYS_C007461</td><td>XDB.XDB$CHOICE_MODEL</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>XDB.SYS_C007462</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>XDB.SYS_C007464</td><td>XDB.XDB$ATTRIBUTE</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>XDB.SYS_C007465</td><td>XDB.XDB$ANYATTR</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007466</td><td>XDB.XDB$ANY</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>XDB.SYS_C007469</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007471</td><td>XDB.XDB$SCHEMA</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-09</td></tr>
+<tr><td>XDB.SYS_C007472</td><td>XDB.XDB$RESOURCE</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-10-03</td></tr>
+<tr><td>XDB.SYS_C007476</td><td>XDB.XDB$ACL</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007504</td><td>XDB.XDB$CONFIG</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>.06</td><td>1</td><td>2026-07-05</td></tr>
+<tr><td>AUDSYS.SYS_IL0000023255C00030$$</td><td>AUDSYS.AUD$UNIFIED</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>AUDSYS.SYS_IL0000023255C00031$$</td><td>AUDSYS.AUD$UNIFIED</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>AUDSYS.SYS_IL0000023255C00097$$</td><td>AUDSYS.AUD$UNIFIED</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>AUDSYS.SYS_IL0000023255C00113$$</td><td>AUDSYS.AUD$UNIFIED</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>DBSFWUSER.SYS_C004174</td><td>DBSFWUSER.EXADIRECT_ACL</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DBSFWUSER.SYS_C004184</td><td>DBSFWUSER.IP_ACL</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DBSFWUSER.SYS_C004187</td><td>DBSFWUSER.ACL$_OBJ</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.AUDIT_TRAIL$_PK1</td><td>DVSYS.AUDIT_TRAIL$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY_LABEL$_FK_IDX</td><td>DVSYS.POLICY_LABEL$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY_LABEL$_PK1</td><td>DVSYS.POLICY_LABEL$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY_MAP$_FK1_IDX</td><td>DVSYS.IDENTITY_MAP$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY_MAP$_FK2_IDX</td><td>DVSYS.IDENTITY_MAP$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY_MAP$_FK_IDX</td><td>DVSYS.IDENTITY_MAP$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY_MAP$_PK1</td><td>DVSYS.IDENTITY_MAP$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.IDENTITY_MAP$_UK_IDX</td><td>DVSYS.IDENTITY_MAP$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.MAC_POLICY$_FK_IDX</td><td>DVSYS.MAC_POLICY$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.MAC_POLICY$_PK1</td><td>DVSYS.MAC_POLICY$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.MAC_POLICY$_UK1</td><td>DVSYS.MAC_POLICY$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.MAC_POLICY_FACTOR$_FK1_IDX</td><td>DVSYS.MAC_POLICY_FACTOR$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.MAC_POLICY_FACTOR$_FK_IDX</td><td>DVSYS.MAC_POLICY_FACTOR$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.MAC_POLICY_FACTOR$_PK1</td><td>DVSYS.MAC_POLICY_FACTOR$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.MAC_POLICY_FACTOR$_UK1</td><td>DVSYS.MAC_POLICY_FACTOR$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.POLICY_LABEL$_UK1</td><td>DVSYS.POLICY_LABEL$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.POLICY_OWNER$_PK1</td><td>DVSYS.POLICY_OWNER$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.POLICY_OWNER$_UK1</td><td>DVSYS.POLICY_OWNER$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.ROLE$_FK_IDX</td><td>DVSYS.ROLE$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.ROLE$_PK1</td><td>DVSYS.ROLE$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.ROLE$_UK1</td><td>DVSYS.ROLE$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_C008439</td><td>DVSYS.STATUS$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_C008640</td><td>DVSYS.SIMULATION_LOG$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_C008641</td><td>DVSYS.SIMULATION_LOG$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_C008642</td><td>DVSYS.SIMULATION_LOG$</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_FK0000072285N00035$</td><td>DVSYS.REALM_ID_TAB</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_FK0000072285N00037$</td><td>DVSYS.COMMAND_RULE_ID_TAB</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_FK0000072285N00039$</td><td>DVSYS.RULE_SET_ID_TAB</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>DVSYS.SYS_IL0000072285C00041$$</td><td>DVSYS.SIMULATION_LOG$</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.I2_GWM$_PROCESS_EVENT</td><td>GSMADMIN_INTERNAL.GWM$_PROCESS_EVENTS</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.I2_GWM$_RELOCATE_CHUNKS</td><td>GSMADMIN_INTERNAL.GWM$_RELOCATE_CHUNKS</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.I2_GWM$_SNR_LOGS</td><td>GSMADMIN_INTERNAL.GWM$_SNR_LOGS</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.I_GWM$_PROCESS_EVENT</td><td>GSMADMIN_INTERNAL.GWM$_PROCESS_EVENTS</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.I_GWM$_RELOCATE_CHUNKS</td><td>GSMADMIN_INTERNAL.GWM$_RELOCATE_CHUNKS</td><td>NORMAL</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.I_GWM$_SNR_LOGS</td><td>GSMADMIN_INTERNAL.GWM$_SNR_LOGS</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.I_GWM_APPLY_LCRS</td><td>GSMADMIN_INTERNAL.GWM$_APPLY_LCRS</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.I_GWM_PROCESS_PARAMS1</td><td>GSMADMIN_INTERNAL.GWM$_PROCESS_PARAMS</td><td>NORMAL</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.I_REPLICATION_UNIT</td><td>GSMADMIN_INTERNAL.REPLICATION_UNIT</td><td>NORMAL</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.MDATAPK</td><td>GSMADMIN_INTERNAL.MOVE_DATA</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.NAME_UNIQUE</td><td>GSMADMIN_INTERNAL.DATABASE</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.NUM_UNIQUE</td><td>GSMADMIN_INTERNAL.REGION</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.PK_SPA</td><td>GSMADMIN_INTERNAL.SERVICE_PREFERRED_AVAILABLE</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.PK_VNCR</td><td>GSMADMIN_INTERNAL.VNCR</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.RPNAME_RUID_UNIQUE</td><td>GSMADMIN_INTERNAL.SNR_RESTOREPOINT_WINDOW</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.RPNAME_UNIQUE</td><td>GSMADMIN_INTERNAL.SNR_RESTOREPOINTS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SG_NAME_UNIQUE</td><td>GSMADMIN_INTERNAL.SHARD_GROUP</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SS_NAME_UNIQUE</td><td>GSMADMIN_INTERNAL.SHARD_SPACE</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007185</td><td>GSMADMIN_INTERNAL.REGION</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007195</td><td>GSMADMIN_INTERNAL.GSM</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007198</td><td>GSMADMIN_INTERNAL.CLOUD</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007205</td><td>GSMADMIN_INTERNAL.DATABASE_POOL</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007207</td><td>GSMADMIN_INTERNAL.DATABASE_POOL_ADMIN</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007211</td><td>GSMADMIN_INTERNAL.SHARD_SPACE</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007215</td><td>GSMADMIN_INTERNAL.BROKER_CONFIGS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007220</td><td>GSMADMIN_INTERNAL.RU_PEERS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007224</td><td>GSMADMIN_INTERNAL.SHARD_GROUP</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007257</td><td>GSMADMIN_INTERNAL.HETEROGENEOUS_COLUMNS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007263</td><td>GSMADMIN_INTERNAL.CONTAINER_DATABASE</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007270</td><td>GSMADMIN_INTERNAL.DATABASE</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007280</td><td>GSMADMIN_INTERNAL.FILES</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007283</td><td>GSMADMIN_INTERNAL.CREDENTIAL</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007287</td><td>GSMADMIN_INTERNAL.TABLE_FAMILY</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007292</td><td>GSMADMIN_INTERNAL.SHARDKEY_COLUMNS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007296</td><td>GSMADMIN_INTERNAL.SERVICE</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007299</td><td>GSMADMIN_INTERNAL.SERVICE_PREFERRED_AVAILABLE</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007306</td><td>GSMADMIN_INTERNAL.GSM_REQUESTS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007307</td><td>GSMADMIN_INTERNAL.GSM_REQUESTS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007308</td><td>GSMADMIN_INTERNAL.CATALOG_REQUESTS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007315</td><td>GSMADMIN_INTERNAL.CHUNKS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007318</td><td>GSMADMIN_INTERNAL.ALL_CHUNKS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007322</td><td>GSMADMIN_INTERNAL.CHUNK_LOC</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007329</td><td>GSMADMIN_INTERNAL.PARTITION_SET</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007333</td><td>GSMADMIN_INTERNAL.TABLESPACE_SET</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007343</td><td>GSMADMIN_INTERNAL.GLOBAL_TABLE</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007347</td><td>GSMADMIN_INTERNAL.DUPLICATED_TABLE$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_C007390</td><td>GSMADMIN_INTERNAL.GWM$_SNR_COMPATIBLE</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_FK0000026084N00008$</td><td>GSMADMIN_INTERNAL.INSTANCES_NT</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_FK0000026089N00014$</td><td>GSMADMIN_INTERNAL.OLD_INSTANCES_NT</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_FK0000026095N00004$</td><td>GSMADMIN_INTERNAL.SHSPACE_NT</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000025984C00008$$</td><td>GSMADMIN_INTERNAL.CLOUD</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000025984C00009$$</td><td>GSMADMIN_INTERNAL.CLOUD</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026070C00002$$</td><td>GSMADMIN_INTERNAL.FILES</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026105C00005$$</td><td>GSMADMIN_INTERNAL.CHUNKS</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026105C00006$$</td><td>GSMADMIN_INTERNAL.CHUNKS</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026105C00015$$</td><td>GSMADMIN_INTERNAL.CHUNKS</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026117C00003$$</td><td>GSMADMIN_INTERNAL.PARTITION_SET</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026117C00004$$</td><td>GSMADMIN_INTERNAL.PARTITION_SET</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026117C00006$$</td><td>GSMADMIN_INTERNAL.PARTITION_SET</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026117C00007$$</td><td>GSMADMIN_INTERNAL.PARTITION_SET</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026144C00006$$</td><td>GSMADMIN_INTERNAL.MOVE_DATA</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026148C00036$$</td><td>GSMADMIN_INTERNAL.CHANGE_LOG_QUEUE_TABLE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026175C00012$$</td><td>GSMADMIN_INTERNAL.BACKUP_CONFIG_INFO</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026194C00022$$</td><td>GSMADMIN_INTERNAL.GWM$_APPLY_LCRS</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.SYS_IL0000026194C00039$$</td><td>GSMADMIN_INTERNAL.GWM$_APPLY_LCRS</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>GSMADMIN_INTERNAL.VNCR_NAME</td><td>GSMADMIN_INTERNAL.VNCR</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.I_OLS$LAB_1</td><td>LBACSYS.OLS$LAB</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.I_OLS$LAB_2</td><td>LBACSYS.OLS$LAB</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS$POLS_OWNPOLIDX</td><td>LBACSYS.OLS$POLS</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS$POLT_OTFPIDX</td><td>LBACSYS.OLS$POLT</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS$POL_PFCPIDX</td><td>LBACSYS.OLS$POL</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS$SESSINFO_IDX</td><td>LBACSYS.OLS$SESSINFO</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_COMP_LONG_UNIQUE</td><td>LBACSYS.OLS$COMPARTMENTS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_COMP_PK</td><td>LBACSYS.OLS$COMPARTMENTS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_COMP_SHORT_UNIQUE</td><td>LBACSYS.OLS$COMPARTMENTS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_GROUP_LONG_UNIQUE</td><td>LBACSYS.OLS$GROUPS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_GROUP_PK</td><td>LBACSYS.OLS$GROUPS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_GROUP_SHORT_UNIQUE</td><td>LBACSYS.OLS$GROUPS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_LABEL_PK</td><td>LBACSYS.OLS$LAB</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_LEVEL_LONG_UNIQUE</td><td>LBACSYS.OLS$LEVELS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_LEVEL_PK</td><td>LBACSYS.OLS$LEVELS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_LEVEL_SHORT_UNIQUE</td><td>LBACSYS.OLS$LEVELS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_PROFILE_PK</td><td>LBACSYS.OLS$PROFILES</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_USER_COMP_PK</td><td>LBACSYS.OLS$USER_COMPARTMENTS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_USER_GRP_PK</td><td>LBACSYS.OLS$USER_GROUPS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.OLS_USER_LEVEL_PK</td><td>LBACSYS.OLS$USER_LEVELS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.SYS_C008324</td><td>LBACSYS.OLS$POL</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.SYS_C008325</td><td>LBACSYS.OLS$POL</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.SYS_C008326</td><td>LBACSYS.OLS$POL</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.SYS_C008329</td><td>LBACSYS.OLS$POLS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.SYS_C008334</td><td>LBACSYS.OLS$POLT</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.SYS_C008337</td><td>LBACSYS.OLS$PROFILE</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.SYS_C008342</td><td>LBACSYS.OLS$USER</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.SYS_C008348</td><td>LBACSYS.OLS$PROG</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>LBACSYS.SYS_C008432</td><td>LBACSYS.OLS$AUDIT</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.CHECKPOINTS_PK</td><td>VECSYS.VECTOR$INDEX$CHECKPOINTS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.CQV_INDEX_OBJN_HASH</td><td>VECSYS.CANDIDATE_QUERY_VECTORS$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.DV_HIT_IDX_CRED</td><td>VECSYS.DV_HITCOUNTS$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.DV_HIT_IDX_UID</td><td>VECSYS.DV_HITCOUNTS$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.SYS_C002435</td><td>VECSYS.VECTOR_ADMIN_PARAMS$</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.SYS_C002437</td><td>VECSYS.VECTOR_TABLE_METADATA</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.SYS_IL0000002005C00007$$</td><td>VECSYS.VECTOR$INDEX</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>VECSYS.SYS_IL0000002005C00008$$</td><td>VECSYS.VECTOR$INDEX</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>VECSYS.SYS_IL0000002005C00010$$</td><td>VECSYS.VECTOR$INDEX</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>VECSYS.SYS_IL0000002020C00003$$</td><td>VECSYS.CANDIDATE_QUERY_VECTORS$</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>VECSYS.SYS_IL0000002024C00012$$</td><td>VECSYS.VECTOR$INDEX$BUILD$</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>VECSYS.SYS_IL0000002029C00009$$</td><td>VECSYS.VECTOR$INDEX$CHECKPOINTS</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>VECSYS.SYS_IL0000002039C00005$$</td><td>VECSYS.VECTOR_TABLE_METADATA</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>VECSYS.SYS_IL0000002039C00006$$</td><td>VECSYS.VECTOR_TABLE_METADATA</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>VECSYS.VECTOR$INDEX$BUILD$I1</td><td>VECSYS.VECTOR$INDEX$BUILD$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.VECTOR$INDEX$BUILD$I2</td><td>VECSYS.VECTOR$INDEX$BUILD$</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.VECTOR$INDEX$CHECKPOINTS$I1</td><td>VECSYS.VECTOR$INDEX$CHECKPOINTS</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>VECSYS.VECTOR$INDEX$I1</td><td>VECSYS.VECTOR$INDEX</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.COKEY</td><td>XDB.XDB$CHECKOUTS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.JSON$COLLECTION_METADATA_PK</td><td>XDB.JSON$COLLECTION_METADATA</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.JSON$USERS_PK</td><td>XDB.JSON$USERS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.JSON$USERS_U1</td><td>XDB.JSON$USERS</td><td>NORMAL</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.JSON$USER_CREDENTIALS_PK</td><td>XDB.JSON$USER_CREDENTIALS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.JSON$USER_ROLES_N1</td><td>XDB.JSON$USER_ROLES</td><td>NORMAL</td><td></td><td></td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.JSON$USER_ROLES_PK</td><td>XDB.JSON$USER_ROLES</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.STATS_PK</td><td>XDB.XDB$STATS</td><td>NORMAL</td><td>Y</td><td>Y</td><td></td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007467</td><td>XDB.XDB$GROUP_DEF</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007468</td><td>XDB.XDB$GROUP_REF</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007470</td><td>XDB.XDB$ATTRGROUP_REF</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007473</td><td>XDB.XDB$NLOCKS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007475</td><td>XDB.APP_USERS_AND_ROLES</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007477</td><td>XDB.XDB$RESCONFIG</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_C007503</td><td>XDB.XDB$STATS</td><td>NORMAL</td><td>Y</td><td></td><td>Y</td><td></td><td>0</td><td>0</td><td>2026-07-05</td></tr>
+<tr><td>XDB.SYS_IL0000026318C00001$$</td><td>XDB.XDB$XDB_READY</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026327C00005$$</td><td>XDB.XDB$H_INDEX</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00004$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00005$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00007$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00011$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00016$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00017$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00018$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00019$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00024$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00025$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00026$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00027$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00032$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00033$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00034$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00035$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00040$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00041$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00042$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00043$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00048$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00049$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00050$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00051$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00056$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00057$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00058$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00059$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00064$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00065$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00066$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00067$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00072$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00073$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00074$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00075$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00080$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00081$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00082$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00083$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00088$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00089$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00090$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00091$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00096$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00097$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00098$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00099$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00104$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00105$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00106$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00107$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00112$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00113$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00114$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00115$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00116$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00119$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00120$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00121$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00122$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00128$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00129$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00130$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00131$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00134$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00135$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00136$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00137$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026439C00138$$</td><td>XDB.XDB$SIMPLE_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00004$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00005$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00007$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00015$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00016$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00017$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00022$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00024$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00027$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00028$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00029$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00034$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00035$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00036$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00039$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00042$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00043$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00044$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00049$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00050$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00051$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00054$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00055$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00056$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00059$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00060$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00061$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00066$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00068$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00069$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00074$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00075$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00076$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00077$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00078$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00079$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00081$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00082$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00083$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00084$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00089$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00090$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00091$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00092$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00097$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00098$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00099$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00100$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00105$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00106$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00107$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00108$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00113$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00114$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00115$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00116$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00121$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00122$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00123$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00124$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00129$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00130$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00131$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00132$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00137$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00138$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00139$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00140$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00145$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00146$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00147$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00148$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00153$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00154$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00155$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00156$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00157$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00158$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00163$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00164$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00165$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00166$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00171$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00172$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00173$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00174$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00179$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00183$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00184$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00185$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00186$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00187$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00188$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00190$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00191$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026581C00192$$</td><td>XDB.XDB$COMPLEX_TYPE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00004$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00005$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00007$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00011$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00012$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00013$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00014$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00015$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00016$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00017$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026775C00018$$</td><td>XDB.XDB$ALL_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00004$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00005$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00007$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00011$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00012$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00013$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00014$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00015$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00016$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00017$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026799C00018$$</td><td>XDB.XDB$CHOICE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00004$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00005$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00007$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00011$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00012$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00013$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00014$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00015$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00016$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00017$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026823C00018$$</td><td>XDB.XDB$SEQUENCE_MODEL</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00004$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00005$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00007$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00031$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00032$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00033$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00059$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00068$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00069$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026847C00070$$</td><td>XDB.XDB$ELEMENT</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00004$$</td><td>XDB.XDB$ATTRIBUTE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00005$$</td><td>XDB.XDB$ATTRIBUTE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00007$$</td><td>XDB.XDB$ATTRIBUTE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00031$$</td><td>XDB.XDB$ATTRIBUTE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00032$$</td><td>XDB.XDB$ATTRIBUTE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026869C00033$$</td><td>XDB.XDB$ATTRIBUTE</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00004$$</td><td>XDB.XDB$ANYATTR</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00005$$</td><td>XDB.XDB$ANYATTR</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00007$$</td><td>XDB.XDB$ANYATTR</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00031$$</td><td>XDB.XDB$ANYATTR</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00032$$</td><td>XDB.XDB$ANYATTR</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026883C00033$$</td><td>XDB.XDB$ANYATTR</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00004$$</td><td>XDB.XDB$ANY</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00005$$</td><td>XDB.XDB$ANY</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00007$$</td><td>XDB.XDB$ANY</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00031$$</td><td>XDB.XDB$ANY</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00032$$</td><td>XDB.XDB$ANY</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026897C00033$$</td><td>XDB.XDB$ANY</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00004$$</td><td>XDB.XDB$GROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00005$$</td><td>XDB.XDB$GROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00007$$</td><td>XDB.XDB$GROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00013$$</td><td>XDB.XDB$GROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00014$$</td><td>XDB.XDB$GROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026911C00015$$</td><td>XDB.XDB$GROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00004$$</td><td>XDB.XDB$GROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00005$$</td><td>XDB.XDB$GROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00007$$</td><td>XDB.XDB$GROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00014$$</td><td>XDB.XDB$GROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00015$$</td><td>XDB.XDB$GROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026925C00016$$</td><td>XDB.XDB$GROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00004$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00005$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00007$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00010$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00011$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00012$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00013$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00014$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026939C00015$$</td><td>XDB.XDB$ATTRGROUP_DEF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00004$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00005$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00007$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00012$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+<tr><td>XDB.SYS_IL0000026959C00013$$</td><td>XDB.XDB$ATTRGROUP_REF</td><td>LOB</td><td>Y</td><td></td><td></td><td></td><td>0</td><td>0</td><td>never</td></tr>
+</tbody></table></div></div></body></html>

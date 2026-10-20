@@ -12,15 +12,30 @@
 --
 -- metric_value is the open transaction count (always 1 per session in Oracle) so the value has the
 -- same meaning and unit as the SQL Server row.
+--
+-- CRITICAL strictly requires a waiter (a session blocked by it): an abandoned sleeping session
+-- blocking someone else. A sleeping session holding a transaction that blocks nobody is normal
+-- application behavior and never pages CRITICAL on its own.
+--
+-- All thresholds are declared in the top-level params CTE so every number appears once.
 
+WITH params AS (
+    SELECT
+        60   AS idle_abandoned_seconds,
+        1800 AS idle_critical_seconds,
+        300  AS idle_warning_seconds
+    FROM dual
+)
 SELECT
     CAST('SID=' || TO_CHAR(s.sid) || ',' || TO_CHAR(s."SERIAL#") AS varchar2(256)) AS metric_item,
     CAST('1' AS varchar2(32)) AS metric_value,
     CAST('transaction(s)' AS varchar2(32)) AS metric_unit,
     CASE
-        WHEN s.blocking_others > 0 THEN 'CRITICAL'
-        WHEN ROUND(s.last_call_et / 60) >= 365 * 24 * 60 THEN 'CRITICAL'
-        WHEN ROUND(s.last_call_et / 60) >= 24 * 60 THEN 'WARNING'
+        -- CRITICAL strictly requires a waiter: an abandoned sleeping session blocking another session.
+        WHEN s.last_call_et >= p.idle_abandoned_seconds AND s.blocking_others > 0 THEN 'CRITICAL'
+        WHEN s.blocking_others > 0 THEN 'WARNING'
+        WHEN s.last_call_et >= p.idle_critical_seconds THEN 'WARNING'
+        WHEN s.last_call_et >= p.idle_warning_seconds THEN 'LOGGING'
         ELSE 'OK'
     END AS status,
     'Sleeping session with open transaction. '
@@ -59,4 +74,5 @@ FROM
     WHERE se.status = 'INACTIVE'
       AND se.username IS NOT NULL
 ) s
-ORDER BY s.last_call_et DESC;
+CROSS JOIN params p
+ORDER BY s.blocking_others DESC, s.last_call_et DESC;

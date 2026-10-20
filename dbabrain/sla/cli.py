@@ -101,10 +101,10 @@ def _run_validate(args: argparse.Namespace, config, logger) -> int:
             started_at=started_at,
             finished_at=finished_at,
             message=f"status={summary.status} passed={summary.passed_count} at_risk={summary.at_risk_count} "
-            f"failed={summary.failed_count} no_data={summary.no_data_count}",
+            f"failed={summary.failed_count} burning={summary.burning_count} no_data={summary.no_data_count}",
         )
     notified_id = _maybe_notify_telegram(args, config, summary, logger, sla_run_id=sla_run_id) if args.notify else None
-    web_path = _maybe_publish_web(args, config, summary, sla_run_id=sla_run_id) if args.publish_web else None
+    web_path = _maybe_publish_web(args, config, summary, policies=policies, sla_run_id=sla_run_id) if args.publish_web else None
 
     payload = asdict(summary)
     payload["sla_run_id"] = sla_run_id
@@ -216,6 +216,7 @@ def _maybe_notify_telegram(args, config, summary, logger, *, sla_run_id: int | N
             "passed": summary.passed_count,
             "at_risk": summary.at_risk_count,
             "failed": summary.failed_count,
+            "burning": summary.burning_count,
             "no_data": summary.no_data_count,
             "level": level,
             "notify_kind": decision.kind,
@@ -227,7 +228,7 @@ def _maybe_notify_telegram(args, config, summary, logger, *, sla_run_id: int | N
 
 #: Worst first. Used to tell an escalation (AT_RISK -> FAILED) from a de-escalation, so a finding
 #: that got worse can interrupt while one that improved does not.
-SLA_SEVERITY_ORDER = ("FAILED", "AT_RISK", "NO_DATA", "NOT_CONFIGURED", "PASSED")
+SLA_SEVERITY_ORDER = ("FAILED", "BURNING", "AT_RISK", "NO_DATA", "NOT_CONFIGURED", "PASSED")
 
 
 def _reminder_seconds(config) -> int:
@@ -272,7 +273,7 @@ def _state_fingerprint(diff) -> str:
 WEB_HISTORY_LIMIT = 15
 
 
-def _maybe_publish_web(args: argparse.Namespace, config, summary, *, sla_run_id: int | None = None):
+def _maybe_publish_web(args: argparse.Namespace, config, summary, *, policies=None, sla_run_id: int | None = None):
     out_dir = args.web_dir if args.web_dir else (config.runtime_dir / "reports")
     store = SlaStore.from_config(config)
     recent_runs = [dict(row) for row in store.fetch_recent_runs(limit=WEB_HISTORY_LIMIT)]
@@ -280,7 +281,10 @@ def _maybe_publish_web(args: argparse.Namespace, config, summary, *, sla_run_id:
     # never disagree about what changed.
     return publish_html(summary, recent_runs=recent_runs, out_dir=out_dir,
                         previous_state=store.fetch_previous_state(before_run_id=sla_run_id),
-                        history_limit=WEB_HISTORY_LIMIT)
+                        history_limit=WEB_HISTORY_LIMIT,
+                        policies=policies, store=store,
+                        runtime_dir=getattr(config, "runtime_dir", None),
+                        data_dir=getattr(config, "data_dir", None))
 
 
 def _run_history(args: argparse.Namespace, config) -> int:
@@ -304,7 +308,8 @@ def _format_validate_text(payload: dict) -> str:
     lines = [
         f"SLA/SLO compliance: {payload['status']} (sla_run_id={payload.get('sla_run_id')})",
         f"policies={payload['policy_count']} instances={payload['result_count']} passed={payload['passed_count']} "
-        f"at_risk={payload['at_risk_count']} failed={payload['failed_count']} no_data={payload['no_data_count']}",
+        f"at_risk={payload['at_risk_count']} failed={payload['failed_count']} "
+        f"burning={payload.get('burning_count', 0)} no_data={payload['no_data_count']}",
     ]
     for result in payload["results"]:
         lines.append(
@@ -321,7 +326,8 @@ def _format_validate_markdown(payload: dict) -> str:
         "# SLA / SLO compliance report", "", f"Overall status: **{payload['status']}**", "",
         "## Executive summary", "",
         f"Passed: {payload['passed_count']}; at risk: {payload['at_risk_count']}; "
-        f"failed: {payload['failed_count']}; no data: {payload['no_data_count']}.", "",
+        f"failed: {payload['failed_count']}; burning: {payload.get('burning_count', 0)}; "
+        f"no data: {payload['no_data_count']}.", "",
         "## SLI results", "", "| SLI | Target | Domain | Actual | Objective | Status | Coverage | Data quality |",
         "| --- | --- | --- | ---: | ---: | --- | ---: | --- |",
     ]

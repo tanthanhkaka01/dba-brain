@@ -43,6 +43,17 @@ DECLARE @counters_since varchar(19) =
 DECLARE @cpu_count varchar(12) =
     CAST((SELECT cpu_count FROM sys.dm_os_sys_info) AS varchar(12));
 
+-- How many of those CPUs the engine may actually run on. cpu_count is what the host has; the
+-- schedulers are what SQL Server uses, and the edition decides the difference: Standard stops at
+-- the lesser of 4 sockets or 24 cores. Measured 2026-10-16 on a 2019 Standard instance: 60 logical
+-- CPUs, 48 schedulers VISIBLE ONLINE, 12 VISIBLE OFFLINE. A percentage taken of 60 there tops out
+-- at 80 with the engine saturated, which is the instance at full load reading as healthy.
+DECLARE @schedulers_online varchar(12) =
+    CAST((SELECT COUNT(*) FROM sys.dm_os_schedulers WHERE status = 'VISIBLE ONLINE') AS varchar(12));
+
+DECLARE @edition varchar(128) =
+    REPLACE(CAST(SERVERPROPERTY('Edition') AS varchar(128)), ',', ' ');
+
 DECLARE @rows TABLE (
     metric_item  varchar(64)  NOT NULL PRIMARY KEY,
     metric_value varchar(32)  NOT NULL,
@@ -57,13 +68,72 @@ DECLARE @rows TABLE (
 -- an evicted plan takes its worker time with it, and an ad-hoc batch that was never cached was
 -- never in the sum. The resource pools carry every millisecond the engine spent, cached or not.
 -- The pools are disjoint (internal, default, and any user pools), so the sum is the instance.
+--
+-- **Only where the pools account CPU at all.** Resource Governor is an Enterprise feature, and on
+-- Standard, Web and Express the DMV lists the internal pool alone and its total never moves -
+-- measured 2026-10-16 on five instances of the estate: 0, 0, 0, 1 and 3 ms since startup, while
+-- one of them served seven cores of work. Every Enterprise and Developer instance listed the
+-- default pool with real totals. Reporting the flat 0 put "CPU used 0.0%" on a busy ERP instance
+-- for weeks, so a server with no default pool reports no pool CPU, and the page says why.
 -- ------------------------------------------------------------------------------------------
 DECLARE @cpu_ms bigint =
     (SELECT SUM(total_cpu_usage_ms) FROM sys.dm_resource_governor_resource_pools);
 
+DECLARE @pools_account_cpu varchar(1) =
+    CASE WHEN EXISTS (SELECT 1 FROM sys.dm_resource_governor_resource_pools WHERE name = 'default')
+         THEN '1' ELSE '0' END;
+
 INSERT INTO @rows (metric_item, metric_value, metric_unit, source)
 SELECT 'cpu_usage_ms', CAST(@cpu_ms AS varchar(32)), 'ms', 'dm_resource_governor_resource_pools'
-WHERE @cpu_ms IS NOT NULL;
+WHERE @cpu_ms IS NOT NULL AND @pools_account_cpu = '1';
+
+-- ------------------------------------------------------------------------------------------
+-- CPU as the scheduler monitor sampled it, every edition.
+--
+-- RING_BUFFER_SCHEDULER_MONITOR writes one record a minute holding the SQL Server process's share
+-- of the host's CPU and the host's idle share, and keeps about four hours of them. It is the one
+-- CPU reading a Standard or Express instance has of itself. These are gauges, not counters: the
+-- average of the minutes since the previous collection (15, at this metric's cadence), and the
+-- number of minutes it was taken over, so a report can say what it covered. Not differenced.
+--
+-- Records whose idle and process figures are both 0 are dropped, the rule SYSTEM_CPU_MEMORY uses:
+-- that pair is a record the monitor wrote without measuring, not an idle host running nothing.
+--
+-- On Linux the host half is not reported. SystemIdle reads 0 there - measured 2026-10-16 on a
+-- 2025 container: system idle 0%, SQL Server 7%, the host plainly not at 100% - so only the
+-- process share is kept, and the host's CPU comes from OS_CPU_COUNTERS.
+-- ------------------------------------------------------------------------------------------
+DECLARE @ms_ticks bigint = (SELECT ms_ticks FROM sys.dm_os_sys_info);
+DECLARE @rb_sql decimal(10,2), @rb_host decimal(10,2), @rb_minutes int;
+
+SELECT @rb_sql     = AVG(CAST(m.process_pct AS decimal(10,2))),
+       @rb_host    = AVG(CAST(100 - m.idle_pct AS decimal(10,2))),
+       @rb_minutes = COUNT(*)
+FROM (
+    SELECT x.record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') AS process_pct,
+           x.record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS idle_pct
+    FROM (
+        SELECT CAST(rb.record AS xml) AS record
+        FROM sys.dm_os_ring_buffers AS rb
+        WHERE rb.ring_buffer_type = 'RING_BUFFER_SCHEDULER_MONITOR'
+          AND rb.record LIKE '%<SystemHealth>%'
+          AND rb.[timestamp] > @ms_ticks - 15 * 60 * 1000
+    ) AS x
+) AS m
+WHERE m.idle_pct BETWEEN 0 AND 100
+  AND m.process_pct BETWEEN 0 AND 100
+  AND NOT (m.idle_pct = 0 AND m.process_pct = 0);
+
+INSERT INTO @rows (metric_item, metric_value, metric_unit, source)
+SELECT x.metric_item, x.metric_value, x.metric_unit, 'dm_os_ring_buffers'
+FROM (
+              SELECT 'sql_cpu_pct_sampled' AS metric_item, CAST(@rb_sql AS varchar(32)) AS metric_value,
+                     'percent' AS metric_unit
+    UNION ALL SELECT 'host_cpu_pct_sampled', CAST(@rb_host AS varchar(32)), 'percent'
+              WHERE @@VERSION NOT LIKE '%on Linux%'
+    UNION ALL SELECT 'cpu_sample_minutes', CAST(@rb_minutes AS varchar(32)), 'minutes'
+) AS x
+WHERE @rb_minutes > 0;
 
 -- ------------------------------------------------------------------------------------------
 -- Throughput, from sys.dm_os_performance_counters.
@@ -173,8 +243,13 @@ SELECT
         + ', unit=' + r.metric_unit
         + ', counters_since=' + @counters_since
         + ', cpu_count=' + @cpu_count
+        + ', schedulers_online=' + @schedulers_online
+        + ', pools_account_cpu=' + @pools_account_cpu
+        + ', edition=' + ISNULL(@edition, 'unknown')
         + ', source=' + r.source
-        + ', note=cumulative_since_start_subtract_two_collections'
+        + CASE WHEN r.source = 'dm_os_ring_buffers'
+               THEN ', note=gauge_averaged_over_the_sampled_minutes_never_subtract'
+               ELSE ', note=cumulative_since_start_subtract_two_collections' END
         AS varchar(1000)) AS message
 FROM @rows AS r
 ORDER BY r.metric_item;

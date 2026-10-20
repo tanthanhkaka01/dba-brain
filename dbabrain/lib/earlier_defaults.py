@@ -167,3 +167,75 @@ def state_lab_folders(sre_config: Any) -> list[dict[str, str]]:
             block[field] = value
             changes.append({"where": "sre.docker_db", "field": field, "value": value})
     return changes
+
+
+#: The fields of an ``app_commands.json`` record, in the order the shipped files write them. Every
+#: one is required since 0.30.0 (the operator, 2026-10-16: *in app_commands every field is required*).
+APP_COMMAND_FIELDS = (
+    "node_role",
+    "sort_order",
+    "app_command_id",
+    "app_code",
+    "app_name",
+    "display_name",
+    "log_scope",
+    "working_dir",
+    "command_text",
+    "active",
+    "run_mode",
+    "max_parallel",
+    "time_window",
+    "note",
+)
+
+
+def state_app_commands(document: Any) -> list[dict[str, str]]:
+    """Write into each app command the value the daemon has been giving each field it left out.
+
+    The same rule as the rest of this file: a field the loader (``jobs.daemon.load_app_commands``,
+    ``lib.run_mode.parse``) filled in is written down with that value, so making the field required
+    changes nothing the node does. ``sort_order`` the loader never read: the record's place in the
+    file is the order it was listed in. A missing ``note`` is an empty one - the reason for a schedule
+    is not something an upgrade can know.
+
+    Three fields the loader never filled are left missing, and the configuration check names them:
+    ``app_command_id`` and ``log_scope`` (it refuses a record without them) and ``time_window``,
+    whose ``repeat_interval`` it has no value for.
+    """
+    records = document.get("app_commands") if isinstance(document, dict) else None
+    if not isinstance(records, list):
+        return []
+    changes: list[dict[str, str]] = []
+    for position, record in enumerate(records, start=1):
+        if not isinstance(record, dict):
+            continue
+        command_id = record.get("app_command_id")
+        mode = str(record.get("run_mode") or "sync").strip().lower()
+        loader_values = {
+            "node_role": "all",
+            "sort_order": position,
+            "app_code": command_id,
+            "app_name": record.get("app_code") or command_id,
+            "display_name": record.get("command_name") or record.get("app_name") or command_id,
+            "working_dir": "",
+            "command_text": "",
+            "active": True,
+            "run_mode": "sync",
+            "max_parallel": 4 if mode == "async" else 1,
+            "note": "",
+        }
+        stated = False
+        for field, value in loader_values.items():
+            if field in record or value is None:
+                continue
+            record[field] = value
+            stated = True
+            changes.append({"where": f"app_commands[{command_id or position}]", "field": field,
+                            "value": str(value)})
+        if stated:
+            # The order the shipped files use, so a node's file reads like the one it came from.
+            ordered = {field: record[field] for field in APP_COMMAND_FIELDS if field in record}
+            ordered.update({field: value for field, value in record.items() if field not in ordered})
+            record.clear()
+            record.update(ordered)
+    return changes

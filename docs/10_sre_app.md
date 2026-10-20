@@ -1459,6 +1459,61 @@ python -m dbabrain.sre.cli ssh 198.51.100.3  -- uptime
 python -m dbabrain.sre.cli ssh 198.51.100.11 -- systemctl status mysql
 ```
 
+### run-cmd-adhoc
+
+Run one shell command on a host named by `server_id`, with the host's login resolved from `data/db_instances.json` (`cmd_access`).
+
+`common.cli run-cmd` runs a shell command from its request alone and reads no configuration (rules R09); `sre ssh` connects through a bastion host that is not reachable from every node. `run-cmd-adhoc` is the host twin of `sql_tasks run-sql-adhoc`: it resolves the target host's OS credentials from configuration and invokes `run-cmd` over the transport, passing the credentials on stdin.
+
+A shell command cannot be classified as read-only: what it does is what it says. Authorization is asked on every run via `common.cli authorize` (operation `run-cmd-adhoc`, level 50 on the emergency operations ladder), and the question names the command (and notes sudo if requested). Once authorized, `run-cmd` is invoked with `confirm: true` and `assume_yes: true`. The command's output is the answer and is not copied into the runtime log.
+
+#### Request Format
+
+The request is written to a file and passed as `@req.json` (on Windows single-quoted inline JSON breaks; stdin can be passed as `-`):
+
+```json
+{
+  "server_id": "LAB-192-0-2-10-HOST",
+  "command": "systemctl restart mysql",
+  "sudo": true,
+  "format": "json",
+  "timeout_seconds": 60,
+  "confirm": "yes",
+  "reason": "restarting lab container"
+}
+```
+
+Fields:
+- `server_id` (required, string): the target host instance in `db_instances.json`.
+- `command` or `script` (exactly one, string): the shell command line or script text to run.
+- `runtime` (optional, `host` | `docker` | `k8s`): where the command runs. **Omitted, an instance with a `container_name` runs it inside that container** (as root, with no `docker` binary) - `"runtime": "host"` runs it on the machine itself, e.g. to restart that container. The rehearsal's `runs` and the authorization question say which.
+- `sudo` (optional, boolean): `true` to run through sudo, the password on stdin (run-cmd's own).
+- `format` (optional, string): run-cmd output format (`json` default, `txt` or `raw`).
+- `timeout_seconds` (optional, positive integer): maximum execution time.
+- `confirm` (optional, string or boolean): `"yes"` provides the typed answer; `true` declares intent only (prompting at the terminal).
+- `assume_yes` (optional, boolean): proceed unattended without terminal confirmation.
+- `reason` (optional, string): operator reason recorded in the authorization gate.
+
+Any unexpected field is refused before authorization or execution.
+
+Flags:
+- `--key` / `--key-base64`: secret passphrase to resolve the host login.
+- `--data-dir`: override the `data/` directory.
+- `--dry-run`: prints the request `run-cmd` would receive with the password masked; asks nothing, runs nothing.
+
+#### Examples
+
+```powershell
+# Rehearsal: resolve credentials and inspect the run-cmd payload without executing
+python -m dbabrain.sre.cli run-cmd-adhoc @req.json --dry-run
+
+# Run it: the question names the command and where it runs; "confirm": "yes" in the
+# request answers it when no terminal is attached
+python -m dbabrain.sre.cli run-cmd-adhoc @req.json --key-base64 <base64 passphrase>
+```
+
+Prefer `@file` to `-` from PowerShell 5.1: its pipe prepends a byte-order mark to what it sends.
+
 ### Lab Database Docker Instances
 
 `create-db-docker` provisions a single or HA-lab database **container** (distinct from the VMware cluster flows above), writes its compose + `.env` under `/opt/db_ops/containers/<name>/`, brings it up with `docker compose`, waits for health, and registers the connection in `data/docker_db_connections.json`.

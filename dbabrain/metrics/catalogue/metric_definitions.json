@@ -3,7 +3,7 @@
   "notes": "Normalized multi-DB metric catalog. metric_code uses engine-neutral group prefixes; collector_type and variants bind each metric to SQL or command collectors or marks unsupported combinations explicitly.",
   "collection": {
     "max_parallel_servers": 16,
-    "note": "How many server_id groups a collect pass may walk at once. Metrics of one server_id always run one at a time, in catalog order, so a machine never gets two WinRM/SSH sessions or two metric queries at once; only different servers overlap. 1 restores the old fully serial pass."
+    "note": "How many batches one collect pass runs at once. A batch is the due metrics of one category on one server, run one at a time in catalog order; different categories and different servers run at the same time and never wait for each other, so a server may get one session per category at once. A batch is claimed by one pass at a time, because APP-METRICS runs async. 1 restores a fully serial pass."
   },
   "metrics": [
     {
@@ -13,6 +13,7 @@
       "category": "availability",
       "default_importance": 5,
       "active": true,
+      "note": "repeat_interval 30, not 60 (the operator, 2026-10-16): the availability SLO counts minutes, and a minute is up when any INSTANCE_STATUS sample in it is OK, so two samples a minute keep one late or failed collection from costing the minute. It is the first metric of each server's availability batch, which since 0.30.0 runs beside the other categories and never waits for them.",
       "connection_error_severity": "CRITICAL",
       "execution_error_severity": "CRITICAL",
       "time_window": {
@@ -26,7 +27,7 @@
         "to_hour": null,
         "from_minute": null,
         "to_minute": null,
-        "repeat_interval": 60,
+        "repeat_interval": 30,
         "timeout": 60
       },
       "collector_type": "sql",
@@ -99,6 +100,19 @@
       "collector_type": "sql",
       "variants": [
         {
+          "db_type": "oracle",
+          "min_major_version": 12,
+          "name": "oracle_12c_plus",
+          "file": "oracle/002_oracle_database_status.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 11,
+          "name": "oracle_9i_to_11g",
+          "file": "oracle/002_oracle_database_status_11g.sql"
+        },
+        {
           "db_type": "sqlserver",
           "min_major_version": 0,
           "max_major_version": 10,
@@ -110,12 +124,6 @@
           "min_major_version": 11,
           "name": "sqlserver_modern_2012_plus",
           "file": "sqlserver/002_sqlserver_database_status.sql"
-        },
-        {
-          "db_type": "oracle",
-          "min_major_version": 9,
-          "name": "oracle_9i_plus",
-          "file": "oracle/002_oracle_database_status.sql"
         },
         {
           "db_type": "oracle",
@@ -482,6 +490,13 @@
           "name": "postgresql_todo",
           "supported": false,
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 9,
+          "name": "oracle_9i_archive_dest",
+          "file": "oracle/110_oracle_archive_dest.sql"
         }
       ],
       "report_policy": {
@@ -562,9 +577,17 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
+          "min_major_version": 12,
+          "name": "postgresql_12_plus",
+          "file": "postgresql/008_postgresql_temp_space.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 0,
+          "max_major_version": 11,
+          "name": "postgresql_pre_12_unsupported",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "pg_ls_tmpdir() - the temp files in use, by backend - exists from 12."
         }
       ],
       "max_rows": 500
@@ -744,9 +767,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/010_oracle_scheduler_failed_jobs.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
           "supported": false,
-          "unsupported_reason": "Oracle Scheduler jobs do not map cleanly to SQL Server Agent job history."
+          "unsupported_reason": "DBMS_SCHEDULER and dba_scheduler_job_run_details exist from 10g."
         },
         {
           "db_type": "mysql",
@@ -816,9 +847,8 @@
           "db_type": "sqlserver",
           "min_major_version": 0,
           "max_major_version": 10,
-          "name": "sqlserver_2008r2_unsupported",
-          "supported": false,
-          "unsupported_reason": "Always On Availability Groups require SQL Server 2012 or newer."
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/011_sqlserver_availability_health.sql"
         },
         {
           "db_type": "sqlserver",
@@ -828,9 +858,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 11,
+          "name": "oracle_11g_plus",
+          "file": "oracle/011_oracle_dataguard_health.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_pre_11g_unsupported",
           "supported": false,
-          "unsupported_reason": "Oracle Data Guard health needs a separate metric model."
+          "unsupported_reason": "Data Guard health monitoring via v$dataguard_stats requires Oracle 11g or newer."
         },
         {
           "db_type": "mysql",
@@ -960,6 +998,7 @@
       "metric_code": "STORAGE_DISK_FREE_SPACE",
       "db_type": "multi",
       "category": "capacity",
+      "note": "Every 300 s, not 3600: the full disk is the CRITICAL for a data or log file that can still grow - a log is LOGGING while it can grow (the operator, 2026-10-15) - so the disk must be seen in time. On 2026-08-10 a volume losing about 140 GB an hour went from OK to CRITICAL in one 3600 s sample, two minutes before its log was full.",
       "default_importance": 5,
       "active": true,
       "connection_error_severity": "WARNING",
@@ -975,7 +1014,7 @@
         "to_hour": null,
         "from_minute": null,
         "to_minute": null,
-        "repeat_interval": 3600,
+        "repeat_interval": 300,
         "timeout": 60
       },
       "collector_type": "sql",
@@ -1075,9 +1114,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
-          "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/014_postgresql_wait_stats.sql"
         }
       ],
       "max_rows": 500
@@ -1123,9 +1162,18 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 11,
+          "name": "oracle_11g_plus",
+          "file": "oracle/015_oracle_deadlock_recent.sql",
+          "repeat_interval": 3600
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_pre_11g_unsupported",
           "supported": false,
-          "unsupported_reason": "Recent deadlock history needs alert-log or diagnostic repository parsing, not a portable SQL-only query."
+          "unsupported_reason": "v$diag_alert_ext - the alert log from SQL - exists from 11g; before it the log is a file only."
         },
         {
           "db_type": "mysql",
@@ -1135,9 +1183,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
+          "name": "postgresql_through_server_log",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "PostgreSQL keeps the history of its deadlocks only in the server log: POSTGRES_SERVER_LOG grades 'deadlock detected' by this metric's rule (any WARNING, 5 in the window CRITICAL), and the Workload table differences pg_stat_database.deadlocks."
         }
       ],
       "max_rows": 500
@@ -1183,9 +1231,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 11,
+          "name": "oracle_11g_plus",
+          "file": "oracle/016_oracle_backup_job_status.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_pre_11g_unsupported",
           "supported": false,
-          "unsupported_reason": "Backup job status depends on RMAN/job scheduler integration."
+          "unsupported_reason": "RMAN backup job details via v$rman_backup_job_details require Oracle 11g or newer."
         },
         {
           "db_type": "mysql",
@@ -1249,9 +1305,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 11,
+          "name": "oracle_11g_plus",
+          "file": "oracle/017_oracle_alertlog_recent_critical.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_pre_11g_unsupported",
           "supported": false,
-          "unsupported_reason": "Oracle alert log collection needs ADR/file access and a separate implementation."
+          "unsupported_reason": "ADR's v$diag_alert_ext exists from 11g."
         },
         {
           "db_type": "mysql",
@@ -1357,9 +1421,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 11,
+          "name": "oracle_11g_plus",
+          "file": "oracle/018_oracle_redo_reuse_wait.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_pre_11g_unsupported",
           "supported": false,
-          "unsupported_reason": "SQL Server log reuse wait has no direct Oracle equivalent."
+          "unsupported_reason": "Redo log reuse wait and archive destination monitoring require Oracle 11g or newer."
         },
         {
           "db_type": "mysql",
@@ -1484,9 +1556,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/021_oracle_block_corruption.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
           "supported": false,
-          "unsupported_reason": "Oracle corruption checks need DBVERIFY/RMAN/alert-log integration."
+          "unsupported_reason": "v$database_block_corruption is read from 10g; older releases are not covered."
         },
         {
           "db_type": "mysql",
@@ -1496,12 +1576,21 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
+          "min_major_version": 12,
+          "name": "postgresql_12_plus",
+          "file": "postgresql/021_postgresql_checksum_failures.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 0,
+          "max_major_version": 11,
+          "name": "postgresql_pre_12_unsupported",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "pg_stat_database.checksum_failures exists from PostgreSQL 12."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "note": "Corruption on every engine (1.159 / 1.160, 2026-10-15): SQL Server's msdb.dbo.suspect_pages, Oracle's v$database_block_corruption (what RMAN found), PostgreSQL's checksum failures (12+), each CRITICAL within 30 days."
     },
     {
       "metric_id": 22,
@@ -2301,9 +2390,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 11,
+          "name": "oracle_11g_plus",
+          "file": "oracle/024_oracle_sleeping_open_transaction.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_pre_11g_unsupported",
           "supported": false,
-          "unsupported_reason": "Sleeping open transaction detection uses SQL Server session and transaction DMVs."
+          "unsupported_reason": "Sleeping open transaction detection requires Oracle 11g or newer."
         },
         {
           "db_type": "mysql",
@@ -2313,9 +2410,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
+          "name": "postgresql_covered_by_long_transactions",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "Covered by POSTGRES_LONG_TRANSACTIONS (53): every transaction open 5 minutes is WARNING and 30 minutes CRITICAL, 'idle in transaction' included and named by its state. A variant here would page twice for the same session (1.149, 2026-10-15)."
         }
       ],
       "report_policy": {
@@ -2423,9 +2520,6 @@
       "category": "lock",
       "default_importance": 4,
       "empty_result_is_ok": true,
-      "sql_settings": {
-          "lock_scan_skip_above": 500000
-      },
       "active": true,
       "connection_error_severity": "WARNING",
       "execution_error_severity": "WARNING",
@@ -2450,19 +2544,35 @@
           "min_major_version": 0,
           "max_major_version": 10,
           "name": "sqlserver_legacy_2008r2",
-          "file": "sqlserver/legacy_2008r2/025_sqlserver_transaction_lock_holders.sql"
+          "file": "sqlserver/legacy_2008r2/025_sqlserver_transaction_lock_holders.sql",
+          "sql_settings": {
+            "lock_scan_skip_above": 2000000,
+            "lock_count_credible_locks_per_second": 2000000
+          }
         },
         {
           "db_type": "sqlserver",
           "min_major_version": 11,
           "name": "sqlserver_modern_2012_plus",
-          "file": "sqlserver/025_sqlserver_transaction_lock_holders.sql"
+          "file": "sqlserver/025_sqlserver_transaction_lock_holders.sql",
+          "sql_settings": {
+            "lock_scan_skip_above": 2000000,
+            "lock_count_credible_locks_per_second": 2000000
+          }
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/025_oracle_transaction_lock_holders.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
           "supported": false,
-          "unsupported_reason": "Transaction lock holder detection uses SQL Server locking DMVs."
+          "unsupported_reason": "v$session.blocking_session, which names who waits on whom, exists from 10g."
         },
         {
           "db_type": "mysql",
@@ -2472,9 +2582,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
-          "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/025_postgresql_transaction_lock_holders.sql"
         }
       ],
       "max_rows": 500
@@ -2719,6 +2829,7 @@
         "timeout": 60
       },
       "collector_type": "sql",
+      "empty_result_is_ok": true,
       "variants": [
         {
           "db_type": "sqlserver",
@@ -2754,7 +2865,7 @@
         }
       ],
       "max_rows": 500,
-      "note": "One code, both engines: 'what does this instance run on a schedule, and is it working' is the same question everywhere, and the catalog already maps codes per engine this way (LOG_FILE_SPACE reads the FRA on Oracle and the transaction log on SQL Server). Oracle 8i reads dba_jobs (DBMS_JOB), 10g+ reads dba_scheduler_jobs, SQL Server reads msdb. Every variant keeps metric_value = ENABLED/DISABLED and starts its message with enabled=/last_outcome=, because reports/inventory_health.py parses those by name."
+      "note": "One code, both engines: 'what does this instance run on a schedule, and is it working' is the same question everywhere, and the catalog already maps codes per engine this way (LOG_FILE_SPACE reads the FRA on Oracle and the transaction log on SQL Server). Oracle 8i reads dba_jobs (DBMS_JOB), 10g+ reads dba_scheduler_jobs, SQL Server reads msdb. Every variant keeps metric_value = ENABLED/DISABLED and starts its message with enabled=/last_outcome=, because reports/inventory_health.py parses those by name. No job at all is an answer, not a failure (empty_result_is_ok): SQL Server on Linux runs no Agent unless mssql-conf enables it, Express has none, and many Oracle schemas schedule nothing - each read NO_DATA, a finding, before 2026-10-15."
     },
     {
       "metric_id": 40,
@@ -2942,9 +3053,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/056_oracle_scheduler_job_runtime.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
           "supported": false,
-          "unsupported_reason": "SQL Server Agent jobs have no direct equivalent."
+          "unsupported_reason": "DBMS_SCHEDULER and dba_scheduler_running_jobs exist from 10g."
         },
         {
           "db_type": "mysql",
@@ -2956,7 +3075,7 @@
           "db_type": "postgresql",
           "name": "postgresql_todo",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "PostgreSQL has no scheduler in core; jobs run from cron or pg_cron, whose long statements QUERY_LONG_RUNNING grades."
         }
       ],
       "max_rows": 500
@@ -3023,6 +3142,12 @@
       "collector_type": "sql",
       "empty_result_is_ok": false,
       "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/044_oracle_process_limit.sql"
+        },
         {
           "db_type": "oracle",
           "min_major_version": 0,
@@ -3097,6 +3222,20 @@
       "variants": [
         {
           "db_type": "oracle",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/045_oracle_shared_pool_free.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 9,
+          "name": "oracle_9i_unsupported",
+          "supported": false,
+          "unsupported_reason": "Read from v$sysmetric, which exists from 10g; 9i is not covered."
+        },
+        {
+          "db_type": "oracle",
           "min_major_version": 0,
           "max_major_version": 8,
           "name": "oracle_8i_legacy",
@@ -3133,6 +3272,20 @@
       "variants": [
         {
           "db_type": "oracle",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/046_oracle_library_cache.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 9,
+          "name": "oracle_9i_unsupported",
+          "supported": false,
+          "unsupported_reason": "Read from v$sysmetric, which exists from 10g; 9i is not covered."
+        },
+        {
+          "db_type": "oracle",
           "min_major_version": 0,
           "max_major_version": 8,
           "name": "oracle_8i_legacy",
@@ -3167,6 +3320,27 @@
       "collector_type": "sql",
       "empty_result_is_ok": false,
       "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 18,
+          "name": "oracle_18c_plus",
+          "file": "oracle/047_oracle_buffer_cache_hit_18c.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 10,
+          "max_major_version": 17,
+          "name": "oracle_10g_to_17",
+          "file": "oracle/047_oracle_buffer_cache_hit.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 9,
+          "name": "oracle_9i_unsupported",
+          "supported": false,
+          "unsupported_reason": "Read from v$sysmetric, which exists from 10g; 9i is not covered."
+        },
         {
           "db_type": "oracle",
           "min_major_version": 0,
@@ -3834,6 +4008,55 @@
       "max_rows": 500
     },
     {
+      "metric_id": 107,
+      "metric_code": "OS_CPU_COUNTERS",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 1,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "cmd",
+      "target_env": [
+        "DBABRAIN_DB_TYPE",
+        "DBABRAIN_DB_PORT",
+        "DBABRAIN_DB_CONTAINER"
+      ],
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/016_os_cpu_counters.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/015_os_cpu_counters.sh"
+        }
+      ],
+      "report_policy": {
+        "_note": "Cumulative CPU totals since boot - the host's busy and idle time, and the database process's - deliberately ungraded, like PERFORMANCE_WORKLOAD_COUNTERS: the report subtracts two collections to get an interval. OS_CPU_USAGE is the graded reading of the moment; this is what the Workload section of the server report turns into the host's and the database's CPU over 15 minutes, an hour and a day.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 10
+    },
+    {
       "metric_id": 63,
       "metric_code": "DATABASE_USER_PERMISSIONS",
       "db_type": "multi",
@@ -3872,9 +4095,16 @@
         },
         {
           "db_type": "oracle",
-          "min_major_version": 9,
-          "name": "oracle_9i_plus",
+          "min_major_version": 12,
+          "name": "oracle_12c_plus",
           "file": "oracle/061_oracle_user_permissions.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 11,
+          "name": "oracle_9i_to_11g",
+          "file": "oracle/061_oracle_user_permissions_11g.sql"
         },
         {
           "db_type": "mysql",
@@ -5320,9 +5550,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
-          "supported": false,
-          "unsupported_reason": "The engine's cumulative throughput counters -- CPU, batch requests, transactions, logical and physical I/O, log bytes -- are a SQL Server feature set. The equivalent for this engine has not been authored yet."
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/081_oracle_workload_counters.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_8i_9i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/081_oracle_workload_counters.sql"
         },
         {
           "db_type": "mysql",
@@ -5332,9 +5570,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
-          "supported": false,
-          "unsupported_reason": "The engine's cumulative throughput counters -- CPU, batch requests, transactions, logical and physical I/O, log bytes -- are a SQL Server feature set. The equivalent for this engine has not been authored yet."
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/075_postgresql_workload_counters.sql"
         }
       ],
       "report_policy": {
@@ -5632,6 +5870,516 @@
       },
       "max_rows": 200,
       "note": "Asked on 2026-09-11: the plan-cache totals said how much work the cached plans did (2.8M executions, 241M logical reads in 15 minutes) and not which statements did it. The union of the top 25 by CPU, elapsed, logical reads, physical reads, logical writes and executions is at most 150 rows; the extra depth beyond the 20 the page shows is what lets consecutive samples be subtracted. Same plan-cache scan, cadence and timeout as PERFORMANCE_QUERY_STATS_TOTALS and for the same measured reason. Statement text is a 200-character snippet because the page is served and ad hoc statements carry literal values."
+    },
+    {
+      "metric_id": 98,
+      "metric_code": "ORACLE_ADR_INCIDENTS",
+      "db_type": "oracle",
+      "category": "errorlog",
+      "default_importance": 5,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 11,
+          "name": "oracle_11g_plus",
+          "file": "oracle/020_oracle_adr_incidents.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_pre_11g_unsupported",
+          "supported": false,
+          "unsupported_reason": "ADR views v$diag_incident and v$diag_problem exist from Oracle 11g."
+        }
+      ],
+      "max_rows": 200,
+      "note": "ADR (Automatic Diagnostic Repository) tracks critical database errors (internal ORA-00600, ORA-07445, process crashes, block corruption) as incidents. Querying v$diag_incident, v$diag_problem, and v$diag_info provides direct SQL-level visibility into incidents from both CDB and PDB connections without needing host file access to alert logs."
+    },
+    {
+      "metric_id": 99,
+      "metric_code": "QUERY_LATENCY_PERCENTILES",
+      "db_type": "multi",
+      "category": "performance",
+      "default_importance": 2,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 120
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 13,
+          "name": "sqlserver_2016_plus",
+          "file": "sqlserver/078_sqlserver_query_latency_percentiles.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 12,
+          "name": "sqlserver_pre_2016_unsupported",
+          "supported": false,
+          "unsupported_reason": "Query Store exists from SQL Server 2016."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Query Store is a SQL Server feature. See ORACLE_WAIT_LATENCY_HISTOGRAM (metric 100) for Oracle wait latency."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Query Store is a SQL Server feature. See POSTGRES_STATEMENT_TOTALS (metric 101) for PostgreSQL statement execution times."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Query Store is a SQL Server feature; no Query Store equivalent in MySQL."
+        }
+      ],
+      "report_policy": {
+        "_note": "Execution-weighted plan latency percentiles per Query Store interval, deliberately ungraded: collectors record and never grade latency numbers. collect_only keeps them out of warning/critical reports, and chart_summary_only keeps per-interval rows out of the generic chart grid.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 500,
+      "note": "Measures Query Store execution-weighted plan latency percentiles (p50, p95, p99) per completed interval across readable databases. Derived from sys.query_store_runtime_stats aggregated over completed intervals in the lookback window. Databases with Query Store disabled or no recent activity emit nothing."
+    },
+    {
+      "metric_id": 100,
+      "metric_code": "ORACLE_WAIT_LATENCY_HISTOGRAM",
+      "db_type": "oracle",
+      "category": "performance",
+      "default_importance": 2,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 11,
+          "name": "oracle_11g_plus",
+          "file": "oracle/072_oracle_wait_latency_histogram.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_pre_11g_unsupported",
+          "supported": false,
+          "unsupported_reason": "v$event_histogram wait time buckets exist from Oracle 11g."
+        },
+        {
+          "db_type": "sqlserver",
+          "name": "sqlserver_unsupported",
+          "supported": false,
+          "unsupported_reason": "v$event_histogram is an Oracle dynamic performance view. See QUERY_LATENCY_PERCENTILES (metric 99) for SQL Server."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_unsupported",
+          "supported": false,
+          "unsupported_reason": "v$event_histogram is an Oracle dynamic performance view. See POSTGRES_STATEMENT_TOTALS (metric 101) for PostgreSQL."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "v$event_histogram is an Oracle dynamic performance view; no equivalent in MySQL."
+        }
+      ],
+      "report_policy": {
+        "_note": "Raw cumulative wait event histogram buckets since startup, deliberately ungraded: the report subtracts two collections to determine interval wait distributions (dbabrain.lib). collect_only keeps them out of warning/critical reports, and chart_summary_only keeps bucket rows out of the generic chart grid.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 50,
+      "note": "Cumulative wait latency histograms from v$event_histogram for 5 core I/O and log sync events (db file sequential read, db file scattered read, direct path read, log file sync, log file parallel write). Emitted for every watched event since instance startup; differential analysis runs in reports."
+    },
+    {
+      "metric_id": 101,
+      "metric_code": "POSTGRES_STATEMENT_TOTALS",
+      "db_type": "postgresql",
+      "category": "performance",
+      "default_importance": 2,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 1800,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 13,
+          "name": "postgresql_13_plus",
+          "file": "postgresql/070_postgresql_statement_totals.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 0,
+          "max_major_version": 12,
+          "name": "postgresql_pre_13_unsupported",
+          "supported": false,
+          "unsupported_reason": "pg_stat_statements execution time columns total_exec_time and mean_exec_time were standardized in PostgreSQL 13 (renamed from total_time)."
+        },
+        {
+          "db_type": "sqlserver",
+          "name": "sqlserver_unsupported",
+          "supported": false,
+          "unsupported_reason": "pg_stat_statements is a PostgreSQL extension. See PERFORMANCE_TOP_QUERIES (metric 97) or QUERY_LATENCY_PERCENTILES (metric 99) for SQL Server."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "pg_stat_statements is a PostgreSQL extension. See ORACLE_WAIT_LATENCY_HISTOGRAM (metric 100) for Oracle."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "pg_stat_statements is a PostgreSQL extension; no equivalent in MySQL."
+        }
+      ],
+      "report_policy": {
+        "_note": "Raw cumulative execution totals from pg_stat_statements, deliberately ungraded: consecutive collections are subtracted downstream in dbabrain.lib to calculate interval workload rates and top query rankings. collect_only keeps them out of warning/critical reports, and chart_summary_only keeps per-query rows out of the generic chart grid.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 120,
+      "note": "Workload attribution from pg_stat_statements for PostgreSQL 13+. Emits cluster-wide totals ('all_statements') plus the union of the top 25 statements by total_exec_time and top 25 by calls. If the extension is not installed, emits a single LOGGING row explaining how to configure it."
+    },
+    {
+      "metric_id": 102,
+      "metric_code": "MEMORY_GRANTS_PENDING",
+      "db_type": "sqlserver",
+      "category": "performance",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 120,
+        "timeout": 30
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_2012_plus",
+          "file": "sqlserver/079_sqlserver_memory_grants_pending.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/079_sqlserver_memory_grants_pending.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Workspace memory grants queued behind resource semaphores are SQL Server's."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Workspace memory grants queued behind resource semaphores are SQL Server's."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Workspace memory grants queued behind resource semaphores are SQL Server's."
+        }
+      ],
+      "max_rows": 50,
+      "note": "Queries waiting for workspace memory (1.141): two samples 5 s apart inside one run. Pending > 5 in the second sample CRITICAL, > 0 in both WARNING; RESOURCE_SEMAPHORE waiters now in the message."
+    },
+    {
+      "metric_id": 103,
+      "metric_code": "POSTGRES_CHECKPOINT_PRESSURE",
+      "db_type": "postgresql",
+      "category": "performance",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 15
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "postgresql",
+          "min_major_version": 17,
+          "name": "postgresql_17_plus",
+          "file": "postgresql/073_postgresql_checkpoint_pressure_17_plus.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "max_major_version": 16,
+          "name": "postgresql_10_to_16",
+          "file": "postgresql/074_postgresql_checkpoint_pressure_pre_17.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "name": "sqlserver_unsupported",
+          "supported": false,
+          "unsupported_reason": "Checkpoint counters of pg_stat_checkpointer / pg_stat_bgwriter are PostgreSQL's."
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Checkpoint counters of pg_stat_checkpointer / pg_stat_bgwriter are PostgreSQL's."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Checkpoint counters of pg_stat_checkpointer / pg_stat_bgwriter are PostgreSQL's."
+        }
+      ],
+      "report_policy": {
+        "_note": "Cumulative checkpoint counters since stats_reset, recorded and not graded (1.145): the approved rule - requested share >= 40 % WARNING, >= 70 % CRITICAL - applies to an interval, two collections subtracted, which nothing computes yet.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 50,
+      "note": "Requested checkpoints among all checkpoints: pg_stat_checkpointer from 17, pg_stat_bgwriter before."
+    },
+    {
+      "metric_id": 104,
+      "metric_code": "PERFORMANCE_IO_LATENCY_INTERVAL",
+      "db_type": "sqlserver",
+      "category": "performance",
+      "default_importance": 3,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_2012_plus",
+          "file": "sqlserver/080_sqlserver_io_latency_interval.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/080_sqlserver_io_latency_interval.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "Two reads of SQL Server's sys.dm_io_virtual_file_stats inside one run; the engine's own I/O wait histograms are read elsewhere (ORACLE_WAIT_LATENCY_HISTOGRAM on Oracle)."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Two reads of SQL Server's sys.dm_io_virtual_file_stats inside one run; the engine's own I/O wait histograms are read elsewhere (ORACLE_WAIT_LATENCY_HISTOGRAM on Oracle)."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Two reads of SQL Server's sys.dm_io_virtual_file_stats inside one run; the engine's own I/O wait histograms are read elsewhere (ORACLE_WAIT_LATENCY_HISTOGRAM on Oracle)."
+        }
+      ],
+      "max_rows": 100,
+      "note": "I/O latency now, not since start (1.147): two reads of the file stats 10 s apart inside one run, per database and file type. Log writes 20 / 50 ms, data reads 50 / 200 ms, at least 20 operations; data writes reported, not graded (checkpoint bursts). PERFORMANCE_IO_LATENCY keeps the cumulative per-file rows the reports difference."
+    },
+    {
+      "metric_id": 105,
+      "metric_code": "SERVER_DIAGNOSTICS",
+      "db_type": "sqlserver",
+      "category": "availability",
+      "default_importance": 4,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 300,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 11,
+          "name": "sqlserver_2012_plus",
+          "file": "sqlserver/081_sqlserver_server_diagnostics.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/081_sqlserver_server_diagnostics.sql"
+        },
+        {
+          "db_type": "oracle",
+          "name": "oracle_unsupported",
+          "supported": false,
+          "unsupported_reason": "ORACLE_ADR_INCIDENTS reads Oracle's own: ADR incidents, problems and Health Monitor findings."
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_unsupported",
+          "supported": false,
+          "unsupported_reason": "Not authored for MySQL."
+        },
+        {
+          "db_type": "postgresql",
+          "name": "postgresql_unsupported",
+          "supported": false,
+          "unsupported_reason": "PostgreSQL keeps no dump or diagnostics store readable over SQL; its server log is 1.165's."
+        }
+      ],
+      "max_rows": 50,
+      "note": "SQL Server's own incidents (1.164): a memory dump within 120 minutes CRITICAL, within 7 days WARNING; sp_server_diagnostics components (2012+) - error CRITICAL, warning WARNING. The nearest thing SQL Server has to Oracle's ADR."
+    },
+    {
+      "metric_id": 106,
+      "metric_code": "POSTGRES_SERVER_LOG",
+      "db_type": "postgresql",
+      "category": "availability",
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "collector_type": "docker",
+      "host_fallback": true,
+      "file": "postgresql/023_postgresql_server_log.sh",
+      "time_window": {
+        "repeat_interval": 900,
+        "retry_interval": 300,
+        "timeout": 60
+      },
+      "max_rows": 20,
+      "default_importance": 4,
+      "note": "The PostgreSQL server log (1.165): a container's through docker logs, a host install's log_directory files through the host login (host_fallback; PG_LOG_FILE / PG_LOG_DIRECTORY in collector_env, else the packagings' places, two clusters named and not guessed between). A day read; PANIC / corrupt pages / disk full / out of memory / a backend killed by a signal CRITICAL within 120 minutes and WARNING after; other FATALs, connection exhaustion and PostgreSQL's own 'checkpoints are occurring too frequently' (1.145) WARNING; failed logins counted. A server logging to syslog or journald is not read."
     }
   ]
 }

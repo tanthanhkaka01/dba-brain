@@ -9,16 +9,24 @@
 --
 -- The metric is declared empty_result_is_ok, so a database with no backup activity in the window
 -- returns no rows rather than a synthetic one - BACKUP_AGE and BACKUP_LAST_RESULT are the metrics
--- that assert a backup should exist.
+-- All thresholds are declared in the top-level params CTE so each number appears once.
 
+WITH params AS (
+    SELECT
+        1 AS lookback_days
+    FROM dual
+)
 SELECT
     CAST('rman_' || LOWER(REPLACE(j.input_type, ' ', '_')) AS varchar2(256)) AS metric_item,
     CAST(j.status AS varchar2(64)) AS metric_value,
     CAST(NULL AS varchar2(32)) AS metric_unit,
     CASE
         WHEN j.status = 'COMPLETED' THEN 'OK'
-        WHEN j.status LIKE 'COMPLETED%' THEN 'WARNING'
         WHEN j.status LIKE 'RUNNING%' THEN 'OK'
+        WHEN j.status = 'COMPLETED WITH WARNINGS' THEN 'WARNING'
+        WHEN j.status = 'COMPLETED WITH ERRORS' THEN 'WARNING'
+        WHEN j.status LIKE 'COMPLETED WITH%' THEN 'WARNING'
+        WHEN j.status = 'FAILED' THEN 'CRITICAL'
         ELSE 'CRITICAL'
     END AS status,
     'job_type=rman'
@@ -28,7 +36,8 @@ SELECT
         || ', finished=' || NVL(TO_CHAR(j.end_time, 'YYYY-MM-DD HH24:MI:SS'), 'running')
         || ', elapsed=' || NVL(j.time_taken_display, '') AS message
 FROM v$rman_backup_job_details j
-WHERE j.start_time > SYSDATE - 1
+CROSS JOIN params p
+WHERE j.start_time > SYSDATE - p.lookback_days
 
 UNION ALL
 
@@ -45,5 +54,6 @@ SELECT
         || ', error=' || TO_CHAR(r."ERROR#")
         || ', info=' || SUBSTR(REPLACE(REPLACE(NVL(r.additional_info, ''), CHR(10), ' '), CHR(13), ' '), 1, 200) AS message
 FROM dba_scheduler_job_run_details r
-WHERE r.actual_start_date > SYSTIMESTAMP - INTERVAL '1' DAY
+CROSS JOIN params p
+WHERE r.actual_start_date > SYSTIMESTAMP - NUMTODSINTERVAL(p.lookback_days, 'DAY')
   AND (UPPER(r.job_name) LIKE '%BACKUP%' OR UPPER(r.job_name) LIKE '%RMAN%');

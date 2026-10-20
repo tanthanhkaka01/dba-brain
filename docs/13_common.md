@@ -826,7 +826,10 @@ Three item kinds: `sql` (the driver connect - SQL Server to `master`, the metric
 or WinRM with its environment prepended) and `local` (run on this machine with the argv the request
 states). **A failure is data, never a stop**: an item answers with `error` - its message, the phase
 the raiser declared (`connect`/`execute`, empty when it could not tell) and whatever output there
-was - and the batch still succeeds. **Stdin only**: the request carries the target's password and
+was - and the batch still succeeds. **Every item is timed** (0.30.0): `duration_seconds` is its wall
+time - for `sql` the connect, the statement and the close, which is what a client of that server
+waits - on a failure too, inside `error`; a script keeps the time it states itself. `metrics` stores
+it as the row's `execution_time`. **Stdin only**: the request carries the target's password and
 the secret refs its configuration names (never the whole store). The fields are
 `input_metric_batch` / `output_metric_batch`.
 
@@ -2774,7 +2777,10 @@ until the store could describe itself.
 ```bash
 python -m dbabrain.common.cli add-sql '<json>'        # config_admin: register + enable a SQL task
 python -m dbabrain.common.cli metric-toggle '<json>'  # config_admin: enable/disable metrics per server_id
-python -m dbabrain.common.cli metric-severity '<json>' # config_admin: remap a metric's statuses per server_id
+python -m dbabrain.common.cli metric-severity '<json>' # config_admin: remap a metric's statuses per server_id;
+                                                     #   {"items": [...]} writes a list of remaps at once, all or none
+python -m dbabrain.common.cli instance-active '<json>' # config_admin: switch a server_id on/off for every app (active)
+python -m dbabrain.common.cli metric-env '<json>'      # config_admin: a collector script's inputs (metrics.collector_env)
 python -m dbabrain.common.cli trace-session '<json>'  # session_trace: who holds an open transaction
 python -m dbabrain.common.cli list-targets            # target_resolve: the /spbot_list_server_id listing
 python -m dbabrain.telegram.cli groups              # the whole level -> chat_id map

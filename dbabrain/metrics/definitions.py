@@ -29,6 +29,10 @@ SUPPORTED_COLLECTOR_TYPES = {"sql", "cmd", "docker", "k8s"}
 # file or variant (the collector reads the target's own config, e.g. container_name).
 BUILTIN_COLLECTOR_TYPES = {"docker", "k8s"}
 SUPPORTED_PLATFORMS = {"windows", "linux"}
+#: What a metric's ``target_env`` may name: the database facts a cmd collector can be handed. A
+#: fixed list, so a catalogue cannot pass a script a field nobody reviewed - the credential sits on
+#: the same target object.
+TARGET_ENV_NAMES = ("DBABRAIN_DB_TYPE", "DBABRAIN_DB_PORT", "DBABRAIN_DB_CONTAINER")
 # Statuses a metric may declare for a failed collection (connection_error_severity /
 # execution_error_severity). The full result-status set on purpose: "OK"/"LOGGING" is how an
 # operator says a failure of this particular check is expected and must not alert (a mounted
@@ -46,13 +50,13 @@ SUPPORTED_EXTENSIONS = {
 
 
 def load_max_parallel_servers(path: str | Path = DEFAULT_DEFINITIONS_PATH) -> int:
-    """How many ``server_id`` groups a collect pass may walk at once (``collection`` block).
+    """How many ``(server_id, category)`` batches a collect pass may run at once (``collection`` block).
 
     Lives in the catalog rather than in code because it is a property of the estate being
-    watched, not of the collector: the number that is safe here is the number of machines the
-    worker may hold sessions against at once. Missing or unreadable settings mean 1 — the old
-    fully serial pass — so a malformed edit degrades to the previous behavior instead of
-    fanning out further than the operator intended.
+    watched, not of the collector: the number that is safe here is the number of concurrent
+    batches the worker may execute at once. Missing or unreadable settings mean 1 — a fully
+    serial pass — so a malformed edit degrades to serial execution instead of fanning out
+    further than the operator intended.
     """
     data = load_json_file(Path(path))
     settings = data.get("collection")
@@ -166,6 +170,14 @@ def load_metric_definitions(
             _validate_extension(file, collector_type, f"{metric_code}.file", errors)
         if path is not None and not path.exists():
             errors.append(f"{metric_code}: file not found under {sql_root}: {file}.")
+        if item.get("host_fallback") and collector_type != "docker":
+            errors.append(f"{metric_code}: host_fallback is for a docker metric, which otherwise "
+                          f"skips a target with no container; this one is {collector_type or '<missing>'}.")
+        unknown_env = sorted({str(name).strip() for name in (item.get("target_env") or [])}
+                             - set(TARGET_ENV_NAMES))
+        if unknown_env:
+            errors.append(f"{metric_code}: target_env may name only {', '.join(TARGET_ENV_NAMES)}, "
+                          f"got {', '.join(unknown_env)}.")
 
         if default_importance is None or interval_seconds is None or default_timeout is None:
             continue
@@ -186,6 +198,9 @@ def load_metric_definitions(
                 execution_error_severity=execution_error_severity,
                 max_rows=int(item.get("max_rows") or 0),
                 sql_settings=dict(item.get("sql_settings") or {}),
+                target_env=tuple(str(name).strip() for name in (item.get("target_env") or [])
+                                 if str(name).strip()),
+                host_fallback=bool(item.get("host_fallback", False)),
                 report_policy=item.get("report_policy") if isinstance(item.get("report_policy"), dict) else {},
                 path=path,
                 variants=variants,
@@ -271,6 +286,14 @@ def _parse_variants(
         max_version = _optional_int(item.get("max_major_version"), f"{metric_code}.{name}.max_major_version", errors)
         unsupported_reason = str(item.get("unsupported_reason") or "").strip()
         per_database = bool(item.get("per_database", False))
+        repeat_interval = _optional_int(item.get("repeat_interval"), f"{metric_code}.{name}.repeat_interval", errors)
+        if repeat_interval is not None and repeat_interval < 1:
+            errors.append(f"{metric_code}.variants[{index}].repeat_interval must be a number of seconds, 1 or more.")
+            repeat_interval = None
+        variant_settings = item.get("sql_settings")
+        if variant_settings is not None and not isinstance(variant_settings, dict):
+            errors.append(f"{metric_code}.variants[{index}].sql_settings must be an object of name: number.")
+            variant_settings = None
         path = _resolve_metric_file(sql_root, file) if file else None
         if not name:
             errors.append(f"{metric_code}.variants[{index}].name is required.")
@@ -303,6 +326,8 @@ def _parse_variants(
                 unsupported_reason=unsupported_reason,
                 path=path,
                 per_database=per_database,
+                sql_settings=dict(variant_settings or {}),
+                repeat_interval=repeat_interval,
             )
         )
     return variants

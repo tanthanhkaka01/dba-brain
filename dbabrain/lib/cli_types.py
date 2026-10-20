@@ -554,13 +554,14 @@ RegistrationAnswer = TypedDict('RegistrationAnswer', {
 }, total=False)
 
 
-#: A config record changed in place, field by field. (app-command-set, metric-toggle, metric-severity)
+#: A config record changed in place, field by field. (app-command-set, metric-toggle, metric-severity, instance-active, metric-env)
 ConfigEditAnswer = TypedDict('ConfigEditAnswer', {
     'ok': bool | None,
     'app_code': str | None,
     'server_id': str | None,
     'scope': str | None,
     'enabled': bool | None,
+    'active': bool | None,
     'metric_code': str | None,
     'metric_item': str | None,
     'severity_map': dict[str, Any] | None,
@@ -570,6 +571,8 @@ ConfigEditAnswer = TypedDict('ConfigEditAnswer', {
     'file': str | None,
     'warnings': list[Any] | None,
     'message': str | None,
+    'items': list[dict[str, Any]] | None,
+    'collector_env': dict[str, Any] | None,
 }, total=False)
 
 
@@ -1376,13 +1379,31 @@ MetricToggleRequest = TypedDict('MetricToggleRequest', {
 }, total=False)
 
 
-#: How one metric's statuses are remapped for one instance. (metric-severity)
+#: How one metric's statuses are remapped for one instance - or a list of such remaps, written together. (metric-severity)
 MetricSeverityRequest = TypedDict('MetricSeverityRequest', {
-    'server_id': Required[str | None],
-    'metric_code': Required[str | None],
+    'server_id': str | None,
+    'metric_code': str | None,
     'metric_item': str | None,
     'severity_map': dict[str, Any] | None,
     'note': str | None,
+    'items': list[dict[str, Any]] | None,
+    'data_dir': str | None,
+}, total=False)
+
+
+#: One instance switched on or off for every app - its active flag. (instance-active)
+InstanceActiveRequest = TypedDict('InstanceActiveRequest', {
+    'server_id': Required[str],
+    'active': Required[bool],
+    'data_dir': str | None,
+}, total=False)
+
+
+#: The inputs a collector script reads from one instance, set or removed. (metric-env)
+MetricEnvRequest = TypedDict('MetricEnvRequest', {
+    'server_id': Required[str],
+    'env': Required[dict[str, Any]],
+    'metric_code': str | None,
     'data_dir': str | None,
 }, total=False)
 
@@ -1806,6 +1827,8 @@ __all__ = [
     'AddSqlRequest',
     'MetricToggleRequest',
     'MetricSeverityRequest',
+    'InstanceActiveRequest',
+    'MetricEnvRequest',
     'AppCommandSetRequest',
     'SecretSetRequest',
     'RunSqlRequest',

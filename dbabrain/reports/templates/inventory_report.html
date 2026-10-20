@@ -682,8 +682,9 @@ const wlNum = v => v == null ? "—"
   : Math.round(v).toLocaleString("en-US");
 
 const WL_CHIPS = [
-  ["cpu_pct",             "CPU",            v => v.toFixed(1)+"%"],
+  ["cpu_pct",             "Database CPU",   v => v.toFixed(1)+"%"],
   ["cpu_usage_ms",        "CPU time",       v => v>=3600000 ? (v/3600000).toFixed(2)+" h" : (v/1000).toFixed(0)+" s"],
+  ["host_cpu_pct",        "Host CPU",       v => v.toFixed(1)+"%"],
   ["batch_requests",      "Batch requests", wlNum],
   ["transactions",        "Transactions",   wlNum],
   ["page_lookups",        "Logical reads",  wlNum],
@@ -695,6 +696,14 @@ const WL_CHIPS = [
   ["io_write_latency_ms", "Write latency",  v => v.toFixed(2)+" ms"],
   ["log_mb_flushed",      "Log generated",  v => v>=1024 ? (v/1024).toFixed(2)+" GB" : v>=10 ? v.toFixed(0)+" MB" : v.toFixed(2)+" MB"],
 ];
+
+/* The server page's wording: "48 of 60 CPUs online" where the engine may use fewer than the host has. */
+const wlCpuText = w => {
+  const c = w.cpu || {};
+  const total = c.total || w.cpuCount;
+  if (!total) return "";
+  return c.online && c.online < total ? `, ${c.online} of ${total} CPUs online` : `, ${total} CPUs`;
+};
 
 const workloadBlock = s => {
   const w = s.workload;
@@ -713,7 +722,8 @@ const workloadBlock = s => {
   const chips = WL_CHIPS.map(([key, label, fmt]) => {
     const cell = ((byKey[key]||{}).values||{})[win.key];
     if (!cell || cell.total == null) return '';
-    return `<span class="dbchip" title="${esc(String(cell.total))}">${esc(label)}: ${esc(fmt(cell.total))}</span>`;
+    /* "≈" where the figure is the scheduler monitor's per-minute samples, not a counter. */
+    return `<span class="dbchip" title="${esc(String(cell.total))}">${esc(label)}: ${cell.estimate?"≈ ":""}${esc(fmt(cell.total))}</span>`;
   }).join("");
   if (!chips) return '';
   /* The top wait over the same hour, on the same line. "Busy" and "busy waiting on WRITELOG" are
@@ -727,7 +737,7 @@ const workloadBlock = s => {
   const span = mins >= 90 ? (mins/60).toFixed(1)+" hours" : mins+" minutes";
   return `<div class="f" style="margin-top:12px"><div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">
       Workload — last ${esc(span)} <span style="text-transform:none;color:var(--faint)">(measured${
-        w.cpuCount?", "+w.cpuCount+" CPU":""}; counters differenced between two collections, not
+        wlCpuText(w)}; counters differenced between two collections, not
         totals since startup)</span></div>
     <div class="dblist" style="margin-top:5px">${chips}${wait}</div></div>`;
 };

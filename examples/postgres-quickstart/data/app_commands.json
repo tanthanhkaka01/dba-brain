@@ -18,13 +18,16 @@
       "working_dir": "tools/dbabrain",
       "command_text": "python -m dbabrain.metrics.cli --config config.json collect",
       "active": false,
+      "run_mode": "async",
+      "max_parallel": 4,
       "time_window": {
         "from_day": 1, "to_day": 31,
         "from_hour": 0, "to_hour": 23,
         "repeat_interval": 300,
         "retry_interval": 60,
         "timeout": 1200
-      }
+      },
+      "note": "Collects database metrics every 5 minutes with async mode capped at 4 concurrent passes; batches are claimed per category per server."
     },
     {
       "node_role": "master",
@@ -37,13 +40,16 @@
       "working_dir": "tools/dbabrain",
       "command_text": "python -m dbabrain.reports.cli --config config.json run-scheduled --summary-limit 50",
       "active": false,
+      "run_mode": "sync",
+      "max_parallel": 1,
       "time_window": {
         "from_day": 1, "to_day": 31,
         "from_hour": 0, "to_hour": 23,
         "repeat_interval": 300,
         "retry_interval": 60,
         "timeout": 600
-      }
+      },
+      "note": "Generates scheduled report summaries every 5 minutes in synchronous mode."
     }
   ]
 }

@@ -5,6 +5,7 @@ from dbabrain.lib.coerce import as_optional_int as _optional_int, as_text
 from dbabrain.lib.text_format import format_utc as _format_utc  # noqa: F401 - one definition, see that module
 
 import json
+import re
 import sys
 import threading
 import time
@@ -28,6 +29,7 @@ from dbabrain.lib.target_profile import TargetProfile, candidate_variants, selec
 from dbabrain.lib.time_window import is_time_window_open, job_due
 from dbabrain.lib.timezone import to_display
 from dbabrain.lib.config import DbaBrainConfig
+from dbabrain.lib.file_lock import FileLock, LockHeld
 from dbabrain.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_max_parallel_servers, load_metric_definitions
 from dbabrain.metrics import batch
 from dbabrain.metrics.batch import Prepared
@@ -66,11 +68,23 @@ class CommandExecution:
     execution_time: float
 
 
+@dataclass(frozen=True)
+class SqlExecution:
+    """What a SQL metric's answer says beside its rows: how long it took - the connect, the
+    statement and the close, as ``metric-batch`` timed it. Read where a ``CommandExecution`` is
+    read; a SQL metric has no streams and no exit code, so those stay empty on its rows."""
+
+    execution_time: float | None
+    raw_stdout: None = None
+    raw_stderr: None = None
+    exit_code: None = None
+
+
 @dataclass
 class _Tally:
-    """What one pass — or one server_id's share of it — counted.
+    """What one pass — or one batch's share of it — counted.
 
-    The per-server workers each fill their own tally and the parent merges them, so no counter is
+    The per-batch workers each fill their own tally and the parent merges them, so no counter is
     written from two threads and the totals cannot go wrong under a wider fan-out.
     """
 
@@ -78,6 +92,7 @@ class _Tally:
     executed_count: int = 0
     skipped_interval_count: int = 0
     skipped_window_count: int = 0
+    skipped_claimed_count: int = 0
     disabled_count: int = 0
     result_count: int = 0
     ok_count: int = 0
@@ -92,6 +107,7 @@ class _Tally:
         self.executed_count += other.executed_count
         self.skipped_interval_count += other.skipped_interval_count
         self.skipped_window_count += other.skipped_window_count
+        self.skipped_claimed_count += other.skipped_claimed_count
         self.disabled_count += other.disabled_count
         self.result_count += other.result_count
         self.ok_count += other.ok_count
@@ -116,38 +132,66 @@ def _collect_target(
     include_windowed: bool,
     tally: _Tally,
 ) -> None:
-    """Walk one target's metrics in catalog order, recording what happened into ``tally``.
+    """One target's metrics on their own: planned, checked for their interval one by one, and run.
 
-    Lifted out of :func:`collect_metrics` so that a server_id's metrics keep running strictly one
-    after another: only whole targets are handed to different workers. Since 0.24.0 the metrics
-    that are due run as one ``common.cli metric-batch`` - still one after another, inside it.
+    A pass does not come through here since 0.30.0 - it plans every target, reads every interval in
+    one query and runs the due metrics in batches by server and category. This is the same three
+    steps for one target, kept for a caller that holds exactly one.
     """
+    due: list[tuple[MetricDefinition, int]] = []
+    for metric, importance in _plan_target(target=target, definitions=definitions, overrides=overrides,
+                                           started=started, dry_run=dry_run,
+                                           include_windowed=include_windowed, tally=tally):
+        if not force and store is not None and not _metric_due(store=store, target=target, metric=metric, now=started):
+            _skip_interval(target=target, metric=metric, tally=tally)
+            continue
+        due.append((metric, importance))
+    if not dry_run:
+        _run_target_items(target=target, items=due, secrets=secrets, store=store, run_id=run_id,
+                          tally=tally)
+
+
+def _plan_target(
+    *,
+    target: MetricTarget,
+    definitions: list[MetricDefinition],
+    overrides: Any,
+    started: datetime,
+    dry_run: bool,
+    include_windowed: bool,
+    tally: _Tally,
+    quiet: bool = False,
+) -> list[tuple[MetricDefinition, int]]:
+    """The metrics this target may run now, with their importance - every check but the interval.
+
+    Each metric left out is counted, and printed with its reason unless ``quiet``. The interval is
+    not read here: a pass reads every pair's last collection in one query
+    (``MetricStore.latest_result_times``), not two queries per pair, and the store opens a
+    connection per call.
+    """
+    def skipped(metric: MetricDefinition, reason: str, *, dry: bool) -> None:
+        if not quiet:
+            _print_metric_skip(target=target, metric=metric, reason=reason, dry_run=dry)
+
     target_metrics = [item for item in definitions if _metric_supports_db_type(item, target.db_type, include_unsupported=True)]
-    # The metrics that are due go to `common` together - one process per target, not one per
-    # metric (rules R03, R10; the start-up cost is measured in test_app_common_imports.py).
-    pending: list[tuple[MetricDefinition, int]] = []
+    planned: list[tuple[MetricDefinition, int]] = []
     for metric in target_metrics:
         unsupported_reason = _metric_unsupported_reason(metric, target)
         if unsupported_reason:
             tally.disabled_count += 1
             tally.messages.append(f"SKIP unsupported {metric.metric_code} target={target.target_id}: {unsupported_reason}")
-            _print_metric_skip(
-                target=target,
-                metric=metric,
-                reason=f"unsupported: {unsupported_reason}",
-                dry_run=dry_run,
-            )
+            skipped(metric, f"unsupported: {unsupported_reason}", dry=dry_run)
             continue
         if not _metric_enabled_for_target(metric, target):
             tally.disabled_count += 1
             tally.messages.append(f"SKIP disabled {metric.metric_code} target={target.target_id}")
-            _print_metric_skip(target=target, metric=metric, reason="disabled by target metric config", dry_run=dry_run)
+            skipped(metric, "disabled by target metric config", dry=dry_run)
             continue
         importance = resolve_metric_importance(metric, target, overrides)
         if importance == 0:
             tally.disabled_count += 1
             tally.messages.append(f"SKIP disabled {metric.metric_code} target={target.target_id}")
-            _print_metric_skip(target=target, metric=metric, reason="disabled by importance override", dry_run=dry_run)
+            skipped(metric, "disabled by importance override", dry=dry_run)
             continue
         tally.metric_count += 1
         # The window is checked even under --force, because the two are answers to
@@ -160,27 +204,46 @@ def _collect_target(
         if not include_windowed and not _metric_window_open(metric=metric, now=started):
             tally.skipped_window_count += 1
             tally.messages.append(f"SKIP window {metric.metric_code} target={target.target_id}")
-            _print_metric_skip(
-                target=target,
-                metric=metric,
-                reason=f"outside its allowed window ({_window_label(metric)})",
-                dry_run=False,
-            )
-            continue
-        if not force and store is not None and not _metric_due(store=store, target=target, metric=metric, now=started):
-            tally.skipped_interval_count += 1
-            tally.messages.append(f"SKIP interval {metric.metric_code} target={target.target_id}")
-            _print_metric_skip(
-                target=target,
-                metric=metric,
-                reason=f"interval not elapsed ({metric.interval_seconds}s)",
-                dry_run=False,
-            )
+            skipped(metric, f"outside its allowed window ({_window_label(metric)})", dry=False)
             continue
         if dry_run:
             _print_line(f"DRY-RUN {metric.metric_code} target={target.target_id} importance={importance}")
             continue
+        planned.append((metric, importance))
+    return planned
 
+
+def _skip_interval(*, target: MetricTarget, metric: MetricDefinition, tally: _Tally,
+                   quiet: bool = False) -> None:
+    """Count a metric left out because its interval has not elapsed, and print it unless ``quiet``."""
+    tally.skipped_interval_count += 1
+    tally.messages.append(f"SKIP interval {metric.metric_code} target={target.target_id}")
+    if quiet:
+        return
+    _print_metric_skip(
+        target=target,
+        metric=metric,
+        reason=f"interval not elapsed ({_repeat_interval_for(metric, target)}s)",
+        dry_run=False,
+    )
+
+
+def _run_target_items(
+    *,
+    target: MetricTarget,
+    items: list[tuple[MetricDefinition, int]],
+    secrets: dict[str, str],
+    store: MetricStore | None,
+    run_id: int | None,
+    tally: _Tally,
+) -> None:
+    """Run one target's due metrics in order, as few ``metric-batch`` processes as they allow.
+
+    The metrics go to `common` together - one process per target, not one per metric (rules R03,
+    R10; the start-up cost is measured in test_app_common_imports.py) - except a windowed one.
+    """
+    pending: list[tuple[MetricDefinition, int]] = []
+    for metric, importance in items:
         tally.executed_count += 1
         if metric.schedule_window is not None:
             # A windowed metric is one of the expensive ones - DBCC CHECKDB, an index scan, a
@@ -208,16 +271,20 @@ def _flush(
         return
     planned = list(pending)
     pending.clear()
-    assert store is not None and run_id is not None
+    # No store is a test run (`collect --test-run`): the rows are printed, never inserted.
+    assert store is None or run_id is not None
     for (metric, _importance), results in zip(
             planned, _collect_metric_batch(target=target, planned=planned, secrets=secrets)):
-        inserted = store.insert_results(run_id=run_id, results=results)
+        inserted = len(results) if store is None else store.insert_results(run_id=run_id, results=results)
         tally.result_count += inserted
         tally.ok_count += sum(1 for item in results if item.status.upper() in {"OK", "LOGGING"})
         tally.error_count += sum(1 for item in results if item.status.upper() == "ERROR")
         tally.warning_count += sum(1 for item in results if item.status.upper() in {"WARNING", "WARN", "UNKNOWN"})
         tally.critical_count += sum(1 for item in results if item.status.upper() == "CRITICAL")
         tally.no_data_count += sum(1 for item in results if item.status.upper() == "NO_DATA")
+        if store is None:
+            _print_test_rows(target=target, metric=metric, results=results)
+            continue
         _print_metric_progress(
             run_id=run_id,
             target=target,
@@ -237,7 +304,19 @@ def collect_metrics(
     force: bool = False,
     include_windowed: bool = False,
     archive_days: int = 30,
+    test_run: bool = False,
 ) -> CollectSummary:
+    """One collection pass - or, with ``test_run``, a trial of the metrics on ONE named target.
+
+    A test run is how a metric is tried on an engine version the estate does not run yet: on a lab
+    instance, which the inventory keeps switched off so the scheduler never collects it. It runs
+    every metric the target's engine has (the interval does not apply; a window still does unless
+    ``include_windowed``), prints every row, and writes nothing - no run row, no results, no health
+    rebuild, nothing for an alert to read. The estate's store is the record of the estate, and a
+    lab's trial rows in it would be read by every report as a server of the estate.
+    """
+    if test_run and not target_id:
+        raise errors.InvalidRequest("a test run names its one target: --target-id or --target-ip.")
     started = datetime.now(timezone.utc)
     started_at = _format_utc(started)
     definitions = load_metric_definitions(DEFAULT_DEFINITIONS_PATH, active_only=True)
@@ -252,15 +331,22 @@ def collect_metrics(
         DEFAULT_OVERRIDES_PATH,
         known_metric_codes={item.metric_code for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)},
     )
-    targets = load_metric_targets(data_dir=DEFAULT_DATA_DIR, db_type=db_type, target_id=target_id)
+    targets = load_metric_targets(data_dir=DEFAULT_DATA_DIR, db_type=db_type, target_id=target_id,
+                                  include_switched_off=test_run)
     # Dry-run never connects, so it does not need the (encrypted) secret store. Skipping the
     # load lets `collect --dry-run` run without a --key, as the docs show.
+    if test_run:
+        # A trial is of one version's files. With no version stated, an unknown version matches
+        # every variant and the last one listed answers - for Oracle that is often the 8i file -
+        # so the run would report on SQL the target will never be given.
+        unversioned = [target.target_id for target in targets
+                       if target.db_type and _target_major_version(target) is None]
+        if unversioned:
+            raise errors.NotConfigured(
+                f"a test run needs the target's major_version in db_instances.json: "
+                f"{', '.join(unversioned)} states none, and every variant would match it.")
     secrets = {} if dry_run else data_sources.load_secret_text(DEFAULT_DATA_DIR)
-    store = None if dry_run else MetricStore.from_config(config)
-    # Archive first: before collecting, move metric rows older than archive_days into
-    # metric_results_archive so the live table stays small (rows are kept, not deleted).
-    archived_count = 0 if store is None else store.archive_old_results(retention_days=archive_days)
-    run_id = None if store is None else store.start_run(started_at=started_at, message="Metric collect started.")
+    store = None if dry_run or test_run else MetricStore.from_config(config)
 
     tally = _Tally()
     if not targets:
@@ -272,71 +358,116 @@ def collect_metrics(
             data_sources.load_db_instances(DEFAULT_DATA_DIR),
             db_type=db_type or "", target_id=target_id or "",
         ))
+
+    # The daemon starts this command every second (APP-METRICS is `run_mode: async` since 0.30.0),
+    # so a scheduled pass prints no line per metric it leaves out - ~800 pairs, every pass, into
+    # metrics_runtime.log. It counts them. A pass run by hand that names what it wants still says
+    # why each one was left out.
+    quiet = not (dry_run or test_run or target_id or metric_code)
+
+    # Plan every target first - every check but the interval - then read every interval at once.
+    # The store has no connection pool, and two queries per (target, metric) pair were ~1,600 new
+    # connections a pass on this estate.
+    candidates: list[tuple[MetricTarget, MetricDefinition, int]] = []
+    for target in targets:
+        try:
+            planned = _plan_target(target=target, definitions=definitions, overrides=overrides,
+                                   started=started, dry_run=dry_run,
+                                   include_windowed=include_windowed, tally=tally, quiet=quiet)
+        except Exception as exc:  # noqa: BLE001 - one target must not end the pass (F3.1).
+            _target_failed(target, exc, tally)
+            continue
+        candidates.extend((target, metric, importance) for metric, importance in planned)
+    if not force and store is not None:
+        candidates = _still_due(candidates, store=store, now=started, tally=tally, quiet=quiet)
+
+    # One batch per server and category. A batch runs its targets and metrics one after another,
+    # as a whole pass used to run one server; batches run at once and never wait for each other. A
+    # pass used to end with its slowest server, and the daemon started no other meanwhile: the
+    # nightly index-fragmentation scan (1009 s on the largest instance) held INSTANCE_STATUS of
+    # every server for ~18 minutes.
+    batches: dict[tuple[str, str], list[tuple[MetricTarget, MetricDefinition, int]]] = {}
+    for target, metric, importance in candidates:
+        key = (str(target.server_id or target.target_id), str(metric.category or ""))
+        batches.setdefault(key, []).append((target, metric, importance))
+
+    def summary(run_id: int | None, finished: datetime, message: str) -> CollectSummary:
+        return CollectSummary(
+            run_id=run_id,
+            target_count=len(targets),
+            metric_count=tally.metric_count,
+            executed_count=tally.executed_count,
+            skipped_interval_count=tally.skipped_interval_count,
+            skipped_window_count=tally.skipped_window_count,
+            skipped_claimed_count=tally.skipped_claimed_count,
+            disabled_count=tally.disabled_count,
+            result_count=tally.result_count,
+            ok_count=tally.ok_count,
+            error_count=tally.error_count,
+            warning_count=tally.warning_count,
+            critical_count=tally.critical_count,
+            no_data_count=tally.no_data_count,
+            started_at=started_at,
+            finished_at=_format_utc(finished),
+            duration_seconds=round((finished - started).total_seconds(), 3),
+            message=message,
+        )
+
+    if not batches:
+        # Nothing to run writes nothing: no run row, no archive, no health rebuild. Most passes
+        # are this one now - started a second after the last, finding everything collected.
+        return summary(None, datetime.now(timezone.utc), _summary_message(tally.messages))
+
+    # Archive first: before collecting, move metric rows older than archive_days into
+    # metric_results_archive so the live table stays small (rows are kept, not deleted).
+    archived_count = 0 if store is None else store.archive_old_results(retention_days=archive_days)
+    run_id = None if store is None else store.start_run(started_at=started_at, message="Metric collect started.")
     if archived_count:
         tally.messages.append(
             f"Archived {archived_count} metric row(s) older than {archive_days} days into metric_results_archive."
         )
+    # A trial prints every row as it comes; one batch at a time keeps one metric's rows together.
+    max_workers = 1 if test_run else max(1, min(load_max_parallel_servers(), len(batches)))
 
-    # One worker per server_id — never per target. Several targets can name the same machine (a
-    # database instance and the OS metrics reached through its cmd_access), and two workers on one
-    # box would stack WinRM/SSH sessions and metric queries on it. Grouping by server_id keeps the
-    # metrics of a machine strictly one at a time, in catalog order, while letting *different*
-    # machines overlap.
-    #
-    # That overlap is the point. The pass used to be a single queue over every target, so one
-    # unresponsive host held the whole estate behind it: a WinRM call to an ERP application server
-    # was measured holding the pass for 490 of its 598 seconds, and during that window the ERP
-    # database's lock metrics were never sampled — a blocking chain grew from 21s to 570s without
-    # a single CRITICAL being raised, because nothing looked.
-    groups: dict[str, list[MetricTarget]] = {}
-    for target in targets:
-        groups.setdefault(target.server_id or target.target_id, []).append(target)
-    max_workers = max(1, min(load_max_parallel_servers(), len(groups)))
-    if store is not None:
-        # Build/upgrade the schema once, here, rather than letting every worker's first store call
-        # race to do it. Each store method opens its own connection, so the workers are otherwise
-        # independent — there is no shared connection or cursor between them.
-        store.initialize()
-
-    def run_group(group_targets: list[MetricTarget]) -> _Tally:
-        group_tally = _Tally()
-        for target in group_targets:
-            try:
-                _collect_target(
-                    target=target,
-                    definitions=definitions,
-                    overrides=overrides,
-                    secrets=secrets,
-                    store=store,
-                    run_id=run_id,
-                    started=started,
-                    dry_run=dry_run,
-                    force=force,
-                    include_windowed=include_windowed,
-                    tally=group_tally,
-                )
-            except Exception as exc:  # noqa: BLE001 - one target must not end the pass (F3.1).
-                from dbabrain.lib import store_outage
-
-                if store_outage.is_transient(exc):
-                    raise  # the store is down: the whole pass is, and says so
-                # A mistyped `disabled_collector_types` raises by design; it used to fail the whole
-                # pass, lose every other group's tally and skip the estate-wide health rebuild.
-                # Now it is this target's error, named in the run message (review 0.25.0, F3.1).
-                group_tally.error_count += 1
-                group_tally.messages.append(
-                    f"{target.server_id}: not collected - {type(exc).__name__}: {exc}")
-        return group_tally
+    def run_batch(key: tuple[str, str], items: list[tuple[MetricTarget, MetricDefinition, int]]) -> _Tally:
+        batch_tally = _Tally()
+        if store is None:
+            _run_batch_items(items, secrets=secrets, store=store, run_id=run_id, tally=batch_tally)
+            return batch_tally
+        # An async command must refuse its own duplicates (lib/run_mode.py): another pass may be in
+        # the middle of this very batch - that is the point of starting a pass while a slow one
+        # runs. The claim is a lock on a file of this node, held by the open handle, so a pass that
+        # dies releases it with its process and no claim is ever left behind.
+        server, category = key
+        claim = FileLock(config.runtime_dir / "metric_claims"
+                         / f"{_safe_claim_name(server)}__{_safe_claim_name(category)}", wait=False)
+        try:
+            claim.__enter__()
+        except LockHeld:
+            batch_tally.skipped_claimed_count += 1
+            batch_tally.messages.append(f"SKIP claimed server={server} category={category}")
+            if not quiet:
+                _print_line(f"METRIC_SKIP server={server} category={category} reason=claimed by another pass")
+            return batch_tally
+        try:
+            # Read again under the claim: the plan's reading predates it, and the pass that held
+            # the claim may have collected these metrics a moment ago.
+            if not force:
+                items = _still_due(items, store=store, now=started, tally=batch_tally, quiet=quiet)
+            _run_batch_items(items, secrets=secrets, store=store, run_id=run_id, tally=batch_tally)
+        finally:
+            claim.__exit__(None, None, None)
+        return batch_tally
 
     try:
         if max_workers == 1:
-            for group_targets in groups.values():
-                tally.merge(run_group(group_targets))
+            for key, items in batches.items():
+                tally.merge(run_batch(key, items))
         else:
-            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="metric-server") as pool:
-                # Merged in submission order, not completion order, so the run message reads the
-                # same whatever the hosts do — a pass is compared against yesterday's by eye.
-                futures = [pool.submit(run_group, group_targets) for group_targets in groups.values()]
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="metric-batch") as pool:
+                # Merged in plan order, not completion order, so the run message reads the same
+                # whatever the hosts do - a pass is compared against yesterday's by eye.
+                futures = [pool.submit(run_batch, key, items) for key, items in batches.items()]
                 for future in futures:
                     tally.merge(future.result())
         status = "DONE"
@@ -355,15 +486,13 @@ def collect_metrics(
                 message="Metric collect failed.",
             )
         raise
-    messages = tally.messages
 
     finished = datetime.now(timezone.utc)
-    finished_at = _format_utc(finished)
-    message = _summary_message(messages)
+    message = _summary_message(tally.messages)
     if store is not None and run_id is not None:
         store.finish_run(
             run_id=run_id,
-            finished_at=finished_at,
+            finished_at=_format_utc(finished),
             status=status,
             target_count=len(targets),
             metric_count=tally.metric_count,
@@ -373,26 +502,65 @@ def collect_metrics(
             critical_count=tally.critical_count,
             message=message,
         )
-        store.rebuild_target_health(run_id=run_id)
-    return CollectSummary(
-        run_id=run_id,
-        target_count=len(targets),
-        metric_count=tally.metric_count,
-        executed_count=tally.executed_count,
-        skipped_interval_count=tally.skipped_interval_count,
-        skipped_window_count=tally.skipped_window_count,
-        disabled_count=tally.disabled_count,
-        result_count=tally.result_count,
-        ok_count=tally.ok_count,
-        error_count=tally.error_count,
-        warning_count=tally.warning_count,
-        critical_count=tally.critical_count,
-        no_data_count=tally.no_data_count,
-        started_at=started_at,
-        finished_at=finished_at,
-        duration_seconds=round((finished - started).total_seconds(), 3),
-        message=message,
-    )
+        # Bounded by the pass's start: the rows of this run are no older, and metric_results has
+        # no index on run_id - unbounded, the read was a scan of ~15 million rows every pass.
+        store.rebuild_target_health(run_id=run_id, since=started_at)
+    return summary(run_id, finished, message)
+
+
+def _target_failed(target: MetricTarget, exc: Exception, tally: _Tally) -> None:
+    """One target's failure, named in the run message - unless it is the store's, which ends the pass.
+
+    A mistyped `disabled_collector_types` raises by design; it used to fail the whole pass, lose
+    every other group's tally and skip the estate-wide health rebuild. Now it is this target's
+    error, named in the run message (review 0.25.0, F3.1).
+    """
+    from dbabrain.lib import store_outage
+
+    if store_outage.is_transient(exc):
+        raise exc  # the store is down: the whole pass is, and says so
+    tally.error_count += 1
+    tally.messages.append(f"{target.server_id or target.target_id}: not collected - {type(exc).__name__}: {exc}")
+
+
+def _still_due(
+    items: list[tuple[MetricTarget, MetricDefinition, int]],
+    *,
+    store: MetricStore,
+    now: datetime,
+    tally: _Tally,
+    quiet: bool,
+) -> list[tuple[MetricTarget, MetricDefinition, int]]:
+    """The items whose interval has elapsed, read for all of them in one store query."""
+    times = store.latest_result_times(pairs=[(target.target_id, metric.metric_code) for target, metric, _ in items])
+    due = []
+    for target, metric, importance in items:
+        last, success = times.get((target.target_id, metric.metric_code), (None, None))
+        if not _is_metric_due(last=last, success=success, metric=metric, target=target, now=now):
+            _skip_interval(target=target, metric=metric, tally=tally, quiet=quiet)
+            continue
+        due.append((target, metric, importance))
+    return due
+
+
+def _run_batch_items(
+    items: list[tuple[MetricTarget, MetricDefinition, int]],
+    *,
+    secrets: dict[str, str],
+    store: MetricStore | None,
+    run_id: int | None,
+    tally: _Tally,
+) -> None:
+    """One batch's items, target by target in inventory order; one target failing is its own error."""
+    by_target: dict[str, tuple[MetricTarget, list[tuple[MetricDefinition, int]]]] = {}
+    for target, metric, importance in items:
+        by_target.setdefault(target.target_id, (target, []))[1].append((metric, importance))
+    for target, target_items in by_target.values():
+        try:
+            _run_target_items(target=target, items=target_items, secrets=secrets, store=store,
+                              run_id=run_id, tally=tally)
+        except Exception as exc:  # noqa: BLE001 - one target must not end the pass (F3.1).
+            _target_failed(target, exc, tally)
 
 
 def _collect_one_metric(
@@ -407,7 +575,7 @@ def _collect_one_metric(
     """One metric, run on its own (a batch of one) and graded."""
     def produce() -> tuple[list[dict[str, Any]], CommandExecution | None]:
         if metric.collector_type == "sql":
-            return _run_sql_file(metric=metric, target=target, secrets=secrets), None
+            return _run_sql_file(metric=metric, target=target, secrets=secrets)
         if metric.collector_type == "cmd":
             command_meta = _run_command_file(metric=metric, target=target, secrets=secrets)
             return command_meta.rows, command_meta
@@ -462,7 +630,8 @@ def _prepare(metric: MetricDefinition, target: MetricTarget, secrets: dict[str, 
     """The item for one metric, whose ``interpret`` answers ``(rows, command_meta)``."""
     if metric.collector_type == "sql":
         sql = _prepare_sql_file(metric=metric, target=target, secrets=secrets)
-        return Prepared(item=sql.item, interpret=lambda answer: (sql.interpret(answer), None))
+        return Prepared(item=sql.item, interpret=lambda answer: (
+            sql.interpret(answer), SqlExecution(execution_time=_optional_float(answer.get("duration_seconds")))))
     if metric.collector_type in {"cmd", "docker"}:
         prepare = _prepare_command_file if metric.collector_type == "cmd" else _prepare_docker_metric
         command = prepare(metric=metric, target=target, secrets=secrets)
@@ -551,8 +720,10 @@ class MetricCommandError(errors.OperationFailed):
         self.failure_phase = failure_phase
 
 
-def _run_sql_file(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> list[dict[str, Any]]:
-    return batch.run_one(target, secrets, _prepare_sql_file(metric=metric, target=target, secrets=secrets))
+def _run_sql_file(*, metric: MetricDefinition, target: MetricTarget,
+                  secrets: dict[str, str]) -> tuple[list[dict[str, Any]], SqlExecution]:
+    """One SQL metric on its own: its rows, and how long it took (as a batch item reports it)."""
+    return batch.run_one(target, secrets, _prepare(metric, target, secrets))
 
 
 def _prepare_sql_file(*, metric: MetricDefinition, target: MetricTarget, secrets: dict[str, str]) -> Prepared:
@@ -563,7 +734,7 @@ def _prepare_sql_file(*, metric: MetricDefinition, target: MetricTarget, secrets
     # The numbers configuration states for this metric, written into the DECLAREs that carry
     # their defaults. A setting the file does not declare raises - and is recorded on this
     # metric for this target, like any other failure to prepare it.
-    sql_text = apply_sql_settings(sql_text, metric.sql_settings)
+    sql_text = apply_sql_settings(sql_text, _sql_settings_for(metric, path))
     sql = prepare_sql(
         target=target,
         sql_text=sql_text,
@@ -631,17 +802,22 @@ def _prepare_docker_metric(*, metric: MetricDefinition, target: MetricTarget, se
     that lets a target collect container stats while its OS/``cmd`` metrics stay disabled. Same
     script + JSON contract as the cmd/OS collectors, so the logic is a visible/editable asset."""
     container = str(target.container_name or "").strip()
-    if not container:
+    cmd_access = target.cmd_access or {}
+    method = str(cmd_access.get("method") or "").strip().lower()
+    if not container and not _runs_on_host(metric, target):
         raise errors.NotConfigured(f"No container_name configured for docker metric {metric.metric_code} on {target.target_id}.")
     path = _resolve_metric_file_path(metric, target)
     if path is None:
         raise errors.InvalidConfig(f"Docker metric script is not resolved: {metric.metric_code}")
-    collector_env = {
-        **_collector_env(metric=metric, target=target, secrets=secrets),
-        "DOCKER_CONTAINER": container,
-    }
-    cmd_access = target.cmd_access or {}
-    method = str(cmd_access.get("method") or "").strip().lower()
+    collector_env = _collector_env(metric=metric, target=target, secrets=secrets)
+    if not container:
+        # The host-install half of a ``host_fallback`` metric: the same script, no DOCKER_CONTAINER,
+        # run on the host the target's cmd_access logs into - never on the worker, whose files are
+        # not the target's.
+        return _prepare_remote(Path(path), target=target, timeout_seconds=metric.default_timeout,
+                               collector_env=collector_env, shell=_remote_shell_for(Path(path), target),
+                               item_id=metric.metric_code)
+    collector_env["DOCKER_CONTAINER"] = container
     if bool(cmd_access.get("enabled", False)) and method == "ssh":
         return _prepare_remote(Path(path), target=target, timeout_seconds=metric.default_timeout,
                                collector_env=collector_env, shell=_remote_shell_for(Path(path), target),
@@ -720,6 +896,13 @@ def _collector_env(
     # second is the case that matters. Config first in the dict, so a target that means something
     # else by it can still override.
     resolved: dict[str, str] = {"DBABRAIN_TARGET_HOST": _target_host(target)}
+    # The database's identity, for the collectors that declare they read it (``target_env``).
+    # Empty values are left out, so a script tells "not set" from "set to nothing" by presence.
+    if metric.target_env:
+        identity = _target_identity(target)
+        for name in metric.target_env:
+            if identity.get(name):
+                resolved[name] = identity[name]
     for source in (metrics_cfg.get("collector_env"), override_cfg.get("collector_env")):
         if not isinstance(source, dict):
             continue
@@ -751,6 +934,15 @@ def _collector_env(
                 )
             resolved[name] = value
     return resolved
+
+
+def _target_identity(target: MetricTarget) -> dict[str, str]:
+    """Every name :data:`definitions.TARGET_ENV_NAMES` allows, for this target."""
+    return {
+        "DBABRAIN_DB_TYPE": str(target.db_type or "").strip().lower(),
+        "DBABRAIN_DB_PORT": str(target.port or "").strip(),
+        "DBABRAIN_DB_CONTAINER": str(target.container_name or "").strip(),
+    }
 
 
 def _target_host(target: MetricTarget) -> str:
@@ -954,7 +1146,7 @@ def _row_to_result(
     importance: int,
     collected_at: str,
     *,
-    command_meta: CommandExecution | None = None,
+    command_meta: CommandExecution | SqlExecution | None = None,
 ) -> MetricResult:
     metric_item = _optional_text(row.get("metric_item"))
     metric_value = _optional_text(row.get("metric_value"))
@@ -1094,6 +1286,20 @@ def _print_metric_progress(
     )
 
 
+def _print_test_rows(*, target: MetricTarget, metric: MetricDefinition, results: list[MetricResult]) -> None:
+    """A test run's answer: every row, as the metric graded it - what the store would have kept."""
+    lines = [f"TEST target={target.target_id} metric={metric.metric_code} "
+             f"status={_worst_status(results)} rows={len(results)}"]
+    for item in results:
+        detail = " ".join(str(item.message or "").split())
+        if len(detail) > 400:
+            detail = detail[:400] + " ..."
+        lines.append(f"  {item.status} item={item.metric_item or ''} value={item.metric_value or ''}"
+                     f"{' ' + item.metric_unit if item.metric_unit else ''}"
+                     f"{' error_type=' + item.error_type if item.error_type else ''} | {detail}")
+    _print_line("\n".join(lines))
+
+
 def _print_metric_skip(*, target: MetricTarget, metric: MetricDefinition, reason: str, dry_run: bool) -> None:
     prefix = "DRY-RUN " if dry_run else ""
     _print_line(
@@ -1163,6 +1369,17 @@ def _apply_data_validity_policy(
 SUPPORTED_COLLECTOR_TYPES_FOR_TARGET = ("sql", "cmd", "docker", "k8s")
 
 
+def _runs_on_host(metric: MetricDefinition, target: MetricTarget) -> bool:
+    """A ``host_fallback`` docker metric on a target with no container and an SSH way onto its host."""
+    if metric.collector_type != "docker" or not getattr(metric, "host_fallback", False):
+        return False
+    if str(getattr(target, "container_name", "") or "").strip():
+        return False
+    cmd_access = target.cmd_access or {}
+    return (bool(cmd_access.get("enabled", False))
+            and str(cmd_access.get("method") or "").strip().lower() == "ssh")
+
+
 def _metric_disabled_by_collector_type(metric: MetricDefinition, target: MetricTarget) -> bool:
     """Turn off a whole class of collector on one target.
 
@@ -1193,7 +1410,10 @@ def _metric_disabled_by_collector_type(metric: MetricDefinition, target: MetricT
             f"metrics.disabled_collector_types has unknown value(s) {sorted(unknown)} for "
             f"{target.target_id}; supported: {list(SUPPORTED_COLLECTOR_TYPES_FOR_TARGET)}."
         )
-    return str(metric.collector_type or "").strip().lower() in normalized
+    # A docker metric reading a host install logs into the host: the switch that turns host access
+    # off on this target turns it off too.
+    effective = "cmd" if _runs_on_host(metric, target) else str(metric.collector_type or "").strip().lower()
+    return effective in normalized
 
 
 def _metric_enabled_for_target(metric: MetricDefinition, target: MetricTarget) -> bool:
@@ -1380,6 +1600,40 @@ def _window_label(metric: MetricDefinition) -> str:
     return f"{'-' if from_hour is None else f'{from_hour:02d}'}-{'-' if to_hour is None else f'{to_hour:02d}'}h"
 
 
+def _safe_claim_name(name: str) -> str:
+    """Sanitize server or category names for filesystem use (anything outside [A-Za-z0-9._-] becomes _)."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(name))
+
+
+def _is_metric_due(
+    *,
+    last: str | None,
+    success: str | None,
+    metric: MetricDefinition,
+    target: MetricTarget,
+    now: datetime,
+) -> bool:
+    """Whether a metric is due based on its last collected time and last successful collected time.
+
+    Like ``app_command_is_due``: a metric is due ``repeat_interval`` after a successful
+    collection, but only ``retry_interval`` after a failed one. The last collection counts as
+    failed when there is no successful row at all, or the newest row is newer than the last
+    success (i.e. the most recent attempt produced only errors).
+    """
+    if last is None:
+        return True  # never collected -> due now
+    last_time = datetime.fromisoformat(last.replace("Z", "+00:00"))
+    last_errored = success is None or last > success
+    # Shared convention via job_due: repeat_interval=0 => collect once; retry after a failure.
+    return job_due(
+        last_run=last_time,
+        last_status="error" if last_errored else "done",
+        repeat_interval=_repeat_interval_for(metric, target),
+        retry_interval=metric.retry_interval_seconds,
+        now=now,
+    )
+
+
 def _metric_due(*, store: MetricStore, target: MetricTarget, metric: MetricDefinition, now: datetime) -> bool:
     """Like ``app_command_is_due``: a metric is due ``repeat_interval`` after a successful
     collection, but only ``retry_interval`` after a failed one. The last collection counts as
@@ -1392,18 +1646,38 @@ def _metric_due(*, store: MetricStore, target: MetricTarget, metric: MetricDefin
     if last is None:
         return True  # never collected -> due now
     success = store.latest_successful_result_time(target_id=target.target_id, metric_code=metric.metric_code)
-    last_time = datetime.fromisoformat(last.replace("Z", "+00:00"))
-    last_errored = success is None or last > success
-    # Shared convention via job_due: repeat_interval=0 => collect once; retry after a failure.
-    return job_due(
-        last_run=last_time,
-        last_status="error" if last_errored else "done",
-        repeat_interval=metric.interval_seconds,
-        retry_interval=metric.retry_interval_seconds,
-        now=now,
-    )
+    return _is_metric_due(last=last, success=success, metric=metric, target=target, now=now)
 
 
+def _repeat_interval_for(metric: MetricDefinition, target: MetricTarget) -> int:
+    """The metric's interval, or the one the variant that runs on this target states for itself."""
+    try:
+        path = _resolve_metric_file_path(metric, target)
+    except errors.DbaBrainError:
+        return metric.interval_seconds      # the collection itself reports why it cannot run
+    for variant in metric.variants:
+        if path is not None and variant.path == path and variant.repeat_interval is not None:
+            return variant.repeat_interval
+    return metric.interval_seconds
+
+
+
+
+def _sql_settings_for(metric: MetricDefinition, path: Path | None) -> dict[str, Any]:
+    """The metric's ``sql_settings`` with those of the variant that runs ``path`` written over them.
+
+    A metric-wide setting is applied to every variant, and a variant that does not declare it fails,
+    which is the point of the rule. A number that is one engine's goes on that engine's variants:
+    ``LOCK_TRANSACTION_HOLDERS``'s lock-scan limits stated for the metric failed every PostgreSQL
+    and Oracle collection of it the day those variants were added (1.149, 2026-10-15). The variant
+    is found by path, as :func:`_variant_is_per_database` finds it.
+    """
+    settings = dict(metric.sql_settings)
+    for variant in metric.variants:
+        if path is not None and variant.path == path:
+            settings.update(variant.sql_settings)
+            break
+    return settings
 
 
 def _variant_is_per_database(metric: MetricDefinition, target: MetricTarget) -> bool:
@@ -1477,7 +1751,11 @@ def _metric_unsupported_reason(metric: MetricDefinition, target: MetricTarget) -
 
     # A docker metric needs a container to inspect. Non-containerized targets (bare-metal /
     # VM DBs) have none, so it is not applicable there — skip, don't error every cycle.
-    if metric.collector_type == "docker" and not str(getattr(target, "container_name", "") or "").strip():
+    if (metric.collector_type == "docker" and not str(getattr(target, "container_name", "") or "").strip()
+            and not _runs_on_host(metric, target)):
+        if getattr(metric, "host_fallback", False):
+            return ("no container_name and no SSH cmd_access on this target (this metric reads a "
+                    "container's log, or a host install's log files through the host login)")
         return "no container_name is configured on this target (a docker metric needs a container)"
 
     # k8s is a reserved fourth collector transport; the collector is scaffolded but not

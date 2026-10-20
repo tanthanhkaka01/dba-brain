@@ -46,7 +46,7 @@ See [01_runtime_store.md](01_runtime_store.md) for the table and
 
 ## Config Files
 
-`data/app_commands.json` is the source of truth. Important fields are `app_command_id`, `app_code`, `app_name`, `display_name`, `log_scope`, `working_dir`, `command_text`, `time_window`, and `active`.
+`data/app_commands.json` is the source of truth. Every field in the record is required — all 14 fields must be stated on each record: `node_role`, `sort_order`, `app_command_id`, `app_code`, `app_name`, `display_name`, `log_scope`, `working_dir`, `command_text`, `active`, `run_mode`, `max_parallel`, `time_window`, and `note`.
 
 `time_window.repeat_interval` and `time_window.timeout` are in seconds by default. `repeat_interval` is measured from the previous run's `started_at`, not from `finished_at` — and that is true of **every** app that carries a `time_window`, not only this one: the rule, the anchor column and the explanation all live in `dbabrain/lib/time_window.py` (`due_from_row`, `run_anchor`, `explain_due`), and [`configuration.md` §5](./configuration.md) is the field reference. For example, if an app has `repeat_interval: 10` and the previous run started at `00:00:00` then finished at `00:00:09`, the app becomes due again at `00:00:10` — at `00:00:09.5` in fact, because a run may start up to `min(interval × 5%, 30s)` early so a scan boundary does not cost a whole cycle. If that same `app_command_id` is still running when it becomes due, the daemon skips it until the running process exits or times out. Date/time bounds use `from_*` and `to_*` names, for example `from_day`, `to_day`, `from_hour`, and `to_hour`.
 
@@ -58,10 +58,17 @@ See [01_runtime_store.md](01_runtime_store.md) for the table and
 
 A long-running service (e.g. `APP-WEBHOST`, the report web host) combines all three: `repeat_interval: 0` (started once), `timeout: 0` (never killed while serving), `retry_interval: 0` (restarted at once if it dies). Leave the `from_*`/`to_*` date-time bounds `null` for such services — do **not** set them to `0` (e.g. `to_hour: 0` would only open the window at midnight).
 
-The current configured commands are `APP-SQL_TASKS`, `APP-METRICS`, `APP-REPORTS-CREATE`, `APP-SLA-VALIDATE`, `APP-BACKUP-RESTORE`, `APP-TELEGRAM`, and `APP-WEBHOST`. The inventory was an app command of its own
-(`APP-REPORTS-INVENTORY-WORKFLOW`) until 0.22.0; it is a report now - `rp_inventory_health` in
-`reports_config.json`, built by `APP-REPORTS-CREATE`'s pass - and `upgrade-config` moves an older
-node's app command there, keeping its schedule.
+The shipped commands and their `run_mode`:
+- `APP-METRICS` (`run_mode: "async"`, `max_parallel: 4`): runs each server/category batch independently;
+- `APP-SQL_TASKS` (`run_mode: "async"`, `max_parallel: 4`): long tasks do not block other due tasks;
+- `APP-BACKUP-RESTORE` (`run_mode: "async"`, `max_parallel: 4`): restores do not block subsequent backups;
+- `APP-CONTROL` (`run_mode: "sync"`, `max_parallel: 1`);
+- `APP-REPORTS-CREATE` (`run_mode: "sync"`, `max_parallel: 1`);
+- `APP-SLA-VALIDATE` (`run_mode: "sync"`, `max_parallel: 1`);
+- `APP-TELEGRAM` (`run_mode: "sync"`, `max_parallel: 1`);
+- `APP-WEBHOST` (`run_mode: "sync"`, `max_parallel: 1`).
+
+The inventory was an app command of its own (`APP-REPORTS-INVENTORY-WORKFLOW`) until 0.22.0; it is a report now - `rp_inventory_health` in `reports_config.json`, built by `APP-REPORTS-CREATE`'s pass - and `upgrade-config` moves an older node's app command there, keeping its schedule.
 
 ## Data Flow
 
@@ -150,7 +157,7 @@ An app command declares how the daemon calls it:
 **Why the field exists.** `APP-SQL_TASKS` is one app command that works through its due list in
 order, so one slow task is a stopped queue rather than a busy one: on 2026-09-19 a 22-minute SQL
 task held every other SQL task for 22 minutes, and a leftover `running` row held the same queue for
-30 minutes earlier that day. `APP-BACKUP-RESTORE` has the same shape. Both ship `async`.
+30 minutes earlier that day. `APP-BACKUP-RESTORE` and `APP-METRICS` have the same shape. All three ship `async`.
 
 **Why it is safe, and what makes it unsafe.** Running an app twice at once is only acceptable
 because each *unit of work* takes an exclusive claim: a `running` row that a unique index will not

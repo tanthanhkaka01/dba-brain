@@ -3,7 +3,7 @@
   "notes": "Normalized multi-DB metric catalog. metric_code uses engine-neutral group prefixes; collector_type and variants bind each metric to SQL or command collectors or marks unsupported combinations explicitly.",
   "collection": {
     "max_parallel_servers": 16,
-    "note": "How many server_id groups a collect pass may walk at once. Metrics of one server_id always run one at a time, in catalog order, so a machine never gets two WinRM/SSH sessions or two metric queries at once; only different servers overlap. 1 restores the old fully serial pass."
+    "note": "How many batches one collect pass runs at once. A batch is the due metrics of one category on one server, run one at a time in catalog order; different categories and different servers run at the same time and never wait for each other, so a server may get one session per category at once. A batch is claimed by one pass at a time, because APP-METRICS runs async. 1 restores a fully serial pass."
   },
   "metrics": [
     {
@@ -13,6 +13,7 @@
       "category": "availability",
       "default_importance": 5,
       "active": true,
+      "note": "repeat_interval 30, not 60 (the operator, 2026-10-16): the availability SLO counts minutes, and a minute is up when any INSTANCE_STATUS sample in it is OK, so two samples a minute keep one late or failed collection from costing the minute. It is the first metric of each server's availability batch, which since 0.30.0 runs beside the other categories and never waits for them.",
       "connection_error_severity": "CRITICAL",
       "execution_error_severity": "CRITICAL",
       "time_window": {
@@ -26,7 +27,7 @@
         "to_hour": null,
         "from_minute": null,
         "to_minute": null,
-        "repeat_interval": 60,
+        "repeat_interval": 30,
         "timeout": 60
       },
       "collector_type": "sql",
@@ -99,6 +100,19 @@
       "collector_type": "sql",
       "variants": [
         {
+          "db_type": "oracle",
+          "min_major_version": 12,
+          "name": "oracle_12c_plus",
+          "file": "oracle/002_oracle_database_status.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 11,
+          "name": "oracle_9i_to_11g",
+          "file": "oracle/002_oracle_database_status_11g.sql"
+        },
+        {
           "db_type": "sqlserver",
           "min_major_version": 0,
           "max_major_version": 10,
@@ -110,12 +124,6 @@
           "min_major_version": 11,
           "name": "sqlserver_modern_2012_plus",
           "file": "sqlserver/002_sqlserver_database_status.sql"
-        },
-        {
-          "db_type": "oracle",
-          "min_major_version": 9,
-          "name": "oracle_9i_plus",
-          "file": "oracle/002_oracle_database_status.sql"
         },
         {
           "db_type": "oracle",
@@ -482,6 +490,13 @@
           "name": "postgresql_todo",
           "supported": false,
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 9,
+          "name": "oracle_9i_archive_dest",
+          "file": "oracle/110_oracle_archive_dest.sql"
         }
       ],
       "report_policy": {
@@ -562,9 +577,17 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
+          "min_major_version": 12,
+          "name": "postgresql_12_plus",
+          "file": "postgresql/008_postgresql_temp_space.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 0,
+          "max_major_version": 11,
+          "name": "postgresql_pre_12_unsupported",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "pg_ls_tmpdir() - the temp files in use, by backend - exists from 12."
         }
       ],
       "max_rows": 500
@@ -744,9 +767,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/010_oracle_scheduler_failed_jobs.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
           "supported": false,
-          "unsupported_reason": "Oracle Scheduler jobs do not map cleanly to SQL Server Agent job history."
+          "unsupported_reason": "DBMS_SCHEDULER and dba_scheduler_job_run_details exist from 10g."
         },
         {
           "db_type": "mysql",
@@ -816,9 +847,8 @@
           "db_type": "sqlserver",
           "min_major_version": 0,
           "max_major_version": 10,
-          "name": "sqlserver_2008r2_unsupported",
-          "supported": false,
-          "unsupported_reason": "Always On Availability Groups require SQL Server 2012 or newer."
+          "name": "sqlserver_legacy_2008r2",
+          "file": "sqlserver/legacy_2008r2/011_sqlserver_availability_health.sql"
         },
         {
           "db_type": "sqlserver",
@@ -1075,9 +1105,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
-          "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/014_postgresql_wait_stats.sql"
         }
       ],
       "max_rows": 500
@@ -1123,9 +1153,18 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 11,
+          "name": "oracle_11g_plus",
+          "file": "oracle/015_oracle_deadlock_recent.sql",
+          "repeat_interval": 3600
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_pre_11g_unsupported",
           "supported": false,
-          "unsupported_reason": "Recent deadlock history needs alert-log or diagnostic repository parsing, not a portable SQL-only query."
+          "unsupported_reason": "v$diag_alert_ext - the alert log from SQL - exists from 11g; before it the log is a file only."
         },
         {
           "db_type": "mysql",
@@ -1135,9 +1174,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
+          "name": "postgresql_through_server_log",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "PostgreSQL keeps the history of its deadlocks only in the server log: POSTGRES_SERVER_LOG grades 'deadlock detected' by this metric's rule (any WARNING, 5 in the window CRITICAL), and the Workload table differences pg_stat_database.deadlocks."
         }
       ],
       "max_rows": 500
@@ -1484,9 +1523,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/021_oracle_block_corruption.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
           "supported": false,
-          "unsupported_reason": "Oracle corruption checks need DBVERIFY/RMAN/alert-log integration."
+          "unsupported_reason": "v$database_block_corruption is read from 10g; older releases are not covered."
         },
         {
           "db_type": "mysql",
@@ -1496,12 +1543,21 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
+          "min_major_version": 12,
+          "name": "postgresql_12_plus",
+          "file": "postgresql/021_postgresql_checksum_failures.sql"
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 0,
+          "max_major_version": 11,
+          "name": "postgresql_pre_12_unsupported",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "pg_stat_database.checksum_failures exists from PostgreSQL 12."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "note": "Corruption on every engine (1.159 / 1.160, 2026-10-15): SQL Server's msdb.dbo.suspect_pages, Oracle's v$database_block_corruption (what RMAN found), PostgreSQL's checksum failures (12+), each CRITICAL within 30 days."
     },
     {
       "metric_id": 22,
@@ -2313,9 +2369,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
+          "name": "postgresql_covered_by_long_transactions",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "Covered by POSTGRES_LONG_TRANSACTIONS (53): every transaction open 5 minutes is WARNING and 30 minutes CRITICAL, 'idle in transaction' included and named by its state. A variant here would page twice for the same session (1.149, 2026-10-15)."
         }
       ],
       "report_policy": {
@@ -2423,9 +2479,6 @@
       "category": "lock",
       "default_importance": 4,
       "empty_result_is_ok": true,
-      "sql_settings": {
-          "lock_scan_skip_above": 500000
-      },
       "active": true,
       "connection_error_severity": "WARNING",
       "execution_error_severity": "WARNING",
@@ -2450,19 +2503,35 @@
           "min_major_version": 0,
           "max_major_version": 10,
           "name": "sqlserver_legacy_2008r2",
-          "file": "sqlserver/legacy_2008r2/025_sqlserver_transaction_lock_holders.sql"
+          "file": "sqlserver/legacy_2008r2/025_sqlserver_transaction_lock_holders.sql",
+          "sql_settings": {
+            "lock_scan_skip_above": 2000000,
+            "lock_count_credible_locks_per_second": 2000000
+          }
         },
         {
           "db_type": "sqlserver",
           "min_major_version": 11,
           "name": "sqlserver_modern_2012_plus",
-          "file": "sqlserver/025_sqlserver_transaction_lock_holders.sql"
+          "file": "sqlserver/025_sqlserver_transaction_lock_holders.sql",
+          "sql_settings": {
+            "lock_scan_skip_above": 2000000,
+            "lock_count_credible_locks_per_second": 2000000
+          }
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/025_oracle_transaction_lock_holders.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
           "supported": false,
-          "unsupported_reason": "Transaction lock holder detection uses SQL Server locking DMVs."
+          "unsupported_reason": "v$session.blocking_session, which names who waits on whom, exists from 10g."
         },
         {
           "db_type": "mysql",
@@ -2472,9 +2541,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
-          "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/025_postgresql_transaction_lock_holders.sql"
         }
       ],
       "max_rows": 500
@@ -2719,6 +2788,7 @@
         "timeout": 60
       },
       "collector_type": "sql",
+      "empty_result_is_ok": true,
       "variants": [
         {
           "db_type": "sqlserver",
@@ -2754,7 +2824,7 @@
         }
       ],
       "max_rows": 500,
-      "note": "One code, both engines: 'what does this instance run on a schedule, and is it working' is the same question everywhere, and the catalog already maps codes per engine this way (LOG_FILE_SPACE reads the FRA on Oracle and the transaction log on SQL Server). Oracle 8i reads dba_jobs (DBMS_JOB), 10g+ reads dba_scheduler_jobs, SQL Server reads msdb. Every variant keeps metric_value = ENABLED/DISABLED and starts its message with enabled=/last_outcome=, because reports/inventory_health.py parses those by name."
+      "note": "One code, both engines: 'what does this instance run on a schedule, and is it working' is the same question everywhere, and the catalog already maps codes per engine this way (LOG_FILE_SPACE reads the FRA on Oracle and the transaction log on SQL Server). Oracle 8i reads dba_jobs (DBMS_JOB), 10g+ reads dba_scheduler_jobs, SQL Server reads msdb. Every variant keeps metric_value = ENABLED/DISABLED and starts its message with enabled=/last_outcome=, because reports/inventory_health.py parses those by name. No job at all is an answer, not a failure (empty_result_is_ok): SQL Server on Linux runs no Agent unless mssql-conf enables it, Express has none, and many Oracle schemas schedule nothing - each read NO_DATA, a finding, before 2026-10-15."
     },
     {
       "metric_id": 40,
@@ -2942,9 +3012,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/056_oracle_scheduler_job_runtime.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
           "supported": false,
-          "unsupported_reason": "SQL Server Agent jobs have no direct equivalent."
+          "unsupported_reason": "DBMS_SCHEDULER and dba_scheduler_running_jobs exist from 10g."
         },
         {
           "db_type": "mysql",
@@ -2956,7 +3034,7 @@
           "db_type": "postgresql",
           "name": "postgresql_todo",
           "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "unsupported_reason": "PostgreSQL has no scheduler in core; jobs run from cron or pg_cron, whose long statements QUERY_LONG_RUNNING grades."
         }
       ],
       "max_rows": 500
@@ -3023,6 +3101,12 @@
       "collector_type": "sql",
       "empty_result_is_ok": false,
       "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "name": "oracle_9i_plus",
+          "file": "oracle/044_oracle_process_limit.sql"
+        },
         {
           "db_type": "oracle",
           "min_major_version": 0,
@@ -3097,6 +3181,20 @@
       "variants": [
         {
           "db_type": "oracle",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/045_oracle_shared_pool_free.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 9,
+          "name": "oracle_9i_unsupported",
+          "supported": false,
+          "unsupported_reason": "Read from v$sysmetric, which exists from 10g; 9i is not covered."
+        },
+        {
+          "db_type": "oracle",
           "min_major_version": 0,
           "max_major_version": 8,
           "name": "oracle_8i_legacy",
@@ -3133,6 +3231,20 @@
       "variants": [
         {
           "db_type": "oracle",
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/046_oracle_library_cache.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 9,
+          "name": "oracle_9i_unsupported",
+          "supported": false,
+          "unsupported_reason": "Read from v$sysmetric, which exists from 10g; 9i is not covered."
+        },
+        {
+          "db_type": "oracle",
           "min_major_version": 0,
           "max_major_version": 8,
           "name": "oracle_8i_legacy",
@@ -3167,6 +3279,27 @@
       "collector_type": "sql",
       "empty_result_is_ok": false,
       "variants": [
+        {
+          "db_type": "oracle",
+          "min_major_version": 18,
+          "name": "oracle_18c_plus",
+          "file": "oracle/047_oracle_buffer_cache_hit_18c.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 10,
+          "max_major_version": 17,
+          "name": "oracle_10g_to_17",
+          "file": "oracle/047_oracle_buffer_cache_hit.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 9,
+          "name": "oracle_9i_unsupported",
+          "supported": false,
+          "unsupported_reason": "Read from v$sysmetric, which exists from 10g; 9i is not covered."
+        },
         {
           "db_type": "oracle",
           "min_major_version": 0,
@@ -3834,6 +3967,55 @@
       "max_rows": 500
     },
     {
+      "metric_id": 107,
+      "metric_code": "OS_CPU_COUNTERS",
+      "db_type": "multi",
+      "category": "os",
+      "default_importance": 1,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 900,
+        "timeout": 60
+      },
+      "collector_type": "cmd",
+      "target_env": [
+        "DBABRAIN_DB_TYPE",
+        "DBABRAIN_DB_PORT",
+        "DBABRAIN_DB_CONTAINER"
+      ],
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/016_os_cpu_counters.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/015_os_cpu_counters.sh"
+        }
+      ],
+      "report_policy": {
+        "_note": "Cumulative CPU totals since boot - the host's busy and idle time, and the database process's - deliberately ungraded, like PERFORMANCE_WORKLOAD_COUNTERS: the report subtracts two collections to get an interval. OS_CPU_USAGE is the graded reading of the moment; this is what the Workload section of the server report turns into the host's and the database's CPU over 15 minutes, an hour and a day.",
+        "collect_only": true,
+        "chart_summary_only": true
+      },
+      "max_rows": 10
+    },
+    {
       "metric_id": 63,
       "metric_code": "DATABASE_USER_PERMISSIONS",
       "db_type": "multi",
@@ -3872,9 +4054,16 @@
         },
         {
           "db_type": "oracle",
-          "min_major_version": 9,
-          "name": "oracle_9i_plus",
+          "min_major_version": 12,
+          "name": "oracle_12c_plus",
           "file": "oracle/061_oracle_user_permissions.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 9,
+          "max_major_version": 11,
+          "name": "oracle_9i_to_11g",
+          "file": "oracle/061_oracle_user_permissions_11g.sql"
         },
         {
           "db_type": "mysql",
@@ -5320,9 +5509,17 @@
         },
         {
           "db_type": "oracle",
-          "name": "oracle_unsupported",
-          "supported": false,
-          "unsupported_reason": "The engine's cumulative throughput counters -- CPU, batch requests, transactions, logical and physical I/O, log bytes -- are a SQL Server feature set. The equivalent for this engine has not been authored yet."
+          "min_major_version": 10,
+          "name": "oracle_10g_plus",
+          "file": "oracle/081_oracle_workload_counters.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_8i_9i_legacy",
+          "supported": true,
+          "file": "oracle/legacy_8i/081_oracle_workload_counters.sql"
         },
         {
           "db_type": "mysql",
@@ -5332,9 +5529,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
-          "supported": false,
-          "unsupported_reason": "The engine's cumulative throughput counters -- CPU, batch requests, transactions, logical and physical I/O, log bytes -- are a SQL Server feature set. The equivalent for this engine has not been authored yet."
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/075_postgresql_workload_counters.sql"
         }
       ],
       "report_policy": {

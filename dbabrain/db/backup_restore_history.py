@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from dbabrain.db import backend as backend_mod
 from dbabrain.db.backend import StoreTarget
@@ -10,6 +11,18 @@ from dbabrain.db.store import DbaBrainStore, utc_now_text
 
 #: Bumped when backup_restore_history's shape changes, so the schema check can skip the DDL.
 HISTORY_SCHEMA_VERSION = 1
+
+
+def drill_rows(conn: Any) -> list[dict[str, Any]]:
+    """Every drill this table holds, as :func:`dbabrain.db.restore_drill.evaluate` reads them.
+
+    The whole history, not a window: "never drilled" and "drilled, but too long ago" are different
+    verdicts, and a window would turn the second into the first. Read by ``db.cli
+    restore-drill-status`` and by the SLA app's ``restore_drill`` policy - one query for both.
+    """
+    return [dict(row) for row in conn.execute(
+        "SELECT database_name, status, restore_start, restore_end, duration_seconds "
+        "FROM backup_restore_history")]
 
 
 class BackupRestoreHistory:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from dbabrain.lib.config import StoreConfig
 from dbabrain.db.sla_results import SlaPolicyResult, SlaValidationSummary, state_key
@@ -84,8 +85,13 @@ class SlaStore:
         window_start: str,
         window_end: str,
         server_ids: tuple[str, ...] = (),
+        with_message: bool = False,
     ) -> list[sqlite3.Row]:
         """Read the metric samples in scope for one SLI.
+
+        ``with_message`` adds each row's ``message`` - the backup RPO policy reads a backup's
+        recovery model and finish time there. Off by default: every other policy reads the status
+        and the value, and the message is the widest column of the table.
 
         Scope is an explicit set of ``target_ids``, or the ``server_ids`` the caller resolved
         from config for a per-DBMS SLO. **``db_types`` is only the fallback**, and it is the
@@ -110,17 +116,9 @@ class SlaStore:
         if not self._metric_results_exists():
             return []
         metric_placeholders = ", ".join("?" for _ in metric_codes)
-        params: list[object] = [*metric_codes]
-        if target_ids:
-            scope_clause = f"target_id IN ({', '.join('?' for _ in target_ids)})"
-            params.extend(target_ids)
-        elif server_ids:
-            scope_clause = f"server_id IN ({', '.join('?' for _ in server_ids)})"
-            params.extend(server_ids)
-        else:
-            scope_clause = f"lower(db_type) IN ({', '.join('?' for _ in db_types)})"
-            params.extend(db_type.lower() for db_type in db_types)
-        params.extend([window_start, window_end])
+        scope_clause, scope_params = _build_scope_clause(target_ids, server_ids, db_types)
+        params: list[object] = [*metric_codes, *scope_params, window_start, window_end]
+        message_column = ", message" if with_message else ""
         with self.connect() as conn:
             return list(
                 conn.execute(
@@ -130,7 +128,7 @@ class SlaStore:
                     -- breach, which multiplied one collector incident across every policy that
                     -- touched that target.
                     SELECT target_id, server_id, db_type, db_name, metric_code, metric_item,
-                           metric_value, metric_unit, status, error_type, collected_at
+                           metric_value, metric_unit, status, error_type, collected_at{message_column}
                     FROM metric_results
                     WHERE metric_code IN ({metric_placeholders})
                       AND {scope_clause}
@@ -141,6 +139,228 @@ class SlaStore:
                     params,
                 )
             )
+
+    def minute_counts(
+        self,
+        *,
+        target_ids: tuple[str, ...] = (),
+        server_ids: tuple[str, ...] = (),
+        db_types: tuple[str, ...] = (),
+        metric_codes: tuple[str, ...],
+        good_statuses: tuple[str, ...],
+        excluded_error_types: tuple[str, ...] | frozenset[str] = (),
+        window_end: str,
+        window_starts: dict[str, str],
+        maintenance_windows: tuple[tuple[str, str], ...] = (),
+        include_archive: bool = False,
+    ) -> dict[str, dict[str, tuple[int, int]]]:
+        """For each target, for each named window [window_starts[name], window_end),
+        the number of observed minutes and of good minutes."""
+        if not metric_codes or (not target_ids and not server_ids and not db_types) or not window_starts:
+            return {}
+        if not self._metric_results_exists():
+            return {}
+
+        earliest_start = min(window_starts.values())
+        scope_clause, scope_params = _build_scope_clause(target_ids, server_ids, db_types)
+
+        metric_placeholders = ", ".join("?" for _ in metric_codes)
+        good_statuses_upper = tuple(s.upper() for s in good_statuses) or ("OK", "LOGGING")
+        good_placeholders = ", ".join("?" for _ in good_statuses_upper)
+
+        excluded_clause = ""
+        excluded_params: list[object] = []
+        if excluded_error_types:
+            excluded_upper = tuple(e.upper() for e in excluded_error_types)
+            excluded_clause = f"AND upper(coalesce(error_type, '')) NOT IN ({', '.join('?' for _ in excluded_upper)})"
+            excluded_params = list(excluded_upper)
+
+        maint_clause = ""
+        maint_params: list[object] = []
+        for start, end in maintenance_windows:
+            maint_clause += " AND NOT (collected_at >= ? AND collected_at <= ?)"
+            maint_params.extend([start, end])
+
+        window_items = list(window_starts.items())
+        outer_selects = []
+        outer_params: list[object] = []
+        for i, (name, start_time) in enumerate(window_items):
+            start_min = start_time[:16]
+            outer_selects.append(f"SUM(CASE WHEN minute >= ? THEN 1 ELSE 0 END) AS obs_{i}")
+            outer_selects.append(f"SUM(CASE WHEN minute >= ? AND up = 1 THEN 1 ELSE 0 END) AS good_{i}")
+            outer_params.extend([start_min, start_min])
+
+        with self.connect() as conn:
+            table_source = _resolve_metric_source(conn, include_archive)
+            sql = f"""
+            WITH minutes AS (
+                SELECT target_id,
+                       substr(collected_at, 1, 16) AS minute,
+                       max(CASE WHEN upper(coalesce(status, '')) IN ({good_placeholders}) THEN 1 ELSE 0 END) AS up
+                FROM {table_source}
+                WHERE metric_code IN ({metric_placeholders})
+                  AND {scope_clause}
+                  AND collected_at >= ?
+                  AND collected_at < ?
+                  {excluded_clause}
+                  {maint_clause}
+                GROUP BY target_id, substr(collected_at, 1, 16)
+            )
+            SELECT target_id,
+                   {', '.join(outer_selects)}
+            FROM minutes
+            GROUP BY target_id;
+            """
+            params = [
+                *good_statuses_upper,
+                *metric_codes,
+                *scope_params,
+                earliest_start,
+                window_end,
+                *excluded_params,
+                *maint_params,
+                *outer_params,
+            ]
+            rows = conn.execute(sql, params).fetchall()
+
+        result: dict[str, dict[str, tuple[int, int]]] = {}
+        for row in rows:
+            target_id = str(row["target_id"])
+            result[target_id] = {}
+            for i, (name, _) in enumerate(window_items):
+                obs = int(row[f"obs_{i}"] or 0)
+                good = int(row[f"good_{i}"] or 0)
+                result[target_id][name] = (obs, good)
+        return result
+
+    def minute_details(
+        self,
+        *,
+        target_ids: tuple[str, ...] = (),
+        server_ids: tuple[str, ...] = (),
+        db_types: tuple[str, ...] = (),
+        metric_codes: tuple[str, ...],
+        good_statuses: tuple[str, ...],
+        excluded_error_types: tuple[str, ...] | frozenset[str] = (),
+        window_start: str,
+        window_end: str,
+        maintenance_windows: tuple[tuple[str, str], ...] = (),
+        include_archive: bool = False,
+    ) -> dict[str, dict[str, Any]]:
+        """Detailed minute counts and diagnostics for one window."""
+        if not metric_codes or (not target_ids and not server_ids and not db_types):
+            return {}
+        if not self._metric_results_exists():
+            return {}
+
+        scope_clause, scope_params = _build_scope_clause(target_ids, server_ids, db_types)
+
+        metric_placeholders = ", ".join("?" for _ in metric_codes)
+        good_statuses_upper = tuple(s.upper() for s in good_statuses) or ("OK", "LOGGING")
+        good_placeholders = ", ".join("?" for _ in good_statuses_upper)
+
+        maint_clause = ""
+        maint_params: list[object] = []
+        for start, end in maintenance_windows:
+            maint_clause += " AND NOT (collected_at >= ? AND collected_at <= ?)"
+            maint_params.extend([start, end])
+
+        excluded_upper = tuple(e.upper() for e in excluded_error_types) if excluded_error_types else ()
+        if excluded_upper:
+            ex_placeholders = ", ".join("?" for _ in excluded_upper)
+            excluded_clause_minutes = f"AND upper(coalesce(error_type, '')) NOT IN ({ex_placeholders})"
+            collection_rows_expr = f"sum(CASE WHEN upper(coalesce(error_type, '')) IN ({ex_placeholders}) THEN 1 ELSE 0 END)"
+            bad_rows_excluded = f"AND upper(coalesce(r.error_type, '')) NOT IN ({ex_placeholders})"
+        else:
+            excluded_clause_minutes = ""
+            collection_rows_expr = "0"
+            bad_rows_excluded = ""
+
+        with self.connect() as conn:
+            table_source = _resolve_metric_source(conn, include_archive)
+            sql = f"""
+            WITH rows AS (
+                SELECT target_id, status, error_type, collected_at,
+                       substr(collected_at, 1, 16) AS minute
+                FROM {table_source}
+                WHERE metric_code IN ({metric_placeholders})
+                  AND {scope_clause}
+                  AND collected_at >= ?
+                  AND collected_at < ?
+                  {maint_clause}
+            ),
+            minutes AS (
+                SELECT target_id, minute,
+                       max(CASE WHEN upper(coalesce(status, '')) IN ({good_placeholders}) THEN 1 ELSE 0 END) AS up
+                FROM rows
+                WHERE 1=1 {excluded_clause_minutes}
+                GROUP BY target_id, minute
+            ),
+            target_summary AS (
+                SELECT target_id,
+                       max(collected_at) AS newest,
+                       {collection_rows_expr} AS collection_rows
+                FROM rows
+                GROUP BY target_id
+            ),
+            newest_min AS (
+                SELECT target_id, up AS newest_minute_up
+                FROM (
+                    SELECT target_id, up,
+                           ROW_NUMBER() OVER (PARTITION BY target_id ORDER BY minute DESC) AS rn
+                    FROM minutes
+                ) ranked
+                WHERE rn = 1
+            ),
+            bad_rows AS (
+                SELECT r.target_id,
+                       upper(coalesce(r.status, '')) AS status,
+                       count(*) AS status_count
+                FROM rows r
+                JOIN minutes m ON r.target_id = m.target_id AND r.minute = m.minute
+                WHERE m.up = 0
+                  {bad_rows_excluded}
+                GROUP BY r.target_id, upper(coalesce(r.status, ''))
+            )
+            SELECT s.target_id,
+                   s.newest,
+                   s.collection_rows,
+                   nm.newest_minute_up,
+                   b.status AS bad_status,
+                   b.status_count AS bad_status_count
+            FROM target_summary s
+            LEFT JOIN newest_min nm ON s.target_id = nm.target_id
+            LEFT JOIN bad_rows b ON s.target_id = b.target_id;
+            """
+            params: list[object] = [
+                *metric_codes,
+                *scope_params,
+                window_start,
+                window_end,
+                *maint_params,
+                *good_statuses_upper,
+            ]
+            if excluded_upper:
+                params.extend(excluded_upper)
+                params.extend(excluded_upper)
+                params.extend(excluded_upper)
+            rows = conn.execute(sql, params).fetchall()
+
+        details: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            target_id = str(row["target_id"])
+            if target_id not in details:
+                up_val = row["newest_minute_up"]
+                details[target_id] = {
+                    "failures_by_status": {},
+                    "collection_rows": int(row["collection_rows"] or 0),
+                    "newest": str(row["newest"]) if row["newest"] is not None else None,
+                    "newest_minute_up": bool(up_val) if up_val is not None else None,
+                }
+            bad_status = row["bad_status"]
+            if bad_status is not None:
+                details[target_id]["failures_by_status"][str(bad_status)] = int(row["bad_status_count"])
+        return details
 
     def save_summary(
         self,
@@ -226,6 +446,8 @@ class SlaStore:
                             "error_budget_consumed": result.error_budget_consumed,
                             "error_budget_remaining": result.error_budget_remaining,
                             "burn_rate": result.burn_rate,
+                            "burn_rates": result.burn_rates,
+                            "burn_alert": result.burn_alert,
                         }, ensure_ascii=False, sort_keys=True),
                         finished_at,
                     )
@@ -305,6 +527,41 @@ class SlaStore:
         """Is metric_results there yet? It is created by the metrics app, which may not have run."""
         with self.connect() as conn:
             return backend_mod.table_exists(conn, "metric_results")
+
+
+def _build_scope_clause(
+    target_ids: tuple[str, ...],
+    server_ids: tuple[str, ...],
+    db_types: tuple[str, ...],
+) -> tuple[str, list[object]]:
+    """Build the scope WHERE clause matching fetch_metric_samples' resolution order.
+
+    target_ids takes precedence, then server_ids, with db_types as fallback.
+    """
+    if target_ids:
+        placeholders = ", ".join("?" for _ in target_ids)
+        return f"target_id IN ({placeholders})", list(target_ids)
+    if server_ids:
+        placeholders = ", ".join("?" for _ in server_ids)
+        return f"server_id IN ({placeholders})", list(server_ids)
+    if db_types:
+        placeholders = ", ".join("?" for _ in db_types)
+        return f"lower(db_type) IN ({placeholders})", [db_type.lower() for db_type in db_types]
+    return "1=1", []
+
+
+def _resolve_metric_source(conn: Any, include_archive: bool) -> str:
+    """Return the table or subquery to read metric samples from.
+
+    When include_archive is True and metric_results_archive exists, reads both tables
+    via UNION ALL. Otherwise reads metric_results alone. The columns are named, not `*`: the
+    archive carries `archived_at` besides, and a UNION of unequal column lists does not run.
+    """
+    if include_archive and backend_mod.table_exists(conn, "metric_results_archive"):
+        columns = "target_id, server_id, db_type, metric_code, status, error_type, collected_at"
+        return (f"(SELECT {columns} FROM metric_results UNION ALL "
+                f"SELECT {columns} FROM metric_results_archive) mr")
+    return "metric_results"
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_sql: str) -> None:

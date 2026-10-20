@@ -32,6 +32,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     collect.add_argument("--dry-run", action="store_true")
     collect.add_argument("--force", action="store_true", help="Collect even when the metric interval has not elapsed.")
     collect.add_argument("--include-windowed", action="store_true", help="Also collect the metrics whose time_window confines them to certain hours (DBCC CHECKDB, index fragmentation, restore validation ...). Off by default: --force means 'never mind the interval', not 'never mind the window', and those metrics are windowed precisely to keep them off a production instance in the daytime.")
+    collect.add_argument(
+        "--test-run", action="store_true",
+        help="Try the metrics on ONE target named by --target-id or --target-ip - even one switched "
+             "off in the inventory, such as a lab - and print every row they return. Nothing is "
+             "written to the store and nothing is sent; the interval does not apply. How a metric "
+             "is tested on an engine version the estate does not run yet.")
     collect.add_argument("--archive-days", type=int, default=30,
                          help="Before collecting, archive metric rows older than N days into metric_results_archive (default 30).")
 
@@ -94,7 +100,8 @@ def main(argv: list[str]) -> int:
         logger = setup_app_logger(config, app_name="metrics", enable_telegram_alerts=False, enable_console=False)
         log_function_call(logger, function_name=f"metrics.{args.command}")
         if args.command == "collect":
-            target_id = _resolve_target_id_arg(target_ip=args.target_ip, target_id=args.target_id, db_type=args.db_type)
+            target_id = _resolve_target_id_arg(target_ip=args.target_ip, target_id=args.target_id, db_type=args.db_type,
+                                               include_switched_off=bool(args.test_run))
             summary = collect_metrics(
                 config=config,
                 db_type=args.db_type,
@@ -104,7 +111,14 @@ def main(argv: list[str]) -> int:
                 force=bool(args.force),
                 include_windowed=bool(args.include_windowed),
                 archive_days=int(args.archive_days),
+                test_run=bool(args.test_run),
             )
+            asked = bool(args.dry_run or args.test_run or target_id or args.metric_code)
+            if summary.run_id is None and summary.target_count and not asked:
+                # The daemon starts this every second (APP-METRICS is async since 0.30.0) and most
+                # passes find nothing due. Sixteen summary lines a second of nothing would bury the
+                # passes that ran - an idle run of APP-SQL_TASKS prints nothing either.
+                return 0
             log_event(
                 logger,
                 level="logging",
@@ -112,7 +126,9 @@ def main(argv: list[str]) -> int:
                     "Metric collect finished. "
                     f"run_id={summary.run_id} targets={summary.target_count} "
                     f"metrics={summary.metric_count} executed={summary.executed_count} "
-                    f"skipped_interval={summary.skipped_interval_count} disabled={summary.disabled_count} "
+                    f"skipped_interval={summary.skipped_interval_count} "
+                    f"skipped_claimed={summary.skipped_claimed_count} "
+                    f"disabled={summary.disabled_count} "
                     f"results={summary.result_count} ok={summary.ok_count} errors={summary.error_count} "
                     f"warnings={summary.warning_count} critical={summary.critical_count} "
                     f"no_data={summary.no_data_count} duration_seconds={summary.duration_seconds}"
@@ -209,10 +225,12 @@ def main(argv: list[str]) -> int:
     return 1
 
 
-def _resolve_target_id_arg(*, target_ip: str | None, target_id: str | None, db_type: str | None = None) -> str | None:
+def _resolve_target_id_arg(*, target_ip: str | None, target_id: str | None, db_type: str | None = None,
+                           include_switched_off: bool = False) -> str | None:
     if not target_ip:
         return target_id
-    return resolve_metric_target(target_ip=target_ip, target_id=target_id, db_type=db_type).target_id
+    return resolve_metric_target(target_ip=target_ip, target_id=target_id, db_type=db_type,
+                                 include_switched_off=include_switched_off).target_id
 
 
 def _print_collect_summary(summary: object) -> None:
@@ -222,6 +240,7 @@ def _print_collect_summary(summary: object) -> None:
         "metric_count",
         "executed_count",
         "skipped_interval_count",
+        "skipped_claimed_count",
         "disabled_count",
         "result_count",
         "ok_count",
@@ -361,7 +380,7 @@ def _summary_line(row: object, *, labels: dict[str, str]) -> str:
         return f"{target} / {_short_error_message(message)}"
     if value:
         compact_value = f"{value}{_compact_unit(unit)}"
-        if item and item.lower() not in target.lower() and item.lower() not in ("server", "sql_agent", "availability_group"):
+        if item and item.lower() not in target.lower() and item.lower() not in ("server", "sql_agent", "availability_group", "availability"):
             return f"{target} / {item} / {metric} {compact_value}"
         return f"{target} / {metric} {compact_value}"
     if message:

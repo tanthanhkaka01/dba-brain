@@ -30,6 +30,17 @@
 DECLARE @warning_tran_seconds  int = 300;    -- 5 min with a transaction open: worth a look
 DECLARE @critical_tran_seconds int = 900;    -- 15 min, and blocking or asleep: an incident
 
+-- A session-owned application lock (sp_getapplock @LockOwner = 'Session') is held with no
+-- transaction open, so open_tran_seconds is 0 for as long as it is held and the two thresholds
+-- above never see it. sys.dm_tran_locks keeps no grant time, so the lock has no age of its own;
+-- what is measured is how long the session holding it has been idle. A session that is working
+-- releases it; an idle one keeps it until sp_releaseapplock or until somebody closes it. Found
+-- when a query tool's session held two such locks for hours and three lock metrics gave only
+-- WARNINGs: the waiters gave up at their own @LockTimeout and retried, so no wait ever grew.
+DECLARE @applock_idle_warning_seconds int = 300;     -- 5 min idle holding one: worth a look
+DECLARE @applock_idle_critical_seconds int = 1800;   -- 30 min idle holding one: an incident
+DECLARE @applock_idle_abandoned_seconds int = 60;    -- 1 min idle while somebody waits on it
+
 -- ---------------------------------------------------------------------------
 -- 0. Is the lock manager too large to enumerate at all?
 -- ---------------------------------------------------------------------------
@@ -49,9 +60,9 @@ DECLARE @critical_tran_seconds int = 900;    -- 15 min, and blocking or asleep: 
 --   server read 3,700 MB with 800 locks in use, two days after the incident - so a limit in
 --   megabytes would have stayed CRITICAL for good.
 -- * The limit is configuration: metric_definitions.json states sql_settings.lock_scan_skip_above
---   and it is written into the DECLARE below, whose number is only the default. 500,000 is about
---   twice the largest count this scan has been measured to walk safely (260,000 in 1.2 s) and
---   under half of what stalled a server.
+--   and it is written into the DECLARE below, whose number is only the default. 2,000,000 since
+--   2026-10-15, the operator's: ABOVE the 1.2 M that stalled a server, so a lock manager of 1.2 to
+--   2 M is scanned again; the scan was measured at 260,000 in 1.2 s. It was 500,000 before.
 -- * Who holds the locks cannot be counted without the scan, so the holders are named by what
 --   can be read without it: the open transactions, largest first by log written, then oldest.
 --   That ranking named the 2026-10-07 session. Each row carries the session, its login, host,
@@ -60,7 +71,15 @@ DECLARE @critical_tran_seconds int = 900;    -- 15 min, and blocking or asleep: 
 --   them under an isolation level that keeps its shared locks - a session that wrote nothing
 --   has no log to rank by. The rest are WARNING.
 -- * No temp table here, unlike below: a server in this state is the last place to create one.
-DECLARE @lock_scan_skip_above bigint = 500000;
+DECLARE @lock_scan_skip_above bigint = 2000000;
+-- The counter is refreshed periodically and can hold a past peak: on 2026-10-15 it read 15.7 M
+-- for eight minutes after an Agent job that built them had ended, with one transaction open on
+-- the server, a second old. Locks belong to transactions, and a transaction builds them at a
+-- bounded rate, so a count is credible only if the oldest open user transaction is old enough
+-- to have built it at this many locks a second. A rate rather than a fixed age: the same job's
+-- real 8.6 M at 08:00 had transactions 50 s old, which a 60-second bound would have called a
+-- past peak. 2,000,000 is above the whole server's measured 1.2 M lock requests a second.
+DECLARE @lock_count_credible_locks_per_second bigint = 2000000;
 DECLARE @locks_in_use bigint;
 DECLARE @lock_memory_mb bigint;
 
@@ -75,6 +94,31 @@ SET @lock_memory_mb = (SELECT SUM(CAST(pc.cntr_value AS bigint)) / 1024
 
 IF ISNULL(@locks_in_use, 0) >= @lock_scan_skip_above
 BEGIN
+    DECLARE @oldest_open_tran_seconds int;
+    DECLARE @count_credible int;
+
+    -- A lock count at or above the limit is credible only if an open user transaction is old
+    -- enough to have built it. The counter (Lock Owner Blocks) is refreshed periodically and can
+    -- hold a past peak for minutes after an Agent job finishes.
+    SELECT
+        @oldest_open_tran_seconds = ISNULL(MAX(CASE
+            WHEN DATEDIFF(SECOND, at.transaction_begin_time, GETDATE()) < 0 THEN 0
+            ELSE DATEDIFF(SECOND, at.transaction_begin_time, GETDATE())
+        END), 0)
+    FROM sys.dm_tran_session_transactions st
+    JOIN sys.dm_tran_active_transactions at
+        ON at.transaction_id = st.transaction_id
+    JOIN sys.dm_exec_sessions s
+        ON s.session_id = st.session_id
+    WHERE s.is_user_process = 1
+      AND st.session_id <> @@SPID;
+
+    SET @count_credible = CASE
+        WHEN CAST(@oldest_open_tran_seconds AS bigint) * @lock_count_credible_locks_per_second
+             >= @locks_in_use THEN 1
+        ELSE 0
+    END;
+
     ;WITH OpenTran AS
     (
         SELECT
@@ -145,14 +189,24 @@ BEGIN
             CAST('lock_scan_skipped' AS varchar(256)) AS metric_item,
             CAST(@locks_in_use AS varchar(32)) AS metric_value,
             CAST('lock(s)' AS varchar(32)) AS metric_unit,
-            CAST('CRITICAL' AS varchar(16)) AS status,
-            ISNULL((SELECT MAX(h0.open_tran_seconds) FROM Holder h0), 0) AS lock_seconds,
+            CAST(CASE WHEN @count_credible = 1 THEN 'CRITICAL' ELSE 'WARNING' END AS varchar(16)) AS status,
+            @oldest_open_tran_seconds AS lock_seconds,
             CAST(
-                'Lock scan SKIPPED: the lock manager holds ' + CAST(@locks_in_use AS varchar(32))
-                + ' locks, at or above the limit of ' + CAST(@lock_scan_skip_above AS varchar(32))
-                + '. Enumerating that many latches the lock manager and stalls every session that '
-                + 'takes or releases a lock, so lock counts per session are not known; the holders '
-                + 'named are the open transactions, largest first by log written, and the oldest. '
+                CASE
+                    WHEN @count_credible = 1 THEN
+                        'Lock scan SKIPPED: the lock manager holds ' + CAST(@locks_in_use AS varchar(32))
+                        + ' locks, at or above the limit of ' + CAST(@lock_scan_skip_above AS varchar(32))
+                        + '. Enumerating that many latches the lock manager and stalls every session that '
+                        + 'takes or releases a lock, so lock counts per session are not known; the holders '
+                        + 'named are the open transactions, largest first by log written, and the oldest. '
+                    ELSE
+                        'Lock scan SKIPPED: the counter reads ' + CAST(@locks_in_use AS varchar(32))
+                        + ' locks at or above the limit, but the oldest open transaction is '
+                        + CAST(@oldest_open_tran_seconds AS varchar(32))
+                        + ' s old: at ' + CAST(@lock_count_credible_locks_per_second AS varchar(32))
+                        + ' locks a second none could have built them, so the counter (Lock Owner Blocks, '
+                        + 'refreshed periodically) is showing a past peak; the scan is skipped all the same. '
+                END
                 + 'locks_in_use=' + CAST(@locks_in_use AS varchar(32))
                 + ', limit=' + CAST(@lock_scan_skip_above AS varchar(32))
                 + ', lock_memory_mb=' + ISNULL(CAST(@lock_memory_mb AS varchar(32)), '')
@@ -172,6 +226,8 @@ BEGIN
                     ORDER BY h2.rn
                     FOR XML PATH(''), TYPE
                   ).value('.', 'nvarchar(max)'), 1, 3, ''), 'none - no session has a transaction open')
+                + ', count_credible=' + CAST(@count_credible AS varchar(10))
+                + ', oldest_open_tran_seconds=' + CAST(@oldest_open_tran_seconds AS varchar(20))
             AS varchar(max)) AS message
 
         UNION ALL
@@ -181,10 +237,10 @@ BEGIN
             CAST('SPID=' + CAST(h.session_id AS varchar(20)) AS varchar(256)) AS metric_item,
             CAST(h.log_records AS varchar(32)) AS metric_value,
             CAST('log record(s)' AS varchar(32)) AS metric_unit,
-            -- The largest writer and the oldest transaction are the two to look at first. The
-            -- rest are named so that a ranking by log written, which is a proxy, cannot hide the
-            -- real holder behind one line.
-            CAST(CASE WHEN h.rn = 1 OR h.rn_age = 1 THEN 'CRITICAL' ELSE 'WARNING' END
+            -- When the count is credible, the largest writer and the oldest transaction are the
+            -- two to look at first (CRITICAL) and the rest WARNING. When not credible, none is
+            -- CRITICAL - all WARNING (they are named only as context).
+            CAST(CASE WHEN @count_credible = 1 AND (h.rn = 1 OR h.rn_age = 1) THEN 'CRITICAL' ELSE 'WARNING' END
                  AS varchar(16)) AS status,
             h.open_tran_seconds AS lock_seconds,
             CAST(
@@ -222,11 +278,17 @@ SELECT
     tl.request_session_id,
     tl.resource_database_id,
     tl.resource_type,
-    tl.request_mode
+    tl.request_mode,
+    tl.request_owner_type,
+    CAST(CASE WHEN tl.resource_type = 'APPLICATION'
+              THEN LTRIM(RTRIM(tl.resource_description)) END AS nvarchar(256)) AS applock_name
 INTO #locks
 FROM sys.dm_tran_locks tl
 WHERE tl.request_status = 'GRANT'
-  AND tl.request_mode IN ('X','IX','IU','U','RangeX-X','Sch-M')
+  AND (tl.request_mode IN ('X','IX','IU','U','RangeX-X','Sch-M')
+       -- A session-owned application lock in ANY mode: a shared one still stops an exclusive
+       -- request for the same name, and it is graded by the session's idle time below.
+       OR (tl.resource_type = 'APPLICATION' AND tl.request_owner_type = 'SESSION'))
   -- Never report the collector's own session. Snapshotting into #locks is itself a temp-table
   -- create, which takes X locks on tempdb OBJECT, so this metric started alerting on itself the
   -- hour that optimisation shipped. A monitoring query is not a finding about the server.
@@ -255,6 +317,8 @@ LockAgg AS
         tl.request_session_id AS session_id,
         COUNT(*) AS lock_count,
         SUM(CASE WHEN tl.resource_database_id = 2 THEN 1 ELSE 0 END) AS tempdb_lock_count,
+        SUM(CASE WHEN tl.resource_type = 'APPLICATION' AND tl.request_owner_type = 'SESSION'
+                 THEN 1 ELSE 0 END) AS session_applock_count,
         MIN(tl.resource_database_id) AS min_database_id
     FROM #locks tl
     GROUP BY tl.request_session_id
@@ -263,6 +327,8 @@ SELECT
     s.session_id,
     la.lock_count,
     la.tempdb_lock_count,
+    la.session_applock_count,
+    ai.applock_idle_seconds,
     la.min_database_id,
     ISNULL(ta.open_tran_seconds, 0) AS open_tran_seconds,
     ta.oldest_tran_begin_time,
@@ -307,6 +373,14 @@ LEFT JOIN sys.dm_exec_connections cn
 OUTER APPLY sys.dm_exec_sql_text(ISNULL(r.sql_handle, cn.most_recent_sql_handle)) t
 CROSS APPLY (SELECT flat = REPLACE(REPLACE(REPLACE(ISNULL(t.text, ''),
                             CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' ')) f
+-- How long the session has been idle holding a session-owned application lock: 0 unless it holds
+-- one and is sleeping. last_request_end_time can read ahead of GETDATE(), so floored at 0 - and a
+-- NULL compares as unknown, which lands on 0 too.
+CROSS APPLY (SELECT applock_idle_seconds =
+    CASE WHEN la.session_applock_count > 0 AND s.status = 'sleeping'
+              AND DATEDIFF(SECOND, s.last_request_end_time, GETDATE()) > 0
+         THEN DATEDIFF(SECOND, s.last_request_end_time, GETDATE())
+         ELSE 0 END) ai
 WHERE s.is_user_process = 1;
 
 -- ---------------------------------------------------------------------------
@@ -316,7 +390,7 @@ SELECT
     CAST('SPID=' + CAST(h.session_id AS varchar(20)) AS varchar(256)) AS metric_item,
     CAST(h.lock_count AS varchar(32)) AS metric_value,
     CAST('lock(s)' AS varchar(32)) AS metric_unit,
-    -- CRITICAL means somebody is waiting. Nothing else.
+    -- For a transaction, CRITICAL means somebody is waiting. Nothing else.
     --
     -- This used to add `OR session_status = 'sleeping'`, on the reasoning that a session which
     -- opened a transaction and walked away is the classic cause of a stuck log. The risk is real,
@@ -332,16 +406,29 @@ SELECT
     --
     -- These sessions still appear, as WARNING, with open_tran_seconds in the message. They are
     -- visible; they just do not wake anyone at 3am before anybody is affected.
+    --
+    -- A session-owned application lock is the one case graded on a timer alone, and the reason
+    -- above does not reach it. That lock is taken only to keep other workers out of a named piece
+    -- of work. Held by a session nobody is driving, it stops that work - and its waiters give up
+    -- at their own @LockTimeout and retry, so the wait never grows and "somebody is waiting" is
+    -- true only at the instant a retry happens to be in flight. Nothing else here would ever
+    -- page for it: there is no transaction, so no log to hold and no transaction age.
     CASE
         WHEN h.open_tran_seconds >= @critical_tran_seconds AND h.is_blocking = 1 THEN 'CRITICAL'
+        WHEN h.applock_idle_seconds >= @applock_idle_abandoned_seconds AND h.is_blocking = 1
+            THEN 'CRITICAL'
+        WHEN h.applock_idle_seconds >= @applock_idle_critical_seconds THEN 'CRITICAL'
         ELSE 'WARNING'
     END AS status,
-    h.open_tran_seconds AS lock_seconds,
+    CASE WHEN h.applock_idle_seconds > h.open_tran_seconds
+         THEN h.applock_idle_seconds ELSE h.open_tran_seconds END AS lock_seconds,
     CAST(
         'Session holding locks. '
         + 'spid=' + CAST(h.session_id AS varchar(20))
         + ', blocked_sessions=' + CAST(h.blocked_sessions AS varchar(20))
         + ', open_tran_seconds=' + CAST(h.open_tran_seconds AS varchar(20))
+        + ', session_applocks=' + CAST(h.session_applock_count AS varchar(20))
+        + ', applock_idle_seconds=' + CAST(h.applock_idle_seconds AS varchar(20))
         + ', session_status=' + ISNULL(h.session_status, '')
         + ', request_status=' + ISNULL(h.request_status, '')
         + ', login=' + ISNULL(h.login_name, '')
@@ -364,14 +451,28 @@ SELECT
             ORDER BY br.session_id
             FOR XML PATH(''), TYPE
           ).value('.', 'nvarchar(max)'), 1, 1, ''), '')
+        + ', applock_names='
+        + ISNULL(STUFF((
+            SELECT TOP (5) '; '
+                + ISNULL(DB_NAME(x.resource_database_id), 'dbid=' + CAST(x.resource_database_id AS varchar(20)))
+                + ' ' + x.request_mode + ' ' + ISNULL(x.applock_name, '')
+            FROM #locks x
+            WHERE x.request_session_id = h.session_id
+              AND x.resource_type = 'APPLICATION'
+              AND x.request_owner_type = 'SESSION'
+            ORDER BY x.resource_database_id, x.applock_name
+            FOR XML PATH(''), TYPE
+          ).value('.', 'nvarchar(max)'), 1, 2, ''), '')
         + ', last_sql=' + ISNULL(h.last_sql, '')
     AS varchar(max)) AS message
 FROM #holders h
 -- A held lock is telemetry. It becomes a finding when the transaction behind it is OLD, and an
 -- incident when it is old AND somebody is waiting on it, or it is sleeping - a session that
--- opened a transaction and walked away is the classic cause of a stuck log.
+-- opened a transaction and walked away is the classic cause of a stuck log. A session-owned
+-- application lock becomes one when the session holding it has sat idle.
 WHERE h.open_tran_seconds >= @warning_tran_seconds
    OR h.is_blocking = 1
+   OR h.applock_idle_seconds >= @applock_idle_warning_seconds
 
 UNION ALL
 
@@ -395,6 +496,7 @@ SELECT
             FROM #holders q2
             WHERE q2.open_tran_seconds < @warning_tran_seconds
               AND q2.is_blocking = 0
+              AND q2.applock_idle_seconds < @applock_idle_warning_seconds
             ORDER BY q2.session_id
             FOR XML PATH(''), TYPE
           ).value('.', 'nvarchar(max)'), 1, 1, ''), '')
@@ -402,6 +504,7 @@ SELECT
 FROM #holders q
 WHERE q.open_tran_seconds < @warning_tran_seconds
   AND q.is_blocking = 0
+  AND q.applock_idle_seconds < @applock_idle_warning_seconds
 HAVING COUNT(*) > 0
 
 ORDER BY 4 DESC, 5 DESC;

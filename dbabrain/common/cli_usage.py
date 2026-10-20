@@ -69,8 +69,10 @@ USAGE = (
     "  remote-credential-add  Register one host's OS login + the cmd_access naming it (see --help)\n"
     "  secret-set       Store one secret encrypted, never in clear; request on stdin (see --help)\n"
     "  probe-host       What a host listens on, and what dbabrain can do with it (see --help)\n"
-    "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING (see --help)\n"
-    "  trace-session    Who is holding an open transaction — the app user behind a SPID (see --help)\n"
+    "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING; or a list (see --help)\n"
+    "  instance-active  Switch one server_id on or off for every app: its active flag (see --help)\n"
+    "  metric-env       Set or remove a collector script's inputs for one server_id (see --help)\n"
+    "  trace-session   Who is holding an open transaction — the app user behind a SPID (see --help)\n"
     "  inventory-summary  Merge a health overlay and render the inventory summary (see --help)\n"
     "  list-backup-files  List an engine's backups as full/diff/log (oracle|postgresql|sqlserver)\n"
     "  backup-database  Run ONE backup from a self-contained spec: script + host + env (see --help)\n"
@@ -846,6 +848,47 @@ METRIC_SEVERITY_USAGE = (
     "  metric_item  scope the remap to one item instead of the whole metric on this server\n"
     "  note         why, stored next to it and read back through Telegram\n"
     "  data_dir     folder holding db_instances.json (default: data/)\n"
+    "\n"
+    "Several at once - every remap or none, one write of the file:\n"
+    "\n"
+    '  {\"items\": [{\"server_id\": ..., \"metric_code\": ..., \"severity_map\": {...}}, ...],\n'
+    '   \"data_dir\": \"...\"}\n'
+    "\n"
+    "  items        a list of remaps, each with the fields above but data_dir. The first that\n"
+    "               is refused names its place (items[3]) and nothing is written. The answer\n"
+    "               carries one result per remap, in order.\n"
+)
+
+
+METRIC_ENV_USAGE = (
+    "usage: python -m dbabrain.common.cli metric-env '<json>'|@<file>|-\n"
+    "\n"
+    "Set or remove variables of one server_id's metrics.collector_env in db_instances.json: the\n"
+    "inputs a collector script reads from its target - a folder, a service list, a port.\n"
+    "\n"
+    '  {\"server_id\": \"ACME-192-0-2-115\", \"env\": {\"PG_BACKUP_DIR\": \"/var/lib/postgresql/backup\"}}\n'
+    "\n"
+    "Fields:\n"
+    "  server_id    (required) the instance, as written in db_instances.json\n"
+    "  env          (required) {NAME: value}; a value of null removes NAME. A name that carries\n"
+    "               a secret is refused - map it in metrics.env_secrets to a ref instead\n"
+    "  metric_code  the variables go to that metric's own block, which wins over the target's\n"
+    "  data_dir     folder holding db_instances.json (default: data/)\n"
+)
+
+
+INSTANCE_ACTIVE_USAGE = (
+    "usage: python -m dbabrain.common.cli instance-active '<json>'|@<file>|-\n"
+    "\n"
+    "Switch one server_id in db_instances.json on or off for every app - its active flag.\n"
+    "metrics.enabled is the metrics app's own switch under it: metric-toggle, scope all.\n"
+    "\n"
+    '  {\"server_id\": \"ACME-192-0-2-115\", \"active\": true}\n'
+    "\n"
+    "Fields:\n"
+    "  server_id  (required) the instance, as written in db_instances.json\n"
+    "  active     (required) true or false\n"
+    "  data_dir   folder holding db_instances.json (default: data/)\n"
 )
 
 

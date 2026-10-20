@@ -392,6 +392,22 @@ Lock waits are deliberately **not** in the pressure list that raises WARNING. `L
 already alerts on blocking with the session, the chain and the SQL text. This metric's job for locks
 is to be the evidence, not a second siren.
 
+**PostgreSQL, sampled (1.162, 2026-10-16).** PostgreSQL keeps no cumulative wait counters - only
+`wait_event` at the instant it is read - so `014_postgresql_wait_stats.sql` reads the active client
+sessions ten times, half a second apart, inside one statement, and counts: a session seen in
+`DataFileRead` at 7 of 10 samples spent about 70% of the sample reading pages (`metric_value` is that
+share of the span, in seconds). The samples are independent only because each one calls
+`pg_stat_get_activity()` with an argument that depends on the sample row, after its own `pg_sleep`
+and `pg_stat_clear_snapshot()`: a function in `FROM` with a constant argument - the
+`pg_stat_activity` view - is materialised once and rewound, which is why the first attempt (14 reads,
+2026-10-15) returned the first sample 14 times. The grading is SQL Server's: fewer than 2 sessions
+waiting on average is idle and OK (the floor's minimum - PostgreSQL cannot read its CPU count from
+SQL); WARNING when the top wait is I/O, `LWLock`, `BufferPin` or `SyncRep` and holds 50% of the
+sampled waits; `Lock` ranked as evidence, never graded; `Client`, `Timeout`, `Extension` not the
+server waiting; an active session with no wait event is on CPU, reported and not graded - there is no
+run queue to read. Run on the `.251` lab against a staged advisory-lock wait and on copies fed
+synthetic samples.
+
 `PERFORMANCE_IO_LATENCY` has the same defect and still grades on the since-boot average. It was
 not given the same treatment, because the answer turned out to be the section below instead: an
 in-query sample gives one file's latency over five seconds, and the question actually being asked
@@ -425,7 +441,7 @@ A collector that records a number and never judges it is the same shape as `PAGE
 
 | Metric | Source | Cadence | What it carries |
 | --- | --- | --- | --- |
-| `PERFORMANCE_WORKLOAD_COUNTERS` | `sys.dm_os_performance_counters`, `sys.dm_resource_governor_resource_pools`, `sys.dm_io_virtual_file_stats` | 900 s | 27 totals: CPU ms, batch requests, transactions, compilations, page lookups, physical page reads/writes, read-ahead, checkpoint and lazy-write pages, full scans, page splits, work files/tables, lock waits and lock wait ms, deadlocks, log flushes and log bytes, and the instance-wide sum of file reads/writes, bytes and stalls |
+| `PERFORMANCE_WORKLOAD_COUNTERS` | SQL Server: `sys.dm_os_performance_counters`, `sys.dm_resource_governor_resource_pools`, `sys.dm_io_virtual_file_stats`, `sys.dm_os_ring_buffers`. Oracle 10g+: `v$sys_time_model`, `v$osstat`; 8i/9i: `v$sysstat` | 900 s | SQL Server: 27 totals - CPU ms (only where the pools count it, below), batch requests, transactions, compilations, page lookups, physical page reads/writes, read-ahead, checkpoint and lazy-write pages, full scans, page splits, work files/tables, lock waits and lock wait ms, deadlocks, log flushes and log bytes, and the instance-wide sum of file reads/writes, bytes and stalls - plus three scheduler-monitor **gauges** (`sql_cpu_pct_sampled`, `host_cpu_pct_sampled`, `cpu_sample_minutes`). Oracle: `cpu_usage_ms` (DB CPU + background cpu time), `host_busy_ms` / `host_idle_ms`. Every message carries `cpu_count`, `schedulers_online` (the CPUs the engine may use) and `edition` |
 | `PERFORMANCE_QUERY_STATS_TOTALS` | `sys.dm_exec_query_stats` | 1800 s | CPU, elapsed, logical reads/writes, physical reads, executions — plus `cached_plans` and `cache_baseline_minutes`, which are gauges and are marked as such |
 | `PERFORMANCE_WAIT_TOTALS` | `sys.dm_os_wait_stats` | 900 s | cumulative wait ms for a **fixed** watch list, plus `lock_waits` (every `LCK_M_*` together) and `all_waits` (every non-benign wait, the denominator for a share) |
 | `PERFORMANCE_MEMORY_GAUGES` | `sys.dm_os_performance_counters`, `sys.dm_os_sys_memory`, `sys.dm_os_process_memory`, `sys.dm_os_memory_brokers` | 900 s | 16 **gauges**, not totals: total/target server memory, the data/stolen/free split, memory grants pending and outstanding, page life expectancy plus the per-NUMA-node minimum and node count, host physical and available memory, the two low-memory flags, and how many memory brokers are being told to shrink |
@@ -447,6 +463,35 @@ Four things about them are load-bearing:
   takes its totals with it, and an uncached ad-hoc batch was never in the sum. Both are reported so
   the page can divide them: query CPU far below pool CPU means the expensive work is not in the
   cache, and the plan-cache rows are a fragment of the hour rather than its total.
+- **…and only where the pools count it (2026-10-16).** Resource Governor is an Enterprise feature:
+  on Standard, Web and Express the DMV lists the internal pool alone and its total never moves (0, 0,
+  0, 1 and 3 ms since startup on the five such instances measured), which put *CPU used 0.0%* on a
+  busy ERP instance for weeks. `cpu_usage_ms` is written only when the `default` pool is listed
+  (`pools_account_cpu=1` in the message). Every edition also writes the scheduler monitor's
+  per-minute readings from `RING_BUFFER_SCHEDULER_MONITOR`, averaged over the 15 minutes since the
+  previous collection - the SQL Server process's share of the host, and the host's busy share
+  except on Linux, where SystemIdle reads 0. Those are gauges, listed in `workload.GAUGE_ITEMS` and
+  never differenced. `schedulers_online` is the `VISIBLE ONLINE` count: Standard stops at 24 cores,
+  so a 60-CPU host gives SQL Server 48, and a percentage of 60 reads 80 at full load.
+- **Oracle: CPU, then throughput (1.171, then 1.149's port, 2026-10-16).** From 10g
+  `v$sys_time_model` holds DB CPU and background cpu time in microseconds and `v$osstat` the host's
+  BUSY_TIME and IDLE_TIME in hundredths of a second - in-memory V$ views, not AWR, so no Diagnostics
+  Pack. 8i and 9i have only `v$sysstat` *CPU used by this session*, which counts a call when it ends.
+  `schedulers_online` is the instance's `cpu_count`, held to 16 on Standard Edition 2 and 2 on Free
+  and Express. The rest of `v$sysstat` goes under the table's keys where it means the same thing -
+  `transactions` (user commits + rollbacks), `page_lookups` (session logical reads), `page_reads` /
+  `page_writes`, `log_bytes_flushed` (redo size), `log_flushes` (redo synch writes), `logins`,
+  `deadlocks` (enqueue deadlocks), `sql_compilations` (hard parses), `workfiles_created` (disk sorts),
+  `io_*` (physical read / write total requests and bytes, 10g+) - and under its own where SQL Server
+  has none: `user_calls`, `executions`. Run on the `.251` 26ai Free lab (2 of 4 CPUs, 19 rows); the
+  8i file run there too for its syntax, not on 8i - the bridge was down that day.
+- **PostgreSQL: `075_postgresql_workload_counters.sql` (1.149's port).** `pg_stat_database` summed
+  over the cluster: `transactions`, `page_lookups` (blks_hit + blks_read), `page_reads`, `rows_read`,
+  `rows_written`, `temp_files` / `temp_bytes`, `deadlocks`, `logins` (`sessions`, 14+, read through
+  `to_jsonb` so 10 - 13 parse); `io_reads` / `io_stall_read_ms` only with `track_io_timing` on - off,
+  `blk_read_time` is a flat 0 the page would print as a measured latency; `log_bytes_flushed` from
+  `pg_current_wal_lsn()` on a primary only. `counters_since` is the later of the postmaster's start
+  and the newest `stats_reset`. No CPU - PostgreSQL keeps none; it comes from `OS_CPU_COUNTERS`.
 
 `PERFORMANCE_QUERY_STATS_TOTALS` is the expensive one and runs at half the others' cadence for a
 measured reason. Aggregating the plan cache scans it: on one measured instance — 86,400 cached plans, 70,109
@@ -697,7 +742,11 @@ three concerns, kept separate so nothing is double-collected:
 1. **Host OS once** — add a single OS-only target for the VM (`db_type: null`, `platform: linux`,
    `cmd_access.method: ssh`) so CPU/RAM/disk/network/load are collected once for the whole host.
 2. **Per-container stats** — each DB-in-Docker target sets `container_name` and gets the
-   `docker` metric (`DOCKER_CONTAINER_STATS`); a target with no `container_name` skips docker metrics.
+   `docker` metric (`DOCKER_CONTAINER_STATS`); a target with no `container_name` skips docker metrics
+   - except one that declares `"host_fallback": true` (2026-10-16), which on a target with no
+   container and an **SSH** `cmd_access` runs the same script on that host, without
+   `DOCKER_CONTAINER`, and is switched off with the target's `cmd` collectors since it logs into the
+   host. `POSTGRES_SERVER_LOG` is the one: a container's `docker logs`, a host install's log files.
    Its `restart_count` row warns while a restart is news: Docker's count only grows, so it warned on
    every pass for months after one restart. Since 0.26.0 it is WARNING while the current run started
    less than `DOCKER_RESTART_WARN_MINUTES` ago (default 60; set it in the target's `collector_env`),
@@ -722,18 +771,29 @@ and `legacy_2008r2/`) open with the same block, word for word:
 | --- | --- |
 | What is read | `Lock Owner Blocks` from `sys.dm_os_performance_counters` - the locks in use now, which is what a scan would have to walk. One row, nothing enumerated |
 | Why not the lock manager's memory | that store keeps its pages after the locks are gone. Measured 2026-10-09 on the server of the incident: **3,700 MB** with **800** locks in use (798 rows in `sys.dm_tran_locks`). A limit in megabytes would have stayed CRITICAL for good |
-| Above the limit | no scan. One row, item `lock_scan_skipped`, **CRITICAL**: the count, the limit, and the sessions most likely to hold the locks |
-| Who is named | the open transactions, from the transaction DMVs (they do not touch the lock manager), largest first by log written - up to five, plus the oldest. Each is a row `SPID=n` with login, host, `client_ip`, program, database, the transaction's age and its log. **Two are CRITICAL: the largest writer and the oldest open transaction** - one of them is the holder whether it changed a million rows or only read them under an isolation level that keeps its shared locks. The rest are WARNING |
+| Above the limit | no scan. One row, item `lock_scan_skipped`, **CRITICAL** when credible (the oldest open user transaction is old enough to have built the count at `@lock_count_credible_locks_per_second`, default 2,000,000), **WARNING** when not (the counter kept a past peak and no open transaction could hold that many locks): the count, the limit, credibility flag, oldest transaction age, and the sessions most likely to hold the locks |
+| Who is named | the open transactions, from the transaction DMVs (they do not touch the lock manager), largest first by log written - up to five, plus the oldest. Each is a row `SPID=n` with login, host, `client_ip`, program, database, the transaction's age and its log. When the count is credible, **two are CRITICAL: the largest writer and the oldest open transaction** - one of them is the holder whether it changed a million rows or only read them under an isolation level that keeps its shared locks; the rest are WARNING. When the count is not credible, **none is CRITICAL - all are WARNING** (named only as context) |
 | What it cannot say | a session's lock count. That is the scan |
 | What it does not do | create a temp table (the scan below does): a server in this state is the last place to create one |
 
 Where the counters are not available the block reads 0 and the scan runs as it always did - the
 guard fails open. One SQL Server 2012 instance of this estate reads 0 for every lock counter.
 
-**The limit is `sql_settings.lock_scan_skip_above`, 500,000.** Read on 2026-10-09 across fourteen
-SQL Server targets, the locks in use ranged from 2,500 to 96,000; the scan has been measured at
-1.2 s for 260,000 rows; 1.2 million stalled a server. Half a million is five times the largest
-normal reading and under half of the incident's.
+**The limit is `sql_settings.lock_scan_skip_above`, 2,000,000** - raised from 500,000 by the
+operator on 2026-10-15, **above the size that stalled a server**. Read on 2026-10-09 across
+fourteen SQL Server targets, the locks in use ranged from 2,500 to 96,000; the scan has been
+measured at 1.2 s for 260,000 rows; 1.2 million stalled a server (2026-10-07). A lock manager of
+1.2 to 2 million is scanned again under this limit, by that decision. An Agent job's peaks on
+one server run 4 to 15.7 million and are skipped either way.
+
+Beside it, **`sql_settings.lock_count_credible_locks_per_second` (default 2,000,000)** asks whether
+any open user transaction is old enough to have built the count at that rate: `Lock Owner Blocks`
+is refreshed periodically and was seen reading the job's 15.7 M for eight minutes after it ended,
+while the only open transaction was one second old. A rate rather than a fixed age, because the
+same job's real 8.6 M had transactions only 50 s old; 2,000,000 a second is above the whole
+server's measured 1.2 M lock requests a second. When the oldest open user transaction is too young,
+the skip row is WARNING (stating the counter shows a past peak) and every SPID row is WARNING; the
+scan is skipped all the same.
 
 ### `sql_settings` - a number the SQL takes from configuration
 
@@ -742,13 +802,17 @@ configured: the limit above depends on the estate, and the only way to change it
 shipped file. A metric may now state
 
 ```json
-"sql_settings": {"lock_scan_skip_above": 500000}
+"sql_settings": {
+  "lock_scan_skip_above": 2000000,
+  "lock_count_credible_locks_per_second": 2000000
+}
 ```
 
 and its SQL declares the same name with its default, on a line of its own:
 
 ```sql
-DECLARE @lock_scan_skip_above bigint = 500000;
+DECLARE @lock_scan_skip_above bigint = 2000000;
+DECLARE @lock_count_credible_locks_per_second bigint = 2000000;
 ```
 
 `lib.sql_text.apply_sql_settings` writes the configured number into that `DECLARE` before the file
@@ -762,7 +826,171 @@ Deliberately narrow, because this writes into SQL text:
   declare fails the metric: an operator who raised a limit that no SQL reads would believe it was
   raised;
 - every variant of the metric has to declare it - `tests/test_a_lock_manager_too_large_to_scan_is_not_scanned.py`
-  applies each metric's settings to each of its supported variant files.
+  applies each metric's settings to each of its supported variant files;
+- **a number that is one engine's goes on that engine's variants**: a variant may state its own
+  `sql_settings`, written over the metric's when that variant runs (`collector._sql_settings_for`).
+  `LOCK_TRANSACTION_HOLDERS`'s two limits are on its SQL Server variants since 0.30.0: stated for
+  the metric, they failed its new PostgreSQL and Oracle files, which have no lock manager to guard.
+
+### An idle session holding an application lock it owns (0.30.0)
+
+`sp_getapplock @LockOwner = 'Session'` takes a lock with **no transaction open**. A query tool's
+session took two such locks, went to sleep, and kept them for hours, and no lock metric went
+CRITICAL: `LOCK_SLEEPING_OPEN_TRANSACTION` lists sessions with a transaction open; this metric's
+CRITICAL needed an old transaction (the age was 0 however long the lock was held); and
+`LOCK_BLOCKING_SESSIONS` needed a long wait, while a waiter on `sp_getapplock` gives up at its own
+`@LockTimeout` and retries, so the wait never grows.
+
+`sys.dm_tran_locks` keeps no grant time, so such a lock has no age of its own. What is measured is
+how long the **session holding it** has been idle - a working session releases it, an idle one keeps
+it until `sp_releaseapplock` or until somebody closes it. Both variants, in the scan that already
+runs behind the size guard above (a second metric scanning the lock manager every cycle is the cost
+that guard bounds):
+
+| | |
+| --- | --- |
+| What the scan takes | besides the strong modes, a lock of `resource_type 'APPLICATION'` owned by `SESSION` **in any mode** - a shared one still stops an exclusive request for the same name - with its name (`resource_description`, trimmed) |
+| `applock_idle_seconds` | seconds since `last_request_end_time`, **0 unless the session holds such a lock and is `sleeping`**; floored at 0 (that column can read ahead of `GETDATE()`) |
+| WARNING | idle **5 minutes** holding one - `@applock_idle_warning_seconds = 300` |
+| CRITICAL | idle **30 minutes** holding one - `@applock_idle_critical_seconds = 1800`; or **at once when somebody waits on it** and it has been idle **60 s** - `@applock_idle_abandoned_seconds = 60` |
+| `lock_seconds` | the larger of the transaction's age and that idle time |
+| The message | gains `session_applocks=`, `applock_idle_seconds=` and `applock_names=` (up to five: database, mode, name) |
+
+On 2012 and later a session idle past the WARNING threshold has a row of its own and leaves the
+`holders_summary` line - the two filters stay complements. On 2008 R2, where every holder is a row,
+it changes the grade, and a session holding only a shared application lock is now listed too. This
+is the one case the metric grades on a timer alone; the comment
+above its `CASE` says why a lock taken to keep other workers out of a named piece of work is
+different from the bare timer the transaction rule refuses.
+
+The three are `DECLARE`s in the `sql_settings` shape, so a node can state other numbers - **but no
+catalogue states them until a released version declares them**: the worker takes the master's data
+files at any time, and a node whose SQL lacks a stated name fails the metric.
+`tests/test_an_idle_session_holding_an_application_lock_is_graded_by_its_idle_time.py` holds the
+contract in both variants.
+
+### A transaction log that cannot grow (0.30.0)
+
+`LOG_FILE_SPACE` emits only `LOGGING` or `OK` for a log that can still grow, whatever its percent used.
+That is a deliberate operator decision (2026-10-15: *"the log can still grow, which is why it was lowered to
+LOGGING; disk full is the CRITICAL"*): an autogrowing log extends onto the volume, and full disk capacity is
+paged by `STORAGE_DISK_FREE_SPACE` rather than here.
+
+A log that **cannot grow** — autogrowth disabled (`growth = 0`), or capped at a `max_size` where the next growth
+step no longer fits — is the one case the disk metric cannot see. When it fills, it stops the database (error 9002)
+while the underlying drive still has plenty of free room, so no disk alert ever fires.
+
+Both variants (`007_sqlserver_log_space.sql` on 2012+ and `legacy_2008r2/007_sqlserver_log_space.sql` on 2008 R2)
+evaluate log growth headroom across every log file of the database (`type = 1`). The 2012+ file runs inside
+each database and reads its own `sys.database_files`; the 2008 R2 file reads `sys.master_files`, which shows a row
+only to a login holding `VIEW ANY DEFINITION`, `CREATE DATABASE` or `ALTER ANY DATABASE` - so a log whose files it
+cannot see is `log_can_grow=unknown` and graded as one that can grow, never paged for a permission it lacks:
+
+| | |
+| --- | --- |
+| `log_can_grow` | `1` if **any** log file has `growth > 0` and either `max_size = -1` (or 268,435,456 8 KB pages, the 2 TB log limit) or `size + step <= max_size` (where `step = growth` pages for fixed growth, or `size * growth / 100` for percent growth); otherwise `0` |
+| When `log_can_grow = 1` | retains today's grading exactly (`LOGGING` / `OK`) — it never alerts at `WARNING` or `CRITICAL` |
+| When `log_can_grow = 0` | `CRITICAL` at or above `@log_cannot_grow_critical_pct` (default **95**), `WARNING` at or above `@log_cannot_grow_warning_pct` (default **85**), otherwise today's grading |
+| Scope | user databases (`database_id > 4`) plus **`tempdb`** (`database_id = 2`) |
+| The message | gains `log_can_grow=0\|1`, `log_max_size_mb=` (or `UNLIMITED`), `log_growth=` (e.g. `10%`, `512MB`, or `NONE`), and `log_reuse_wait=` from `sys.databases.log_reuse_wait_desc` |
+
+The two thresholds are declared at the top of the outer batch in the `sql_settings` shape (`DECLARE @name int = <number>;`),
+allowing configuration to override them without editing the shipped files.
+`tests/test_a_log_that_cannot_grow_is_graded.py` holds the contract across both variants. Run on the `.251` lab
+(17.00, 2026-10-15), both files: a scratch database whose 8 MB log had `FILEGROWTH = 0`, filled to error 9002, read
+`CRITICAL`, `log_can_grow=0`, `log_reuse_wait=LOG_BACKUP`; the growable logs beside it read `OK`, `log_can_grow=1`.
+
+### Oracle collectors and ADR incident grading (0.30.0)
+
+Five authored Oracle collectors are wired for Oracle 11g and newer (`oracle_11g_plus`), with older versions
+explicitly routed to `oracle_pre_11g_unsupported`. Oracle SQL lacks the T-SQL `DECLARE` rewrite mechanism
+used by `apply_sql_settings`, so each collector encapsulates its numeric thresholds in a single named CTE
+at the top (`WITH params AS (SELECT ... FROM dual)`), ensuring each threshold is declared exactly once.
+All collectors query views accessible from a Pluggable Database (PDB) session in Oracle 12c through 26ai
+without requiring CDB-level administrative privileges or host-level file access.
+
+The grading rules enforce that only genuine DBA-actionable emergencies page:
+
+- **Data Guard health (`011_oracle_dataguard_health.sql`)**: On a physical or active standby, lag is parsed
+  from `v$dataguard_stats` interval strings. Apply lag is `CRITICAL` at or above `apply_lag_critical_seconds`
+  (3600 s) and `WARNING` at `apply_lag_warning_seconds` (900 s); transport lag is `CRITICAL` at or above
+  `transport_lag_critical_seconds` (1800 s) and `WARNING` at `transport_lag_warning_seconds` (300 s).
+  On a primary database, remote archive destinations in `ERROR` (`v$archive_dest_status`) are `CRITICAL`.
+  A standalone instance without Data Guard configured returns `NOT_CONFIGURED` at status `OK`.
+- **RMAN backup job status (`016_oracle_backup_job_status.sql`)**: Reads `v$rman_backup_job_details` and
+  `dba_scheduler_job_run_details` over the lookback window (`lookback_days = 1`). A `FAILED` backup job in
+  the last 24 hours is `CRITICAL`; jobs ending in `COMPLETED WITH ERRORS` or `COMPLETED WITH WARNINGS` are
+  `WARNING`. Instances without backup activity in the window return no rows (`empty_result_is_ok: true`).
+  **Read from a PDB it sees no RMAN job at all**: RMAN's job history (`v$rman_backup_job_details`,
+  `v$rman_status`) belongs to the CDB root - on the 26ai lab, connected to `FREEPDB1`, both read 0 rows while
+  `v$backup_set` showed a backup set 40 minutes old. On a target connected to a PDB a failed RMAN job is
+  caught by the backup's age - `BACKUP_LAST_RESULT` reads `v$backup_set`, which a PDB sees - and by the SLA's
+  RPO policy, not here.
+- **Alert log criticals (`017_oracle_alertlog_recent_critical.sql`)**: Queries the ADR view `v$diag_alert_ext`
+  without host file access. Internal database crashes and severe corruption errors (`ORA-00600`, `ORA-07445`,
+  `ORA-01578`, `ORA-01110`, `ORA-04031`, `ORA-00257`, `ORA-00353`, `ORA-00470`, `ORA-00471`, `ORA-27102`)
+  are graded `CRITICAL`; any other unsuppressed `ORA-` message is `WARNING`. The query retains a bounded row
+  cap (`max_rows = 50`) because unbounded XML table scans across a long-lived instance exceed query timeouts.
+- **Redo log reuse wait (`018_oracle_redo_reuse_wait.sql`)**: Evaluates `v$log` to detect redo log starvation.
+  When every online redo log group requires archiving (`archived = 'NO'`), the archiver is stuck, online redo
+  cannot allocate new extents, and the instance halts; this condition is graded `CRITICAL`. If only some groups
+  are unarchived, status remains `WARNING`. A remote destination in `ERROR` is `CRITICAL`.
+- **Sleeping open transactions (`024_oracle_sleeping_open_transaction.sql`)**: Identifies `INACTIVE` sessions
+  holding transactions in `v$transaction`. To prevent false alarms on application think-time between statements,
+  `CRITICAL` severity strictly requires a waiter (`blocking_others > 0`) combined with idle duration past
+  `idle_abandoned_seconds` (60 s). An idle transaction blocking nobody is graded `WARNING` only after
+  `idle_critical_seconds` (1800 s).
+- **ADR incidents (`ORACLE_ADR_INCIDENTS`, metric 98, `020_oracle_adr_incidents.sql`)**: ADR captures internal
+  errors, corruptions, and process failures as diagnostic incidents. The collector emits one `CRITICAL` row per
+  incident created in the last 24 hours (`v$diag_incident` joined to `v$diag_problem`), reporting incident ID
+  and problem key. To satisfy the principle that a metric which cannot fail is not a check, it always returns an
+  `adr_summary` row from `v$diag_info`; if active unresolved problems exist without recent 24-hour incidents,
+  the summary reports `WARNING`, and `OK` otherwise.
+
+Contract and grading are held offline by `tests/test_oracle_collectors_are_wired_and_graded.py`. Run on the
+`.251` lab (Oracle AI Database 26ai, 23.26, from the PDB `FREEPDB1`, 2026-10-15): all six files compile and
+answer, and the five wired metrics run through `collect --test-run` on the `oracle_11g_plus` variants.
+`LOG_REUSE_WAIT` reads unarchived groups only in `ARCHIVELOG` mode: a `NOARCHIVELOG` database never archives,
+and its `ACTIVE` group after each log switch would otherwise read as a stuck archiver.
+`ORACLE_ADR_INCIDENTS` is in `data/metric_definitions.json` as well as the catalogue, which the two files must
+match: a node still running an image without `020_oracle_adr_incidents.sql` that is given this data file reads
+an execution error for this one metric on each Oracle target until it runs the version that ships the file.
+
+### Latency percentiles (0.30.0)
+
+Query and wait latency metrics across SQL Server, Oracle, and PostgreSQL follow the same contract as
+`PERFORMANCE_TOP_QUERIES`: status is always `LOGGING`, `report_policy` enforces `collect_only: true` and
+`chart_summary_only: true`, and collectors record without ever grading. Any arithmetic across collections
+(deltas, interval histograms, percentile derivations) lives in `dbabrain/lib` and executes during report
+generation rather than inside the collection path.
+
+- **SQL Server Query Store percentiles (`QUERY_LATENCY_PERCENTILES`, metric 99, `078_sqlserver_query_latency_percentiles.sql`)**:
+  Reads completed Query Store runtime intervals (`sys.query_store_runtime_stats_interval`) that ended within
+  `@lookback_minutes` (default 65 minutes, configurable through `apply_sql_settings`) across readable user
+  databases (`d.database_id > 4`, `d.state = 0`, not a non-readable AG secondary). Because Query Store stores
+  summary statistics per plan and interval (average, standard deviation, min, max) without preserving individual
+  execution durations, percentiles (p50, p95, p99) are computed as the execution-weighted percentile of the plans'
+  average durations; `max_ms` reports the true observed maximum. A true per-execution distribution requires an
+  Extended Events session on each instance, which was declined on 2026-09-11 as production DDL. Each interval is
+  keyed as `<database> @ <interval_start as yyyy-MM-ddTHH:mmZ>` so downstream readers deduplicate intervals
+  across collection cycles without gaps or double-counting.
+- **Oracle wait latency histogram (`ORACLE_WAIT_LATENCY_HISTOGRAM`, metric 100, `072_oracle_wait_latency_histogram.sql`)**:
+  Extracts wait latency distributions from `v$event_histogram` for a fixed watch list of five fundamental I/O
+  and commit events (`db file sequential read`, `db file scattered read`, `direct path read`, `log file sync`,
+  `log file parallel write`). To maintain consistent row structures across collections for differential rate
+  calculations, every watched event is emitted even when an instance has accumulated zero waits for that event
+  since startup. Messages carry `counters_since` (`v$instance.startup_time`) and bucket tallies rolled up via
+  `LISTAGG` as `le_1ms:N|le_2ms:N|...`. Accessible from CDB root and PDB sessions alike.
+- **PostgreSQL statement totals (`POSTGRES_STATEMENT_TOTALS`, metric 101, `070_postgresql_statement_totals.sql`)**:
+  Collects workload attribution and cumulative execution statistics from `pg_stat_statements` on PostgreSQL 13+.
+  Because `pg_stat_statements` requires `shared_preload_libraries` and an active extension, direct SELECT queries
+  on an unconfigured cluster fail at parse time. Access is guarded via `to_regclass('pg_stat_statements')` and
+  dynamic execution through `query_to_xml`, unpacked with `xmltable`. If the extension is missing, the collector
+  emits a single `pg_stat_statements` row with value `NOT_INSTALLED` and status `LOGGING` explaining configuration
+  steps ("not configured is a state, not a failure"). When present, it emits an `all_statements` cluster total
+  plus the union of the top 25 statements by `total_exec_time` and top 25 by `calls`. Messages carry `counters_since`
+  from `pg_stat_statements_info.stats_reset` (PostgreSQL 14+) falling back to `pg_postmaster_start_time()`, and a
+  200-character SQL text snippet with every `=` spaced out (` = `) positioned strictly last.
 
 ## Supported Database Engines
 
@@ -808,6 +1036,49 @@ no address. Both join the request's own connection now (`c.connection_id = r.con
 the guard holds every collector whose live SQL writes `host=` to write `client_ip=` too.
 Verify with `run-sql` and `"autocommit": true` against a real instance of that version — see
 [`13_common.md`](./13_common.md).
+
+### Availability and capacity checks added in 0.30.0 (items 1.135 - 1.150, 1.155, 1.159 - 1.161, 1.164 - 1.166)
+
+Thresholds approved by the operator on 2026-10-15 (1.135 - 1.145; the rest built as the plan
+proposed them when the operator said to go on, the same day); each is a `DECLARE` (SQL Server)
+or a `params` / `thresholds` CTE (Oracle, PostgreSQL) on its own, never a literal in a `CASE`.
+
+| Metric | Engine | What is graded |
+| --- | --- | --- |
+| `DATABASE_STATUS` | SQL Server | **The system databases too** (`master`, `model`, `msdb`, `tempdb` were left out by `database_id > 4`): not `ONLINE` = CRITICAL. One more row, `sql_agent_service`, from `sys.dm_server_services`: not `Running` = CRITICAL; Express (no Agent) and builds before 2008 R2 SP1 (no DMV - read through dynamic SQL) are LOGGING. **On Linux** Agent is off until `mssql-conf` enables it and still reads `Stopped`; what the OS leaves out is not an outage (the operator, 2026-10-15), so a Linux instance (`@@VERSION`) whose Agent is not running is OK, `Not enabled` - unless an enabled job with an enabled schedule waits for it, which never runs and stays CRITICAL. A login that cannot read msdb leaves it OK with `scheduled_jobs=unreadable` |
+| `SQL_AGENT_JOB_INVENTORY` | all | No job at all is OK (`empty_result_is_ok`), not NO_DATA: no Agent on Linux or Express, and many Oracle schemas schedule nothing |
+| `INSTANCE_CONNECTIONS` | SQL Server | A second row, `connection_limit_ratio`: user sessions against `user connections` - >= 90 % CRITICAL, >= 80 % WARNING; `0` (the engine's own 32,767) is no ceiling and LOGGING. Graded on that row alone; the `server` row grades blocking as before |
+| `LOG_RECENT_CRITICAL` | SQL Server | Severities **19 and 20** join the critical class (21 - 25, 823 / 824 / 825, corruption, stack dumps, out of memory), declared once in `@critical_types`. **CRITICAL only within `@critical_recent_minutes` (120)** of the error - the metric runs hourly and read 24 h, so one error paged all day; older but inside the 24 h it is WARNING, still in the report. `critical_errors_recent=` and `recent_window_minutes=` follow `critical_errors_24h=` in the message |
+| `PERFORMANCE_WAIT_STATS` | SQL Server | **Worker starvation on its own row, `threadpool`, at any rank** - it was CRITICAL only as the top wait. THREADPOOL waiters and the schedulers' work queue are read at both ends of the 5 s sample: any THREADPOOL wait, or a queued task at either read, WARNING; waiters or a queue at both reads, or THREADPOOL time >= `@threadpool_sustained_pct` (100) % of the sample, CRITICAL. Always emitted, so it clears. The top-wait row no longer grades THREADPOOL (`graded_on=threadpool`): one condition, one alert |
+| `MEMORY_GRANTS_PENDING` (102) | SQL Server | Queries waiting for workspace memory, read twice 5 s apart inside one run (`WAITFOR`), because a collector remembers nothing between runs: > 0 in both samples WARNING, > 5 in the second CRITICAL; `RESOURCE_SEMAPHORE` waiters now in the message |
+| `PERFORMANCE_IO_LATENCY_INTERVAL` (104) | SQL Server | **I/O latency now**, not since the engine started: the file stats read twice 10 s apart inside one run (014's pattern), per database and file type, at least 20 operations to be graded. A log is graded on its writes - every commit waits for them - >= 50 ms CRITICAL, >= 20 ms WARNING; a data file on its reads - a buffer-pool miss waits for each - >= 200 / 50 ms. Data-file writes are in the message and not graded: the checkpoint issues them in bursts nobody waits for, and their stall measures the queue. `PERFORMANCE_IO_LATENCY` keeps its cumulative per-file rows, which the reports difference |
+| `POSTGRES_XID_WRAPAROUND` | PostgreSQL | Two rows per database, `<db> :: xid` and `<db> :: multixact` (`mxid_age(datminmxid)` against `autovacuum_multixact_freeze_max_age`): >= 90 % CRITICAL, >= 75 % WARNING |
+| `POSTGRES_REPLICATION` | PostgreSQL | The primary's view of each standby (`pg_stat_replication`): replay lag in bytes >= 1 GB CRITICAL, >= 100 MB WARNING; `sent_lsn` in the message. A standby grades its own lag at 100 MB / 10 MB, as before - the two views use different numbers. A primary with no standby is OK |
+| `POSTGRES_CHECKPOINT_PRESSURE` (103) | PostgreSQL | **Recorded, not graded.** The requested share of checkpoints, from `pg_stat_checkpointer` (17+) or `pg_stat_bgwriter` (10 - 16), two variants by version. The counters run since `stats_reset` (`counters_since`), and a share since a reset weeks ago says nothing about now; the approved rule (>= 40 % WARNING, >= 70 % CRITICAL) applies to an interval - two collections subtracted - which nothing computes yet. `collect_only` |
+| `PROCESS_LIMIT` | Oracle 9i+ | `v$resource_limit` for `processes` and `sessions`: >= 90 % CRITICAL, >= 80 % WARNING, `UNLIMITED` not graded. **Inside a PDB that view answers no rows**: the limits are read from `v$parameter` and `v$process` / `v$session` are counted (no high-water mark), and `source=` says which |
+| `LOG_FILE_SPACE` | Oracle | Configured archive destinations (`v$archive_dest`): not `VALID` = CRITICAL with the error; `INACTIVE` / `DEFERRED` are not failures. 10g+ inside `007` beside the FRA; 9i in `110` |
+| `DATABASE_STATUS` | Oracle 12c+ | A PDB not open `READ WRITE` (but `PDB$SEED`) = CRITICAL on a primary; on a standby `MOUNTED` / `READ ONLY` is normal. `session_container=` names the container the session is in. 9i - 11g have their own variant, with no `v$pdbs` |
+| `STORAGE_TEMP_SPACE` | Oracle 9i+ | Temp space **in use now**, from `v$tempseg_usage`, against the temp files' size to `maxbytes`: >= 95 % CRITICAL, >= 85 % WARNING. It read `v$temp_space_header`, whose "used" is extents allocated and never handed back - near 100 % for good |
+| `STORAGE_TEMP_SPACE` | PostgreSQL 12+ | **Temp files in use now** (1.149's port, 2026-10-16): PostgreSQL has no temp area to be full - a spill goes to `pgsql_tmp` on the data filesystem - so the same 95 / 85 % are read against what it does enforce, `temp_file_limit`, **per process**: the backend with the most temp files (`pg_ls_tmpdir` per tablespace, its pid from the file name `pgsql_tmp<pid>.<n>`). With no limit (-1, the default) one OK row with the total, the backend count and the largest backend. A parallel query's shared file sets are directories `pg_ls_tmpdir` does not list - undercounted. The cumulative side (temp files and bytes per hour) is the Workload table's. Before 12, unsupported. Needs `pg_monitor` |
+| `STORAGE_DATA_FILE_SPACE` | Oracle 9i+ | **The tablespace is graded, not the file**: Oracle puts an extent in any file of a tablespace with room, so one full file beside two that can grow is no incident. One graded row per tablespace (`scope=tablespace, name=`, 95 / 85 % of the capacity to `maxbytes`), and the per-file rows as before, LOGGING - the server page lists each tablespace's datafiles from them and the fleet page sums their `current_mb` into the database's size, so the tablespace row carries neither `tablespace=` nor `current_mb` |
+| `DATABASE_USER_PERMISSIONS` | Oracle 12c+ | Oracle's own accounts are left out by `dba_users.oracle_maintained`, not by a list of names: the list missed every account added since (`GGSHAREDCAP`, `SYSBACKUP` read WARNING on 26ai). 9i - 11g have no such column and keep the list (`061_..._11g.sql`) |
+| `DATABASE_SUSPECT_PAGES` | PostgreSQL 12+, Oracle 10g+ | **Corruption on every engine**, not SQL Server's only. PostgreSQL: `pg_stat_database.checksum_failures` per database (the shared catalogs named) - the counter only grows, so graded by `checksum_last_failure`: within 30 days (SQL Server's own window) CRITICAL, older LOGGING; a cluster without data checksums is one LOGGING row. Oracle: `v$database_block_corruption` - what RMAN found and has not seen repaired - per file and type: NOLOGGING WARNING (unrecoverable from an older backup, not damaged), every other type CRITICAL. No row when nothing is corrupt |
+| `LOCK_TRANSACTION_HOLDERS` | PostgreSQL 10+, Oracle 10g+ | **The session holding the locks**, SQL Server's contract ported (1.149): a row only for a finding - a transaction open 5 min, or blocking anyone, or a session-scope lock (`pg_advisory_lock`; Oracle `DBMS_LOCK`, type `UL`) held by an idle session 5 min; CRITICAL when old (15 min) **and** somebody waits, or that lock idle 60 s while blocking, or 30 min idle; everything else one LOGGING `holders_summary`. No scan guard on PostgreSQL: its lock table is sized at start and row locks never enter `pg_locks`. Oracle reads `v$` (this instance on RAC). The SQL Server lock-scan limits are `sql_settings` of the SQL Server variants only |
+| `LOCK_SLEEPING_OPEN_TRANSACTION` | PostgreSQL | **Not ported, on purpose**: `POSTGRES_LONG_TRANSACTIONS` (53) already grades every transaction open 5 / 30 min, `idle in transaction` named by its state; a variant here would page twice for one session |
+| `JOB_FAILED` | Oracle 10g+ | **Failed scheduler jobs** (1.149): `dba_scheduler_job_run_details` over 24 h, graded by SQL Server's own rule - a fail rate of 70 % CRITICAL, 50 % WARNING, any failure LOGGING - with the last ORA- error; STOPPED runs counted, not graded; the owners Oracle maintains left out as `SQL_AGENT_JOB_INVENTORY` leaves them out. Before it, the inventory listed a job failing every run at OK. A job the DBA has since disabled is left out, as SQL Server leaves out a disabled Agent job; a one-off `auto_drop` job that failed is not (review, 2026-10-16) |
+| `SQL_AGENT_JOB_RUNTIME` | Oracle 10g+ | **Scheduler jobs running now and the next run** (1.149's port, 2026-10-16): `dba_scheduler_running_jobs` and `dba_scheduler_jobs`, in SQL Server's words and graded as SQL Server grades it - not at all - except a job past the `max_run_duration` it declares itself (when Oracle raises `JOB_OVER_MAX_DUR`): WARNING. No threshold of ours; a long statement inside a job is `QUERY_LONG_RUNNING`'s. The owners Oracle maintains left out |
+| `LOCK_DEADLOCK_RECENT` | Oracle 11g+ | **Deadlocks** (1.149's port, 2026-10-16): ORA-00060 lines in the alert log over 24 h through `v$diag_alert_ext`, at any message level (ORA-00060 is level 16, which `LOG_RECENT_CRITICAL` never reads), by SQL Server's rule - any WARNING, 5 CRITICAL. **The variant runs hourly** (`repeat_interval` 3600 on the variant, the scheduler reads it for the target it runs on): the view scans the whole XML alert log, and the metric's 150 s is SQL Server's ring buffer. PostgreSQL's deadlocks are in `POSTGRES_SERVER_LOG` below |
+| `AVAILABILITY_DATABASE_HEALTH` | SQL Server, 2008 R2 too | **Database mirroring and log shipping** beside Availability Groups (1.148) - an AG-only metric was blind to them, and on 2008 R2 the metric did not run at all. Mirroring: SYNCHRONIZED OK, SYNCHRONIZING WARNING - but OK on an asynchronous mirror (safety OFF), which never leaves it - SUSPENDED / DISCONNECTED / PENDING_FAILOVER / UNSYNCHRONIZED CRITICAL. Log shipping from msdb's monitor tables, against **the thresholds log shipping is configured with** (`backup_threshold`, `restore_threshold`): past it, or never run, CRITICAL. msdb unreadable: one LOGGING `log_shipping` row, the AG and mirror rows kept. Nothing configured: one OK `availability` row |
+| `SERVER_DIAGNOSTICS` (105) | SQL Server | SQL Server's own incidents, the nearest it has to Oracle's ADR (1.164). A memory dump (`sys.dm_server_memory_dumps`) within 120 minutes CRITICAL, within 7 days WARNING, older not listed. `sp_server_diagnostics` with `@repeat_interval = 0` (2012+): one row per component - error CRITICAL, warning WARNING, unknown LOGGING - with the attributes that explain it (access violations, non-yielding tasks, out-of-memory, pending tasks, long I/Os). The 2008 R2 file reads the dumps only, guarded before SP1 |
+| `AVAILABILITY_DATABASE_HEALTH` | SQL Server 2012+ | **Availability Group queues** (1.161): a HEALTHY replica whose log send queue plus redo queue reaches 100 MB is WARNING - Redgate SQL Monitor's default "replication falling behind" (one reading here; the metric's interval repeats it, where Redgate holds it 120 s). The message carries the queues, the rates, `est_redo_seconds` (redo queue / redo rate: what a failover to it waits for) and `est_data_loss_seconds` (the primary's last commit time against the secondary's - Microsoft's estimate). The item names the replica, `<database> :: <replica>`: on a primary every replica of a database shared one item |
+| `PERFORMANCE_WAIT_STATS` | SQL Server | **tempdb allocation contention** (1.161): a `tempdb_allocation` row, always emitted - tasks waiting on a tempdb PFS / GAM / SGAM page (page 1 or every 8088th; 2 or every 511232nd; 3 or the next) at both ends of the 5 s sample, or a waiter while `PAGELATCH_UP` / `EX` are at least 5 % of the sample's wait time (Netdata's guide), is WARNING - never CRITICAL: the remedy is more equally sized tempdb files, and the message counts them beside the CPUs |
+| `POSTGRES_SERVER_LOG` (106) | PostgreSQL in a container | **The server log** (1.165), through the docker collector: a day of `docker logs`, streamed through one `grep` of the patterns that matter. PANIC, corrupt pages, disk full, out of memory, a backend killed by a signal: CRITICAL within 120 minutes (`PG_LOG_CRITICAL_RECENT_MINUTES`), WARNING after - 1.140's short window. Other FATALs and connection exhaustion WARNING; failed logins and routine FATALs counted. **PostgreSQL's own checkpoint alarm** - "checkpoints are occurring too frequently", logged when they come within `checkpoint_warning` (30 s by default) - is WARNING (1.145's alert, from the engine). **Deadlocks** ("ERROR:  deadlock detected") by `LOCK_DEADLOCK_RECENT`'s rule over the window: any WARNING, `PG_LOG_DEADLOCK_CRITICAL` (5) CRITICAL however old - the day is the rule, as on SQL Server. One graded summary row, LOGGING detail rows per class. **A host install** (2026-10-16, `host_fallback`): no container, an SSH `cmd_access` - the same script reads the log files on the host, `PG_LOG_FILE` (a file or a glob) or `PG_LOG_DIRECTORY` from the target's `collector_env`, else the packagings' places (`/var/log/postgresql`, the RPMs' and the source build's `data/log`); files changed inside the window only, each line cut by its own `log_line_prefix` time and zone; through `sudo -n` where only `postgres` may read (WARNING, naming the file, where that is not allowed); **two clusters found on one host are named and not read** until one of the two settings says which. A line whose time cannot be read grades WARNING, never pages. Not read: a container logging to a file (`logging_collector = on`), and a server logging to syslog or journald |
+| `SECURITY_LOGIN_HEALTH` | SQL Server | A **SYSADMIN** signal (1.148): an enabled login in the sysadmin role other than the login the check runs as (dbabrain's own - the operator's one sysadmin) and SQL Server's own (`sa` by id, `NT SERVICE\*`, `NT AUTHORITY\SYSTEM`, `##...##`) - sp_Blitz's exclusions; on Linux also the Windows principals setup adds, which log nobody in. Runs only when the login is sysadmin (it alone sees the whole role); otherwise the summary says `sysadmin=skipped`. Each member a LOGGING row, the summary WARNING, as the other signals |
+| `ORACLE_ADR_INCIDENTS` | Oracle 11g+ | Health Monitor too (1.166): an open `CRITICAL` finding in `v$hm_finding` is a WARNING row `hm_finding=<id>`; `hm_open_critical=` in the summary |
+| `SHARED_POOL_FREE`, `LIBRARY_CACHE`, `BUFFER_CACHE_HIT` | Oracle 10g+ | **They existed for 8i only** (1.150), so `ORACLE_PERFORMANCE_24H` measured nothing on a modern Oracle. From 10g each reads `v$sysmetric`'s 60-second interval - current, where the 8i files divide counters since startup - at **check_oracle_health's defaults**: hit ratios below 98 % WARNING, 95 % CRITICAL; shared pool free below 10 % WARNING, 5 % CRITICAL. `v$sysmetric` is an in-memory view, not one Oracle's licensing guide puts in the Diagnostics Pack. Inside a PDB it answers nothing: shared pool and library cache are the instance's, one LOGGING row says to read them from the root; from 18c the buffer cache ratio is the PDB's own (`v$con_sysmetric`, group 18). **A minute with under 100 logical reads a second is not graded for the buffer cache** (OK, the message says so, the value kept): a PDB that read nothing answers 0, and the idle `.251` 23ai lab read CRITICAL for it the minute it was switched on (1.179). `ORACLE_TABLESPACE_CAPACITY_24H` reads `STORAGE_DATA_FILE_SPACE` beside 8i's `TABLESPACE_FREE_SPACE` |
+
+Run on the `.251` labs (SQL Server 2025, PostgreSQL 18.6, Oracle 26ai PDB `FREEPDB1`) with
+`collect --test-run`; the 2008 R2 SQL Server variants were run there directly.
 
 ### What `INSTANCE_STATUS` says about a server, engine by engine (0.28.0)
 
@@ -967,7 +1238,27 @@ python -m dbabrain.metrics.cli --config config.json report --db-type sqlserver
 python -m dbabrain.metrics.cli --config config.json summary-latest --db-type sqlserver
 python -m dbabrain.metrics.cli --config config.json health-summary-latest --db-type sqlserver
 python -m dbabrain.metrics.cli --config config.json alert-summary
+python -m dbabrain.metrics.cli --config config.json collect --test-run --include-windowed --target-id "<server_id>/oracle/<service>"
 ```
+
+### `collect --test-run` - a metric tried on one named target, nothing kept (0.30.0)
+
+How a metric is tested on an engine version the estate does not run yet. The newest versions live
+on a lab instance, and the inventory keeps a lab **switched off** (`active: false`,
+`metrics.enabled: false`) so the scheduler never collects it. A plain `collect` would write the
+lab's rows into the estate's store, where every report reads them as a server of the estate; and
+`--dry-run` connects to nothing.
+
+`--test-run` reaches the **one** target named by `--target-id` or `--target-ip`, switched off or
+not; runs every metric its engine has (the interval does not apply; a window still does unless
+`--include-windowed`); and prints each metric's rows as it graded them - `TEST target=...
+metric=... status=... rows=N`, then one line per row. Nothing is written: no run row, no results,
+no health rebuild, nothing for an alert to read.
+
+It **refuses a target that states no `major_version`**. An unknown version matches every variant and
+the last one listed answers - for Oracle that is often the `legacy_8i/` file - so the trial would be
+of SQL the target is never given. The first lab run of 0.30.0 did exactly that on Oracle 26ai before
+the lab records stated their versions.
 
 ## Useful Manual Queries
 
@@ -1037,7 +1328,7 @@ what shows free space trapped inside a file.
 
 ## OS Metrics
 
-Thirteen OS metric codes exist under `category: "os"`:
+Fourteen OS metric codes exist under `category: "os"`:
 
 | Code | Rows it returns |
 | --- | --- |
@@ -1046,12 +1337,43 @@ Thirteen OS metric codes exist under `category: "os"`:
 | `OS_MEMORY_USAGE` | `memory_usage` % of **physical** memory (+ total/used/available GB), and `swap_usage` / `pagefile_usage` |
 | `OS_DISK_USAGE` | one row per mount/drive: used % (+ total/used/free GB, free %, filesystem, label), plus **host-wide** IO rows — `disk_read_kbps` / `disk_write_kbps` on both, `disk_iops` on Linux, `disk_queue_length` on Windows (see below) |
 | `OS_NETWORK` | one row per interface: IP address (+ link, speed, bytes sent/received, errors, dropped) |
-| `OS_PROCESS_TOP_CPU` | one row per process, ranked by current CPU % (Windows: `% Processor Time` divided by logical CPUs, not cumulative CPU seconds) |
+| `OS_PROCESS_TOP_CPU` | one row per process, ranked by current CPU % (Windows: `% Processor Time` divided by logical CPUs, not cumulative CPU seconds). Linux leaves out processes younger than `OS_TOP_MIN_AGE_SECONDS` (10): `ps`'s `%cpu` is over the process's life, so `ps` itself and the `docker exec` the other collectors start read 50 - 100 % |
 | `OS_PROCESS_TOP_MEMORY` | one row per process name, ranked by resident memory; processes with the same name are summed (`process_count` in the message) |
+| `OS_CPU_COUNTERS` | cumulative, ungraded (`collect_only`): `host_busy_ms` / `host_idle_ms` since boot (Windows `GetSystemTimes`, Linux `/proc/stat` with iowait as idle), and `db_cpu_ms` for the database process - see below |
 | `OS_SERVICE_STATUS` | one row per configured service (see `collector_env` below) |
 | `OS_EVENTLOG_CRITICAL` | Windows: one row per event log with the count of Critical/Error events in the window. Linux: journald priority ≤ 3. Both read at most `OS_EVENTLOG_MAX_EVENTS` (500) newest events — see below |
 | `OS_REBOOT_PENDING`, `OS_UPTIME`, `OS_TIME_SYNC` | as before |
 | `OS_TCP_PORT_STATUS` | one row per configured port: `OPEN` / `LOOPBACK_ONLY` / `CLOSED` (see below) |
+
+### `OS_CPU_COUNTERS`: the host's CPU, and the database process's, as totals (2026-10-16)
+
+`OS_CPU_USAGE` is three one-second samples once an hour - right for "is it busy now", no use for
+"how busy was the last hour". These are the kernel's own totals, so the report differences two
+collections like any counter (`workload._build_cpu`). It is also the only CPU PostgreSQL has: the
+engine keeps no CPU total of its own.
+
+Which process is the database is the hard part, and the script never guesses:
+
+- **Windows, SQL Server**: the process listening on the target's port (`Get-NetTCPConnection`,
+  else `netstat -ano`) when it is `sqlservr.exe`. By port, not by service name: a failover cluster's
+  inventory names the network name, and a passive node runs no sqlservr at all. PostgreSQL on
+  Windows is not counted - an exited backend takes its time with it.
+- **Linux**: the container's init when the target names `container_name` (`docker inspect`), else
+  the one root `sqlservr` / `postgres` process on the host, else the one outside a container when
+  the target is not in one, else the one whose command line names the port. Its tree is summed with
+  each process's reaped-children time, so a backend that exits moves its CPU into the postmaster's
+  total and the sum never falls while the postmaster lives.
+
+When none of that settles it, `db_cpu_ms` is left out and `db_process` says why - *2 sqlservr
+processes on this host and all are in containers - set container_name on the target* was the
+answer on a host whose inventory named no container. The message carries `counters_since` (boot)
+and `process_since` (the process's start) separately, so a service restart costs the process's pair
+and not the host's.
+
+The script needs to know which database is on the host, which no other OS collector does, so the
+metric declares it: `"target_env": ["DBABRAIN_DB_TYPE", "DBABRAIN_DB_PORT", "DBABRAIN_DB_CONTAINER"]`.
+`_collector_env` hands those - and only to a metric that declares them - from the target, and the
+loader refuses any other name (`definitions.TARGET_ENV_NAMES`): the credential is on the same object.
 
 ### `OS_TCP_PORT_STATUS`: which address the probe knocks on
 
@@ -1143,6 +1465,8 @@ These are `collector_type: "cmd"` metrics. Each has two variants — `windows_po
 - A target with **no database** (`db_type: null`) runs only these cmd collectors: no SQL variant matches an empty db_type, so no database collector is dispatched to it.
 
 **Per-target collector input (`collector_env`)**
+
+Written with `python -m dbabrain.common.cli metric-env '{"server_id": ..., "env": {NAME: value}}'` (a value of `null` removes NAME; `metric_code` writes the metric's own block). The folder a PostgreSQL base backup is read from is one of these, `PG_BACKUP_DIR`, and the metrics app's own: it does not read `restore_config.json` - backup and metrics are separate apps and never read each other's configuration (the operator, 2026-10-19). A target that states none is read at the default folder, and its FULL reads never backed up (1.183).
 
 A cmd script reads its inputs from environment variables. They are declared per target in `db_instances.json` and injected into the script before it runs (as `$env:NAME = '...'` for PowerShell, `export NAME='...'` for bash), so the same script serves every host:
 
@@ -1343,57 +1667,83 @@ Both are per-metric and optional in `data/metric_definitions.json`'s `time_windo
 ### A metric's interval is a floor, not a promise — the pass has to reach it
 
 `repeat_interval` only says when a metric *becomes* due. It is collected when the pass gets to it,
-so the real cadence is the interval **plus** however long the pass takes to come round again. A
-metric asking for 150s was measured being sampled every 200–830s for this reason.
+so the real cadence is the interval **plus** however long the pass takes to come round again.
 
-The pass therefore walks **server_id groups in parallel, and the metrics inside one group one at a
-time**, capped by `collection.max_parallel_servers` in `data/metric_definitions.json`:
+The pass therefore groups work into **batches by `(server_id, category)` running in parallel**, capped
+by `collection.max_parallel_servers` in `data/metric_definitions.json`:
 
 ```json
 "collection": { "max_parallel_servers": 16 }
 ```
 
-`server_id` is the unit, not `target_id`, because several targets can name one machine (a database
-instance and the OS metrics reached through its `cmd_access`); two workers on one box would stack
-WinRM/SSH sessions and metric queries on it. Set it to `1` to restore the old fully serial pass; a
-missing or malformed `collection` block also means 1, so a bad edit degrades rather than fans out.
+A metric's `category` (`availability`, `performance`, `capacity`, `os`, `maintenance`, ...) forms its
+batch group. Due metrics of one category on one server run sequentially in a single batch, while
+different categories—on the same server or across different servers—run concurrently and never wait
+for each other.
 
-Why it matters: a pass used to be one queue over every target, so its cadence was the sum of all of
-them and one unresponsive host set the pace for the estate. A WinRM call to an ERP application
-server was measured holding a pass for 490 of its 598 seconds, and in that window the ERP
-*database's* lock metrics were never sampled — a blocking chain grew from 21s to 570s and no
-CRITICAL was raised, because the check that would have raised it never ran.
+Why it matters, twice over. A pass used to be one queue over every target: a WinRM call to an ERP
+application server held a pass for 490 of its 598 seconds, and in that window the ERP *database's*
+lock metrics were never sampled - a blocking chain grew from 21 s to 570 s with no CRITICAL. Grouping
+by server fixed that between servers but not inside one, and the pass still ended with its slowest
+server while the daemon, running `APP-METRICS` `sync`, started no other. Measured on 2026-10-16
+(24 h): a pass took 27-35 s at p50, and the 01:00 pass **1105 s** - `MAINTENANCE_INDEX_FRAGMENTATION`
+ran 1009 s on the largest instance, and `INSTANCE_STATUS` (then every 60 s) went unsampled on
+**every** server for ~18 minutes. The next slowest were `QUERY_LONG_RUNNING` (87 s on one server),
+`LINKED_SERVER_STATUS` (56 s) and `PERFORMANCE_IO_LATENCY` (45 s). Now a slow batch holds only its
+own category of its own server. A server may get one session per category at a time - the price of
+that, and the reason the unit is the category and not the metric.
 
-Each worker uses its own store connection (every `MetricStore` method opens one), fills its own
-counters, and the parent merges them in submission order, so the run summary reads the same however
-the hosts behaved.
+Set `max_parallel_servers` to `1` to run all batches sequentially; a missing or malformed `collection`
+block also defaults to 1.
 
-**Measured on the live estate**, before and after the change:
+#### Batch claiming and `run_mode: async`
 
-| | Serial pass | Parallel, cap 16 |
-| --- | --- | --- |
-| Pass wall time | 138–598 s | **25–71 s** |
-| Servers collecting at once | 1 | **16** (peak, = the cap) |
-| `LOCK_BLOCKING_SESSIONS` sampling gap | 192–830 s, erratic | 226–236 s, avg 230 s |
+The metric collection app command `APP-METRICS` runs under `run_mode: async` (with `repeat_interval: 1`
+and `max_parallel: 4`). An async command must refuse its own duplicate work. Batches prevent concurrent
+overlap using non-waiting file locks:
 
-In one 19-server pass the sum of the per-server collection windows was 300 s while the pass itself
-took 31 s — the compression is the point. What was fixed is not throughput but the **blind spots**:
-the old gaps were erratic because a single slow host stalled the queue, and a ten-minute hole is
-where an incident escalates unobserved.
+1. **Batch Claiming:** Before executing a batch, the worker acquires an exclusive non-waiting lock at
+   `runtime/metric_claims/<server>__<category>.lock` via `FileLock(..., wait=False)`. If another pass
+   already holds the claim, the batch is skipped, logged as `SKIP claimed`, and recorded in
+   `skipped_claimed_count`. The lock is released as soon as the batch finishes, or automatically by the
+   OS if a worker process terminates.
+2. **Post-Claim Re-check:** Because a batch may have been planned while a previous pass was still finishing
+   those same metrics, acquiring the claim is followed immediately by a re-check of `latest_result_times`
+   for that batch's pairs. Any metric collected in the interim is dropped before querying the target.
 
-The residual ~230 s gap on a metric declaring `repeat_interval: 150` is not the collector lagging.
-It is quantisation: the daemon relaunched `APP-METRICS` every 120 s, a metric only becomes due 150 s
-after its last collection, and a pass that finds it at 130 s skips it until the next launch. To get
-closer to a declared interval, lower the `APP-METRICS` `repeat_interval` in `data/app_commands.json`
-— raising the parallel cap will not help, because the pass already finishes well inside its window.
+#### Single due check and lightweight idle passes
 
-**Since 0.26.0 the shipped `APP-METRICS` and `APP-REPORTS-CREATE` run every 30 s** (the operator,
-2026-10-03; they were 120 s). A metric is then late by at most 30 s past its own interval instead
-of up to 120 s, and a report is due within half a minute of its window. A launch that finds nothing
-due ends in about a second, and the daemon never starts a second run of a command while one is
-still going, so a pass longer than 30 s simply delays the next. `init` seeds new nodes with 30 s;
-an existing node keeps the value in its own `data/app_commands.json` until it is changed there -
-`python -m dbabrain.common.cli app-command-set`, or the console.
+The store has no connection pool: opening connections naively per metric check would produce ~1,600
+new PostgreSQL connections per pass for ~800 target/metric pairs. The pass therefore plans first:
+
+- **Single CTE Query:** A single `latest_result_times` call checks all candidate pairs in chunks of 200
+  over a single store connection using a CTE:
+  `WITH p(target_id, metric_code) AS (VALUES (?, ?), ...)`.
+  Correlated scalar subqueries use the existing `(target_id, metric_code, collected_at DESC)` index to
+  return the latest collection time and latest successful collection time in one round trip.
+- **Zero Overhead Idle Pass:** If no metrics are due, the pass exits immediately with `run_id: None`
+  without calling `archive_old_results`, `start_run`, `finish_run`, or `rebuild_target_health`. At an
+  async repeat interval of 1 second, empty passes cost exactly one store connection and insert no rows.
+- **Bounded Health Rebuilding:** When collections do run, `rebuild_target_health(run_id=run_id, since=started_at)`
+  applies `collected_at >= ?` so the scan is bounded by the `collected_at` index, preventing a full
+  table scan over ~15.2 million rows in `metric_results` (which lacks an index on `run_id`).
+- **Deterministic Summaries:** Tallies and summaries are merged in original plan order rather than worker
+  completion order, preserving deterministic log output.
+- **Quiet scheduled passes:** a scheduled pass counts the metrics it leaves out (unsupported,
+  disabled, outside their window, interval not elapsed, batch claimed) and prints no line for each -
+  ~800 pairs a pass, a pass a second, into `metrics_runtime.log`. A pass that ran nothing prints
+  nothing at all, as an idle `APP-SQL_TASKS` run does. A pass run by hand with `--dry-run`,
+  `--test-run`, `--target-id` or `--metric-code` still prints every skip and its reason, and the
+  summary. `--test-run` runs its batches one at a time, so one metric's rows stay together.
+
+### Every collection says how long it took (0.30.0)
+
+`metric_results.execution_time` is the collection's wall time in seconds, on SQL metrics too: the
+connect, the statement and the close, as `metric-batch` timed the item (a script states its own,
+the remote run alone). Until 0.30.0 a SQL row carried none, so INSTANCE_STATUS - every 30 s on
+every instance - said whether a server answered and never how fast. Its times are the connection
+probe of the server page's latency section (`docs/06_reports_app.md`): a real p50 / p95 / p99 of
+connect plus one query, recorded and never graded. A failed collection keeps no time on its row.
 
 ### A metric's `timeout` is enforced by wall clock
 

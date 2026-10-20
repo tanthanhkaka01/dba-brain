@@ -106,3 +106,18 @@ def test_the_summary_is_the_worst_of_the_fleet():
 
     assert summary == {"databases": 2, "compliant": 1, "warning": 1, "critical": 0,
                        "status": "WARNING"}
+
+
+def test_a_retired_drill_is_not_judged_however_old_its_last_success():
+    """A drill switched off keeps its last success in the history for ever. On 2026-10-16 four
+    such databases - their restore entries off since June to August - were the whole of the SLA's
+    restore drill breach; the policy names them `required: false` and they leave the verdict."""
+    policy = {"defaults": {"max_age_hours": 168},
+              "overrides": [{"database_name": "ARCHIVE_BK", "required": False}]}
+    rows = [_row("ARCHIVE_BK", "SUCCESS", 1255), _row("SALESDB_Prod", "SUCCESS", 11)]
+
+    verdicts = rd.evaluate(rows, policy=policy, now=NOW)
+
+    assert [r["database_name"] for r in verdicts] == ["SALESDB_Prod"]
+    assert rd.is_drilled(policy, database="archive_bk") is False
+    assert rd.is_drilled(policy, database="SALESDB_Prod") is True

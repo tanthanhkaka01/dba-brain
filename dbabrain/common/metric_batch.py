@@ -80,6 +80,7 @@ def _run_item(item: dict[str, Any], target: dict[str, Any], secrets: dict[str, s
     # Wall-clock, so the caller stamps the row with when THIS metric ran - not when the batch
     # started or ended, which is what the in-process loop recorded and a report compares by.
     answer: dict[str, Any] = {"id": item.get("id"), "kind": kind, "started_at": time.time()}
+    started = time.monotonic()
     try:
         if kind == "sql":
             answer.update(_sql(item, target, secrets))
@@ -94,6 +95,14 @@ def _run_item(item: dict[str, Any], target: dict[str, Any], secrets: dict[str, s
     except Exception as exc:  # noqa: BLE001 - one item's failure is its answer, not the batch's.
         answer["error"] = {"message": str(exc), "kind": "other",
                            "failure_phase": str(getattr(exc, "failure_phase", "") or "")}
+    # The wall time of the whole item, on every kind - for SQL the connect, the statement and the
+    # close, which is what a client of that server waits. A script states its own (the remote run
+    # alone); this does not overwrite it. INSTANCE_STATUS taken every 30 s is then a connection
+    # probe whose p50 / p95 / p99 the server page shows (0.30.0) - it recorded no time at all.
+    elapsed = round(time.monotonic() - started, 3)
+    answer.setdefault("duration_seconds", elapsed)
+    if isinstance(answer.get("error"), dict) and answer["error"].get("duration_seconds") is None:
+        answer["error"]["duration_seconds"] = elapsed
     return answer
 
 

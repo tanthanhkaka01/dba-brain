@@ -22,6 +22,8 @@ from dbabrain.metrics import collector
 
 class _Metric:
     metric_code = "ORACLE_RESTORE_VALIDATION"
+    # Every MetricDefinition has it; this metric declares none of the database facts.
+    target_env = ()
 
 
 class _Target:

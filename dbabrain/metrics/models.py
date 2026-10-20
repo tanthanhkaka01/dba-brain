@@ -35,6 +35,16 @@ class MetricVariant:
     #:
     #: SQL Server needs nothing here: it iterates databases inside the SQL with a cursor and USE.
     per_database: bool = False
+    #: How often this variant runs, in seconds, when it is not how often the metric does. The
+    #: metric's interval is set by its cheapest engine: LOCK_DEADLOCK_RECENT reads SQL Server's
+    #: system_health ring buffer every 150 s, and Oracle's only source is v$diag_alert_ext - an
+    #: external-table scan of the whole XML alert log, which LOG_RECENT_CRITICAL reads hourly.
+    repeat_interval: int | None = None
+    #: This variant's own ``sql_settings``, written over the metric's when this variant runs. A
+    #: number that belongs to one engine's file is stated here: ``LOCK_TRANSACTION_HOLDERS``'s
+    #: lock-scan limits are SQL Server's, and stated for the whole metric they were written into
+    #: its PostgreSQL and Oracle files too, which do not declare them (1.149, 2026-10-15).
+    sql_settings: dict[str, Any] = field(default_factory=dict)
 
     @property
     def sql_file(self) -> str:
@@ -85,6 +95,16 @@ class MetricDefinition:
     # (lib.sql_text.apply_sql_settings): the file declares each with its default, and a node
     # that states another runs with that one.
     sql_settings: dict[str, Any] = field(default_factory=dict)
+    # Which facts about the *database* a cmd collector is handed beside DBABRAIN_TARGET_HOST
+    # (``DBABRAIN_DB_TYPE``, ``DBABRAIN_DB_PORT``, ``DBABRAIN_DB_CONTAINER``). Declared per
+    # metric rather than given to every script: OS_CPU_COUNTERS has to find the engine's process
+    # on the host, and no other OS collector has any use for which database is on it.
+    target_env: tuple[str, ...] = ()
+    # A docker metric that, on a target with no ``container_name``, runs its script on the host
+    # through ``cmd_access`` instead of being skipped. POSTGRES_SERVER_LOG reads ``docker logs`` for
+    # a container and the ``log_directory`` files for an install on the host - one metric, the
+    # source per target - and a host install is exactly the target a docker metric skipped.
+    host_fallback: bool = False
     report_policy: dict[str, Any] = field(default_factory=dict)
     path: Path | None = None
     # Optional allowed collection window (from_hour/to_hour etc.). When set, the collector only
@@ -126,3 +146,5 @@ class CollectSummary:
     # Metrics left alone because the clock is outside their allowed window. Counted apart
     # from skipped_interval_count so "we did not run CHECKDB, it is 15:00" stays legible.
     skipped_window_count: int = 0
+    # Batches skipped because another pass held the category's file claim lock.
+    skipped_claimed_count: int = 0

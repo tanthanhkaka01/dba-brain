@@ -15,6 +15,16 @@
 --                     the event is still within the retained error log; otherwise it stays
 --                     silent (no false positives). For reliable dormancy tracking use a SQL
 --                     Server Audit that persists login events.
+--   * SYSADMIN      : an enabled login in the sysadmin role that nobody expects there (1.148).
+--                     Expected: the login this check runs as - dbabrain's own, which the operator
+--                     named as THE sysadmin (2026-10-15) - and what SQL Server puts there itself:
+--                     sa (principal_id 1, whatever it is renamed to), NT SERVICE\*, NT AUTHORITY\SYSTEM
+--                     (sysadmin by default up to 2008 R2), ##certificate logins##. The same
+--                     exclusions sp_Blitz's long-standing "Sysadmins" check makes; a disabled login
+--                     cannot connect and is left out as it does. Only a sysadmin sees every member
+--                     of the role, so the signal runs only when this login is one, and is skipped
+--                     otherwise (the operator: run it with sysadmin, skip it without) - the summary
+--                     says sysadmin=skipped rather than an undercount that reads as clean.
 -- Requires VIEW SERVER STATE (sessions), securityadmin / EXECUTE on xp_readerrorlog (error log),
 -- and VIEW ANY DEFINITION (principals). A missing right drops only that signal (TRY/CATCH); the
 -- metric never fails and never returns CRITICAL.
@@ -24,6 +34,7 @@ DECLARE @failed_threshold  int = 10;   -- >= this many failed logins in 24h => W
 DECLARE @long_session_hours int = 72;  -- a login connected longer than this => WARNING
 DECLARE @password_max_days int = 180;  -- SQL login password older than this (~6 months) => WARNING
 DECLARE @dormant_days      int = 90;   -- no successful login in this many days => WARNING
+DECLARE @sysadmin_checked  bit = 0;    -- set when this login could see the whole sysadmin role
 
 IF OBJECT_ID('tempdb..#login') IS NOT NULL DROP TABLE #login;
 CREATE TABLE #login (kind nvarchar(20), principal nvarchar(300), metric_val nvarchar(64), unit nvarchar(16), detail nvarchar(1000));
@@ -111,6 +122,35 @@ BEGIN TRY
     WHERE g.last_success < DATEADD(day, -@dormant_days, GETDATE());
 END TRY BEGIN CATCH END CATCH;
 
+-- SYSADMIN: members of the sysadmin role other than this login and the engine's own accounts.
+BEGIN TRY
+    IF IS_SRVROLEMEMBER('sysadmin') = 1
+    BEGIN
+        SET @sysadmin_checked = 1;
+        INSERT INTO #login (kind, principal, metric_val, unit, detail)
+        SELECT 'SYSADMIN', m.name, m.type_desc, 'type',
+               N'type=' + m.type_desc
+               + N' created=' + CONVERT(varchar(10), m.create_date, 120)
+               + N' (expected: this login ' + SUSER_SNAME() + N', sa, NT SERVICE\*, NT AUTHORITY\SYSTEM)'
+        FROM sys.server_role_members AS rm
+        JOIN sys.server_principals AS r
+            ON r.principal_id = rm.role_principal_id AND r.name = 'sysadmin'
+        JOIN sys.server_principals AS m
+            ON m.principal_id = rm.member_principal_id
+        WHERE m.principal_id <> 1                   -- sa, by id: a renamed sa is still sa
+          AND m.is_disabled = 0
+          AND m.name <> SUSER_SNAME()
+          AND m.name NOT LIKE 'NT SERVICE\%'
+          AND m.name <> 'NT AUTHORITY\SYSTEM'
+          AND m.name NOT LIKE '##%'
+          -- On Linux the Windows principals setup puts in the role (BUILTIN\Administrators,
+          -- NT AUTHORITY\*) map to no account that can log in: what the OS does not have is not a
+          -- finding (the operator, 2026-10-15). An AD group added on purpose is still listed.
+          AND NOT (@@VERSION LIKE '%on Linux%'
+                   AND (m.name LIKE 'BUILTIN\%' OR m.name LIKE 'NT AUTHORITY\%'));
+    END
+END TRY BEGIN CATCH SET @sysadmin_checked = 0; END CATCH;
+
 -- Output: the always-present summary carries the alert; the per-login rows are LOGGING detail.
 -- One warning per login made a single finding ("26 SQL logins have a password older than 180
 -- days") arrive as 26 separate warnings, which is 26 things to read and one thing to do.
@@ -137,7 +177,10 @@ FROM (
         CAST(N'failed=' + CAST((SELECT COUNT(*) FROM #login WHERE kind = 'FAILED_LOGIN') AS nvarchar(12))
              + N' long_session=' + CAST((SELECT COUNT(*) FROM #login WHERE kind = 'LONG_SESSION') AS nvarchar(12))
              + N' password_old=' + CAST((SELECT COUNT(*) FROM #login WHERE kind = 'PASSWORD_OLD') AS nvarchar(12))
-             + N' dormant=' + CAST((SELECT COUNT(*) FROM #login WHERE kind = 'DORMANT') AS nvarchar(12)) AS varchar(1000)) AS message,
+             + N' dormant=' + CAST((SELECT COUNT(*) FROM #login WHERE kind = 'DORMANT') AS nvarchar(12))
+             + N' sysadmin=' + CASE WHEN @sysadmin_checked = 1
+                                    THEN CAST((SELECT COUNT(*) FROM #login WHERE kind = 'SYSADMIN') AS nvarchar(12))
+                                    ELSE N'skipped (this login is not sysadmin)' END AS varchar(1000)) AS message,
         0 AS sort_rank
 ) AS q
 ORDER BY q.sort_rank, q.metric_item;

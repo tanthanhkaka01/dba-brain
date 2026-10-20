@@ -14,7 +14,17 @@
 -- v$dataguard_stats reports lag as an interval string ('+00 00:00:05'). It is converted only when
 -- it matches that shape, so an unexpected value degrades to "unparsed"/OK instead of failing the
 -- whole collection with ORA-01867.
+--
+-- All thresholds are declared in the top-level params CTE so every number appears once.
 
+WITH params AS (
+    SELECT
+        3600 AS apply_lag_critical_seconds,
+        900  AS apply_lag_warning_seconds,
+        1800 AS transport_lag_critical_seconds,
+        300  AS transport_lag_warning_seconds
+    FROM dual
+)
 SELECT
     CAST('database_role' AS varchar2(256)) AS metric_item,
     CAST(d.database_role AS varchar2(64)) AS metric_value,
@@ -34,15 +44,18 @@ FROM v$database d
 
 UNION ALL
 
--- Transport/apply lag. WARNING from 5 minutes, CRITICAL from 15.
+-- Transport/apply lag. On a standby, apply lag >= 3600s CRITICAL, >= 900s WARNING;
+-- transport lag >= 1800s CRITICAL, >= 300s WARNING.
 SELECT
     CAST(s.name AS varchar2(256)) AS metric_item,
     CAST(NVL(TO_CHAR(s.lag_seconds), s.value) AS varchar2(64)) AS metric_value,
     CAST(CASE WHEN s.lag_seconds IS NULL THEN NULL ELSE 'seconds' END AS varchar2(32)) AS metric_unit,
     CASE
         WHEN s.lag_seconds IS NULL THEN 'OK'
-        WHEN s.lag_seconds >= 900 THEN 'CRITICAL'
-        WHEN s.lag_seconds >= 300 THEN 'WARNING'
+        WHEN s.name = 'apply lag' AND s.lag_seconds >= p.apply_lag_critical_seconds THEN 'CRITICAL'
+        WHEN s.name = 'apply lag' AND s.lag_seconds >= p.apply_lag_warning_seconds THEN 'WARNING'
+        WHEN s.name = 'transport lag' AND s.lag_seconds >= p.transport_lag_critical_seconds THEN 'CRITICAL'
+        WHEN s.name = 'transport lag' AND s.lag_seconds >= p.transport_lag_warning_seconds THEN 'WARNING'
         ELSE 'OK'
     END AS status,
     'name=' || s.name
@@ -67,16 +80,18 @@ FROM
     FROM v$dataguard_stats ds
     WHERE ds.name IN ('transport lag', 'apply lag')
 ) s
+CROSS JOIN params p
 
 UNION ALL
 
--- Remote redo destinations: a destination in ERROR, or with a resolvable gap, is the signal.
+-- Remote redo destinations: a destination in ERROR on the primary is CRITICAL.
 SELECT
     CAST(ads.dest_name AS varchar2(256)) AS metric_item,
     CAST(ads.status AS varchar2(64)) AS metric_value,
     CAST(NULL AS varchar2(32)) AS metric_unit,
     CASE
         WHEN ads.status = 'VALID' AND NVL(ads.gap_status, 'NO GAP') IN ('NO GAP', ' ', '') THEN 'OK'
+        WHEN ads.status = 'ERROR' THEN 'CRITICAL'
         WHEN ads.status IN ('DEFERRED', 'DISABLED') THEN 'WARNING'
         ELSE 'CRITICAL'
     END AS status,

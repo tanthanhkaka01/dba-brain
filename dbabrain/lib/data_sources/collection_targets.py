@@ -50,7 +50,12 @@ def load_metric_targets(
     inventory_path: Path | None = None,
     db_type: str | None = None,
     target_id: str | None = None,
+    include_switched_off: bool = False,
 ) -> list[MetricTarget]:
+    # `include_switched_off` is for a test run that names its target: a lab instance is switched
+    # off in the inventory precisely so the scheduler never collects it, and naming it is the
+    # deliberate act that reaches it anyway.
+    #
     # One reader for db_instances.json, and it is not this app. Four call sites across metrics,
     # sql_tasks and metric_targets_config each built the path and called json themselves; the
     # file is the estate inventory, so a second parse of it is a second opinion about what the
@@ -66,7 +71,7 @@ def load_metric_targets(
 
     targets: list[MetricTarget] = []
     for item in instances:
-        if not is_target_enabled(item) or not is_metrics_enabled(item):
+        if not include_switched_off and (not is_target_enabled(item) or not is_metrics_enabled(item)):
             continue
         metrics_cfg = item.get("metrics") or {}
 
@@ -226,13 +231,15 @@ def resolve_metric_target(
     data_dir: Path = DEFAULT_DATA_DIR,
     inventory_path: Path | None = None,
     db_type: str | None = None,
+    include_switched_off: bool = False,
 ) -> MetricTarget:
     normalized_target_id = str(target_id or "").strip()
     normalized_target_ip = str(target_ip or "").strip()
     if not normalized_target_id and not normalized_target_ip:
         raise ValueError("target lookup requires --target-ip or --target-id.")
 
-    targets = load_metric_targets(data_dir=data_dir, inventory_path=inventory_path, db_type=db_type)
+    targets = load_metric_targets(data_dir=data_dir, inventory_path=inventory_path, db_type=db_type,
+                                  include_switched_off=include_switched_off)
     matches = [
         target
         for target in targets
