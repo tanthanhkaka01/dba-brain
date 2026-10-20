@@ -24,11 +24,13 @@ import re
 
 import pytest
 
+from conftest import present_copies
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTORS = REPO_ROOT / "dbabrain" / "metrics" / "collectors"
 POSTGRES = COLLECTORS / "postgresql" / "021_postgresql_checksum_failures.sql"
 ORACLE = COLLECTORS / "oracle" / "021_oracle_block_corruption.sql"
-CATALOGUES = (
+CATALOGUES = present_copies(
     "data/metric_definitions.json",
     "data/metric_definitions.example.json",
     "dbabrain/metrics/catalogue/metric_definitions.json",

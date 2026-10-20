@@ -25,6 +25,8 @@ import pytest
 
 from dbabrain.lib import backup_policy, data_sources
 
+from conftest import shipped_config
+
 
 NOW = datetime.datetime(2026, 10, 15, 12, 0, 0)
 
@@ -56,7 +58,7 @@ def _row(database: str, backup_type: str, hours_ago: float | None,
 
 @pytest.fixture
 def policy() -> dict:
-    return data_sources.load_backup_policy()
+    return data_sources.load_backup_policy(shipped_config("backup_policy.json"))
 
 
 # --------------------------------------------------------------------------- #

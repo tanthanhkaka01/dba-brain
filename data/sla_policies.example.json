@@ -206,6 +206,29 @@
       "target_value": 0,
       "window_hours": 720,
       "rto_target_seconds": 7200
+    },
+    {
+      "policy_id": "SQLSERVER_IO_LATENCY_24H",
+      "display_name": "SQL Server I/O latency SLO",
+      "description": "99 % of the 10-second I/O samples within the latency thresholds over 24h (1.155, 2026-10-15): PERFORMANCE_IO_LATENCY_INTERVAL grades each sample by file type - log writes 20 / 50 ms, data reads 50 / 200 ms - so a good sample is one the metric graded OK. The SLO is the share of good samples, the way Google's SRE book states a latency SLO, rather than a p95 of the values: one policy cannot filter items, and a percentile over log and data rows together would mix two thresholds in one number. Its own policy, not SQLSERVER_PERFORMANCE_24H: up to two rows per database every 300 s would outweigh every other metric there. minimum_sample_count is 100, not the 12 it was written with (review, 2026-10-16): a 1 % budget is under one sample until there are 100, so the first bad sample of a new window read as a breach - INSUFFICIENT_DATA until then, which at two rows per database every 300 s is minutes on a server with several databases.",
+      "category": "performance",
+      "active": true,
+      "db_types": [
+        "sqlserver"
+      ],
+      "metric_codes": [
+        "PERFORMANCE_IO_LATENCY_INTERVAL"
+      ],
+      "objective_percent": 99.0,
+      "window_hours": 24,
+      "at_risk_budget_percent": 25.0,
+      "good_statuses": [
+        "OK",
+        "LOGGING"
+      ],
+      "expected_collection_interval_seconds": 300,
+      "freshness_threshold_seconds": 1800,
+      "minimum_sample_count": 100
     }
   ]
 }

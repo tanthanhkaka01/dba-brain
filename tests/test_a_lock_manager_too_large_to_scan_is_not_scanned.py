@@ -40,6 +40,8 @@ from dbabrain.lib.paths import PACKAGED_CATALOGUE
 from dbabrain.lib.sql_text import SqlSettingError, apply_sql_settings
 from dbabrain.metrics.definitions import load_metric_definitions
 
+from conftest import present_copies
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTORS = REPO_ROOT / "dbabrain" / "metrics" / "collectors"
 CATALOGUE = REPO_ROOT / "dbabrain" / "metrics" / "catalogue" / "metric_definitions.json"
@@ -260,7 +262,7 @@ def test_the_default_in_each_file_is_the_number_the_catalogue_ships():
 
 
 def test_the_three_metric_definitions_files_state_the_credible_rate_and_the_2m_limit_for_this_metric():
-    files = (
+    files = present_copies(
         REPO_ROOT / "data" / "metric_definitions.json",
         REPO_ROOT / "data" / "metric_definitions.example.json",
         REPO_ROOT / "dbabrain" / "metrics" / "catalogue" / "metric_definitions.json",

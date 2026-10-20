@@ -14,7 +14,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from dbabrain.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_metric_definitions
+from dbabrain.metrics.definitions import load_metric_definitions
+
+from conftest import shipped_config
 
 SQL = (Path(__file__).resolve().parents[1] / "dbabrain" / "metrics" / "collectors" / "postgresql"
        / "008_postgresql_temp_space.sql").read_text(encoding="utf-8")
@@ -38,7 +40,7 @@ def test_no_statement_text_is_carried():
 
 
 def test_the_catalogue_runs_it_from_12():
-    metric = next(item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)
+    metric = next(item for item in load_metric_definitions(shipped_config("metric_definitions.json"))
                   if item.metric_code == "STORAGE_TEMP_SPACE")
     postgres = {variant.name: variant for variant in metric.variants if variant.db_type == "postgresql"}
     assert postgres["postgresql_12_plus"].path.name == "008_postgresql_temp_space.sql"

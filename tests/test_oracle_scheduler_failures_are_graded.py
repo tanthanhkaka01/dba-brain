@@ -16,10 +16,12 @@ import re
 
 import pytest
 
+from conftest import present_copies
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ORACLE = REPO_ROOT / "dbabrain" / "metrics" / "collectors" / "oracle"
-CATALOGUES = ("data/metric_definitions.json", "data/metric_definitions.example.json",
-              "dbabrain/metrics/catalogue/metric_definitions.json")
+CATALOGUES = present_copies("data/metric_definitions.json", "data/metric_definitions.example.json",
+                            "dbabrain/metrics/catalogue/metric_definitions.json")
 
 
 def _code(path: Path) -> str:

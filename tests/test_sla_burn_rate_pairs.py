@@ -377,31 +377,31 @@ def test_parser_refuses_burn_rate_alerts_on_non_minutes_policy() -> None:
 
 def test_transition_passed_to_burning_is_escalation_in_diff_states() -> None:
     """A transition from PASSED to BURNING is treated as an escalation in diff_states."""
-    key = "INSTANCE_AVAILABILITY_30D @ server/sqlserver/master"
+    policy_target = "INSTANCE_AVAILABILITY_30D @ server/sqlserver/master"
 
     # PASSED -> BURNING is new_bad
     diff_from_passed = diff_states(
-        previous={key: "PASSED"},
-        current={key: "BURNING"},
+        previous={policy_target: "PASSED"},
+        current={policy_target: "BURNING"},
         severity_order=SLA_SEVERITY_ORDER,
         healthy=("PASSED",),
     )
-    assert key in diff_from_passed.new_bad
+    assert policy_target in diff_from_passed.new_bad
 
     # AT_RISK -> BURNING is worsened (BURNING is ranked ahead of AT_RISK in SLA_SEVERITY_ORDER)
     diff_from_at_risk = diff_states(
-        previous={key: "AT_RISK"},
-        current={key: "BURNING"},
+        previous={policy_target: "AT_RISK"},
+        current={policy_target: "BURNING"},
         severity_order=SLA_SEVERITY_ORDER,
         healthy=("PASSED",),
     )
-    assert any(item[0] == key and item[1] == "AT_RISK" and item[2] == "BURNING" for item in diff_from_at_risk.worsened)
+    assert any(item[0] == policy_target and item[1] == "AT_RISK" and item[2] == "BURNING" for item in diff_from_at_risk.worsened)
 
     # BURNING -> PASSED is recovered
     diff_recovered = diff_states(
-        previous={key: "BURNING"},
-        current={key: "PASSED"},
+        previous={policy_target: "BURNING"},
+        current={policy_target: "PASSED"},
         severity_order=SLA_SEVERITY_ORDER,
         healthy=("PASSED",),
     )
-    assert key in diff_recovered.recovered
+    assert policy_target in diff_recovered.recovered

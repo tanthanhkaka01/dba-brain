@@ -24,9 +24,11 @@ import pytest
 
 from dbabrain.lib.sql_text import apply_sql_settings
 
+from conftest import shipped_config
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CATALOGUE_PATH = REPO_ROOT / "dbabrain" / "metrics" / "catalogue" / "metric_definitions.json"
-DATA_CATALOGUE_PATH = REPO_ROOT / "data" / "metric_definitions.json"
+DATA_CATALOGUE_PATH = shipped_config("metric_definitions.json")
 
 SQLSERVER_078 = REPO_ROOT / "dbabrain" / "metrics" / "collectors" / "sqlserver" / "078_sqlserver_query_latency_percentiles.sql"
 ORACLE_072 = REPO_ROOT / "dbabrain" / "metrics" / "collectors" / "oracle" / "072_oracle_wait_latency_histogram.sql"

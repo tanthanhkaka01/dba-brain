@@ -16,8 +16,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from dbabrain.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_metric_definitions
+from dbabrain.metrics.definitions import load_metric_definitions
 from dbabrain.reports import workload
+
+from conftest import shipped_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTORS = REPO_ROOT / "dbabrain" / "metrics" / "collectors"
@@ -100,7 +102,7 @@ def test_oracle_maps_two_statistics_onto_one_transaction_row():
 
 
 def test_the_catalogue_runs_the_counters_on_every_engine_it_can():
-    metric = next(item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)
+    metric = next(item for item in load_metric_definitions(shipped_config("metric_definitions.json"))
                   if item.metric_code == workload.COUNTER_CODE)
     files = {variant.db_type: variant.path.name for variant in metric.variants if variant.supported and variant.path}
     assert files["postgresql"] == "075_postgresql_workload_counters.sql"

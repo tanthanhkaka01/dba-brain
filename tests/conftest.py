@@ -702,6 +702,27 @@ def shipped_config(name: str) -> Path:
     return DEFAULT_DATA_DIR / f"{stem}.example.{suffix}"
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def present_copies(*copies):
+    """Every copy of a shipped file this checkout has: the operator's ``data/<name>.json`` only where it is.
+
+    Some checks hold *each* copy of a file to one rule - the catalogue in the package, the example
+    beside it, and the operator's own ``data/<name>.json``. The last exists only on an operator's
+    checkout. Listed unconditionally, it failed 39 tests of 0.30.0's public suite (2026-10-20) on a
+    file that never ships, while the private suite, which has it, passed every one. Only that copy
+    is dropped where it is absent: a missing example or catalogue still fails the test naming it.
+    Takes paths relative to the repository or absolute ones, and returns them as given.
+    """
+    def operators_own(copy) -> bool:
+        path = Path(copy)
+        relative = path.relative_to(_REPO_ROOT) if path.is_absolute() else path
+        return relative.parts[:1] == ("data",) and ".example." not in relative.name
+
+    return tuple(copy for copy in copies if not operators_own(copy) or (_REPO_ROOT / copy).exists())
+
+
 #: Materialised once per session by :func:`shipped_data_dir`, because it is read at *collection*
 #: time — a parametrize argument cannot ask for a fixture, and building it per call would copy the
 #: same files for every test that asks.

@@ -33,6 +33,8 @@ from dbabrain.sre import cli as sre_cli
 from dbabrain.transport import common_cli
 from dbabrain.transport.process import ProcessResult
 
+from conftest import present_copies
+
 SERVER = "LAB-192-0-2-10-HOST"
 PASSWORD = "s3cret-not-for-stdout"
 
@@ -412,11 +414,11 @@ def test_key_base64_reaches_set_key_env(calls, capsys, monkeypatch, tmp_path):
 # --------------------------------------------------------------------------- #
 # What running an ad-hoc shell command costs
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("relative", [
+@pytest.mark.parametrize("relative", present_copies(
     "dbabrain/common/catalogue/emergency_operations.json",
     "data/emergency_operations.json",
     "data/emergency_operations.example.json",
-])
+))
 def test_every_shipped_ladder_prices_run_cmd_adhoc_at_50(relative):
     path = Path(__file__).resolve().parents[1] / relative
     operations = json.loads(path.read_text(encoding="utf-8-sig"))["operations"]

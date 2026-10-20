@@ -15,7 +15,9 @@ from pathlib import Path
 
 from dbabrain.sla.policies import load_sla_policies
 
-POLICIES = Path(__file__).resolve().parents[1] / "data" / "sla_policies.json"
+from conftest import shipped_config
+
+POLICIES = shipped_config("sla_policies.json")
 
 
 def _policy(policy_id: str):
@@ -38,10 +40,12 @@ def test_a_window_too_young_to_hold_one_percent_of_a_sample_is_insufficient_not_
     assert policy.minimum_sample_count >= round(100 / (100 - policy.objective_percent))
 
 
-def test_the_interval_metric_is_not_pooled_into_the_performance_slo():
-    assert "PERFORMANCE_IO_LATENCY_INTERVAL" not in _policy("SQLSERVER_PERFORMANCE_24H").metric_codes
+def test_the_interval_metric_is_pooled_into_no_other_slo():
+    pooling = [p.policy_id for p in load_sla_policies(POLICIES)
+               if "PERFORMANCE_IO_LATENCY_INTERVAL" in p.metric_codes]
+    assert pooling == ["SQLSERVER_IO_LATENCY_24H"]
 
 
 def test_the_policy_reads_a_metric_the_catalogue_defines():
-    catalogue = json.loads((POLICIES.parent / "metric_definitions.json").read_text(encoding="utf-8"))
+    catalogue = json.loads(shipped_config("metric_definitions.json").read_text(encoding="utf-8"))
     assert any(m["metric_code"] == "PERFORMANCE_IO_LATENCY_INTERVAL" for m in catalogue["metrics"])

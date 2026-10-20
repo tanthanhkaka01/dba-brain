@@ -27,7 +27,9 @@ from pathlib import Path
 import pytest
 
 from dbabrain.metrics import collector
-from dbabrain.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_metric_definitions
+from dbabrain.metrics.definitions import load_metric_definitions
+
+from conftest import shipped_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "dbabrain" / "metrics" / "collectors" / "postgresql" / "023_postgresql_server_log.sh"
@@ -201,7 +203,7 @@ class _Target:
 
 
 def _definition():
-    return next(item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)
+    return next(item for item in load_metric_definitions(shipped_config("metric_definitions.json"))
                 if item.metric_code == "POSTGRES_SERVER_LOG")
 
 
@@ -232,7 +234,7 @@ def test_turning_host_access_off_turns_off_the_host_read_and_not_the_containers(
 
 
 def test_only_a_docker_metric_may_declare_a_host_fallback(tmp_path):
-    catalogue = json.loads(Path(DEFAULT_DEFINITIONS_PATH).read_text(encoding="utf-8"))
+    catalogue = json.loads(Path(shipped_config("metric_definitions.json")).read_text(encoding="utf-8"))
     for metric in catalogue["metrics"]:
         if metric["metric_code"] == "OS_CPU_USAGE":
             metric["host_fallback"] = True

@@ -21,10 +21,12 @@ import re
 
 import pytest
 
+from conftest import present_copies, shipped_config
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ORACLE = REPO_ROOT / "dbabrain" / "metrics" / "collectors" / "oracle"
-CATALOGUES = ("data/metric_definitions.json", "data/metric_definitions.example.json",
-              "dbabrain/metrics/catalogue/metric_definitions.json")
+CATALOGUES = present_copies("data/metric_definitions.json", "data/metric_definitions.example.json",
+                            "dbabrain/metrics/catalogue/metric_definitions.json")
 RATIOS = {
     "045_oracle_shared_pool_free.sql": ("Shared Pool Free %", 10, 5),
     "046_oracle_library_cache.sql": ("Library Cache Hit Ratio", 98, 95),
@@ -88,7 +90,10 @@ def test_every_oracle_version_from_10g_has_a_variant_of_each(relative):
 
 
 def test_the_capacity_policy_reads_the_tablespace_metric_modern_oracle_has():
-    data = json.loads((REPO_ROOT / "data" / "sla_policies.json").read_text(encoding="utf-8"))
+    path = shipped_config("sla_policies.json")
+    if ".example." in path.name:
+        pytest.skip("ORACLE_TABLESPACE_CAPACITY_24H is an operator's policy; the shipped ones carry none")
+    data = json.loads(path.read_text(encoding="utf-8"))
     found = [p for p in data["sla_policies"] if p.get("policy_id") == "ORACLE_TABLESPACE_CAPACITY_24H"]
     assert found, "ORACLE_TABLESPACE_CAPACITY_24H"
     assert {"TABLESPACE_FREE_SPACE", "STORAGE_DATA_FILE_SPACE", "PROCESS_LIMIT"} <= set(found[0]["metric_codes"])

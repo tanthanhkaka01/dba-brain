@@ -33,6 +33,8 @@ import re
 
 import pytest
 
+from conftest import present_copies
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTORS = REPO_ROOT / "dbabrain" / "metrics" / "collectors"
 MODERN = "sqlserver/002_sqlserver_database_status.sql"
@@ -137,7 +139,7 @@ def test_the_linux_message_keeps_the_agent_contract_and_names_the_platform():
         assert field in branch
 
 
-@pytest.mark.parametrize("relative", (
+@pytest.mark.parametrize("relative", present_copies(
     "data/metric_definitions.json",
     "data/metric_definitions.example.json",
     "dbabrain/metrics/catalogue/metric_definitions.json",

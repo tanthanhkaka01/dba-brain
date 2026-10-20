@@ -19,7 +19,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from dbabrain.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_metric_definitions
+from dbabrain.metrics.definitions import load_metric_definitions
+
+from conftest import shipped_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SQL = (REPO_ROOT / "dbabrain" / "metrics" / "collectors" / "postgresql"
@@ -76,7 +78,7 @@ def test_an_idle_sample_says_it_was_idle_rather_than_healthy():
 
 
 def test_the_catalogue_runs_it_on_postgresql_10_and_later():
-    metric = next(item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)
+    metric = next(item for item in load_metric_definitions(shipped_config("metric_definitions.json"))
                   if item.metric_code == "PERFORMANCE_WAIT_STATS")
     postgres = [variant for variant in metric.variants if variant.db_type == "postgresql"]
     assert len(postgres) == 1 and postgres[0].supported

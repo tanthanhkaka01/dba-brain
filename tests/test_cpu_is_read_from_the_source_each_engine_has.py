@@ -26,8 +26,10 @@ from pathlib import Path
 import pytest
 
 from dbabrain.metrics import collector
-from dbabrain.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_metric_definitions
+from dbabrain.metrics.definitions import load_metric_definitions
 from dbabrain.reports import workload
+
+from conftest import shipped_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTORS = REPO_ROOT / "dbabrain" / "metrics" / "collectors"
@@ -267,7 +269,7 @@ def test_the_os_collector_ships_for_both_platforms_with_unix_line_endings_for_li
 
 
 def test_the_catalogue_wires_the_new_collectors_and_keeps_them_ungraded():
-    definitions = {item.metric_code: item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)}
+    definitions = {item.metric_code: item for item in load_metric_definitions(shipped_config("metric_definitions.json"))}
     counters = definitions["OS_CPU_COUNTERS"]
     assert {variant.platform for variant in counters.variants} == {"windows", "linux"}
     assert counters.report_policy.get("collect_only") is True
@@ -311,7 +313,7 @@ def test_only_a_collector_that_declares_it_is_told_which_database_is_on_the_host
 
 
 def test_a_catalogue_cannot_hand_a_script_a_target_field_nobody_reviewed(tmp_path):
-    catalogue = json.loads(Path(DEFAULT_DEFINITIONS_PATH).read_text(encoding="utf-8"))
+    catalogue = json.loads(Path(shipped_config("metric_definitions.json")).read_text(encoding="utf-8"))
     for metric in catalogue["metrics"]:
         if metric["metric_code"] == "OS_CPU_COUNTERS":
             metric["target_env"] = ["DBABRAIN_DB_TYPE", "DBABRAIN_DB_PASSWORD"]

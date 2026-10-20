@@ -23,6 +23,8 @@ import pytest
 from dbabrain.common import config_upgrade
 from dbabrain.lib import earlier_defaults
 
+from conftest import present_copies, shipped_config
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_FIELDS = (
@@ -42,7 +44,7 @@ EXPECTED_FIELDS = (
     "note",
 )
 
-APP_COMMAND_FILES = (
+APP_COMMAND_FILES = present_copies(
     REPO_ROOT / "data" / "app_commands.json",
     REPO_ROOT / "data" / "app_commands.example.json",
     REPO_ROOT / "dbabrain" / "jobs" / "catalogue" / "app_commands.json",
@@ -50,7 +52,7 @@ APP_COMMAND_FILES = (
     REPO_ROOT / "examples" / "sqlserver-quickstart" / "data" / "app_commands.json",
 )
 
-REFERENCE_COPIES = (
+REFERENCE_COPIES = present_copies(
     REPO_ROOT / "data" / "shared_config_objects.json",
     REPO_ROOT / "data" / "shared_config_objects.example.json",
     REPO_ROOT / "dbabrain" / "common" / "catalogue" / "shared_config_objects.json",
@@ -80,7 +82,7 @@ def test_every_shipped_app_command_states_all_fourteen_fields_in_exact_order(pat
 
 def test_app_metrics_is_async_with_parallel_brake_and_one_second_repeat() -> None:
     """APP-METRICS is async with max_parallel 4 and repeat_interval 1 in data and catalogue files."""
-    for path in (
+    for path in present_copies(
         REPO_ROOT / "data" / "app_commands.json",
         REPO_ROOT / "data" / "app_commands.example.json",
         REPO_ROOT / "dbabrain" / "jobs" / "catalogue" / "app_commands.json",
@@ -93,16 +95,17 @@ def test_app_metrics_is_async_with_parallel_brake_and_one_second_repeat() -> Non
         assert "0.30.0" in metrics_cmd["note"], f"{path.name} note does not mention batch processing"
 
 
-def test_all_three_reference_copies_are_byte_identical() -> None:
-    """The master copy, the packaged catalogue copy, and the public example must be identical."""
-    payloads = [path.read_bytes() for path in REFERENCE_COPIES]
-    assert payloads[0] == payloads[1], "data/shared_config_objects.json != data/shared_config_objects.example.json"
-    assert payloads[0] == payloads[2], "data/shared_config_objects.json != dbabrain/common/catalogue/shared_config_objects.json"
+def test_every_reference_copy_is_byte_identical_to_the_catalogue() -> None:
+    """The master copy where this checkout has one, and the public example, are the packaged catalogue's bytes."""
+    catalogue = REFERENCE_COPIES[-1].read_bytes()
+    for path in REFERENCE_COPIES[:-1]:
+        assert path.read_bytes() == catalogue, (
+            f"{path.relative_to(REPO_ROOT).as_posix()} != dbabrain/common/catalogue/shared_config_objects.json")
 
 
 def test_the_reference_marks_every_app_command_field_as_required_and_non_nullable() -> None:
     """The shared reference defines app_command with required_field_count 14 and all fields required."""
-    ref_path = REPO_ROOT / "data" / "shared_config_objects.json"
+    ref_path = shipped_config("shared_config_objects.json")
     document = json.loads(ref_path.read_text(encoding="utf-8"))
     shared_objects = document.get("shared_config_objects") or []
     app_cmd_entry = next(item for item in shared_objects if item.get("object") == "app_command")
@@ -159,7 +162,7 @@ def test_state_app_commands_fills_missing_fields_with_loader_defaults() -> None:
 
 def test_state_app_commands_leaves_a_complete_fourteen_field_record_unchanged() -> None:
     """A complete 14-field record in canonical order produces zero changes and is left intact."""
-    ref_path = REPO_ROOT / "data" / "app_commands.json"
+    ref_path = shipped_config("app_commands.json")
     doc = json.loads(ref_path.read_text(encoding="utf-8"))
     original_copy = copy.deepcopy(doc)
 

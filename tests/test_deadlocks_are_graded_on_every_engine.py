@@ -24,7 +24,9 @@ from pathlib import Path
 import pytest
 
 from dbabrain.metrics import collector
-from dbabrain.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_metric_definitions
+from dbabrain.metrics.definitions import load_metric_definitions
+
+from conftest import shipped_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTORS = REPO_ROOT / "dbabrain" / "metrics" / "collectors"
@@ -32,7 +34,7 @@ BASH = shutil.which("bash")
 
 
 def _definition(code):
-    return next(item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH) if item.metric_code == code)
+    return next(item for item in load_metric_definitions(shipped_config("metric_definitions.json")) if item.metric_code == code)
 
 
 def _code(relative: str) -> str:
@@ -88,7 +90,7 @@ def test_the_scheduler_takes_the_interval_of_the_variant_that_runs_on_the_target
 
 
 def test_a_variant_interval_must_be_seconds(tmp_path):
-    catalogue = json.loads(Path(DEFAULT_DEFINITIONS_PATH).read_text(encoding="utf-8"))
+    catalogue = json.loads(Path(shipped_config("metric_definitions.json")).read_text(encoding="utf-8"))
     for metric in catalogue["metrics"]:
         if metric["metric_code"] == "LOCK_DEADLOCK_RECENT":
             metric["variants"][0]["repeat_interval"] = 0

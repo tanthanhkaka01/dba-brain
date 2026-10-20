@@ -14,7 +14,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from dbabrain.metrics.definitions import DEFAULT_DEFINITIONS_PATH, load_metric_definitions
+from dbabrain.metrics.definitions import load_metric_definitions
+
+from conftest import shipped_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTORS = REPO_ROOT / "dbabrain" / "metrics" / "collectors"
@@ -48,7 +50,7 @@ def test_jobs_oracle_runs_for_itself_are_left_out_here_too():
 
 
 def test_the_catalogue_runs_it_from_10g():
-    metric = next(item for item in load_metric_definitions(DEFAULT_DEFINITIONS_PATH)
+    metric = next(item for item in load_metric_definitions(shipped_config("metric_definitions.json"))
                   if item.metric_code == "SQL_AGENT_JOB_RUNTIME")
     oracle = {variant.name: variant for variant in metric.variants if variant.db_type == "oracle"}
     assert oracle["oracle_10g_plus"].path.name == "056_oracle_scheduler_job_runtime.sql"
