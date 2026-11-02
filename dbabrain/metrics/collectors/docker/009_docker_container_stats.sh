@@ -8,7 +8,8 @@
 # [{metric_item, metric_value, metric_unit, status, message}, ...]. One target = one container,
 # so a DB-in-Docker target collects sql + docker. Thresholds: not-running=CRITICAL,
 # restarting=WARNING, a restart in the last DOCKER_RESTART_WARN_MINUTES (default 60)=WARNING,
-# memory>=90%=WARNING; everything else OK/LOGGING.
+# memory>=90%=WARNING, CPU share of the CPUs it may use >=80% WARNING / >=90% CRITICAL, a mounted
+# volume >=85% WARNING / >=95% CRITICAL; everything else OK/LOGGING.
 set -u
 
 container="${DOCKER_CONTAINER:-}"
@@ -94,13 +95,41 @@ case "$restart_count" in
 esac
 add_row "${container}:restart_count" "$restart_count" "count" "$restart_status" "$restart_note"
 
+# What 100% of this container's CPU is. `docker stats` counts in CPUs - 319% is 3.19 CPUs busy - so
+# a page that printed it had no denominator (2026-10-26: a store container read "CPU 319%"). The
+# number is read, never assumed: the container's own limit first (--cpus, a CFS quota, a cpuset),
+# else the daemon's count of the host's CPUs. None of them readable leaves cpus empty and no share.
+# The basis is one token (limit_cpus, limit_cpu_quota, cpuset_<list with ;>, host_no_limit): the
+# message is read back as comma-separated key=value pairs, and a comma would cut the value.
+cpu_limits=$(docker inspect "$container" --format '{{.HostConfig.NanoCpus}}|{{.HostConfig.CpuQuota}}|{{.HostConfig.CpuPeriod}}|{{.HostConfig.CpusetCpus}}' 2>/dev/null)
+IFS='|' read -r nano_cpus cpu_quota cpu_period cpuset <<< "$cpu_limits"
+host_cpus=$(docker info --format '{{.NCPU}}' 2>/dev/null)
+cpus=""; cpus_basis=""
+if [ "${nano_cpus:-0}" -gt 0 ] 2>/dev/null; then
+    cpus=$(awk -v n="$nano_cpus" 'BEGIN { printf "%g", n / 1e9 }'); cpus_basis="limit_cpus"
+elif [ "${cpu_quota:-0}" -gt 0 ] 2>/dev/null && [ "${cpu_period:-0}" -gt 0 ] 2>/dev/null; then
+    cpus=$(awk -v q="$cpu_quota" -v p="$cpu_period" 'BEGIN { printf "%g", q / p }'); cpus_basis="limit_cpu_quota"
+elif [ -n "$cpuset" ]; then
+    cpus=$(printf '%s' "$cpuset" | awk -F, '{ n = 0; for (i = 1; i <= NF; i++) { split($i, r, "-"); n += (r[2] == "" ? 1 : r[2] - r[1] + 1) } print n }')
+    cpus_basis="cpuset_${cpuset//,/;}"
+elif [ "${host_cpus:-0}" -gt 0 ] 2>/dev/null; then
+    cpus="$host_cpus"; cpus_basis="host_no_limit"
+fi
+
 if [ "$running" = "true" ]; then
     stats=$(docker stats "$container" --no-stream --format '{{.CPUPerc}}|{{.MemPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}' 2>/dev/null)
     if [ -n "$stats" ]; then
         IFS='|' read -r cpu memp memu netio blockio pids <<< "$stats"
         cpu_num="${cpu%\%}"
         memp_num="${memp%\%}"
-        add_row "${container}:cpu" "$cpu_num" "percent" "OK" "cpu=${cpu}"
+        add_row "${container}:cpu" "$cpu_num" "percent" "OK" "cpu=${cpu}, cpus=${cpus:-unknown}, cpus_basis=${cpus_basis:-not_readable}, host_cpus=${host_cpus:-unknown}"
+        if [ -n "$cpus" ]; then
+            share=$(awk -v c="${cpu_num:-0}" -v n="$cpus" 'BEGIN { printf "%.2f", c / n }')
+            busy=$(awk -v c="${cpu_num:-0}" 'BEGIN { printf "%.2f", c / 100 }')
+            share_status=$(awk -v v="$share" 'BEGIN { if (v >= 90) print "CRITICAL"; else if (v >= 80) print "WARNING"; else print "OK" }')
+            add_row "${container}:cpu_share" "$share" "percent" "$share_status" \
+                "cpu_share_pct=${share}, cpus_busy=${busy}, cpus=${cpus}, cpus_basis=${cpus_basis}, host_cpus=${host_cpus:-unknown}"
+        fi
         mem_status="OK"
         if awk "BEGIN{exit !((${memp_num:-0})+0 >= 90)}" 2>/dev/null; then mem_status="WARNING"; fi
         add_row "${container}:memory" "$memp_num" "percent" "$mem_status" "mem_usage=${memu} mem_pct=${memp}"
@@ -108,6 +137,31 @@ if [ "$running" = "true" ]; then
         add_row "${container}:block_io" "$blockio" "io" "LOGGING" "block_io=${blockio}"
         add_row "${container}:pids" "$pids" "count" "LOGGING" "pids=${pids}"
     fi
+
+    # How full each volume the container writes to is, as the container itself sees it - `df`
+    # inside it, on every mount's destination. A database in a container has no host login, so
+    # this is the only reading of the disk its data files are on. Mounts on one filesystem are
+    # reported once, named by the first destination in sorted order - docker lists mounts in no
+    # fixed order, and a name that changed between runs split one volume into two series
+    # (2026-10-26). A container with no `df` reports nothing.
+    seen_fs="|"
+    while IFS= read -r dest; do
+        [ -n "$dest" ] || continue
+        line=$(docker exec "$container" df -P -B1 "$dest" 2>/dev/null | tail -n 1)
+        [ -n "$line" ] || continue
+        read -r fs_name fs_total fs_used fs_avail _fs_pct fs_mount <<< "$line"
+        case "$fs_total" in ''|*[!0-9]*) continue ;; esac
+        [ "$fs_total" -gt 0 ] || continue
+        case "$seen_fs" in *"|${fs_name}:${fs_total}|"*) continue ;; esac
+        seen_fs="${seen_fs}${fs_name}:${fs_total}|"
+        vol=$(awk -v t="$fs_total" -v u="$fs_used" -v a="$fs_avail" 'BEGIN {
+            pct = (u + a) > 0 ? u * 100 / (u + a) : 0
+            printf "%.2f|%.2f|%.2f|%.2f", pct, t / 1073741824, u / 1073741824, a / 1073741824 }')
+        IFS='|' read -r used_pct total_gb used_gb free_gb <<< "$vol"
+        vol_status=$(awk -v v="$used_pct" 'BEGIN { if (v >= 95) print "CRITICAL"; else if (v >= 85) print "WARNING"; else print "OK" }')
+        add_row "${container}:disk:${dest}" "$used_pct" "percent" "$vol_status" \
+            "mount=${dest}, filesystem=${fs_name}, total_gb=${total_gb}, used_gb=${used_gb}, free_gb=${free_gb}, used_pct=${used_pct}"
+    done <<< "$(docker inspect "$container" --format '{{range .Mounts}}{{.Destination}}{{println}}{{end}}' 2>/dev/null | sort)"
 fi
 
 emit

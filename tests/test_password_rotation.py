@@ -403,3 +403,125 @@ def test_a_store_failure_rolls_that_change_back_and_stops_the_batch(monkeypatch)
     assert "OLD_PASSWORD" in log[-1], "the rollback statement ran last"
     assert by_ref["C_DBA"]["status"] == "SKIPPED" and "not started" in by_ref["C_DBA"]["detail"]
     assert outcome["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# A password SQL Server has expired: changed at login, since no session exists
+# ---------------------------------------------------------------------------
+EXPIRED = ("Login failed for user 'dba'. Reason: The password of the account has expired. "
+           "(18487) (SQLDriverConnect)")
+
+
+def _expiring_connect(opened, *, change_fails=False, verify_fails=False):
+    """Refuses the stored password as expired; takes it only as the old half of a change."""
+    def connect(target, **kwargs):
+        old = kwargs.get("sqlserver_old_password", "")
+        opened.append((target["password"], old))
+        if target["password"] == "OldPass1!" and not old:
+            raise RuntimeError(EXPIRED)
+        if old and change_fails:
+            raise RuntimeError("The password does not meet the policy requirements. (18466)")
+        if not old and verify_fails:
+            raise RuntimeError("TCP Provider: timeout")
+        return _Connection([])
+    return connect
+
+
+def test_an_expired_password_is_changed_at_login_not_skipped(monkeypatch):
+    """18487 refuses the login, so ALTER LOGIN has no session to run in. The server named the
+    reason, which means the stored password is the right one - only expired."""
+    opened, stored = [], {}
+    _patch(monkeypatch, connect=_expiring_connect(opened))
+
+    result = rot.rotate_ref("REF", persist=lambda ref, value: stored.update({ref: value}))
+
+    assert result["status"] == "SUCCESS"
+    assert "changed at login" in result["detail"]
+    new = stored["REF"]
+    # the refused login, the change (new password, old one beside it), the verify on its own
+    assert opened == [("OldPass1!", ""), (new, "OldPass1!"), (new, "")]
+
+
+def test_a_dry_run_says_the_password_has_expired_and_changes_nothing(monkeypatch):
+    opened = []
+    _patch(monkeypatch, connect=_expiring_connect(opened))
+
+    result = rot.rotate_ref("REF", dry_run=True)
+
+    assert result["status"] == "READY"
+    assert "expired" in result["detail"]
+    assert opened == [("OldPass1!", "")]
+
+
+def test_a_change_the_server_refuses_stores_nothing(monkeypatch):
+    opened, stored = [], {}
+    _patch(monkeypatch, connect=_expiring_connect(opened, change_fails=True))
+
+    result = rot.rotate_ref("REF", persist=lambda ref, value: stored.update({ref: value}))
+
+    assert result["status"] == "FAILED"
+    assert stored == {}
+    assert "_new_password" not in result
+
+
+def test_a_failed_verify_after_the_change_still_stores_the_new_password(monkeypatch):
+    """No rollback exists - the old password is expired - so a password the server took must not
+    be dropped: it is stored, and the result says the verify did not pass."""
+    opened, stored = [], {}
+    _patch(monkeypatch, connect=_expiring_connect(opened, verify_fails=True))
+
+    result = rot.rotate_ref("REF", persist=lambda ref, value: stored.update({ref: value}))
+
+    assert result["status"] == "FAILED"
+    assert result["stored"] is True
+    assert stored["REF"] == opened[1][0]
+    assert "verify" in result["detail"]
+
+
+def test_a_login_refused_for_another_reason_is_still_skipped(monkeypatch):
+    _patch(monkeypatch, connect=lambda target, **k: (_ for _ in ()).throw(
+        RuntimeError("Login failed for user 'dba'. (18456)")))
+
+    assert rot.rotate_ref("REF")["status"] == "SKIPPED"
+
+
+def test_the_odbc_login_carries_the_old_password_as_the_change_attribute():
+    from dbabrain.common import sql_execution
+
+    calls = []
+
+    class _Odbc:
+        @staticmethod
+        def drivers():
+            return ["ODBC Driver 18 for SQL Server"]
+
+        @staticmethod
+        def connect(conn_str, **kwargs):
+            calls.append((conn_str, kwargs))
+            return _Connection([])
+
+    sql_execution.open_sqlserver_odbc(_Odbc, server="h,1433", database="master", username="dba",
+                                      password="NewPass1!", timeout=5, old_password="OldPass1!")
+
+    conn_str, kwargs = calls[0]
+    assert "PWD={NewPass1!}" in conn_str
+    assert kwargs["attrs_before"] == {sql_execution.SQL_COPT_SS_OLDPWD: "OldPass1!"}
+
+
+def test_a_change_at_login_never_falls_back_to_pymssql(monkeypatch):
+    """pymssql has no change-at-login; falling back would log in with the new password and fail
+    for a reason that hides the real one."""
+    pytest.importorskip("pyodbc")  # the `mssql` extra: without it nothing is tried at all
+    from dbabrain.common import sql_execution
+
+    def refuse(*a, **k):
+        raise RuntimeError("refused (18466)")
+
+    monkeypatch.setattr(sql_execution, "open_sqlserver_odbc", refuse)
+    monkeypatch.setattr(sql_execution, "_connect_pymssql",
+                        lambda **k: pytest.fail("pymssql was tried"))
+
+    with pytest.raises(RuntimeError, match="18466"):
+        sql_execution.connect_sqlserver_with_fallback(host="h", username="dba",
+                                                      password="NewPass1!",
+                                                      old_password="OldPass1!")

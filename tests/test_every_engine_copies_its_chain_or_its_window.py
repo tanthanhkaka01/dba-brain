@@ -354,7 +354,8 @@ def _entry(**extra):
             "target_server_id": "DST-PG", "backup_dir": "/opt/db_ops/backup/PG",
             "source_backup_host_dir": "/opt/db_ops/backup/PG", "target_backup_dir": "/opt/stage",
             "script": "assets/restore/postgresql/pg_restore_basebackup.sh",
-            "time_window": {"repeat_interval": 3600}, "cleanup_retention": 7200, **extra}
+            "time_window": {"repeat_interval": 3600}, "cleanup_retention": 7200,
+            "integrity": {"copy_max_retry": 3}, **extra}
 
 
 def _parsed(**extra):

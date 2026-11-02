@@ -33,6 +33,8 @@
 #      PG_PORT (optional; the image's default when unset - set it when the container runs the
 #      cluster on a non-default port, or runs more than one).
 # Exit: 0 on success, non-zero on failure. Prints RESULT=ok only on a completed run.
+# Receipt (0.34.0): one `FILE` line for the backup directory - the sha256 of its backup_manifest,
+# which holds a checksum of every file, and pg_verifybackup's verdict on it.
 set -u
 
 container="${DOCKER_CONTAINER:-}"
@@ -56,6 +58,15 @@ pg_conn="-U '${pg_user}'"
 [ -n "$pg_port" ] && pg_conn="${pg_conn} -p '${pg_port}'"
 
 die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
+
+# Where a stop finds this run (0.34.0, 1.238): this shell's pid, under the run's tag, removed on exit.
+# backup-stop ends the tree under it - killing the engine session alone left the script to start the
+# next database a second later (a production SQL Server, 2026-10-29).
+if [ -n "${DBABRAIN_RUN_TAG:-}" ]; then
+    run_file="${TMPDIR:-/tmp}/dbabrain_runs/${DBABRAIN_RUN_TAG}.pid"
+    mkdir -p "${run_file%/*}" 2>/dev/null && printf '%s\n' "$$" > "$run_file" 2>/dev/null \
+        && trap 'rm -f "$run_file"' EXIT
+fi
 
 [ -n "$backup_dir" ] || die "BACKUP_DIR is not set."
 case "$retention_days" in
@@ -265,6 +276,71 @@ fi
 
 run_db "test -f '${target}/backup_manifest'" \
     || die "pg_basebackup left no backup_manifest in '${target}'."
+
+# The file's path on this server, not inside the container (0.34.0): through the container's
+# mount that holds it, the longest one first. Empty for a file in no mount - it then lives only in
+# the container's own layer, gone with the container, which is worth the catalog saying.
+_dbabrain_mounts=""
+if [ -n "$container" ]; then
+    _dbabrain_mounts="$($DOCKER inspect -f '{{range .Mounts}}{{.Destination}}|{{.Source}}{{"\n"}}{{end}}' "$container" 2>/dev/null)"
+fi
+host_path_of() {
+    if [ -z "$container" ]; then printf '%s' "$1"; return 0; fi
+    _best_dst=""; _best_src=""
+    while IFS='|' read -r _dst _src; do
+        [ -n "$_dst" ] || continue
+        case "$1" in
+            "$_dst"|"$_dst"/*)
+                if [ "${#_dst}" -gt "${#_best_dst}" ]; then _best_dst="$_dst"; _best_src="$_src"; fi ;;
+        esac
+    done <<HOSTPATHS
+$_dbabrain_mounts
+HOSTPATHS
+    if [ -n "$_best_dst" ]; then printf '%s%s' "$_best_src" "${1#"$_best_dst"}"; fi
+    return 0
+}
+
+# --- The receipt (0.34.0): one FILE line for this backup ---------------------------------------
+# A plain-format base backup is a whole data directory - thousands of files - and its
+# backup_manifest already carries a checksum for every one of them. So the catalog records the
+# backup as one row: its directory, the sha256 of its manifest, and pg_verifybackup's verdict,
+# which checks every file (and the WAL streamed into it) against that manifest.
+taken="${target##*_}"                       # FULL or INCR - the fallback above may have changed it
+case "$taken" in FULL) file_type=FULL_BASE ;; *) file_type=INCR_BASE ;; esac
+verify=not_run
+verify_note=""
+if run_db "command -v pg_verifybackup >/dev/null 2>&1"; then
+    vb_out="$(run_db "pg_verifybackup '${target}' 2>&1")"
+    vb_rc=$?
+    # The WAL check runs pg_waldump. Where it is missing, every file is still checked against the
+    # manifest (-n skips only the WAL) - a missing tool must not read as a broken backup.
+    if [ "$vb_rc" -ne 0 ] && printf '%s' "$vb_out" | grep -q 'pg_waldump'; then
+        vb_out="$(run_db "pg_verifybackup -n '${target}' 2>&1")"
+        vb_rc=$?
+        verify_note="files checked against the manifest; WAL not parsed (no pg_waldump)"
+    fi
+    if [ "$vb_rc" -eq 0 ]; then
+        verify=passed
+    elif printf '%s' "$vb_out" | grep -qi 'incremental'; then
+        # An incremental backup holds only the changed blocks; pg_verifybackup cannot judge it on
+        # its own, and saying "failed" about a good backup would be a lie in the other direction.
+        verify_note="pg_verifybackup does not verify an incremental backup on its own"
+    else
+        verify=failed
+        verify_note="$(printf '%s' "$vb_out" | tr '\t\r\n' '   ' | cut -c1-300)"
+        printf 'ERROR pg_verifybackup failed for %s: %s\n' "$target" "$vb_out" >&2
+    fi
+else
+    verify_note="pg_verifybackup is not installed where the cluster runs"
+fi
+manifest_sha="$(run_db "sha256sum '${target}/backup_manifest'" 2>/dev/null | cut -d' ' -f1 | tr -d '[:space:]')"
+[ "${#manifest_sha}" -eq 64 ] || { printf 'warning: could not hash %s/backup_manifest\n' "$target" >&2; manifest_sha=""; }
+target_bytes="$(run_db "du -sb '${target}' 2>/dev/null | cut -f1" | tr -d '[:space:]')"
+# pg_basebackup has no encryption of its own: the backup is written plain.
+printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=no\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
+    "cluster" "$file_type" "${target_bytes:-}" "$manifest_sha" "$verify" "$verify_note" \
+    "$(host_path_of "$target")" "$container" "$target"
+[ "$verify" = "failed" ] && die "pg_verifybackup found the backup in '${target}' does not match its manifest."
 
 # --- Retention: drop whole chains, newest-member-first ---------------------------------------
 # A chain runs from a _FULL up to (not including) the next _FULL. Keep the chain if any member

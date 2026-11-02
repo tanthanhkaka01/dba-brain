@@ -35,6 +35,9 @@
 #      BACKUP_CERT_NAME (default dbabrain_backup_cert), RETENTION_DAYS (default 14),
 #      RETENTION_SECONDS (optional; a window under a day, which wins over RETENTION_DAYS).
 # Exit: 0 on success, non-zero on failure. Prints RESULT=ok only on a completed run.
+# Receipt: one `FILE` line per backup file written (0.34.0) - its sha256 taken where it lies, its
+# size, and RESTORE VERIFYONLY's verdict - which dbabrain records in its backup catalog:
+#   FILE<TAB>db=<DB><TAB>type=FULL|DIFF|LOG<TAB>size=<n><TAB>sha256=<hex><TAB>verify=passed|failed<TAB>encrypted=yes|no<TAB>path=<file>
 set -u
 
 container="${DOCKER_CONTAINER:-}"
@@ -50,6 +53,17 @@ retention_days="${RETENTION_DAYS:-14}"
 retention_seconds="${RETENTION_SECONDS:-}"
 
 die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
+
+# Where a stop finds this run (0.34.0, 1.238): this shell's pid, under the run's tag, removed on exit.
+# backup-stop ends the tree under it - killing the engine session alone left the script to start the
+# next database a second later (a production SQL Server, 2026-10-29).
+if [ -n "${DBABRAIN_RUN_TAG:-}" ]; then
+    run_file="${TMPDIR:-/tmp}/dbabrain_runs/${DBABRAIN_RUN_TAG}.pid"
+    mkdir -p "${run_file%/*}" 2>/dev/null && printf '%s\n' "$$" > "$run_file" 2>/dev/null \
+        && trap 'rm -f "$run_file"' EXIT
+fi
+run_host=()
+[ -n "${DBABRAIN_RUN_TAG:-}" ] && run_host=(-H "dbabrain:${DBABRAIN_RUN_TAG}")
 
 [ -n "$backup_dir" ]     || die "BACKUP_DIR is not set."
 [ -n "$mssql_password" ] || die "MSSQL_PASSWORD is not set (declare it in the job's env_secrets)."
@@ -131,14 +145,14 @@ done
 # the container by name with `-e SQLCMDPASSWORD`). As `-P` it was in `ps` on the host and in the
 # container for every statement (review 0.25.0, F10.4).
 run_sql() {
-    exec_here "$sqlcmd_bin" -C -b -S localhost -U "$mssql_user" -Q "$1"
+    exec_here "$sqlcmd_bin" -C -b -S localhost ${run_host[@]+"${run_host[@]}"} -U "$mssql_user" -Q "$1"
 }
 # A batch that carries a secret (the encryption password) goes in on stdin, not in -Q.
 run_sql_secret() {
-    printf '%s\n' "$1" | exec_stdin "$sqlcmd_bin" -C -b -S localhost -U "$mssql_user" -i /dev/stdin
+    printf '%s\n' "$1" | exec_stdin "$sqlcmd_bin" -C -b -S localhost ${run_host[@]+"${run_host[@]}"} -U "$mssql_user" -i /dev/stdin
 }
 query_sql() {   # single column, no headers, trimmed
-    exec_here "$sqlcmd_bin" -C -b -S localhost \
+    exec_here "$sqlcmd_bin" -C -b -S localhost ${run_host[@]+"${run_host[@]}"} \
         -U "$mssql_user" -h -1 -W -Q "SET NOCOUNT ON; $1" \
         | sed '/^$/d;/^(.*rows affected)$/d'
 }
@@ -229,6 +243,46 @@ SELECT COUNT(*) FROM msdb.dbo.backupset
     done
 fi
 
+# The file's path on this server, not inside the container (0.34.0): through the container's
+# mount that holds it, the longest one first. Empty for a file in no mount - it then lives only in
+# the container's own layer, gone with the container, which is worth the catalog saying.
+_dbabrain_mounts=""
+if [ -n "$container" ]; then
+    _dbabrain_mounts="$($DOCKER inspect -f '{{range .Mounts}}{{.Destination}}|{{.Source}}{{"\n"}}{{end}}' "$container" 2>/dev/null)"
+fi
+host_path_of() {
+    if [ -z "$container" ]; then printf '%s' "$1"; return 0; fi
+    _best_dst=""; _best_src=""
+    while IFS='|' read -r _dst _src; do
+        [ -n "$_dst" ] || continue
+        case "$1" in
+            "$_dst"|"$_dst"/*)
+                if [ "${#_dst}" -gt "${#_best_dst}" ]; then _best_dst="$_dst"; _best_src="$_src"; fi ;;
+        esac
+    done <<HOSTPATHS
+$_dbabrain_mounts
+HOSTPATHS
+    if [ -n "$_best_dst" ]; then printf '%s%s' "$_best_src" "${1#"$_best_dst"}"; fi
+    return 0
+}
+
+# One receipt line per file written: the sha256 taken where the file lies - inside the container
+# when there is one - so nothing is moved to be hashed. A file that cannot be hashed is still
+# listed, with an empty sha256: dbabrain records it as unverified rather than not at all.
+emit_file() {
+    f_size="$(exec_here stat -c %s "$3" 2>/dev/null | tr -d '[:space:]')"
+    f_sha="$(exec_here sha256sum "$3" 2>/dev/null | cut -d' ' -f1 | tr -d '[:space:]')"
+    if [ "${#f_sha}" -ne 64 ]; then
+        printf 'warning: could not hash %s\n' "$3" >&2
+        f_sha=""
+    fi
+    # Encrypted exactly when this script wrote it WITH ENCRYPTION - when a passphrase was given.
+    f_encrypted=no
+    [ -n "$encrypt_clause" ] && f_encrypted=yes
+    printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
+        "$1" "$2" "${f_size:-}" "$f_sha" "$4" "$f_encrypted" "$(host_path_of "$3")" "$container" "$3"
+}
+
 # --------------------------------------------------------------------------- #
 # Back up.
 # --------------------------------------------------------------------------- #
@@ -257,10 +311,14 @@ for db in $databases; do
     if run_sql "$statement"; then
         # CHECKSUM on the way in is only half of it: VERIFYONLY re-reads what landed on disk,
         # which is the difference between "the command returned" and "the file is restorable".
-        if ! run_sql "RESTORE VERIFYONLY FROM DISK = '${target_file}';" >/dev/null; then
+        # WITH CHECKSUM (0.34.0): every page checksum the backup carries is checked as it is read.
+        verify=passed
+        if ! run_sql "RESTORE VERIFYONLY FROM DISK = '${target_file}' WITH CHECKSUM;" >/dev/null; then
             printf 'ERROR verify failed: %s\n' "$target_file" >&2
             failed=1
+            verify=failed
         fi
+        emit_file "$db" "$sub" "$target_file" "$verify"
     else
         printf 'ERROR backup failed: %s (%s)\n' "$db" "$level" >&2
         failed=1

@@ -37,6 +37,9 @@ from pathlib import Path
 from typing import Any
 
 from dbabrain.lib import field_names
+from dbabrain.lib import integrity as restore_integrity
+from dbabrain.lib import offload as offload_rules
+from dbabrain.lib import backup_scope
 from dbabrain.lib import data_sources
 from dbabrain.lib import secret_text
 from dbabrain.lib.json_io import atomic_write_text
@@ -129,6 +132,11 @@ instance they are restored onto, and which databases to carry across.
                  chat_id} - which chat this entry's runs and failures go to. Absent it
                  still notifies, but to the NEUTRAL 'logging'/'error' levels, which reads
                  as nothing having been sent from whichever group you are watching
+  integrity      {copy_max_retry, copy_retry_interval_seconds, verify_source_before_copy,
+                 uncatalogued, engine_verify_before_restore, algorithm} - how each staged
+                 file is proven before it is used. Always WRITTEN: what you give, the rest
+                 stated from the defaults (copy_max_retry 3, 30 s apart, the source hashed
+                 before the copy, sha256), so no entry leaves it to the code
   active, note   optional
   replace        overwrite an existing restore_id instead of refusing
 
@@ -363,6 +371,20 @@ def add_backup(request: dict[str, Any] | None = None, *,
     if db_type:
         entry["db_type"] = db_type
     entry.setdefault("active", True)
+    # Every offload field stated (0.34.0): what was given, the rest as "off", read back through the
+    # one parser so a misspelled or contradictory value is refused here.
+    for name, value in offload_rules.OFFLOAD_FIELDS.items():
+        entry.setdefault(name, value)
+    # Every job names its databases, as a list (0.34.0). A whole-cluster engine takes them all - the
+    # only answer it has; a SQL Server job states which, or all_databases true.
+    for job in entry.get("jobs") or []:
+        if isinstance(job, dict) and db_type in backup_scope.WHOLE_INSTANCE_ENGINES:
+            job.setdefault("databases", [])
+            job.setdefault("all_databases", True)
+    try:
+        offload_rules.parse_backup_offload(entry, label=backup_id, db_type=db_type)
+    except offload_rules.OffloadConfigError as exc:
+        raise RegistrationError(str(exc)) from None
 
     # The refs are derived first and the values stored last, with validation in between: a ref is
     # only a string, so the document can be checked complete before a single secret exists.
@@ -373,6 +395,15 @@ def add_backup(request: dict[str, Any] | None = None, *,
 
     section["backups"] = _put_entry(section["backups"], "backup_id", backup_id, entry)
     _validate(path, document, load_backup_jobs)
+    # After the loader, so its own refusals (a job without cleanup_retention, ...) are said first;
+    # the loader reads an unstated job as unstated, and a registrar does not write one.
+    for job in entry.get("jobs") or []:
+        name = f"{backup_id}.{job.get('job', '?') if isinstance(job, dict) else '?'}"
+        try:
+            backup_scope.require_backup_databases(
+                backup_scope.parse_backup_databases(job, label=name, db_type=db_type), label=name)
+        except backup_scope.BackupScopeError as exc:
+            raise RegistrationError(str(exc)) from None
 
     written: list[str] = []
     for name, value in values.items():
@@ -494,6 +525,25 @@ def add_restore(request: dict[str, Any] | None = None, *,
             'back to back for as long as the daemon is up. A daily drill is {"from_hour": 2, '
             '"to_hour": 5, "repeat_interval": 72000, "retry_interval": 600, "timeout": 7200}.')
 
+    # Mandatory on every entry (the operator, 2026-10-29: copy_max_retry, default 3, declared in
+    # full): the entry is written with the block stated - what was given, the rest from the
+    # defaults - and read back through the one parser, so a misspelled field is refused here.
+    given = payload.get("integrity")
+    if given is not None and not isinstance(given, dict):
+        raise RegistrationError(f"{restore_id}: integrity must be an object, e.g. "
+                                f'{{"copy_max_retry": {restore_integrity.DEFAULT_COPY_MAX_RETRY}}}.')
+    payload["integrity"] = {**restore_integrity.stated_restore_integrity(), **(given or {})}
+    # What the entry does (1.216): as given - `copy_only` copies from server_id to the target and
+    # restores nothing - else stated as `restore`, what an entry without the field always did.
+    payload["action"] = payload.get("action") if payload.get("action") is not None else restore_integrity.STATED_ACTION
+    payload.setdefault("restore_from", offload_rules.STATED_RESTORE_FROM)
+    try:
+        restore_integrity.parse_restore_integrity(payload, label=restore_id)
+        restore_integrity.parse_restore_action(payload, label=restore_id)
+        offload_rules.parse_restore_from(payload, label=restore_id)
+    except (restore_integrity.IntegrityConfigError, offload_rules.OffloadConfigError) as exc:
+        raise RegistrationError(str(exc)) from None
+
     document = _read_document(path)
     section = document["backup_restore"]
     existing = [item for item in section["restores"]
@@ -564,5 +614,117 @@ def add_restore(request: dict[str, Any] | None = None, *,
         "next": [
             "dbabrain backup_restore list-restores",
             f"dbabrain backup_restore restore-latest --restore-id {restore_id} --dry-run",
+        ],
+    }
+
+
+ENTRY_ACTIVE_USAGE = r"""usage: python -m dbabrain.backup_restore.cli entry-active <json>|@<file>|-
+
+Switches backup and restore entries of data/restore_config.json on or off - their active flag,
+and nothing else. Every entry named, or none: an id that is not there is refused before anything
+is written.
+
+  {"backup_ids": ["ACME_APPDB_FULL", "ACME_APPDB_LOG"],
+   "restore_ids": ["ACME_APPDB_TO_LAB"],
+   "active": false,
+   "note": "the lab VM is switched off (2026-10-22)"}
+
+  backup_ids    backup_id values in backups[] - the whole entry, every job in it
+  restore_ids   restore_id values in restores[]. At least one id between the two lists
+  active        required. true or false
+  note          optional. Appended to the note of each entry that changes, so the file
+                says why it is off
+
+An entry switched ON is first held to the loader the scheduled app uses, the way backup-add and
+restore-add hold a new one: an entry that could never run is not switched on.
+
+  python -m dbabrain.backup_restore.cli list-backups
+  python -m dbabrain.backup_restore.cli list-restores
+"""
+
+#: The fields `entry-active` takes. Anything else is refused rather than ignored: a `server_id`
+#: here would read as "every entry of that server", which this command does not do.
+ENTRY_ACTIVE_FIELDS = frozenset({"backup_ids", "restore_ids", "active", "note"})
+
+
+def set_entries_active(request: dict[str, Any] | None = None, *,
+                       data_dir: str | Path | None = None) -> dict[str, Any]:
+    """Switch named ``backups[]`` / ``restores[]`` entries on or off, in one write.
+
+    Asked for on 2026-10-22, when the operator switched off the two lab VMs .251 and .252: seven
+    backups ran against the first and four restores into the second - one of them the nightly
+    100.250 drill - and each of the eleven would have failed every cycle against a machine that
+    was not there. The only way to stop them was ``backup-add`` / ``restore-add`` with ``replace``,
+    which restates the whole entry, or a hand-edit. The flag is the one field changed; the entry's
+    jobs, windows and notes stay as written, so switching it back on is the same call with true.
+    """
+    payload = dict(request or {})
+    unknown = sorted(set(payload) - ENTRY_ACTIVE_FIELDS)
+    if unknown:
+        raise RegistrationError(
+            f"unknown field(s) {unknown}; entry-active takes {sorted(ENTRY_ACTIVE_FIELDS)}. "
+            "Nothing was written.")
+    active = payload.get("active")
+    if not isinstance(active, bool):
+        raise RegistrationError("active is required: true or false. Nothing was written.")
+    named: dict[str, list[str]] = {}
+    for field in ("backup_ids", "restore_ids"):
+        raw = payload.get(field)
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+            raise RegistrationError(f"{field} is a list of ids. Nothing was written.")
+        named[field] = [item.strip() for item in raw]
+    if not named["backup_ids"] and not named["restore_ids"]:
+        raise RegistrationError(
+            "name at least one entry, in backup_ids or restore_ids. Nothing was written.")
+    note = str(payload.get("note") or "").strip()
+
+    path = _config_path(data_dir)
+    document = _read_document(path)
+    section = document["backup_restore"]
+    results: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for field, list_name, id_field in (("backup_ids", "backups", "backup_id"),
+                                       ("restore_ids", "restores", "restore_id")):
+        entries = {str(item.get(id_field)): item for item in section[list_name] if isinstance(item, dict)}
+        for entry_id in named[field]:
+            entry = entries.get(entry_id)
+            if entry is None:
+                missing.append(f"{id_field} {entry_id}")
+                continue
+            # The loaders read an absent flag as on (`active`, default true).
+            was = entry.get("active", True) is not False
+            changed = was != active
+            if changed:
+                entry["active"] = active
+                if note and note not in str(entry.get("note") or ""):
+                    entry["note"] = f"{str(entry.get('note') or '').rstrip()} {note}".strip()
+            results.append({id_field: entry_id, "active": active, "changed": changed})
+    if missing:
+        raise RegistrationError(f"not in {path.name}: {', '.join(missing)}. Nothing was written.")
+
+    changed_any = any(item["changed"] for item in results)
+    if changed_any and active:
+        from dbabrain.backup_restore.backup import load_backup_jobs
+
+        def load_switched_on(candidate: Path) -> None:
+            if named["backup_ids"]:
+                load_backup_jobs(candidate)
+            for restore_id in named["restore_ids"]:
+                _load_every_restore(candidate, registering=restore_id)
+
+        _validate(path, document, load_switched_on)
+    if changed_any:
+        _write_document(path, document)
+    return {
+        "ok": True,
+        "active": active,
+        "changed": changed_any,
+        "items": results,
+        "files_written": [path.name] if changed_any else [],
+        "next": [
+            "dbabrain backup_restore list-backups",
+            "dbabrain backup_restore list-restores",
         ],
     }

@@ -11,6 +11,7 @@ third route for a SQL Server restore and went (rules R43), and the spec with it.
 from __future__ import annotations
 
 from dbabrain.lib import errors
+from dbabrain.lib import backup_scope
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,10 @@ def backup_request_from_job(
     # at least), SQL Server and PostgreSQL read these seconds. See BackupJob.retention_seconds.
     if getattr(job, "retention_seconds", None) is not None:
         env["RETENTION_SECONDS"] = str(job.retention_seconds)
+    # The databases, from the job's own list (0.34.0) - stated on every job, never left to a code
+    # default (R50): a job with none stated is refused here, before anything is shipped.
+    env.update(backup_scope.script_env(backup_scope.require_backup_databases(
+        getattr(job, "scope", None), label=job.label)))
     env.update(job.env)
     for name, ref in (job.env_secrets or {}).items():
         env[name] = _secret(str(ref), secrets, where=f"{job.label}.env_secrets.{name}")
@@ -79,24 +84,32 @@ def backup_request_from_job(
         "level": level,
         "script_path": str(_script_path(job.script, label=job.label, data_dir=data_dir)),
         "env": env,
-        "host": {
-            # windows: the engine runs natively on the host. docker: the script `docker exec`s
-            # into the container itself, so it still runs ON the host - the runtime tells hostcmd
-            # which interpreter to use, not where to step into.
-            "runtime": ("windows" if str(getattr(target, "platform", "")).lower() == "windows"
-                        else "linux"),
-            "host": target.host,
-            "port": target.port,
-            "username": target.username,
-            "key_file": _resolved_key_file(target, data_dir),
-            "password": _ssh_password(target, secrets),
-            # How to reach it, which is a different question from what runs there: a Windows
-            # SQL Server may answer on SSH or on WinRM, and hostcmd dispatches on this.
-            "access": str(getattr(target, "access", "") or "ssh").strip().lower(),
-            "ssl": bool(getattr(target, "ssl", False)),
-        },
+        "host": host_block(target, secrets=secrets, data_dir=data_dir),
         "timeout": job.time_window.timeout or 3600,
         "dry_run": dry_run,
+    }
+
+
+def host_block(target: Any, *, secrets: dict[str, str], data_dir: str | Path | None = None) -> dict:
+    """The ``host`` a ``common.cli`` request reaches a backup's server with - the server itself.
+
+    One builder for the backup run and for ``file-checksum`` re-checking what it wrote (rules R43).
+    """
+    return {
+        # windows: the engine runs natively on the host. docker: the script `docker exec`s
+        # into the container itself, so it still runs ON the host - the runtime tells hostcmd
+        # which interpreter to use, not where to step into.
+        "runtime": ("windows" if str(getattr(target, "platform", "")).lower() == "windows"
+                    else "linux"),
+        "host": target.host,
+        "port": target.port,
+        "username": target.username,
+        "key_file": _resolved_key_file(target, data_dir),
+        "password": _ssh_password(target, secrets),
+        # How to reach it, which is a different question from what runs there: a Windows
+        # SQL Server may answer on SSH or on WinRM, and hostcmd dispatches on this.
+        "access": str(getattr(target, "access", "") or "ssh").strip().lower(),
+        "ssl": bool(getattr(target, "ssl", False)),
     }
 
 

@@ -260,6 +260,14 @@
             "description": "Bot endpoint, timeouts, and the level to chat map."
         },
         {
+            "file": "ai_assist.json",
+            "app_code": "telegram",
+            "kind": "config",
+            "transfer": "push",
+            "in_bundle": true,
+            "description": "The AI assistant in Telegram: its chats, model, limits, tools, prices and who may ask."
+        },
+        {
             "file": "telegram_groups.json",
             "app_code": "telegram",
             "kind": "config",

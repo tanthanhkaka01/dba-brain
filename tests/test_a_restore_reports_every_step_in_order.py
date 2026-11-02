@@ -35,6 +35,7 @@ import pytest
 from dbabrain.backup_restore import events, restore_by_id, restore_script
 from dbabrain.common import backup_copy
 from dbabrain.lib import restore_space
+from dbabrain.lib.integrity import RestoreIntegrity
 
 SUCCESS = ["COPY_START", "COPY_DONE", "METADATA_SKIP", "RESTORE_START", "RESTORE_DONE",
            "VERIFY_START", "VERIFY_DONE", "DELETE_START", "DELETE_DONE"]
@@ -49,6 +50,7 @@ def _job(db_type="postgresql", *, remote=True, metadata=False):
         target_backup_dir="/b/pg_restore_from_a", target_visible_dir="/b/pg_restore_from_a",
         cleanup_retention=259200, copy_mode="auto", space_check=restore_space.SpaceCheck(),
         copy_selection="chain", copy_recent_hours=24, staging_marker="",
+        integrity=RestoreIntegrity(copy_retry_interval_seconds=0),
         server_metadata=SimpleNamespace(enabled=metadata))
 
 
@@ -250,7 +252,8 @@ def test_a_step_event_leads_with_its_own_message():
 # --------------------------------------------------------------------------- #
 # Each step is its own common.cli command
 # --------------------------------------------------------------------------- #
-def test_the_copy_is_two_common_commands_and_the_delete_a_third(monkeypatch):
+def test_the_copy_is_a_chain_a_plan_and_a_copy_and_the_delete_a_fourth(monkeypatch):
+    """The plan (0.34.0, 1.213b) is how the checksum gate learns the files before any moves."""
     called = []
 
     def run(command, request, **kwargs):
@@ -271,10 +274,11 @@ def test_the_copy_is_two_common_commands_and_the_delete_a_third(monkeypatch):
                                                    point_in_time="2026-09-25 08:23:46 +08:00")
     restore_script.prune_staged_backups(job, target=target)
 
-    assert [c for c, _ in called] == ["backup-chain", "copy-backup-dir", "prune-staged-backups"]
+    assert [c for c, _ in called] == ["backup-chain", "copy-backup-dir", "copy-backup-dir", "prune-staged-backups"]
     assert called[0][1]["point_in_time"] == "2026-09-25 08:23:46 +08:00"
-    assert called[1][1]["include"] == ["base/F", "wal/"]
-    assert called[1][1]["source"]["host"] == "192.0.2.49" and called[1][1]["target"]["host"] == "192.0.2.50"
+    assert called[1][1]["plan_only"] is True and "plan_only" not in called[2][1]
+    assert called[2][1]["include"] == ["base/F", "wal/"]
+    assert called[2][1]["source"]["host"] == "192.0.2.49" and called[2][1]["target"]["host"] == "192.0.2.50"
     assert out["include"] == ["base/F", "wal/"]
 
 
@@ -325,10 +329,15 @@ class _Store:
 
 
 @pytest.mark.parametrize("status, expected", [("done", ["START", "END"]), ("error", ["START", "ERROR"])])
-def test_a_backup_reports_start_then_its_end_or_its_error_with_the_reason(monkeypatch, status, expected):
+def test_a_backup_reports_start_then_its_end_or_its_error_with_the_reason(monkeypatch, tmp_path, status, expected):
     from dbabrain.backup_restore import backup as backup_module
     from dbabrain.backup_restore.server_metadata import ServerMetadataPlan
+    from dbabrain.db.backup_catalog import BackupCatalogStore
     from dbabrain.lib.time_window import TimeWindow
+
+    # A run that is not recorded is not a success (0.34.0): the backup writes into a real catalog.
+    catalog = BackupCatalogStore(tmp_path / "catalog.sqlite")
+    monkeypatch.setattr(backup_module, "BackupCatalogStore", SimpleNamespace(from_config=lambda config: catalog))
 
     emitted = []
     job = backup_module.BackupJob(

@@ -11,7 +11,7 @@ import html
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dbabrain.lib import engine_sections, page_banner, page_style
+from dbabrain.lib import engine_sections, page_banner, page_kit, page_style
 from dbabrain.sla.models import SlaPolicy, SlaPolicyResult, SlaValidationSummary, state_key
 from dbabrain.sla.storage import SlaStore
 from dbabrain.lib.timezone import file_stamp, format_display
@@ -237,7 +237,7 @@ def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
         else:
             calendar_month_html = ""
 
-    return _PAGE_TEMPLATE.format(
+    return page_kit.inline(_PAGE_TEMPLATE.format(
         banner_css=page_banner.CSS,
         page_css=page_style.CSS,
         page_banner=page_banner.render(
@@ -274,7 +274,7 @@ def render_html(summary: SlaValidationSummary, *, recent_runs: list[dict],
         calendar_month_section=calendar_month_html,
         rows=_server_sections(summary, instances=instances),
         history=history,
-    )
+    ))
 
 
 def _headline_note() -> str:
@@ -404,7 +404,7 @@ def render_index_html(summary: SlaValidationSummary | None, *, directory: Path) 
         disabled=not inventory_available,
     )
     sla_card = _index_card(href="sla.html", emoji="📊", title="SLA / SLO compliance", note=sla_status, disabled=False)
-    return _INDEX_TEMPLATE.format(
+    return page_kit.inline(_INDEX_TEMPLATE.format(
         banner_css=page_banner.CSS,
         page_banner=page_banner.render(
             title="Reports", snapshot_at=generated_at,
@@ -413,7 +413,7 @@ def render_index_html(summary: SlaValidationSummary | None, *, directory: Path) 
                 index_usage=page_banner.pick_index_usage(
                     path.name for path in directory.glob("index-usage_*.htm*")))),
         generated_at=html.escape(generated_at),
-        sla_card=sla_card, inventory_card=inventory_card)
+        sla_card=sla_card, inventory_card=inventory_card))
 
 
 def _index_card(*, href: str, emoji: str, title: str, note: str, disabled: bool) -> str:
@@ -859,7 +859,8 @@ _PAGE_TEMPLATE = """<!doctype html>
 <style>
 {page_css}
   .engines {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:12px; }}
-  .ecard {{ background:var(--surface); border:1px solid var(--line); border-top:4px solid var(--faint); border-radius:10px; padding:13px 15px; }}
+  /* Cards, tables and badges are Tabler's (lib.page_kit.ALIASES); these are the page's layout and its state edges. */
+  .ecard {{ border-top:4px solid var(--faint); padding:13px 15px; }}
   .ecard.ok {{ border-top-color:var(--ok); }} .ecard.warn {{ border-top-color:var(--warn); }}
   .ecard.crit {{ border-top-color:var(--crit); }} .ecard.idle {{ border-top-color:var(--faint); }}
   .ehead {{ display:flex; justify-content:space-between; align-items:center; gap:8px; }}
@@ -872,27 +873,27 @@ _PAGE_TEMPLATE = """<!doctype html>
   .counts .c.ok {{ color:var(--ok); }} .counts .c.idle {{ color:var(--muted); }}
   .now {{ display:inline-block; margin-top:6px; font-size:12px; font-weight:600; }}
   .now.crit {{ color:var(--crit); }} .now.ok {{ color:var(--ok); }}
-  .look {{ margin-top:6px; font-size:12px; color:#3a4757; }}
+  .look {{ margin-top:6px; font-size:12px; }}
   .look a {{ color:var(--link); text-decoration:none; font-family:var(--mono); font-size:11.5px; }}
   .ok-text {{ color:var(--ok); }}
   tbody td {{ white-space:nowrap; }}
-  tr.grp th {{ background:#eef2f7; text-align:left; font-size:12px; letter-spacing:.04em; text-transform:uppercase; color:var(--brand); padding:7px 11px; border-bottom:1px solid var(--line); }}
-  .gcount {{ display:inline-block; margin-left:8px; font-size:11px; font-weight:600; color:var(--muted); background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:0 7px; text-transform:none; letter-spacing:0; }}
+  tr.grp th {{ background:var(--surface-2); text-align:left; color:var(--brand); }}
+  .gcount {{ margin-left:8px; text-transform:none; letter-spacing:0; }}
   td.srv a {{ color:var(--ink); text-decoration:none; font-weight:600; }}
   td.srv a:hover {{ color:var(--link); }}
   td.na {{ color:var(--faint); }}
   .cell {{ font-family:var(--mono); min-width:58px; text-align:center; cursor:default; }}
   .more {{ font-size:10.5px; color:var(--muted); margin-left:4px; }}
   .good-line {{ color:var(--ok); font-weight:600; }}
-  h3.eng-head {{ font-size:14px; letter-spacing:.04em; text-transform:uppercase; color:var(--brand); margin:20px 0 8px; }}
-  details.inst {{ background:var(--surface); border:1px solid var(--line); border-radius:10px; margin-bottom:8px; }}
+  h3.eng-head {{ margin:20px 0 8px; }}
+  details.inst {{ margin-bottom:8px; }}
   details.inst > summary {{ cursor:pointer; list-style:none; display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; }}
   details.inst > summary::-webkit-details-marker {{ display:none; }}
   details.inst > summary::before {{ content:"\\25b8"; color:var(--faint); }}
   details.inst[open] > summary::before {{ content:"\\25be"; }}
   details.inst .iname {{ font-family:var(--mono); font-weight:650; }}
   details.inst .icount {{ font-size:12px; color:var(--muted); margin-left:auto; }}
-  details.inst .tbl-scroll {{ border:none; border-top:1px solid var(--line); border-radius:0 0 10px 10px; margin:0; }}
+  details.inst .tbl-scroll {{ border:none; border-top:1px solid var(--line); border-radius:0; box-shadow:none; margin:0; }}
   .burn-rates {{ margin-top:4px; font-size:11px; }}
   @media print {{ details.inst {{ break-inside:avoid; }} }}
 {banner_css}
@@ -971,28 +972,13 @@ _INDEX_TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DBA Brain · Reports</title>
 <style>
-  :root {{ color-scheme: light dark; }}
-  body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0f1419; color: #e6e6e6; }}
+  /* Tabler draws the cards and badges (lib.page_kit.ALIASES); this is the page's layout. */
   .wrap {{ max-width: 760px; margin: 0 auto; padding: 40px 16px; }}
-  h1 {{ font-size: 1.5rem; margin: 0 0 4px; }}
-  .sub {{ color: #9aa4af; font-size: .85rem; margin-bottom: 28px; }}
-  .hub-card {{ display: block; text-decoration: none; color: inherit; background: #182029; border: 1px solid #263340;
-              border-radius: 12px; padding: 20px 22px; margin-bottom: 14px; transition: border-color .15s, transform .05s; }}
-  a.hub-card:hover {{ border-color: #3d5a73; transform: translateY(-1px); }}
+  .sub {{ color: var(--tblr-secondary); margin-bottom: 24px; }}
+  .hub-card {{ display: block; text-decoration: none; color: inherit; padding: 20px 22px; margin-bottom: 14px; }}
   .hub-card.disabled {{ opacity: .55; }}
-  .hub-title {{ font-size: 1.15rem; font-weight: 650; margin-bottom: 6px; }}
-  .hub-note {{ color: #9aa4af; font-size: .88rem; }}
-  .badge {{ padding: 2px 8px; border-radius: 6px; font-size: .8rem; font-weight: 600; }}
-  .badge.ok {{ background: #123d2b; color: #7ee2a8; }}
-  .badge.warn {{ background: #3d3312; color: #f0d97a; }}
-  .badge.bad {{ background: #3d1620; color: #f28ba0; }}
-  .badge.nodata {{ background: #24303d; color: #9db4c7; }}
-  .muted {{ color: #7c8894; }}
-  @media (prefers-color-scheme: light) {{
-    body {{ background: #f5f7fa; color: #1a2029; }}
-    .hub-card {{ background: #fff; border-color: #dbe2ea; }}
-    .sub, .hub-note {{ color: #5a6672; }}
-  }}
+  .hub-note {{ color: var(--tblr-secondary); }}
+  .muted {{ color: var(--tblr-secondary); }}
 {banner_css}
 </style>
 </head>

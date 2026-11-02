@@ -153,6 +153,37 @@ def test_only_the_new_files_are_streamed_on_a_repeat_run(monkeypatch):
     assert (result.copied, result.skipped, result.bytes_copied) == (1, 1, 200)
 
 
+def test_a_same_size_file_the_caller_names_in_replace_is_sent_again(monkeypatch):
+    """Size and time cannot see a copy with other bytes; the caller's checksum gate can (0.34.0)."""
+    same = {"/src": [("a.bak", 100, False), ("b.bak", 100, False)],
+            "/dst": [("a.bak", 100, False), ("b.bak", 100, False), (".dbabrain-staging", 1, False)]}
+    source = _Client(sftp=_Sftp(same))
+    target = _Client(sftp=_Sftp(same))
+    seen = {}
+    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: seen.update(kw) or True)
+
+    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
+                                      target_session=target, target_dir="/dst", replace=("b.bak",))
+
+    assert [rel for rel, _ in seen["files"]] == ["b.bak"]
+    assert (result.copied, result.skipped) == (1, 1)
+    assert result.as_dict()["files"] == [{"path": "a.bak", "size_bytes": 100}, {"path": "b.bak", "size_bytes": 100}], \
+        "every selected file is answered, copied or not - the gate hashes them all"
+
+
+def test_a_plan_lists_what_the_copy_would_select_and_never_opens_the_target():
+    tree = {"/src": [("base", 0, True), ("wal", 0, True), ("old", 0, True)],
+            "/src/base": [("F", 0, True)], "/src/base/F": [("backup_manifest", 7, False)],
+            "/src/wal": [("000000010000000000000001", 16, False)], "/src/old": [("x.bak", 3, False)]}
+    source = _Client(sftp=_Sftp(tree))
+
+    plan = transfer.plan_backup_dir(source_session=source, source_dir="/src", include=("base/F", "wal/"))
+
+    assert plan.as_dict()["files"] == [{"path": "base/F/backup_manifest", "size_bytes": 7},
+                                       {"path": "wal/000000010000000000000001", "size_bytes": 16}]
+    assert plan.copied == 0 and source.commands == [], "nothing streamed, nothing run"
+
+
 def test_a_changed_size_is_re_sent():
     """Same name, different size = not the same file."""
     tree_src = {"/src": [("a.bak", 300, False)]}

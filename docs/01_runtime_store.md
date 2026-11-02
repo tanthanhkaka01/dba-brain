@@ -117,7 +117,7 @@ install trips over.
 | | SQLite | PostgreSQL |
 | --- | --- | --- |
 | The container (file / database + schema) | **dbabrain creates it** — the file and its parent folder, on first use | **must already exist** — dbabrain creates neither |
-| The 29 tables, indexes and seed rows | dbabrain creates them on first use | dbabrain creates them on first use |
+| The 35 tables, indexes and seed rows | dbabrain creates them on first use | dbabrain creates them on first use |
 | A login | none — whoever can read the file | **`username` + `password_ref`, both already in place** |
 
 So on SQLite a path is the whole configuration. On PostgreSQL you point dbabrain at a database and a
@@ -409,6 +409,12 @@ The path form is deliberate: ~20 call sites in `dbabrain/` and the whole test su
 | `telegram_send_messages` | Telegram App | Outgoing Telegram send queue. |
 | `telegram_background_tasks` | Telegram App | In-flight background restore subprocesses (pid, stdout/stderr paths, status). |
 | `backup_restore_history` | Backup Restore App | Restore history for database/file/status checks. |
+| `backup_runs` | Backup Restore App | One row per backup run: entry, server, engine, level, status, the engine's own verification (0.34.0). |
+| `backup_files` | Backup Restore App | One row per file a backup wrote: server, database, name, `file_type`, path, size, `checksum_after_backup`, its place in the chain, the virus scan. Never deleted - a pruned file's row stays (0.34.0). |
+| `backup_file_checks` | Backup Restore App | Every later hash or virus scan of a stored file: the scrub, a restore's source check, the vault (0.34.0). |
+| `restore_runs` | Backup Restore App | One row per restore or copy-only run, both `server_id`s, its `copy_max_retry` (0.34.0). |
+| `restore_run_files` | Backup Restore App | One row per file a run copied: both `server_id`s, file name and type, the checksums before and after the copy, the verdict, the virus scan of the copy (0.34.0). |
+| `copy_attempts` | Backup Restore App | One row per copy attempt of one file, with the hash it produced (0.34.0). |
 | `sla_runs` | SLA/SLO App | One row per SLA validation run (per-status counts and window end). |
 | `sla_results` | SLA/SLO App | One row per policy **per instance**: SLI, SLO, error budget, and status. |
 | `config_sources` | Runtime Store / Web Host | One row per synced `data/*.json` file, with the app that owns it. |
@@ -638,6 +644,119 @@ What the shape guarantees:
   answerable from `job_runs` alone.
 - **It closes.** The daemon marks the request `done` as it reaps the process, and sweeps any left
   `started` by a daemon that was killed before it could.
+
+## Backup Catalog (`backup_*`, `restore_run*`, `copy_attempts`) - 0.34.0
+
+`BackupCatalogStore` (`dbabrain/db/backup_catalog.py`). Every file a backup wrote and every file a
+restore or a copy-only run used, with its checksum, so every run is verified (the operator,
+2026-10-29). The design is `audits/20261029_plan_ransomware_resilience_and_backup_integrity.md` §B.1.
+
+| Table | One row per | Its key |
+| --- | --- | --- |
+| `backup_runs` | backup run | PK `backup_run_id`; UNIQUE `(backup_id, started_at)` |
+| `backup_files` | file a backup wrote | PK `file_id`; FK to `backup_runs` and to itself (`chain_parent_file_id`); **partial** UNIQUE `(server_id, file_path) WHERE state <> 'pruned'` |
+| `backup_file_checks` | later hash or virus scan of a file | PK `check_id`; FK to `backup_files`; UNIQUE `(file_id, checked_at, location, checked_by)` |
+| `restore_runs` | restore or copy-only run | PK `restore_run_id`; UNIQUE `(restore_id, source_server_id, target_server_id, started_at)` |
+| `restore_run_files` | file a run copied | PK `run_file_id`; FK to `restore_runs` and `backup_files`; UNIQUE `(restore_run_id, source_path)` |
+| `copy_attempts` | copy attempt of one file | PK `attempt_id`; FK to `restore_run_files`; UNIQUE `(run_file_id, attempt_no)` |
+
+What the shape guarantees:
+
+- **A row reads on its own.** The `server_id`s, the file name and the `file_type` are repeated on
+  each per-file and per-attempt row, so a row exported or read alone still says where a file came
+  from and where it went.
+- **"Proven" is the store's rule.** A per-file verdict of `match`, `copied` or `recopied` is refused
+  unless `checksum_target_after_copy` equals `checksum_source_before_copy`; an attempt `match` the
+  same; `copy_attempts` never exceeds `copy_max_retry + 1`; a backup file has its checksum unless its
+  verdict says it could not be hashed. A writer cannot forget these - the `CHECK`s hold them.
+- **One list per word.** `file_type`, the verdicts, the check results, the virus-scan status: each a
+  list in `dbabrain/lib/integrity.py`, and the `CHECK`s are built from those lists.
+- **The first checksum is never updated** (the operator, 2026-10-29: *backup, restore*). A backup
+  file's `checksum_after_backup`, and a copied file's `checksum_after_backup`,
+  `checksum_source_before_copy`, `checksum_target_before_copy` and `checksum_target_after_copy`,
+  are written once - an empty one may be filled, the same value again is harmless, any other value
+  is refused (`backup_catalog.FIRST_CHECKSUMS`, held in the one update path every writer goes
+  through). They are the evidence every later check is held to: one that could be rewritten would
+  let a changed backup be "fixed" by recording its new hash. A later hash is a row of its own
+  (`backup_file_checks`, `copy_attempts`) or `checksum_last_check` / `*_checked_at`. **The
+  database holds it too**, against any writer - a hand-written `UPDATE`, another tool: a `BEFORE
+  UPDATE` trigger per table (`trg_backup_files_first_checksum`,
+  `trg_restore_run_files_first_checksum`), SQLite's `RAISE(ABORT)` and PostgreSQL's
+  `dbabrain_first_checksum_guard()`, created with the tables. Only a database owner who drops
+  the trigger can get past it. **The first size is held the same way**: `backup_files.size_bytes`
+  and `restore_run_files.size_source_bytes`; a later size is `size_now` on a check.
+- **Every file states its size in bytes** (the operator, 2026-10-29). Each backup script measures
+  what it wrote (`stat -c %s`, `.Length`, `du -sb` for a PostgreSQL base-backup directory). A file
+  whose size could not be read is `size_failed`, never `ok`, and `ck_backup_files_sized` refuses an
+  `ok` file with no size.
+- **Each restore marks the files it used** (the operator, 2026-10-29: *when, server_id, target_id,
+  result*). `backup_files.last_restore_run_id` / `_at` / `_action` / `_target_server_id` /
+  `_result` (the run's phase) / `_verdict` (this file's copy verdict); the source is the row's own
+  `server_id`. Only the store writes them (`_mark_used`), on every write to the run or its files, so
+  the result follows the run to its end, and a mark only moves forward. NULL means never used. Every
+  use, not only the last, is a `restore_run_files` row; `server_backup_files` counts them
+  (`used_count`), plus the ones that restored the file OK (`restored_ok_count`): a proven copy in a
+  `restore` run that ended `done`. A copy-only run proves a copy, never a restore.
+- **The repository copy** (schema 2, 1.240; schema 3, its retention). `backup_files` carries
+  `offload_state` (NULL - the entry does not offload; `pending`, `verified`, `failed`,
+  `quarantined`, `expired`), `offload_server_id`, `offload_path`, `offload_run_id`,
+  `offload_attempted_at`, `offload_verified_at`, `offload_error`, `source_deleted_at` and
+  `offload_expired_at`. The copy itself is a `restore_runs` row of action `offload` (with its
+  files and attempts), which is never a use of the file: `_mark_used` and `used_count` leave it
+  out. Two rules are held by the store on every backend, and by constraints on PostgreSQL:
+  `ck_backup_files_offload_verified` (a verified copy names its place, run and time) and
+  `ck_backup_files_source_deleted_after_copy` (a source is deleted only after its copy is
+  verified), and `ck_backup_files_offload_expired` (only a verified copy expires, and says when).
+  A restore from the repository reads each file's proof from the offload runs' own file rows
+  (`repository_proofs`), so a base backup's members are proven too. A check of the repository copy is a `backup_file_checks` row with `location
+  repository`. It never moves the source's own `on_disk` / `checksum_matches` / `state`. A proven
+  copy's size equals its source's (`ck_restore_run_files_size`, 1.245).
+- **Schema versions 2 and 3 are reached in place** (`_migrate`). The new columns are added where
+  missing. On PostgreSQL the list CHECKs on `restore_runs.action`, `backup_file_checks.checked_by` /
+  `location` and `backup_files.offload_state` are named ones (`ck_<table>_<column>`), dropped and
+  added again with today's lists, and so is every added rule - the size rule `NOT VALID`. SQLite
+  cannot alter a constraint, so it gets the columns only.
+- **No foreign key to `job_runs`.** `job_run_id` is a plain column: `job_runs` ages out, and a real
+  key into it blocked the archive sweep before (the run requests above).
+- **The virus-scan columns are NULL until a scan runs** - NULL is "never scanned", not "clean".
+- **Where the file is on its server, and whether it still is** (the operator, 2026-10-29). A backup
+  file has `file_path` - where the engine wrote it, inside its container when it runs in one - and
+  `host_path`, the same file on the server itself through the container's mount (`''` for a file
+  in no mount: it lives in the container alone), with `container_name`. `on_disk` and
+  `checksum_matches` answer *is it still there* and *is it still the bytes the backup wrote*,
+  **against the checksum this catalog stored**, as of `last_checked_at`: 1 / 0, NULL = not known.
+  A copied file carries the same on **both** sides - `source_host_path` / `target_host_path`,
+  `source_on_disk` / `source_checksum_matches` / `source_checked_at` and the `target_` three - held
+  to `checksum_after_backup`, or, for a file no backup recorded, the source's hash at the copy.
+  The comparison is the store's own (`check_backup_file`, `check_run_file`): a caller hands in what
+  it found on disk, never a verdict.
+
+`copy_max_retry` comes from the restore entry's `integrity` block and is required on every run row:
+the store never fills it in (`docs/08_backup_restore_app.md`, *The copy gate*).
+
+## AI Assistant (`ai_*`) - 0.34.0
+
+Written by `dbabrain/db/ai_assist_store.py` (schema `AiAssistStore` 1) for the Telegram AI
+assistant ([`07_telegram_app.md`](./07_telegram_app.md#the-ai-assistant-0340)). Every key in
+full; no foreign key to `telegram_messages` / `telegram_send_messages`, which age out.
+
+| Table | One row per | Natural key |
+| --- | --- | --- |
+| `ai_conversations` | conversation of one user in one chat; `closed_reason` `new` / `idle` / `length` | `(chat_id, user_id, created_at)` |
+| `ai_requests` | message the assistant read: a `question`, or a `command` (`/new`, `/usage`, `/help`, or a message left to others) - **a refused question is a row** (`status blocked`, `reason`). Tokens (input, output, cache read, cache write, total), `cost_usd`, turns, tool calls, `answer_text`, `reply_send_ids`; a running question holds `est_tokens` / `est_cost_usd` in the limits | `(chat_id, message_id)` - the claim |
+| `ai_messages` | message of the conversation exactly as the model takes it (thinking blocks included) | `(ai_conversation_id, seq)` |
+| `ai_api_calls` | call to the model: model asked and served, Anthropic's `request-id`, stop reason and details, the four token counts, `cost_usd`, `price_known`, duration, the whole response | `(ai_request_id, turn_no)` |
+| `ai_tool_runs` | tool call: input, output (redacted, up to `tool_kept_output_chars`), characters sent, error, rows, duration | `(ai_request_id, tool_use_id)` |
+
+```sql
+-- What the assistant cost this month, by user
+SELECT user_id, user_name, COUNT(*) AS questions, SUM(total_tokens) AS tokens, SUM(cost_usd) AS usd
+FROM ai_requests WHERE kind = 'question' AND status <> 'blocked' AND started_at >= '2026-11-01T00:00:00Z'
+GROUP BY user_id, user_name;
+```
+
+`python -m dbabrain.telegram.cli ai-usage --days 30 --by user|day|model` and
+`ai-show --id <ai_request_id>` (the question with every message, call and tool run) read them back.
 
 ## The store read back for a person (`db.cli`)
 

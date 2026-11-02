@@ -13,7 +13,7 @@ import math
 import re
 from pathlib import Path
 from dbabrain.lib import data_sources
-from dbabrain.lib import health_model, interval_rates
+from dbabrain.lib import health_model, interval_rates, report_windows
 from dbabrain.db.metric_store import MetricStore
 from dbabrain.lib.paths import DEFAULT_DATA_DIR
 from dbabrain.lib.time_window import window_of
@@ -26,6 +26,17 @@ from dbabrain.lib.time_window import window_of
 #: module``, every ``test_server_report_*`` file failing to collect when run on its own. A leaf has
 #: no such order (2026-10-03, when the page was split).
 QUERY_STORE_CODE = "QUERY_STORE_COVERAGE"
+
+#: ``OS_DISK_USAGE`` rows that are storage *activity*: rates and the queue, never a volume.
+OS_DISK_ACTIVITY_ITEMS = ("disk_read_kbps", "disk_write_kbps", "disk_iops", "disk_queue_length")
+#: ... and every row of it that is not a volume: the activity, plus ``disk_perf_counters`` - the
+#: note that the activity could not be read (the counters are not registered, or did not answer in
+#: time). They share the metric code with the mount points, and each page builder kept its own
+#: copy of this list; the note reached one of the three, so the inventory listed it as a drive
+#: with no size. The note is in neither tile: under Storage activity its LOGGING status would
+#: colour a tile green that holds no reading. Here for the same reason as ``QUERY_STORE_CODE``:
+#: all three import this module.
+OS_DISK_NOT_A_VOLUME_ITEMS = (*OS_DISK_ACTIVITY_ITEMS, "disk_perf_counters")
 
 
 def _cadence(definition: dict, code: str) -> int | None:
@@ -717,8 +728,62 @@ def load_server_series(sqlite_path: str | Path, *, server_id: str, days: int,
                              else "primary" if code in PRIMARY_CODES
                              else "diagnostics" if code in DIAGNOSTIC_CODES else "detail")
             entry["lowCadence"] = low_cadence
+            _apply_report_window(entry, item_rows, by_code[code])
             series.append(entry)
     return series, omitted
+
+
+def _apply_report_window(entry: dict, item_rows: list, code_items: dict) -> None:
+    """Judge an entry on the last hour of its stored rows, where its newest row is not "now".
+
+    Disk latency's newest row is its average since the engine started, page life expectancy's one
+    reading of a gauge, and CPU's, the disk queue's and the wait sample's one sample the collector
+    graded on its own; :mod:`dbabrain.lib.report_windows` says how each is read instead. The tile,
+    the problem list and the chart all read the entry, so the entry carries the hour's figure or
+    status, the three readings, and the sentence that says which one decided.
+
+    ``code_items`` is every item's rows of the entry's metric: the wait sample is judged per
+    collection, across items that change from one collection to the next.
+    """
+    code = entry["code"]
+    rows = ([row for rows in code_items.values() for row in rows]
+            if code in report_windows.SAMPLED_CODES else item_rows)
+    judged = report_windows.rejudge(code, rows, item=str(entry["item"] or ""))
+    if judged is None:
+        return
+    entry.update({"windows": judged["windows"], "windowSummary": judged["summary"],
+                  "windowLine": judged["line"]})
+    if judged["status"] is not None:
+        # Collector-graded: the severity the hour held, and the hour's average beside it.
+        entry["status"] = report_windows.judged_status(entry["status"], judged)
+        if code not in report_windows.SAMPLED_CODES and judged["value"] is not None:
+            entry.update({"last": judged["value"], "lastText": f"{judged['value']:g}"})
+        return
+    if entry["code"] == report_windows.IO_LATENCY_CODE:
+        # One point per collection interval instead of the running average, which drifts by
+        # hundredths a day and draws a flat line through a stall.
+        status_at = {_epoch(row["collected_at"]): str(row["status"] or "") for row in item_rows}
+        points = [[epoch, value, status_at.get(epoch, "")]
+                  for epoch, value in report_windows.io_interval_points(item_rows)]
+        if points:
+            values = [point[1] for point in points if point[1] is not None]
+            scale_min, scale_max, scale_kind, capacity = _series_scale(
+                entry["code"], entry["item"], judged["unit"], entry["message"], values)
+            entry.update({
+                "points": _downsample(points),
+                "min": scale_min, "max": scale_max, "scaleKind": scale_kind, "capacity": capacity,
+                "observedMin": round(min(values), 2) if values else None,
+                "observedMax": round(max(values), 2) if values else None,
+                "avg": round(sum(values) / len(values), 2) if values else None,
+            })
+    value = judged["value"]
+    entry.update({
+        "numeric": True,
+        "static": False,
+        "unit": judged["unit"],
+        "last": value,
+        "lastText": judged["text"] if value is None else f"{value:g}",
+    })
 
 
 def metric_label(code: str) -> str:

@@ -428,6 +428,33 @@ writes an unencrypted set nobody notices until a restore needs it.
 The plan (and the dry run) names `env_names` and never env values: it exists to be shown to
 somebody, and half of them are passphrases.
 
+**`files` - what the run wrote, each file hashed where it lies (0.34.0).** Every engine script
+prints one receipt line per file it wrote, tab-separated, the path last:
+
+```
+FILE<TAB>db=APPDB<TAB>type=FULL<TAB>size=123<TAB>sha256=<hex><TAB>verify=passed<TAB>path=/b/APPDB/FULL/APPDB_FULL_...bak
+```
+
+(`host_path=` and `container=` before `path=` - the file on the server itself, through the
+container's mount; the bash scripts read the mounts once with `docker inspect`; `encrypted=yes|no`
+- what the script wrote the file with: SQL Server `WITH ENCRYPTION` and RMAN `SET ENCRYPTION ON`
+exactly when a passphrase was given, PostgreSQL always `no`), and the answer's
+`files` is those lines read (`lib.integrity.parse_file_lines`): path, host path, container, name,
+folder, database, `file_type` (the catalog's words), size, `sha256` (null when the script could not
+hash it - kept, never dropped), `engine_verify` (`passed` / `failed` / `not_run`) and its text,
+and `encrypted` (1 / 0, null when the line does not say - an older script is unknown, not "no").
+The hash is taken by the script on the host, inside the container when there is one, right after
+the engine verified the file:
+
+| Script | One line per | `verify` |
+| --- | --- | --- |
+| `mssql_backup_database.sh` / `.ps1` | `.bak` / `.trn` written | `RESTORE VERIFYONLY ... WITH CHECKSUM` - every page checksum re-read (`WITH CHECKSUM` since 0.34.0). Windows hashes through .NET: PowerShell 2.0 has no `Get-FileHash` |
+| `pg_basebackup_database.sh` | base backup **directory** (`FULL_BASE` / `INCR_BASE`); the sha256 is its `backup_manifest`'s, which holds a checksum of every file | `pg_verifybackup` against that manifest; without `pg_waldump` the files are still checked (`-n`, said in the note); an incremental, which it cannot judge alone, is `not_run` |
+| `pg_archive_wal.sh` | archived WAL segment after `CATALOG_AFTER` (the newest the catalog holds - PostgreSQL writes the archive, not the job), at most `CATALOG_MAX_FILES` (200) a run, before the cleanup | `not_run` - a segment is checked when it is replayed |
+| `oracle_rman_database.sh` / `_archivelog.sh` | backup piece RMAN names (`piece handle=... tag=...`), its type from the tag (`DBOPS_L0` → `RMAN_L0`, `DBOPS_ARCH` → `ARCHIVELOG`, ...) | `VALIDATE BACKUPSET` on the sets this run completed |
+
+A `verify=failed` fails the script (`RESULT=error`): the file is on disk and unusable.
+
 **`server_metadata` is refused since 0.23.0.** A SQL Server backup covers user databases only —
 the scripts select `database_id > 4` — so the logins, roles, Agent jobs and the rest are exported
 separately, by `sqlserver-export-instance` after a backup that completed; the backup_restore app
@@ -486,6 +513,44 @@ silently and back up as whoever WinRM connected as.
 Measured on 2026-08-07 against 203.0.113.188: an RMAN archivelog backup through
 `docker exec`, `RESULT=ok` in 16s — the same run through `backup_restore.cli backup --force` took
 17s, because it is now the same code.
+
+### `backup-stop` — the run's process tree first, then its sessions (0.34.0, 1.238)
+
+**Why.** On a production SQL Server (2026-10-29) a manual FULL was "stopped" by killing its engine session.
+The script driving it went on to its next database a second later - 548 GB, from and onto the drive
+holding the data file - for another hour. A WinRM call that times out also leaves its script running
+(pypsrp has no cancel), and so does a runner killed on the node. The stop has to happen on the host,
+in this order:
+
+1. **The run's process tree.** Every run carries `DBABRAIN_RUN_TAG` (`lib.backup_run`,
+   `<backup_id>_<job_runs id>`). All six backup scripts write their own pid to
+   `<temp>/dbabrain_runs/<tag>.pid` and remove it on exit. The stop ends that tree, children first:
+   - Linux: `pgrep -P`, TERM then KILL;
+   - Windows: `Win32_Process` through `Get-WmiObject` (PowerShell 2.0 has no CIM), then `taskkill /F`.
+2. **SQL Server: every session of the run.** Both SQL Server scripts pass `-H dbabrain:<tag>` on every
+   sqlcmd. The stop KILLs the sessions with that `host_name`, so a native job's backup on the same
+   instance is never touched. A few seconds later it lists any left (a KILL still rolling back).
+3. **What is left, said.** `stopped` is true only when the process is gone and no session remains;
+   otherwise the command fails and names what is left.
+
+**A pid is ended only when that process started before the pid file was written.** A file left by a
+run that died never ends whatever has that number now. A start time that cannot be read counts as
+"not ours": PowerShell holds `$null -le <date>` true, and the first real run of the script on this PC
+let pid 4 (System) through that way.
+
+The request is the run's own `host` and `env`, as `backup-database` took them. Only
+`DOCKER_CONTAINER`, `MSSQL_SERVER`, `MSSQL_USER` and `MSSQL_PASSWORD` are sent, and nothing is read
+from configuration (R09). The scripts are `backup_scripts/stop/backup_stop.sh` / `.ps1`; the
+platform of the `host` picks one.
+
+A SQL Server container that is not running holds no session: the stop says `container_running=0`
+and asks nothing of it.
+
+**Not ended: an engine tool inside a container** (`pg_basebackup`, RMAN). Ending `docker exec` on
+the host does not end the process it started in the container. SQL Server's in-container sqlcmd is
+covered by the session KILL; the other two are not yet.
+
+The app's face is `backup_restore.cli backup-stop --backup-id <id>` (`docs/08_backup_restore_app.md`).
 
 ### `prune-backup-files` — the part that decides, with 8 days as the default
 
@@ -618,6 +683,84 @@ computing a Linux target's parent turned `/b/one.bkp` into `` — a directory o
 
 Measured on 2026-08-07, pack on 203.0.113.188 → pull to the worker → push to 203.0.113.121:
 one sha256 (`7ed6a8d8…`) across all three.
+
+### `file-checksum` — a sha256 taken where the file is (0.34.0)
+
+```jsonc
+{"paths": ["/opt/backup/APPDB_FULL_20261029.bak", "/opt/backup/APPDB_LOG_20261029_0315.trn"],
+ "host": {"runtime": "linux", "host": "192.0.2.20", "username": "u", "key_file": "/keys/id"}}
+// data: {"algorithm": "sha256", "host", "files": [{"path", "sha256", "size_bytes", "mtime_utc"}],
+//        "missing": [...], "file_count", "bytes_total"}
+```
+
+**The one way this tool takes a checksum (rules R43).** A backup records it, a restore compares the
+source before its copy and the copy after it, and the scrub compares it again later - all through
+this command. Before it, `pack-backup`/`pull-file`/`push-file` and `pack-files` each built their
+own hash command; both now build it from `filechecksum.hash_command`.
+
+**It runs on the host that holds the files.** Streaming a 60 GB FULL here to hash it would cost the
+same bytes as the copy it is checking. A batch of paths goes to the host as one command: on Linux
+`sha256sum` and `stat`, on Windows one PowerShell script. With no `host` the files are hashed on
+this machine.
+
+**Windows hashes through .NET, not `Get-FileHash`.** `Get-FileHash` arrived in PowerShell 4.0, and
+Windows Server 2008 R2 ships 2.0. The same script runs on every version, so there is no fallback to
+get wrong. A batch is cut to stay under cmd.exe's 8191 characters once encoded; on Linux a batch
+stays under 60,000.
+
+**A missing file is an answer.** It is listed under `missing`, and the caller - a restore gate, the
+scrub - decides what a missing backup means. A host that cannot run the command at all (no
+`sha256sum`, a dead container) is an error, so "gone" and "could not ask" never read the same.
+
+**Or a whole folder (1.215).** `folder` in place of `paths` hashes every file under it, which is what
+a catalog backfill needs.
+
+- The folder is listed on the host in one command: `find` on Linux, `Get-ChildItem -Recurse` on
+  Windows. PowerShell 2.0 has no `-File`, so folders are filtered out by `PSIsContainer`.
+- `include` keeps the names matching its patterns, case-insensitively.
+- With a `container`, the folder is a path inside it, read on the host through the container's
+  mounts. The longest mount wins; it is the translation `restorestep.postgresql` already asks
+  docker for.
+- At most `max_files`; more is answered as `truncated`, never cut silently.
+- The answer adds `folder`, `host_folder` (the paths in `files` are under it), `folder_found` (a
+  missing folder is an answer) and `listed`.
+
+### `copy-files` — named files host to host, nothing removed (0.34.0, 1.240)
+
+```jsonc
+{"source": {"host": "192.0.2.20", "port": 22, "username": "u", "key_file": "/keys/id"},
+ // or, for a Windows source: "source_share": {"host", "share", "username", "password", "domain"?}
+ "target": {"host": "192.0.2.40", "port": 22, "username": "u", "key_file": "/keys/id"},
+ "files": [{"source": "/opt/backup/APPDB/FULL/APPDB_FULL_20261029.bak",
+            "target": "/repository/SRV-01/APPDB/FULL/APPDB_FULL_20261029.bak"}],
+ "timeout_seconds": 21600}
+// data: {"source_kind": "sftp|smbclient|unc", "files": [{"source", "target", "ok", "bytes_copied",
+//        "error", "warning"?}], "copied", "failed", "bytes_copied"}
+```
+
+**The transport of the repository copy.** It is not `copy-backup-dir`, because that command
+**mirrors**: it deletes from the target whatever the source no longer has. That is right for a
+restore's staging. Pointed at a repository, it would delete the only copy left on the day the server
+is wiped. This command copies exactly the files it is named, and removes nothing on either side.
+`copy-backup-dir` in turn never selects a `<name>.dbabrain_partial` - this tool's name for a file not
+yet whole - so a copy that died half way is never staged as a backup.
+
+- **Streamed, never staged.** The bytes cross this machine as one stream per file. An SSH source is
+  read with SFTP read-ahead. A Windows source is read by `smbclient` into a FIFO that this process
+  reads, so a 500 GB FULL never lands on the worker's disk; on a Windows node the share is its UNC
+  path. The password reaches `smbclient` through its `-A` file, never a command line.
+- **Whole or not at all.** Each file is written as `<name>.dbabrain_partial` and renamed over its
+  name (OpenSSH's posix-rename, in one step) only when every byte has arrived. A read shorter than
+  the source's size is a failure, not a smaller file, and its partial is removed.
+- **One file's failure is that file's line**, and the rest are still copied. A source or target that
+  cannot be reached at all is the command's error. A read or write that stalls for `stall_seconds`
+  (default 300; the offload passes its entry's `offload_stall_seconds`) gives up its file.
+  `timeout_seconds` bounds the whole command: a file not started in time says so.
+- **The exit is asked before the rename.** A FIFO has no size of its own, so a `smbclient` that died
+  half way ends the stream like a whole file. Its exit is read first, and a failed read never takes
+  the file's name.
+- **Nothing is hashed here.** The caller proves each copy with `file-checksum` on both hosts. A
+  copier that judged its own copy would be the one witness the copy gate exists not to trust.
 
 ### A remote path is stated whole (0.29.0)
 
@@ -775,7 +918,7 @@ common cli metadata ...".) The app now resolves the two logins and calls, in ord
 | Step | Command |
 | --- | --- |
 | which files | `backup-chain` - PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), and - since 2026-10-03 - SQL Server's chain from `<database>/FULL|DIFF|LOG/` and the time in each name, with `_cert/` (a database with no FULL, or another layout, whole). **A point in time copies everything**: every narrowing takes the NEWEST chain, and a moment before the newest full needs an older one |
-| the copy | `copy-backup-dir` - `include` (the chain) and, for `copy_selection: window`, `window_hours`: every other file the source wrote in that many hours travels too, so a window is never less than the chain. One `tar` stream through the orchestrator, file by file where tar cannot be used, and the answer says which (`copy_mode`, below). It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has - **and, since 2026-10-03, the directories the source no longer has**, deepest first and only once empty: removing only the files left the husk of a pruned PostgreSQL set, dated by the removal, and the listing took it for the newest full (*pg_combinebackup: could not open file .../global/pg_control*, most hours of the 0.26 node). `list-backup-files` also skips a PostgreSQL backup directory holding no file. **Every piece keeps its source time, by either way** - tar always did; the file-by-file fallback dated each piece by the copy until 2026-10-03, so with several chains staged (a point in time copies them all) the chain copied last read as the newest. A latest restore moves the newest chain plus `wal/`, a point in time everything not already staged - `tests/test_a_staging_folder_holding_several_chains_restores_the_right_one.py` names the files. It refuses a source it cannot list completely, and says which way: the folder does not exist (no backup yet), a folder vanished while listed, or the SSH user cannot read one. **Before the first file moves it checks the room** (0.26.0): `space_check` in the request - a restore entry's own, `{enabled, factor, on_unknown}`, on at x2 when absent - holds the files still to copy to `free on the target >= bytes x factor` (`df` at the staging folder), and a shortfall or an unreadable target fails the command with *No file was copied*. The answer carries what was measured (`space_check`); the restore script that follows checks nothing itself |
+| the copy | `copy-backup-dir` - `include` (the chain) and, for `copy_selection: window`, `window_hours`: every other file the source wrote in that many hours travels too, so a window is never less than the chain. One `tar` stream through the orchestrator, file by file where tar cannot be used, and the answer says which (`copy_mode`, below). It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has - **and, since 2026-10-03, the directories the source no longer has**, deepest first and only once empty: removing only the files left the husk of a pruned PostgreSQL set, dated by the removal, and the listing took it for the newest full (*pg_combinebackup: could not open file .../global/pg_control*, most hours of the 0.26 node). `list-backup-files` also skips a PostgreSQL backup directory holding no file. **Every piece keeps its source time, by either way** - tar always did; the file-by-file fallback dated each piece by the copy until 2026-10-03, so with several chains staged (a point in time copies them all) the chain copied last read as the newest. A latest restore moves the newest chain plus `wal/`, a point in time everything not already staged - `tests/test_a_staging_folder_holding_several_chains_restores_the_right_one.py` names the files. It refuses a source it cannot list completely, and says which way: the folder does not exist (no backup yet), a folder vanished while listed, or the SSH user cannot read one. **Before the first file moves it checks the room** (0.26.0): `space_check` in the request - a restore entry's own, `{enabled, factor, on_unknown}`, on at x2 when absent - holds the files still to copy to `free on the target >= bytes x factor` (`df` at the staging folder), and a shortfall or an unreadable target fails the command with *No file was copied*. The answer carries what was measured (`space_check`); the restore script that follows checks nothing itself **Since 0.34.0 (1.213b) it serves the caller's checksum gate:** `plan_only: true` answers the files the request selects, read from the source alone (the target is not opened, nothing moves); `replace` names relative paths copied even at the same size and no older (a copy whose checksum differs, which size and time cannot see); and every answer lists `files` - each selected file, copied or not, `{path, size_bytes}`. The command still hashes nothing and writes no catalog (R09): the gate is the app's |
 | the listing | `list-backup-files` (unchanged) |
 | instance metadata | `sqlserver-replay-instance` (unchanged), before the databases and after them |
 | the restore | `restore-full` / `restore-diff` / `restore-log`. Since 0.26.0 a SQL Server full with `replace` starts its batch with a guard: a database ONLINE on the target raises before anything runs unless the request says `overwrite_existing: true` (G2.10) |
@@ -921,7 +1064,7 @@ with an import in it.
 | `schema_copy.py` | **Single source of truth** for *reproducing one SQL Server schema on another instance*. `table_load.py` covers a file into one table; this covers "make schema `X` on instance B look like schema `X` on instance A". Nine phases in dependency order — partition function/scheme, change tracking on the database, tables, change tracking per table, indexes, checks, data, modules, foreign keys — with **FKs after data**, so load order cannot violate them. Every phase is **idempotent** (`IF OBJECT_ID(...) IS NULL`, `IF NOT EXISTS`, `CREATE OR ALTER`), because a run that dies in phase 4 has to resume by being run again rather than by being repaired. `plan` prints counts and statements and writes nothing; `apply` takes an `sp_getapplock` around the whole operation, because the "already has rows" guard is read-then-write and two appliers really did run against one target. Data moves **through the client** in batched `executemany` with `IDENTITY_INSERT` per table — `INSERT ... SELECT FROM [OtherDb]...` only works when both databases share an instance. **Input is a JSON object**, like `run-sql` and `rotate-password`. See [the section below](#copying-a-schema-between-instances-schema_copy). | `copy_schema`, `build_plan`, `apply_plan`, `plan_steps`, `verify_copy`, `copy_table_data`, `select_tables`, `select_modules`, `assert_destination`, `application_lock`, `format_plan`; `SchemaCopyError`; `SchemaCopyRequest`, `Endpoint`, `Step`; `PHASES`, `DEFAULT_BATCH_SIZE = 2000`, `DEFAULT_TIMEOUT_SECONDS = 900`, `DEFAULT_LOCK_TIMEOUT_SECONDS = 300`, `DEFAULT_MODULE_PASSES = 4` |
 | `schema_catalog.py` | **Single source of truth** for *what SQL Server's catalogue views say a schema contains* — the read half of `schema_copy`, kept apart because reading a catalogue and writing DDL fail differently and are worth testing separately. Also owns the answer to the question the feature request called worth as much as the copying: **`unsupported_features` lists what a copy will silently drop**. Scripting from `sys.tables` alone loses partitioning (a UAT hop shipped 0 of 32 partitioned indexes), change tracking (a `CREATE PROCEDURE` failed with Msg 22105 mid-deploy), filegroups, compression, temporal tables, extended properties and permissions. Reporting them is not the same as carrying them, and saying which is which is the point. | `unsupported_features`, and the per-object readers `schema_copy` plans from |
 | `result_format.py` | **Single source of truth** for *how a result set is rendered*: `json` (default, the only one a program should parse), `txt` (aligned table for a terminal), `csv` (RFC 4180 via the stdlib writer, header row included), `xml` (structure without a JSON parser), `xlsx` (writes a workbook, via `xlsx_export`), `raw` (values only, tab-separated, no header — so `\| cut -f2` works). Chosen inside the JSON request as `"format"`, never a flag, so a config file can carry it. `xlsx` was already here but reachable only from `sql_tasks` config; the rest existed nowhere and were being improvised by piping JSON into whatever the operator remembered. **A SQL NULL stays distinguishable from an empty string in every text format** — rendering both as nothing silently answers a question nobody asked. `csv` does it PostgreSQL's way (`COPY ... WITH CSV`): an empty *unquoted* field is NULL, `""` is the empty string; numbers stay unquoted so a spreadsheet reads them as numbers. Column names become XML *attributes*, not tags: SQL returns columns called `1` or `count(*)` and neither is a legal element name. `write_result` is the single entry point for "put this result set in a file", whatever the format — callers get one call and no branch, which is what `sql_tasks` now uses for all of `xlsx`/`csv`/`txt`/`xml`. | `render_result`, `write_result`, `normalize_format`; `ResultFormatError`; `RESULT_FORMATS`, `NULL_TEXT` |
-| `backup_copy.py` | A restore's **staging copy** between two hosts (0.23.0, from `backup_restore.transfer`): which parts of a backup directory the restore needs (`chain_include` - PostgreSQL by name, Oracle by asking RMAN, everything for SQL Server and for a point in time), the copy as one `tar` stream that skips what is there and removes what the source dropped (`sync_backup_dir`), the room the files to copy must find first (`check_room`, the entry's `space_check`), the engine's read access (`open_for_the_engine`), and the staging cleanup past retention (`prune_target_dir`). SSH clients arrive open, from values the caller resolved; the CLI face is `cli_backup_copy` (`backup-chain`, `copy-backup-dir`, `prune-staged-backups`). | `chain_include`, `sync_backup_dir`, `check_room`, `open_for_the_engine`, `prune_target_dir`; `TransferResult`, `CopySpaceError` |
+| `backup_copy.py` | A restore's **staging copy** between two hosts (0.23.0, from `backup_restore.transfer`): which parts of a backup directory the restore needs (`chain_include` - PostgreSQL by name, Oracle by asking RMAN, everything for SQL Server and for a point in time), the copy as one `tar` stream that skips what is there and removes what the source dropped (`sync_backup_dir`), the same selection read from the source alone (`plan_backup_dir`, 0.34.0), the room the files to copy must find first (`check_room`, the entry's `space_check`), the engine's read access (`open_for_the_engine`), and the staging cleanup past retention (`prune_target_dir`). SSH clients arrive open, from values the caller resolved; the CLI face is `cli_backup_copy` (`backup-chain`, `copy-backup-dir`, `prune-staged-backups`). | `chain_include`, `sync_backup_dir`, `plan_backup_dir`, `check_room`, `open_for_the_engine`, `prune_target_dir`; `TransferResult`, `CopySpaceError` |
 | `file_transfer.py` | **Single source of truth** for *moving one named file* between this host and a remote one, and for *packing a set into one archive* so it can be moved as one. The apps that move files do it inside a larger job — `backup_copy` (`copy-backup-dir`) syncs a whole backup directory between two remote hosts, `backup_restore.copy_backup` pulls a window of backups off an SMB share — and neither answers "put **this** file **there**", so that kept being typed by hand as `ssh`/`scp`/`docker cp`. Every transfer is size-verified and a short copy deletes what it wrote; overwriting must be asked for and lands atomically; a same-size destination is skipped; mtime is preserved (the restore log-chain filter reads it). `pack_files` builds the archive **on the host that already holds the files** and returns its `sha256` — size catches a truncated copy, not a corrupted one. **Not** for staging a backup set: per-file SFTP across two internet hops measured 10 KB/s, which is why `backup_copy` streams a directory as one `tar`. **Input is a JSON object.** | `fetch_file`, `send_file`, `pack_files`; `FileTransferError`; `STATUS_COPIED` / `STATUS_REPLACED` / `STATUS_SKIPPED_EXISTS`, `PARTIAL_SUFFIX` |
 | `sqlserver_patch.py` | The SQL-Server-specific half of a cumulative update: the "is this instance safe to patch" gate set, the unattended `setup.exe /Action=Patch` contract with its exit-code rules (**3010 = applied, restart required — never re-run**), and the build verification that reads `SERVERPROPERTY` first and registry **`PatchLevel`** (not `Version`) as corroboration. Everything platform-generic underneath is `host_ops`. See [the section below](#patching-a-sql-server-instance-sqlserver_patch). | `precheck`, `apply_cu`, `verify_build` (the JSON entry points); `patch_arguments`, `patch_exit_verdict`, `sqlserver_service_names`, `sqlserver_registry_key`, `setup_log_root`, `version_tuple`; `SqlServerPatchError`; `EXIT_SUCCESS_RESTART_REQUIRED = 3010` |
 | `ops_status.py` | **Is dbabrain itself running** — the one question no other app here asks. Everything in dbabrain watches databases; nothing watched dbabrain, and on 2026-08-12 a NameError in the SQL task scanner made every scheduled scan exit 1 once a minute for a day while the daemon stayed up, the container stayed up and the metric reports kept arriving. Not one scheduled SQL task ran, and a person found it by noticing an absence. Reads `job_runs` and `app_commands.json` and answers two things the estate's own monitoring cannot: **overdue** (an app that stopped being *scheduled* writes no failure row at all, so "no errors" is not health) and **failed since the last alert went out** (the alert's own queue row is the watermark, so an app broken since Tuesday does not message the group every minute for three days — the standing failures ride the periodic summary instead, the same split `sla_policies.json` makes with `reminder_after_seconds`). That question is asked **over an interval, never sampled at an instant**: the first version compared the two newest `job_runs` rows at the moment it happened to run and in seven weeks never sent one alert, because APP-CONTROL runs once a minute while APP-TELEGRAM runs every four seconds — a failure that came and went between two checks was invisible (2026-08-14). Both ends of a **restart** are excused, the daemon's shutdown rows and the stale-`running` rows it closes on startup, or every deploy would raise an incident. The summary's working-hours window is **local** and constrains only the summary; the failure alert ignores the clock, because an app that breaks at 03:00 is news at 03:00. Its state is the queue row it already writes (`source_type=ops_status`), so there is no state table to drift. CLI face: `db.cli ops-status` (the module is `db/ops_status.py` now), scheduled as `APP-CONTROL`. It answers `success: true` when the check **ran**, whatever it found - `false` for a failing app would make *dbabrain found a problem* and *dbabrain could not look* the same answer; what it found is in `data`. `mode: report` sends nothing; there is no `dry_run`, and the default `auto` sends. | `build_ops_status`, `format_summary`, `format_failure_alert`, `summary_is_due`, `last_summary_sent_at`, `last_failure_alert_at`, `load_app_commands`; `FAILED_STATUSES`, `NON_FAULT_MARKERS`, `SOURCE_TYPE`, `SUMMARY_NOTE`, `FAILURE_NOTE` |
@@ -2319,6 +2462,15 @@ If step 3 fails, the change is rolled back inline using the new password, which 
 holds. That is the single window in which a host could be left with a password nothing recorded,
 which is why the rollback is not optional and not deferred.
 
+**A password SQL Server has expired (2026-10-27).** Step 1 is refused with `18487` (expired) or
+`18488` (must be changed): the server names the reason, so the stored password is the right one -
+not the "store was already wrong" skip. No session exists for `ALTER LOGIN`, so the change *is* the
+login: ODBC's `SQL_COPT_SS_OLDPWD` carries the old password and `PWD` the new one
+(`sql_execution.open_sqlserver_odbc(old_password=...)`, never through pymssql, which has no such
+login). Then step 3 and the store as always. There is no rollback - the old password is expired -
+so a value the server took is **stored even when the verify fails**, and the result says `FAILED`
+with why. A dry run answers `READY` with *the current password has expired*.
+
 ### The JSON input
 
 ```json
@@ -2408,6 +2560,14 @@ Three properties, in the order they matter:
    addresses the collectors found on the wire that no configuration ever named. Any finding removes
    the folder and fails the command: a partially scrubbed page is the one that gets published.
 
+**A page's value is read as JSON before it is read as a name (0.34.0).** The identity fields (`login`,
+`owner`, ...) are cut out of the page's text, where `<` and `>` are `\u003c` / `\u003e`. Read raw, the
+backslash of `"\u003cnot-provided\u003e"` passed for the separator of `DOMAIN\login`, `u003e` was learnt
+as a credential, and every `\u003e` on the page became `\CRED_9251` - sixteen invalid JSON escapes on
+the 0.30.0 showcase's inventory page, one of them a `>` in SQL text. Each value is now decoded first
+(`showcase._json_string`), and a `<placeholder>` is not a name at all. The scrub's self-check counts
+identifiers, not escapes, which is why it passed that page.
+
 The replacement is stable and shaped (`dbabrain.lib.pseudonym`), which is what makes the output worth
 having: one machine is the same fake machine on every page and on every day, so a reader can follow
 it from the inventory to its metrics page to its index report. Nothing reversible is written - no
@@ -2467,7 +2627,7 @@ What a first run on real pages will hit, and why each refusal is the feature:
   characters.
 * **Ordinary words that are this estate's database names.** `check-identifiers` puts those at
   `review` confidence and the scrub leaves them, which is right for the product's own vocabulary
-  (`inventory`, `Export`, `ReportServer`, `DWQueue`) and wrong for a customer's (`DtradeProduction`,
+  (`inventory`, `Export`, `ReportServer`, `DWQueue`) and wrong for a customer's (`SALESDB`,
   `Scanpack`). They are listed in the result as `left_as_ordinary_words`: **read that list**, and
   move the ones that are theirs into `extra_terms`. Nothing can make this call automatically -
   mechanically renaming the `review` tier is how the first run renamed
@@ -2505,7 +2665,9 @@ showcase already published carried the same tag. Certified clean, because a tag 
 
 The class names a page builds inside its own script strings are out of the markup rule's reach, so
 **a name the pages' own stylesheet selects is not mapped at all**: a word a `<style>` selector uses
-is the product's by construction. It is listed under `left_as_ordinary_words`.
+is the product's by construction. It is listed under `left_as_ordinary_words`. The UI kit's
+block (`lib.page_kit`, Tabler's rules) is not read for this: its class names are Tabler's words, not
+the pages', and many are ordinary ones (`alert`, `card`, `container`) a customer table may be called.
 
 **Nor is a plain word the code that writes the pages prints** (`page_code_words`: the string
 constants of `reports`, `sla`, `webhost` and `lib/page_style.py`, docstrings left out, and their
@@ -2629,7 +2791,7 @@ Three questions that had no answer a program could ask for:
 | `due-check` | would this `time_window` run now, and if not why not | nothing — it evaluates the request |
 | `check-objects` | does this node's own `data/*.json` obey the reference | that file, and every file it names |
 | `check-references` | which pointer between two config files lands nowhere | `data/config_references.json`, and every file it names |
-| `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the package's 0.29.0 name in every module path, path into the package, `tools/` alias and environment-variable name the node's files carry (`lib.package_rename`; the store's schema, host folders, ids and secret refs are left as they are), the field renames, a restore's machine ids, the name of the backup certificate written into every SQL Server backup job and restore that had been leaving it to the default 0.29.0 renamed the name of the file that marks a staging folder written into every restore entry that already stages on a target, and the two folders lab databases live in written into `sre_config.json` where it states none (`lib.earlier_defaults`; a default is configuration nobody wrote down, so the record is told what it has been running on before the code's default changes), a Telegram record's switch, the inventory into the reports, a command line that moved to another CLI, and the console apps this version lists and the node's `webhost_config.json` does not (added, never changed - 2026-10-03, after a node filled by bundle was found without the `transport` app) - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
+| `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the package's 0.29.0 name in every module path, path into the package, `tools/` alias and environment-variable name the node's files carry (`lib.package_rename`; the store's schema, host folders, ids and secret refs are left as they are), the field renames, a restore's machine ids, the name of the backup certificate written into every SQL Server backup job and restore that had been leaving it to the default 0.29.0 renamed the name of the file that marks a staging folder written into every restore entry that already stages on a target, and the two folders lab databases live in written into `sre_config.json` where it states none (`lib.earlier_defaults`; a default is configuration nobody wrote down, so the record is told what it has been running on before the code's default changes), a Telegram record's switch, the inventory into the reports, a command line that moved to another CLI, and the console apps this version lists and the node's `webhost_config.json` does not (added, never changed - 2026-10-03, after a node filled by bundle was found without the `transport` app), and an instance's `report_policy` keys nothing reads - `enabled`, `severity_overrides`, `disabled_event_codes`, `disabled_report_events` - removed where they hold their empty default, a value named as a conflict (0.34.0, `unread-report-keys`; the hand-formatted example keeps its layout), and a restore entry's `integrity` block - `copy_max_retry` 3 and the other defaults - written where the entry states none, mandatory since 0.34.0 (`stated-integrity`, `lib.integrity`) - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
 | `standardize-field-names` | moves `data/*.json` to the standard field names (stage C of one name per concept), and `config_catalog.json`'s `label_field` / `key_fields` with them - a catalogue still naming `sql_name` labelled every SQL task empty on the worker and made each sync rewrite 30 unchanged records (0.27.0); a plan unless `dry_run: false` | the reference's `used_in`, and every file it names with its `.example.json` |
 
 `due-check` calls `dbabrain.lib.time_window.explain_due` — **the same function the schedulers call** —
@@ -2776,9 +2938,11 @@ until the store could describe itself.
 
 ```bash
 python -m dbabrain.common.cli add-sql '<json>'        # config_admin: register + enable a SQL task
-python -m dbabrain.common.cli metric-toggle '<json>'  # config_admin: enable/disable metrics per server_id
+python -m dbabrain.common.cli metric-toggle '<json>'  # config_admin: enable/disable metrics per server_id;
+                                                     #   "reason" with state off on one metric -> its disabled_reason
 python -m dbabrain.common.cli metric-severity '<json>' # config_admin: remap a metric's statuses per server_id;
-                                                     #   {"items": [...]} writes a list of remaps at once, all or none
+                                                     #   {"items": [...]} writes a list of remaps at once, all or none;
+                                                     #   metric_code "*" is every metric of the server (metrics.severity_map)
 python -m dbabrain.common.cli instance-active '<json>' # config_admin: switch a server_id on/off for every app (active)
 python -m dbabrain.common.cli metric-env '<json>'      # config_admin: a collector script's inputs (metrics.collector_env)
 python -m dbabrain.common.cli trace-session '<json>'  # session_trace: who holds an open transaction
@@ -2821,6 +2985,7 @@ python -m dbabrain.common.cli sqlserver-export-instance '<json>'  # sqlserver_in
 python -m dbabrain.common.cli sqlserver-replay-instance '<json>'  # sqlserver_instance: apply a bundle to a target
 python -m dbabrain.common.cli sqlserver-verify-instance '<json>'  # sqlserver_instance: orphaned users + counts
 python -m dbabrain.common.cli backup-database '<json>'    # backup: run ONE backup, script + host + env
+python -m dbabrain.common.cli backup-stop '<json>'        # backup: stop ONE running backup - its tree, then its sessions
 python -m dbabrain.common.cli list-backup-files '<json>'  # backupfiles: an engine's backups as full/diff/log
 python -m dbabrain.common.cli prune-backup-files '<json>' # retention: which are obsolete (default 14 days)
 python -m dbabrain.common.cli delete-file '<json>'        # deletefiles: remove ONE file by full path

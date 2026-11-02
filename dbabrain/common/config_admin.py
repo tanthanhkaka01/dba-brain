@@ -393,6 +393,7 @@ def set_metric_toggle(
     server_id: str,
     scope: str,
     enabled: bool,
+    reason: str | None = None,
     data_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Enable/disable metric collection for one ``server_id`` in ``db_instances.json``.
@@ -404,9 +405,11 @@ def set_metric_toggle(
                                via ``metrics.disabled_collector_types``;
     * ``<METRIC_CODE>``      — one metric via ``metrics.metric_overrides.<CODE>.enabled``
                                (validated against ``metric_definitions.json``). Enabling
-                               also removes the code from the legacy
-                               ``report_policy.disabled_metric_codes`` list, which blocks
-                               collection the same way.
+                               also removes the code from
+                               ``report_policy.disabled_metric_codes``, the list that keeps
+                               the metric's alerts out of the reports (and, before 0.34.0,
+                               stopped its collection too) - so "on" means collected and
+                               reported.
 
     The write is a single atomic replace of ``db_instances.json``. Returns a summary
     with the applied changes and any warnings (e.g. the metric is enabled but its
@@ -419,6 +422,14 @@ def set_metric_toggle(
     scope_text = str(scope or "").strip()
     if not scope_text:
         raise ConfigAdminError("scope is required: all, collector:<type>, or a metric_code.")
+    # `disabled_reason` sits on one metric's override and says why it is off; switching it on
+    # clears it. Until 0.34.0 no command wrote it, and the three Oracle 8i records' RMAN metrics
+    # were off for a stated reason only in an audit (0.31.0 sheet 1.189).
+    reason_text = str(reason or "").strip()
+    if reason_text and (enabled or scope_text.lower() == "all"
+                        or scope_text.lower().startswith("collector:")):
+        raise ConfigAdminError(
+            "reason says why one metric is off: it goes with state off and a METRIC_CODE scope.")
 
     data_root = Path(data_dir).resolve() if data_dir else DEFAULT_DATA_DIR
     instances_path = data_root / "db_instances.json"
@@ -490,6 +501,9 @@ def set_metric_toggle(
         if not already_in_state:
             override["enabled"] = bool(enabled)
             changes.append(f"metric_overrides.{metric_code}.enabled: {previous} -> {bool(enabled)}")
+        if reason_text and override.get("disabled_reason") != reason_text:
+            override["disabled_reason"] = reason_text
+            changes.append(f"metric_overrides.{metric_code}.disabled_reason set")
         if enabled:
             # `disabled_reason` states why the metric is off. Left behind after it is switched
             # back on, it is a false statement that outlives the fact — and on the worker it
@@ -505,13 +519,12 @@ def set_metric_toggle(
             if list(override) == ["enabled"] and override["enabled"] is True:
                 overrides.pop(metric_code, None)
                 changes.append(f"removed the now-empty metric_overrides.{metric_code} entry")
-        # Reported only when the call really did nothing: a metric already on whose stale
-        # `disabled_reason` was just cleared has changed, and saying otherwise sends the
-        # operator looking for a write that did happen.
-        if already_in_state and not changes:
-            warnings.append(f"{metric_code} is already {state} in metric_overrides — nothing to change.")
         if not override:
             overrides.pop(metric_code, None)
+        # Nothing left behind that means "default", as metric-severity does: switching on a
+        # metric of a record with no overrides wrote `"metric_overrides": {}` (2026-10-23).
+        if not overrides:
+            metrics_cfg.pop("metric_overrides", None)
         if enabled:
             report_policy = instance.get("report_policy")
             if isinstance(report_policy, dict):
@@ -521,6 +534,12 @@ def set_metric_toggle(
                     if len(kept) != len(disabled_codes):
                         report_policy["disabled_metric_codes"] = kept
                         changes.append(f"removed {metric_code} from report_policy.disabled_metric_codes")
+        # Reported only when the call really did nothing: a metric already on whose stale
+        # `disabled_reason` was just cleared has changed, and so has one taken off the report
+        # list - saying otherwise sends the operator looking for a write that did happen.
+        if already_in_state and not changes:
+            warnings.append(f"{metric_code} is already {state} in metric_overrides — nothing to change.")
+        if enabled:
             disabled_collectors = {
                 str(item or "").strip().lower()
                 for item in (metrics_cfg.get("disabled_collector_types") or [])
@@ -653,8 +672,13 @@ def _apply_severity_map(
     metric_code = str(metric_code or "").strip().upper()
     if not metric_code:
         raise ConfigAdminError("metric_code is required.")
-    if metric_code not in known_codes:
+    every_metric = metric_code == EVERY_METRIC
+    if not every_metric and metric_code not in known_codes:
         raise ConfigAdminError(f"Unknown metric_code: {metric_code}")
+    if every_metric and str(metric_item or "").strip():
+        raise ConfigAdminError(
+            f"metric_item scopes a remap to one item of one metric; with metric_code {EVERY_METRIC!r} "
+            "there is no metric for it to be an item of.")
     if severity_map is not None and not isinstance(severity_map, dict):
         raise ConfigAdminError("severity_map is an object {from: to}, or null to remove the remap.")
 
@@ -684,6 +708,9 @@ def _apply_severity_map(
     metrics_cfg = instance.setdefault("metrics", {})
     if not isinstance(metrics_cfg, dict):
         raise ConfigAdminError(f"{server_id}: metrics is not an object.")
+    if every_metric:
+        return _apply_target_severity_map(instance, metrics_cfg, server_id=server_id,
+                                          normalized=normalized, note=note)
     overrides = metrics_cfg.setdefault("metric_overrides", {})
     if not isinstance(overrides, dict):
         raise ConfigAdminError(f"{server_id}: metrics.metric_overrides is not an object.")
@@ -737,6 +764,52 @@ def _apply_severity_map(
         "server_id": str(instance.get("server_id") or server_id),
         "metric_code": metric_code,
         "metric_item": item,
+        "severity_map": normalized,
+        "changed": bool(changes),
+        "changes": changes,
+    }
+
+
+#: The metric_code that remaps every metric of one server at once: `metrics.severity_map`.
+EVERY_METRIC = "*"
+
+
+def _apply_target_severity_map(
+    instance: dict[str, Any],
+    metrics_cfg: dict[str, Any],
+    *,
+    server_id: str,
+    normalized: dict[str, str],
+    note: str,
+) -> dict[str, Any]:
+    """The target-level ``metrics.severity_map``: under every metric's own map, which still wins.
+
+    For a server whose every alert is expected - a lab VM the operator has switched off answers
+    each metric with a connect failure (2026-10-22, the .251 and .252 labs). The collector has
+    read this map since 2026-07 (``metrics.collector._resolve_severity_map``) and no command
+    wrote it, so the choice was a hand-edit or one remap per metric code - and a remap per code
+    leaves every metric added later alerting again. The note gets its own key rather than
+    ``_note``: beside ``enabled`` and ``collector_env`` a bare ``_note`` would say nothing about
+    what it explains, and removing the map must not remove a note about something else.
+    """
+    previous = metrics_cfg.get("severity_map") if isinstance(metrics_cfg.get("severity_map"), dict) else {}
+    changes: list[str] = []
+    if normalized:
+        if previous != normalized:
+            metrics_cfg["severity_map"] = normalized
+            changes.append(f"metrics.severity_map: {previous or 'none'} -> {normalized}")
+        if note and metrics_cfg.get("severity_map_note") != note:
+            metrics_cfg["severity_map_note"] = note
+            changes.append("metrics.severity_map_note set")
+    elif previous or "severity_map_note" in metrics_cfg:
+        metrics_cfg.pop("severity_map", None)
+        metrics_cfg.pop("severity_map_note", None)
+        changes.append(f"metrics.severity_map removed (was {previous or 'none'})")
+    return {
+        "ok": True,
+        "server_id": str(instance.get("server_id") or server_id),
+        "metric_code": EVERY_METRIC,
+        "metric_item": "",
         "severity_map": normalized,
         "changed": bool(changes),
         "changes": changes,
@@ -963,6 +1036,8 @@ def _build_parser() -> argparse.ArgumentParser:
     toggle.add_argument("--state", required=True, choices=["on", "off"])
     toggle.add_argument("--scope", required=True,
                         help="all | collector:<sql|cmd|docker|k8s> | <METRIC_CODE>")
+    toggle.add_argument("--reason", default=None,
+                        help="With state off and a METRIC_CODE: why it is off (disabled_reason).")
     toggle.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
     return parser
 
@@ -990,6 +1065,8 @@ METRIC_TOGGLE_USAGE = (
     "  server_id  (required) the instance to toggle, as written in db_instances.json\n"
     "  state      (required) on | off\n"
     "  scope      (required) all | collector:<sql|cmd|docker|k8s> | <METRIC_CODE>\n"
+    "  reason     with state off and a METRIC_CODE: why it is off, written as the override's\n"
+    "             disabled_reason (switching the metric on clears it)\n"
     "  data_dir   folder holding db_instances.json (default: data/)\n"
     "\n"
     "Legacy form (still accepted): metric-toggle --server-id ... --state off --scope all\n"
@@ -1138,6 +1215,7 @@ def main(argv: list[str] | None = None) -> int:
                 server_id=args.server_id,
                 scope=args.scope,
                 enabled=args.state == "on",
+                reason=args.reason,
                 data_dir=args.data_dir,
             )
         except ConfigAdminError as exc:

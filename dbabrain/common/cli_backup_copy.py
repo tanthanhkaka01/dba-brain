@@ -56,14 +56,17 @@ Copy a backup directory from one host to another as one tar stream, mirroring th
    "open_for_engine": true,      // chmod -R a+rX on the target after (the engine's own uid)
    "copy_mode": "auto",          // auto: tar, else file by file | tar | sftp - pinned, no step down
    "staging_marker": ".dbabrain-staging",   // the file that marks target_dir as this tool's; the default
-   "space_check": {{"enabled": true, "factor": 2.0, "on_unknown": "refuse"}}}}   // these are the defaults
+   "space_check": {{"enabled": true, "factor": 2.0, "on_unknown": "refuse"}},   // these are the defaults
+   "replace": [],                // relative paths copied even at the same size (a copy whose checksum differs)
+   "plan_only": false}}           // true: answer the files selected, read from the source; nothing copied
 
-A file already on the target with the same size and not older is skipped; a staged file the source
+A file already on the target with the same size and not older is skipped, unless replace names it; a staged file the source
 no longer has is removed. A target folder that holds files, none of them at the source, and no
 marker is refused: state staging_marker as the name the folder already carries (a folder marked
 before 0.29.0 carries the earlier default). The files still to copy must fit the target's free space, times the
 factor, or nothing is copied. data: {{"copied", "skipped", "bytes_copied",
-"removed_absent_at_source", "opened_for_engine", "copy_mode", "copy_fell_back", "space_check"}} -
+"removed_absent_at_source", "opened_for_engine", "copy_mode", "copy_fell_back", "space_check", "files"}} -
+files is every file the request selected, copied or not, as {{"path", "size_bytes"}} (path relative to source_dir);
 copy_mode is how the files went (tar | sftp | none), copy_fell_back whether that was the step down
 from tar, space_check what was measured (absent when there was nothing to copy).
 Progress goes to stderr.
@@ -146,6 +149,10 @@ def _copy_backup_dir(request: dict[str, Any]) -> dict[str, Any]:
     if space_check.measure_restore:
         raise ValueError("space_check.measure_restore belongs to a restore entry: this command "
                          "copies files and measures only them.")
+    replace = request.get("replace") or []
+    if not isinstance(replace, list) or not all(isinstance(item, str) for item in replace):
+        raise ValueError("replace must be a list of relative paths.")
+    include = tuple(str(item) for item in request.get("include") or ())
     source = _open(request.get("source"), role="source")
     try:
         if request.get("make_readable", True):
@@ -153,14 +160,21 @@ def _copy_backup_dir(request: dict[str, Any]) -> dict[str, Any]:
             # archivelog job writes new 0640 pieces every 15 minutes - so a set fully readable when
             # the copy started can grow an unreadable file while it runs.
             source.run(f"sudo chmod -R a+rX {shlex.quote(source_dir)} 2>/dev/null || true")
+        if request.get("plan_only"):
+            # The files this request selects, and nothing moved: the caller's checksum gate hashes
+            # them on both hosts before the first copy (0.34.0, 1.213b). The target is not opened.
+            return backup_copy.plan_backup_dir(
+                source_session=source, source_dir=source_dir, include=include,
+                window_since=_window_since(request.get("window_hours"))).as_dict()
         target = _open(request.get("target"), role="target")
         try:
             result = backup_copy.sync_backup_dir(
                 source_session=source, source_dir=source_dir,
                 target_session=target, target_dir=target_dir,
-                include=tuple(str(item) for item in request.get("include") or ()), log=_log,
+                include=include, log=_log,
                 copy_mode=copy_mode, space_check=space_check,
-                window_since=_window_since(request.get("window_hours")), marker=marker)
+                window_since=_window_since(request.get("window_hours")), marker=marker,
+                replace=tuple(replace))
             opened = (backup_copy.open_for_the_engine(target, target_dir, log=_log)
                       if request.get("open_for_engine", True) else False)
         finally:
@@ -207,6 +221,8 @@ def _message(command: str, data: dict[str, Any]) -> str:
         return (f"{len(data['include'])} prefix(es) to copy" if data["narrowed"]
                 else "the whole directory")
     if command == "copy-backup-dir":
+        if "opened_for_engine" not in data:
+            return f"{len(data.get('files') or [])} file(s) selected, nothing copied (plan_only)"
         return (f"{data['copied']} copied, {data['skipped']} already there, "
                 f"{data.get('removed_absent_at_source', 0)} removed (gone at the source)"
                 # Said in the one line a person reads: the step down is the slow way (G4).

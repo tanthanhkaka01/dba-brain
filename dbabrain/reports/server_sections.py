@@ -12,7 +12,7 @@ from dbabrain.lib import data_sources
 from dbabrain.lib import backup_policy, capacity_forecast
 from dbabrain.lib import health_model
 from dbabrain.reports import inventory_health
-from dbabrain.reports.server_series import QUERY_STORE_CODE, SEVERITY_RANK, _int_or_none, _int_or_zero, _message_kv, severity_of
+from dbabrain.reports.server_series import OS_DISK_NOT_A_VOLUME_ITEMS, QUERY_STORE_CODE, SEVERITY_RANK, _int_or_none, _int_or_zero, _message_kv, severity_of
 
 
 LINKED_SERVER_CODE = "LINKED_SERVER_STATUS"
@@ -137,10 +137,10 @@ CAPACITY_CODE = "STORAGE_DISK_FREE_SPACE"
 OS_VOLUME_CODE = "OS_DISK_USAGE"
 VOLUME_SECTION_CODES = [OS_VOLUME_CODE, CAPACITY_CODE]
 
-#: ``OS_DISK_USAGE`` items that are storage *activity*, not a volume. They share the metric code
-#: with the mount points and would otherwise arrive in the volume table as rows with no size.
-_NOT_A_VOLUME = {"disk_read_kbps", "disk_write_kbps", "disk_iops", "disk_queue_length",
-                 "disk_perf_counters", "disk_usage"}
+#: ``OS_DISK_USAGE`` items that are not a volume - and ``disk_usage``, the script's own failure
+#: row. They share the metric code with the mount points and would otherwise arrive in the
+#: volume table as rows with no size.
+_NOT_A_VOLUME = {*OS_DISK_NOT_A_VOLUME_ITEMS, "disk_usage"}
 
 
 def _volume_key(name: str) -> str:
@@ -516,7 +516,220 @@ DATABASE_SECTION_CODES = [
     "DATABASE_DATA_SIZE", "DATABASE_LOG_SIZE", "LOG_FILE_SPACE", "LOG_REUSE_WAIT",
     QUERY_STORE_CODE, "DATABASE_USER_PERMISSIONS",
     "BACKUP_AGE", *backup_policy.BACKUP_LAST_RESULT_CODES,
+    # An Oracle database is its data files: without them its size read "—" here while the fleet
+    # page, which loads them, summed them (2026-10-26).
+    "STORAGE_DATA_FILE_SPACE",
 ]
+
+
+def _num(value, unit: str = "") -> str:
+    """A number as the inventory prints it: ``—`` for nothing, thousands separated, its unit after."""
+    number = as_float(value)
+    if number is None:
+        return "—"
+    text = f"{number:,.0f}" if abs(number) >= 100 or number == int(number) else f"{number:,.1f}"
+    return f"{text} {unit}".strip()
+
+
+def _on_off(value) -> str:
+    """An sp_configure switch: ``on (1)`` / ``off (0)``, or the value as stored when it is neither."""
+    if value is None or value == "":
+        return "—"
+    number = as_float(value)
+    if number == 1:
+        return "on (1)"
+    if number == 0:
+        return "off (0)"
+    return str(value)
+
+
+def _config_rows(cfg: dict) -> tuple[list, list]:
+    """The inventory's Config tab for one server, as ``[label, value]`` rows and its advice lines."""
+    if not cfg or cfg.get("govMissing"):
+        return [], []
+    cpu = cfg.get("cpu")
+    if cpu is None:
+        cpus = "—"
+    elif cfg.get("cpuLive"):
+        cpus = f"{cpu} visible · {cfg.get('sched') if cfg.get('sched') is not None else '—'} schedulers online"
+    else:
+        seen = f", asked {cfg['cpuSeenAt']}" if cfg.get("cpuSeenAt") else ""
+        cpus = f"{cpu} (stored in the inventory, not read from the instance{seen})"
+    max_mem = as_float(cfg.get("maxmemMB"))
+    rows = [
+        ["CPUs visible / schedulers", cpus],
+        ["Max degree of parallelism", _num(cfg.get("maxdop"))],
+        ["Cost threshold for parallelism", _num(cfg.get("cost"))],
+        ["Max server memory", "unlimited (2147483647 MB)" if max_mem is not None and max_mem >= 2147483647
+         else _num(max_mem, "MB")],
+        ["Committed memory", _num(cfg.get("committedMB"), "MB")],
+        ["TempDB", str(cfg.get("tempdb") or "—")],
+        ["Backup compression default", _on_off(cfg.get("backupCompr"))],
+        ["Remote admin connections (DAC)", _on_off(cfg.get("remoteDac"))],
+        ["Optimize for ad hoc workloads", _on_off(cfg.get("optAdhoc"))],
+        ["Blocked process threshold", _num(cfg.get("blockedThr"), "s")],
+        ["CLR enabled", _on_off(cfg.get("clr"))],
+        ["xp_cmdshell", _on_off(cfg.get("xpcmd"))],
+    ]
+    # The same advice the inventory prints under a server with config warnings, word for word.
+    advice = []
+    if as_float(cfg.get("backupCompr")) == 0:
+        advice.append("backup compression default = 0 → enable to shrink backup size/time")
+    if as_float(cfg.get("blockedThr")) == 0:
+        advice.append("blocked process threshold = 0 → set 30–60s to capture blocking")
+    if as_float(cfg.get("optAdhoc")) == 0:
+        advice.append("optimize for ad hoc workloads = 0 → enable to reduce plan-cache bloat")
+    if as_float(cfg.get("remoteDac")) == 0:
+        advice.append("remote admin connections = 0 → enable remote DAC for prod")
+    cost = as_float(cfg.get("cost"))
+    if cost is not None and cost < 30:
+        advice.append(f"cost threshold for parallelism = {cfg.get('cost')} → raise to 30–50")
+    if as_float(cfg.get("xpcmd")) == 1:
+        advice.append("xp_cmdshell = 1 (enabled) → confirm intentional / scope it")
+    return rows, advice
+
+
+def _host_rows(os_health: dict) -> list:
+    """The host as the OS collectors read it - every field the inventory keeps, not only the five it prints."""
+    o = os_health or {}
+    if not o:
+        return []
+    cpu_bits = [o.get("cpuModel"),
+                f"{o['cores']} cores" if o.get("cores") else "",
+                f"{o['logicalCpus']} logical CPUs" if o.get("logicalCpus") else "",
+                f"{_num(o.get('cpuPct'))}% used" if o.get("cpuPct") is not None else ""]
+    mem_bits = [f"{_num(o.get('memUsedGB'))} / {_num(o.get('memTotalGB'))} GB used"
+                if o.get("memTotalGB") is not None else "",
+                f"{_num(o.get('memPct'))}%" if o.get("memPct") is not None else ""]
+    rows = [
+        ["Hostname", o.get("hostname") or ""],
+        ["Operating system", o.get("osName") or ""],
+        ["Architecture", o.get("arch") or ""],
+        ["Timezone", o.get("timezone") or ""],
+        ["Uptime", o.get("uptime") or ""],
+        ["Last boot", o.get("lastBoot") or ""],
+        ["CPU", " · ".join(x for x in cpu_bits if x)],
+        ["Load / processor queue", "" if o.get("loadOrQueue") is None else _num(o.get("loadOrQueue"))],
+        ["Memory", " · ".join(x for x in mem_bits if x)],
+        ["Swap / page file used", "" if o.get("swapPct") is None else f"{_num(o.get('swapPct'))}%"],
+        ["Pending reboot", str(o.get("pendingReboot") or "")],
+    ]
+    return [row for row in rows if row[1]]
+
+
+def _security_rows(security: dict) -> list:
+    sec = security or {}
+    if not sec.get("collected"):
+        return []
+    rows = [["Failed logins (24 h)", _num(sec.get("failed24h"))]]
+    principals = sec.get("principals") or []
+    if principals:
+        rows.append(["Failed logins by login", ", ".join(
+            f"{p.get('login')}: {_num(p.get('attempts'))}" for p in principals[:10])])
+    passwords = sec.get("passwordsOld") or []
+    if passwords:
+        rows.append([f"Passwords older than {sec.get('passwordThresholdDays') or 180} days",
+                     f"{len(passwords)} login(s), oldest {_num(sec.get('oldestPasswordDays'))} days: " + ", ".join(
+                         f"{p.get('login')} {_num(p.get('age_days'))}d" for p in passwords[:10])])
+    rows.append(["Certificates expired", _num(sec.get("certsExpired"))])
+    rows.append(["Certificates expiring in 30 days", _num(sec.get("certsExpiring30d"))])
+    return rows
+
+
+def _disk_text(disk: dict) -> str:
+    free = disk.get("free")
+    bits = [str(disk.get("m") or "")]
+    if free is not None:
+        bits.append(f"{_num(free)}% free")
+    if disk.get("freeGB") is not None and disk.get("totalGB") is not None:
+        bits.append(f"{_num(disk.get('freeGB'))} / {_num(disk.get('totalGB'))} GB")
+    if disk.get("flag"):
+        bits.append(str(disk["flag"]))
+    return " · ".join(bits)
+
+
+def _freshness_line(freshness: dict, inv: str) -> str:
+    """The inventory's last line for a server: how live its values are, then its inventory status."""
+    f = freshness or {}
+    if f.get("collectFailed"):
+        head = "collection failed - the values are the last known ones"
+    elif not f.get("asOf"):
+        head = "no live metrics - the values are the last known inventory snapshot"
+    else:
+        age = f.get("ageHours")
+        head = f"live metrics as of {f['asOf']}" + (f" ({age} h ago)" if age else "")
+    return " · ".join(x for x in (head, str(inv or "")) if x)
+
+
+def build_server_detail(model: dict | None) -> dict:
+    """Everything the inventory says about this one server, for the per-server page - and more.
+
+    The operator, 2026-10-23: *the server metrics page is the page of one instance; it must carry
+    more than the inventory, never less.* Until then a reader of one server's page found no
+    version, no configuration, no security counts and no host facts there - the inventory had them
+    all, in its Server Detail and its Config tab. ``model`` is that inventory's own record for the
+    server (``inventory_report.build_models``), so the two pages read one set of values and no
+    query is added. Where the inventory prints a few of a block's fields (the host: five), this
+    prints every field the block holds.
+
+    ``tests/test_the_server_page_carries_everything_the_inventory_says_about_a_server.py`` holds
+    the page to every per-server field the inventory's template reads.
+    """
+    m = model or {}
+    if not m:
+        return {}
+    inst = m.get("instance") or {}
+    backup = m.get("backup") or {}
+    backup_bits = [str(backup.get("cov") or ""), str(backup.get("note") or "")]
+    worst = backup.get("worstDatabases") or []
+    if worst:
+        backup_bits.append("worst: " + ", ".join(
+            str(w.get("database") or w.get("name") or w) if isinstance(w, dict) else str(w) for w in worst[:5]))
+    online, total = m.get("online"), m.get("total")
+    summary_rows = [
+        ["Company", str(m.get("company") or "")],
+        ["Platform", str(m.get("platform") or "")],
+        ["Operating system", "" if m.get("os") in (None, "—") else str(m.get("os"))],
+        ["Endpoint", " · ".join(dict.fromkeys(
+            str(x) for x in (m.get("machine"), m.get("endpoint")) if x and x != "—"))],
+        ["Databases online", "" if total is None else f"{online} / {total}"],
+        ["Host RAM", "" if m.get("ramGB") in (None, "") else f"{_num(m.get('ramGB'))} GB"],
+        # The inventory's own token, said in words: "none_documented · standalone".
+        ["HA / DR", "" if m.get("ha") in (None, "", "none_documented")
+         else str(m.get("ha")).replace("none_documented", "none documented")],
+        ["Backup", " · ".join(x for x in backup_bits if x)],
+        ["Page life expectancy", "" if m.get("ple") is None else _num(m.get("ple"), "s")],
+        ["Active sessions", "" if m.get("sessions") is None else _num(m.get("sessions"))],
+    ]
+    disks = m.get("disks") or []
+    if disks:
+        summary_rows.append(["Disks", " · ".join(_disk_text(d) for d in disks)])
+    if not (m.get("databases") or []) and m.get("dbs"):
+        summary_rows.append(["Databases (inventory)", ", ".join(str(d) for d in m["dbs"])])
+    # The Server Detail rows - the instance's own facts first - each with its "static" mark when it
+    # comes from the canonical inventory file rather than a metric.
+    detail = [[str(row[0]), str(row[1]), *(["static"] if len(row) > 2 and row[2] == "static" else [])]
+              for row in (m.get("detail") or [])]
+    config, advice = _config_rows(m.get("cfg") or {})
+    return {
+        "summary": inventory_health.instance_summary(inst),
+        "asOf": str(inst.get("as_of") or ""),
+        "status": str(m.get("status") or ""),
+        "facts": [row for row in summary_rows if row[1]] + detail,
+        "config": config,
+        "configAdvice": advice,
+        "host": _host_rows(m.get("os_health") or {}),
+        "services": [{"name": s.get("name"), "state": s.get("state"), "status": s.get("status")}
+                     for s in ((m.get("os_health") or {}).get("services") or [])],
+        "topCpu": (m.get("os_health") or {}).get("topCpu") or [],
+        "topMemory": (m.get("os_health") or {}).get("topMemory") or [],
+        "network": (m.get("os_health") or {}).get("network") or [],
+        "events": (m.get("os_health") or {}).get("events") or [],
+        "security": _security_rows(m.get("security") or {}),
+        "findings": [str(f) for f in (m.get("findings") or [])],
+        "freshness": _freshness_line(m.get("freshness") or {}, str(m.get("inv") or "")),
+        "stale": bool((m.get("freshness") or {}).get("stale")),
+    }
 
 
 def build_databases(code_map, backup_result=None) -> dict:

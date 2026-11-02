@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import stat
 import sys
 import tempfile
@@ -21,6 +22,7 @@ from dbabrain.backup_restore.config import BackupRestoreConfig, load_restore_con
 from dbabrain.lib import data_sources
 from dbabrain.lib import sqlserver_backup_chain as chain_rule
 from dbabrain.lib.remote_host import RemoteHost
+from dbabrain.lib import integrity as restore_integrity_rules
 from dbabrain.logging_ops import log_event
 
 
@@ -46,6 +48,137 @@ class CopyBackupResult:
     file_results: tuple[CopyBackupFileResult, ...]
     failed: int = 0
     replaced: int = 0
+    #: The catalog's run row, and the gate's answer - counts per verdict, ``proven`` (0.34.0).
+    restore_run_id: int | None = None
+    integrity: dict | None = None
+
+
+class _Gate:
+    """One restore run's checksum gate on the Linux copy paths (0.34.0, 1.213).
+
+    Holds what every file is held to - the entry's ``integrity``, the catalog, the run row - and the
+    target's login, so the smbclient pre-skip and the SFTP push answer to the same rules:
+    ``copy_gate.confirm_on_target`` for a file already on the target, ``copy_gate.copy_verified_batch``
+    for a file copied. A file that is not proven fails the copy, and the restore is never run on it.
+    """
+
+    def __init__(self, config: BackupRestoreConfig, catalog, *, logger: logging.Logger | None) -> None:
+        from dbabrain.lib import integrity as restore_integrity
+
+        self.config = config
+        self.integrity = restore_integrity.require_restore_integrity(
+            {"integrity": config.integrity.as_record()} if config.integrity else {},
+            label=f"restore_id={config.restore_id or '?'}")
+        self.catalog = catalog
+        self.logger = logger
+        self.outcomes: list = []
+        self.restore_run_id: int | None = None
+        if catalog is not None:
+            from dbabrain.lib.version import __version__
+
+            self.restore_run_id = catalog.start_restore_run(
+                # A copy-only run is recorded as one: it never counts as a restore (1.216).
+                action=restore_integrity.ACTION_COPY_ONLY if config.action == restore_integrity.ACTION_COPY_ONLY
+                else restore_integrity.ACTION_RESTORE, restore_id=config.restore_id, source_server_id=config.source_id,
+                target_server_id=config.target_id, target_folder=str(config.vm_import_unc),
+                copy_max_retry=self.integrity.copy_max_retry, phase="copying",
+                node_host=socket.gethostname(), app_version=__version__)
+
+    def _item(self, *, relative: str, target_posix: str, source_display: str, stored: dict) -> "object":
+        from dbabrain.backup_restore.copy_gate import FileToCopy
+        from dbabrain.lib import integrity as restore_integrity
+
+        row = stored.get(PurePosixPath(relative).name) or {}
+        parts = [part for part in relative.split("/") if part]
+        return FileToCopy(
+            source_server_id=self.config.source_id, target_server_id=self.config.target_id,
+            file_name=PurePosixPath(relative).name, file_type=restore_integrity.sqlserver_file_type(relative),
+            source_path=source_display, target_path=target_posix, database_name=parts[0] if len(parts) > 1 else "",
+            engine="sqlserver", checksum_after_backup=row.get("checksum_after_backup"),
+            size_after_backup=row.get("size_bytes"),
+            file_id=row.get("file_id"), source_host_path=str(row.get("host_path") or ""),
+            target_host_path=target_posix, backup_taken_at=row.get("backup_ended_at"))
+
+    def _stored(self, names: list[str]) -> dict:
+        return self.catalog.stored_files(server_id=self.config.source_id, file_names=names) if self.catalog else {}
+
+    @staticmethod
+    def hash_targets(remote: RemoteHost):
+        """The Linux target, hashed on itself - one ``common.cli file-checksum`` per batch."""
+        from dbabrain.transport import common_cli
+
+        def batch(paths: list[str]) -> dict:
+            if not paths:
+                return {}
+            answer = common_cli.run("file-checksum", {"host": remote.host_block(), "paths": list(paths)})
+            return {item["path"]: (item["sha256"], item.get("size_bytes")) for item in answer.get("files") or []}
+        return batch
+
+    @staticmethod
+    def hash_local(paths: list[str]) -> dict:
+        """Paths this process reads itself - a Windows node's UNC target (1.213b). The bytes hashed are
+        the ones the share serves, which are the ones the restore will read."""
+        found = {}
+        for path in paths:
+            file = Path(path)
+            if file.is_file():
+                found[path] = (_local_sha256(file), file.stat().st_size)
+        return found
+
+    def confirm(self, candidates: list[tuple[str, str]], *, hash_targets) -> set[str]:
+        """``candidates``: ``(relative, target)`` of files the target holds at the source's size.
+        Answers the relatives proven against the catalog; the rest are copied."""
+        from dbabrain.backup_restore.copy_gate import confirm_on_target
+
+        stored = self._stored([PurePosixPath(rel).name for rel, _ in candidates])
+        items = [self._item(relative=rel, target_posix=target, stored=stored,
+                            source_display=f"{self.config.prod_backup_share}\\{rel.replace('/', chr(92))}")
+                 for rel, target in candidates]
+        outcomes, remaining = confirm_on_target(items, integrity=self.integrity, hash_targets=hash_targets,
+                                                catalog=self.catalog, restore_run_id=self.restore_run_id)
+        proven = [index for index in range(len(items)) if index not in set(remaining)]
+        self.outcomes.extend(outcomes[index] for index in proven)
+        return {candidates[index][0] for index in proven}
+
+    def copy(self, files: list[tuple[Path, str, str, str]], put, *, hash_targets, copy_engine: str) -> list:
+        """``files``: ``(local, relative, target, source_display)``; ``put(local, target)`` copies
+        one. Answers one outcome per file, in order."""
+        from dbabrain.backup_restore.copy_gate import copy_verified_batch
+
+        stored = self._stored([PurePosixPath(rel).name for _, rel, _, _ in files])
+        items = [self._item(relative=rel, target_posix=target, source_display=display, stored=stored)
+                 for _, rel, target, display in files]
+        local_of = {item.source_path: local for item, (local, _, _, _) in zip(items, files)}
+        target_of = {item.target_path: local for item, (local, _, _, _) in zip(items, files)}
+
+        def hash_sources(paths: list[str]) -> dict:
+            # The bytes this node read from the share: what the copy will carry, hashed here.
+            return {path: (_local_sha256(local_of[path]), local_of[path].stat().st_size)
+                    for path in paths if local_of.get(path) is not None and local_of[path].is_file()}
+
+        outcomes = copy_verified_batch(
+            items, integrity=self.integrity, hash_sources=hash_sources, hash_targets=hash_targets,
+            copy=lambda item: put(target_of[item.target_path], item.target_path),
+            catalog=self.catalog, restore_run_id=self.restore_run_id, copy_engine=copy_engine)
+        self.outcomes.extend(outcomes)
+        return outcomes
+
+    def finish(self) -> dict:
+        from dbabrain.backup_restore.copy_gate import summarize
+
+        summary = summarize(self.outcomes)
+        if self.catalog is not None and self.restore_run_id is not None:
+            self.catalog.set_restore_run(
+                self.restore_run_id, phase="verified" if summary["proven"] else "refused",
+                chain_files=summary["files"], files_matched=summary["verdicts"].get("match", 0),
+                files_recopied=summary["recopied"],
+                refused_reason="; ".join(summary["unproven"])[:2000])
+        summary["restore_run_id"] = self.restore_run_id
+        return summary
+
+
+def _local_sha256(path: Path) -> str:
+    return restore_integrity_rules.sha256_of_file(path)
 
 
 def share_login_request(*, credential_target: str, username: str, password_env: str) -> dict[str, str] | None:
@@ -542,6 +675,7 @@ def _copy_backup_files_via_sftp(
     logger: logging.Logger | None,
     force: bool = False,
     source_root: Path | None = None,
+    gate: "_Gate | None" = None,
 ) -> tuple[CopyBackupFileResult, ...]:
     # source_root is the base the selected files are relative to. On Windows it is
     # the UNC share; on Linux it is the local smbclient staging dir.
@@ -549,6 +683,10 @@ def _copy_backup_files_via_sftp(
     linux_import = PurePosixPath(str(config.vm_import_unc).replace("\\", "/"))
     results: list[CopyBackupFileResult] = []
     _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
+
+    if gate is not None:
+        return _copy_gated_via_sftp(config, selected_files, root=root, linux_import=linux_import,
+                                    gate=gate, logger=logger, from_share=source_root is not None)
 
     with open_ssh_connection(config) as remote:
         _prepare_linux_base_import_dir(remote, config)
@@ -651,6 +789,128 @@ def _copy_backup_files_via_sftp(
                     logger,
                     f"{_rid}copy-backup source_id={config.source_id} copy_failed file={source_file} error={_format_log_value(exc)}",
                 )
+    return tuple(results)
+
+
+def _copy_gated_via_sftp(
+    config: BackupRestoreConfig,
+    selected_files: list[Path],
+    *,
+    root: Path,
+    linux_import: PurePosixPath,
+    gate: _Gate,
+    logger: logging.Logger | None,
+    from_share: bool,
+) -> tuple[CopyBackupFileResult, ...]:
+    """Every selected file through the checksum gate (0.34.0): source hashed as this node holds it,
+    the target hashed on the target before and after, copied again over itself up to
+    ``copy_max_retry``. Always to a temporary name, then renamed: a valid copy is never overwritten
+    in place, and a copy cut off midway is never under the real name."""
+    _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
+    files = []
+    for source_file in selected_files:
+        relative = "/".join(source_file.relative_to(root).parts)
+        target_posix = str(linux_import.joinpath(*source_file.relative_to(root).parts))
+        display = (f"{config.prod_backup_share}\\{relative.replace('/', chr(92))}" if from_share
+                   else str(source_file))
+        files.append((source_file, relative, target_posix, display))
+
+    with open_ssh_connection(config) as remote:
+        _prepare_linux_base_import_dir(remote, config)
+
+        def put(local: Path, target_posix: str) -> int:
+            remote.mkdirs(str(PurePosixPath(target_posix).parent))
+            staged = f"{target_posix}.dbabrain_partial"
+            remote.put(local, staged)
+            try:
+                # The source's time travels with it: the restore's log-chain filter compares them.
+                remote.set_mtime(staged, local.stat().st_mtime)
+            except OSError:
+                pass
+            remote.rename(staged, target_posix)
+            return local.stat().st_size
+
+        outcomes = gate.copy(files, put, hash_targets=gate.hash_targets(remote), copy_engine="sftp")
+
+    return _gated_results(config, files, outcomes, logger=logger)
+
+
+def _copy_gated_locally(
+    config: BackupRestoreConfig,
+    selected_files: list[Path],
+    *,
+    gate: _Gate,
+    engine: str,
+    logger: logging.Logger | None,
+    force: bool = False,
+) -> tuple[CopyBackupFileResult, ...]:
+    """A Windows node's copy, share to share or path to path, through the same gate (0.34.0, 1.213b).
+
+    Until 1.213b this copied by size alone, like the Linux paths before 1.213: a target file at the
+    source's size was skipped unread. Now a same-size file is skipped only when its hash IS what its
+    backup recorded (``confirm``); everything else is hashed on both sides as this node reads them and
+    copied again over itself up to ``copy_max_retry``. Every copy goes to a temporary name and is
+    renamed, so a copy cut off midway never sits under the real name for the restore to pick up.
+    """
+    _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
+    root, target_root = config.prod_backup_share, config.vm_import_unc
+    files = []
+    for source_file in selected_files:
+        target_file = target_file_for_source(source_file, source_root=root, target_root=target_root)
+        relative = "/".join(source_file.relative_to(root).parts)
+        files.append((source_file, relative, str(target_file), str(source_file)))
+
+    candidates = []
+    # --force skips no file on the catalog's word; the gate still leaves a target already equal alone.
+    for source_file, relative, target, _display in ([] if force else files):
+        try:
+            if Path(target).is_file() and Path(target).stat().st_size == source_file.stat().st_size:
+                candidates.append((relative, target))
+        except OSError:
+            continue
+    proven = gate.confirm(candidates, hash_targets=gate.hash_local) if candidates else set()
+    for relative, target in candidates:
+        if relative in proven:
+            _log_progress(logger, (
+                f"{_rid}copy-backup source_id={config.source_id} copy_skip_existing file={relative} "
+                f"target={target} reason=target_matches_the_backup_checksum"))
+
+    def put(local: Path, target: str) -> int:
+        target_file = Path(target)
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        staged = target_file.with_name(target_file.name + ".dbabrain_partial")
+        shutil.copy2(local, staged)
+        os.replace(staged, target_file)
+        return target_file.stat().st_size
+
+    to_copy = [item for item in files if item[1] not in proven]
+    outcomes = gate.copy(to_copy, put, hash_targets=gate.hash_local, copy_engine=engine) if to_copy else []
+    skipped = tuple(CopyBackupFileResult(source_file=source_file, target_file=Path(target), status="SKIPPED_EXISTS",
+                                         bytes=source_file.stat().st_size)
+                    for source_file, relative, target, _display in files if relative in proven)
+    return skipped + _gated_results(config, to_copy, outcomes, logger=logger)
+
+
+def _gated_results(config: BackupRestoreConfig, files: list, outcomes: list, *,
+                   logger: logging.Logger | None) -> tuple[CopyBackupFileResult, ...]:
+    """The gate's verdicts as the copy's statuses: anything not proven is ``FAILED``, which stops the
+    workflow before ``RESTORE``."""
+    _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
+    results: list[CopyBackupFileResult] = []
+    for (source_file, _relative, target_posix, _display), outcome in zip(files, outcomes):
+        status = {"match": "SKIPPED_EXISTS", "copied": "COPIED", "recopied": "REPLACED"}.get(outcome.verdict, "FAILED")
+        try:
+            size = source_file.stat().st_size
+        except OSError:
+            # A share file gone since it was listed: the gate said source_missing, the copy says FAILED.
+            size = 0
+        results.append(CopyBackupFileResult(source_file=source_file, target_file=Path(target_posix),
+                                            status=status, bytes=size))
+        _log_progress(logger, (
+            f"{_rid}copy-backup source_id={config.source_id} copy_verified file={source_file} "
+            f"target={target_posix} verdict={outcome.verdict} attempts={len(outcome.attempts)} "
+            f"sha256={(outcome.checksum_source_before_copy or '')[:16]}"
+            + (f" reason={_format_log_value(outcome.reason)}" if outcome.reason else "")))
     return tuple(results)
 
 
@@ -950,8 +1210,14 @@ def _smbclient_download_selected_to_staging(
     *,
     logger: logging.Logger | None,
     force: bool = False,
+    confirm=None,
 ) -> tuple[Path, list[CopyBackupFileResult], int]:
     """List first, filter remote backups, then download only selected files one by one.
+
+    ``confirm`` (0.34.0): with the checksum gate on, a file the target holds at the source's size is
+    only a candidate - ``confirm(candidates)`` answers which of them are proven against the catalog,
+    and only those are skipped; every other one is downloaded and goes through the gate. Without it,
+    the size alone decides, as before.
 
     Files that already exist in the FINAL destination (``vm_import_unc`` on the target)
     with a matching size are skipped at the source — never downloaded from SMB — so a
@@ -967,7 +1233,21 @@ def _smbclient_download_selected_to_staging(
     dest_sizes = {} if force else _remote_destination_sizes(config, logger=logger)
     linux_import = str(config.vm_import_unc).replace("\\", "/").rstrip("/")
     try:
-        for db, remote_dir, selected in _smbclient_selection(config, logger=logger):
+        selections = list(_smbclient_selection(config, logger=logger))
+        same_size: list[tuple[str, str]] = []
+        for db, _remote_dir, selected in selections:
+            for backup in selected:
+                rel_backup = backup.relative_path.replace("\\", "/")
+                dest_rel = f"{db}/{rel_backup}" if db else rel_backup
+                if not force and dest_sizes.get(dest_rel.lower()) == backup.size_bytes:
+                    same_size.append((dest_rel, f"{linux_import}/{dest_rel}"))
+        if confirm is not None:
+            skippable = confirm(same_size) if same_size else set()
+            skip_reason = "verified_on_target"
+        else:
+            skippable = {dest_rel for dest_rel, _ in same_size}
+            skip_reason = "destination_same_size"
+        for db, remote_dir, selected in selections:
             local_dir = (staging / db) if db else staging
             local_dir.mkdir(parents=True, exist_ok=True)
             total_selected += len(selected)
@@ -980,7 +1260,7 @@ def _smbclient_download_selected_to_staging(
                 dest_rel = f"{db}/{rel_backup}" if db else rel_backup
                 dest_target = f"{linux_import}/{dest_rel}"
                 existing_dest = dest_sizes.get(dest_rel.lower())
-                if not force and existing_dest is not None and existing_dest == backup.size_bytes:
+                if dest_rel in skippable:
                     pre_skipped.append(CopyBackupFileResult(
                         source_file=Path(dest_target),
                         target_file=Path(dest_target),
@@ -992,7 +1272,7 @@ def _smbclient_download_selected_to_staging(
                         (
                             f"{_rid}copy-backup source_id={config.source_id} copy_skip_existing "
                             f"file={backup.relative_path} target={dest_target} size_bytes={backup.size_bytes} "
-                            f"reason=destination_same_size sequence={index} total={len(selected)}"
+                            f"reason={skip_reason} sequence={index} total={len(selected)}"
                         ),
                     )
                     continue
@@ -1000,8 +1280,10 @@ def _smbclient_download_selected_to_staging(
                     _log_progress(
                         logger,
                         (
-                            f"{_rid}copy-backup source_id={config.source_id} copy_replace_size_mismatch "
-                            f"file={backup.relative_path} target={dest_target} source_bytes={backup.size_bytes} "
+                            f"{_rid}copy-backup source_id={config.source_id} "
+                            + ("copy_replace_not_proven " if existing_dest == backup.size_bytes
+                               else "copy_replace_size_mismatch ")
+                            + f"file={backup.relative_path} target={dest_target} source_bytes={backup.size_bytes} "
                             f"destination_bytes={existing_dest} action=download_then_atomic_move"
                         ),
                     )
@@ -1063,7 +1345,10 @@ def run_copy_backup(
     *,
     logger: logging.Logger | None = None,
     force: bool = False,
+    catalog=None,
 ) -> CopyBackupResult:
+    """Copy an entry's chain to its target. On the Linux paths every file goes through the
+    checksum gate (0.34.0, ``_Gate``); ``catalog`` records it, and without one the gate still decides."""
     restore_config = config or load_restore_config()
     _validate_unc_source(restore_config.prod_backup_share)
     if not restore_config.is_linux:
@@ -1072,6 +1357,8 @@ def run_copy_backup(
     found_count = 0
     file_results_list: list[CopyBackupFileResult] = []
     failed_before_copy = 0
+    gate: _Gate | None = None
+    gate_summary: dict | None = None
     _rid = f"restore_id={restore_config.restore_id} " if restore_config.restore_id else ""
     try:
         _log_progress(
@@ -1100,6 +1387,9 @@ def run_copy_backup(
 
         engine = copy_engine(restore_config)
         _log_progress(logger, f"{_rid}copy-backup source_id={restore_config.source_id} scanning engine={engine}")
+        # Every engine, since 1.213b. Refuses an entry with no integrity block (R50): the gate never
+        # assumes copy_max_retry.
+        gate = _Gate(restore_config, catalog, logger=logger)
 
         if engine == ENGINE_SMBCLIENT:
             # dbabrain runs on Linux and cannot read the Windows UNC share directly:
@@ -1107,7 +1397,9 @@ def run_copy_backup(
             # Files already present in the final destination are skipped at the source and
             # never downloaded; pre_skipped carries them into the summary.
             staging, pre_skipped, total_selected = _smbclient_download_selected_to_staging(
-                restore_config, logger=logger, force=force
+                restore_config, logger=logger, force=force,
+                confirm=lambda candidates: gate.confirm(
+                    candidates, hash_targets=gate.hash_targets(open_ssh_connection(restore_config))),
             )
             try:
                 # Staged is exactly what was selected. A second window filter here dropped the LOG
@@ -1130,7 +1422,8 @@ def run_copy_backup(
                 )
                 file_results_list = list(pre_skipped)
                 file_results_list.extend(_copy_backup_files_via_sftp(
-                    restore_config, selected_files, logger=logger, force=force, source_root=staging
+                    restore_config, selected_files, logger=logger, force=force, source_root=staging,
+                    gate=gate,
                 ))
             finally:
                 shutil.rmtree(staging, ignore_errors=True)
@@ -1141,7 +1434,8 @@ def run_copy_backup(
             found_count = len(selected_files)
             reason = " reason=no_matching_files" if found_count == 0 else ""
             _log_progress(logger, f"{_rid}copy-backup source_id={restore_config.source_id} scan_completed found_files={found_count}{reason}")
-            file_results_list = list(_copy_backup_files_via_sftp(restore_config, selected_files, logger=logger, force=force))
+            file_results_list = list(_copy_backup_files_via_sftp(restore_config, selected_files, logger=logger,
+                                                                 force=force, gate=gate))
         else:
             selected_files = (
                 list_recent_backup_files_on_share(restore_config)
@@ -1151,22 +1445,22 @@ def run_copy_backup(
             found_count = len(selected_files)
             reason = " reason=no_matching_files" if found_count == 0 else ""
             _log_progress(logger, f"{_rid}copy-backup source_id={restore_config.source_id} scan_completed found_files={found_count}{reason}")
-            for source_file in selected_files:
-                result = copy_backup_file_with_logging(
-                    source_file,
-                    source_root=restore_config.prod_backup_share,
-                    target_root=restore_config.vm_import_unc,
-                    source_id=restore_config.source_id,
-                    restore_id=restore_config.restore_id,
-                    logger=logger,
-                    force=force,
-                )
-                file_results_list.append(result)
+            file_results_list = list(_copy_gated_locally(restore_config, selected_files, gate=gate,
+                                                         engine=engine, logger=logger, force=force))
 
         file_results = tuple(file_results_list)
         _write_copy_log(restore_config, file_results)
+        if gate is not None:
+            gate_summary = gate.finish()
+            _log_progress(logger, (
+                f"{_rid}copy-backup source_id={restore_config.source_id} checksum_gate "
+                f"files={gate_summary['files']} proven={gate_summary['proven']} "
+                f"verdicts={gate_summary['verdicts']} restore_run_id={gate_summary['restore_run_id']}"))
     except Exception as exc:
         failed_before_copy = 1
+        if gate is not None and gate.catalog is not None and gate.restore_run_id is not None:
+            gate.catalog.set_restore_run(gate.restore_run_id, phase="error",
+                                         error_text=f"{type(exc).__name__}: {exc}"[:2000])
         _log_progress(
             logger,
             f"{_rid}copy-backup source_id={restore_config.source_id} exit_early reason={_format_log_value(exc)}",
@@ -1198,6 +1492,8 @@ def run_copy_backup(
         skipped=sum(1 for item in file_results if item.status == "SKIPPED_EXISTS"),
         file_results=file_results,
         failed=failed_count,
+        restore_run_id=gate.restore_run_id if gate is not None else None,
+        integrity=gate_summary,
         replaced=sum(1 for item in file_results if item.status == "REPLACED"),
     )
 

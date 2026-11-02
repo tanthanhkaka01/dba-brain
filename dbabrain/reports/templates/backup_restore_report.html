@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backup &amp; restore</title>
+<style>
+__REPORT_CSS__
+__BANNER_CSS__
+  section.files{margin-top:6px}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap">
+    __PAGE_BANNER__
+    <h1 class="title">Backup &amp; restore</h1>
+    <p class="subtitle">every server's backup files and every restore that used them, from the backup
+      catalog · snapshot __SNAPSHOT_DATE__</p>
+    <a class="back" href="server-metrics.html">a server's own files are on its page in Server metrics →</a>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="body"></div>
+</div>
+
+<script>
+/* BACKUP & RESTORE - one page for the fleet (the operator, 2026-10-30: beside Fleet inventory,
+   Server metrics, SLA and Index usage). Every row is the backup catalog's: what each backup wrote -
+   its size in bytes, its SHA-256 recorded once and never changed, the engine's verification, whether
+   it is still on disk and still the same bytes, the virus scan - and every restore or copy that used
+   it. The table is the server page's own (backup_files.js), with a Server column and filter. */
+const FILES = __FILES__;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+/* The configured clock, as on the server page: store timestamps are UTC, and every stamp says
+   which clock it is on, the same wherever the page is opened. */
+const DISPLAY_OFFSET_MINUTES = __UTC_OFFSET_MINUTES__;
+const DISPLAY_OFFSET_LABEL = "__UTC_OFFSET_LABEL__";
+const inDisplayZone = t => new Date((t + DISPLAY_OFFSET_MINUTES*60)*1000);
+function when(value){
+  if (value == null || value === "") return "";
+  const parsed = Date.parse(String(value).endsWith("Z") ? value : String(value)+"Z");
+  if (!isNaN(parsed))
+    return esc(inDisplayZone(parsed/1000).toISOString().slice(0,19).replace("T"," "))+" "+DISPLAY_OFFSET_LABEL;
+  return esc(String(value).replace("T"," ").replace("Z",""))+" "+DISPLAY_OFFSET_LABEL;
+}
+
+__BACKUP_FILES_JS__
+
+document.getElementById("body").innerHTML = backupFilesBlock(FILES, {fleet: true})
+  || `<div class="empty">The backup catalog holds no file yet. Backups record their files from 0.34.0
+      on; the ones taken before are added by <span class="mono">backup_restore.cli catalog-backfill</span>.</div>`;
+bindFileFilters(FILES.files);
+</script>
+</body>
+</html>

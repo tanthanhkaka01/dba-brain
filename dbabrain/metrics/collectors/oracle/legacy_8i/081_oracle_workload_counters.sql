@@ -9,7 +9,9 @@
 -- What it cannot say. 8i adds a call to these totals when the call ends, so a query still running
 -- at a collection is counted at the collection after it finishes - an interval holding the end of
 -- a long batch reads high and the ones before it low. Over the hour and the day that evens out.
--- There is no host figure at all from 8i.
+-- There is no host figure at all from 8i. And with timed_statistics off the instance times nothing:
+-- CPU used by this session stays 0 however busy it is, so the parameter rides in the message and
+-- the page says the CPU was not timed rather than that it was idle (2026-10-26).
 --
 -- Written for 8i: old-style joins, DECODE, no WITH, no column 9i added. No comment here holds a
 -- semicolon or a quote, so no client between this file and the server has to read one correctly
@@ -24,6 +26,7 @@ SELECT
         ', counters_since=' || TO_CHAR(i.startup_time, 'YYYY-MM-DD HH24:MI:SS') ||
         ', cpu_count=' || p.value ||
         ', schedulers_online=' || p.value ||
+        ', timed_statistics=' || t.value ||
         ', source=v$sysstat' ||
         ', note=cumulative_since_start_subtract_two_collections' AS message
 FROM (
@@ -63,5 +66,7 @@ FROM (
     GROUP BY m.metric_item
 ) c,
 v$instance i,
-v$parameter p
+v$parameter p,
+v$parameter t
 WHERE p.name = 'cpu_count'
+  AND t.name = 'timed_statistics'

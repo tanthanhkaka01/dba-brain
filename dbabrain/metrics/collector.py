@@ -1388,7 +1388,8 @@ def _metric_disabled_by_collector_type(metric: MetricDefinition, target: MetricT
         "metrics": { "enabled": true, "disabled_collector_types": ["cmd"] }
 
     Listing every OS metric code in ``report_policy.disabled_metric_codes`` was the only way to
-    say "this target has no OS to look at" — which meant every OS metric added later started
+    say "this target has no OS to look at" (a list that, since 0.34.0, silences alerts and no
+    longer stops collection) — which meant every OS metric added later started
     producing noise until someone remembered to extend that list (it happened: the five new OS
     metrics made 61 warning rows a day on the PostgreSQL lab targets). The switch belongs on the
     thing they have in common, which is the collector type.
@@ -1417,21 +1418,20 @@ def _metric_disabled_by_collector_type(metric: MetricDefinition, target: MetricT
 
 
 def _metric_enabled_for_target(metric: MetricDefinition, target: MetricTarget) -> bool:
+    """Collection switches only. ``report_policy.disabled_metric_codes`` is not one of them.
+
+    That list silences a metric's alerts on one target (``reports.metrics_reports``) and used to
+    stop its collection as well. Kept for a noisy alert, it also emptied the store: a SQL Server had
+    listed its nine ``OS_*`` codes since its ``cmd_access`` was ``local``, kept them once SSH
+    worked, and its CPU tile could not name a socket or its memory tile the host's RAM, because
+    ``OS_CPU_USAGE`` and ``OS_MEMORY_USAGE`` had never run (2026-10-23, 0.31.0 sheet 1.189). A
+    metric that cannot run on a target is switched off with ``metric_overrides.<CODE>.enabled``
+    or ``disabled_collector_types``; one without a way onto the host is skipped by itself.
+    """
     if _metric_disabled_by_collector_type(metric, target):
-        return False
-    if _metric_disabled_by_report_policy(metric.metric_code, target):
         return False
     metric_cfg = _metric_override_config(target, metric.metric_code)
     return bool(metric_cfg.get("enabled", True))
-
-
-def _metric_disabled_by_report_policy(metric_code: str, target: MetricTarget) -> bool:
-    report_policy = target.report_policy if isinstance(target.report_policy, dict) else {}
-    disabled_metric_codes = report_policy.get("disabled_metric_codes") or []
-    if not isinstance(disabled_metric_codes, list):
-        return False
-    normalized_metric_code = str(metric_code or "").strip().upper()
-    return normalized_metric_code in {str(item or "").strip().upper() for item in disabled_metric_codes}
 
 
 def _apply_metric_result_overrides(

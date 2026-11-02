@@ -138,6 +138,16 @@
       "collections": []
     },
     {
+      "file": "ai_assist.json",
+      "app_code": "telegram",
+      "display_name": "AI assistant",
+      "description": "The AI assistant in Telegram: its chats, model, limits, tools, prices and who may ask.",
+      "collections": [
+          {"collection": "users", "key_fields": ["telegram_user_id"], "label_field": "name"},
+          {"collection": "prices", "key_fields": ["model"], "label_field": "model"}
+      ]
+    },
+    {
       "file": "bot_telegram.json",
       "app_code": "telegram",
       "display_name": "Telegram bot identity",

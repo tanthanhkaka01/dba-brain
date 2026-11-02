@@ -22,7 +22,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "0.30.0"
+version = "0.34.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #
@@ -83,6 +83,8 @@ postgres = ["pg8000>=1.31.0"]
 mysql = ["PyMySQL>=1.1.0"]
 ssh = ["paramiko>=3.0.0"]
 winrm = ["pypsrp"]
+# The AI assistant in Telegram (0.34.0): the official Claude SDK, imported by that assistant only.
+ai = ["anthropic>=2.3.0"]
 all = [
     "pyodbc>=5.3.0",
     "pymssql>=2.3.13",
@@ -91,6 +93,7 @@ all = [
     "PyMySQL>=1.1.0",
     "paramiko>=3.0.0",
     "pypsrp",
+    "anthropic>=2.3.0",
 ]
 dev = ["pytest>=8.0.0", "mypy>=1.10"]
 
@@ -161,7 +164,9 @@ namespaces = false
 # The rest of what `dbabrain init` writes. These are product data - which reports exist, which bot
 # commands are answered, which apps can be scheduled - so each ships with the component that owns
 # it. Without them the daemon starts and every scheduled command fails on a missing file.
-"dbabrain.telegram" = ["catalogue/*.json"]
+"dbabrain.telegram" = ["catalogue/*.json",
+                     # The assistant's guide, read into its system prompt (0.34.0, 1.260).
+                     "catalogue/*.md"]
 "dbabrain.jobs" = ["catalogue/*.json"]
 "dbabrain.db" = ["catalogue/*.json"]
 "dbabrain.control" = ["catalogue/*.json"]
@@ -192,7 +197,11 @@ namespaces = false
                 # every source-tree test passed while an installed node's `init` would have
                 # skipped both in silence.
                 "catalogue/*.json"]
-"dbabrain.reports" = ["templates/**/*.html", "catalogue/*.json"]
+"dbabrain.reports" = ["templates/**/*.html", "templates/**/*.js", "catalogue/*.json"]
+# The UI kit every report page is drawn with (lib.page_kit, 2026-10-30): Tabler's stylesheet and its
+# MIT license, vendored because the worker that serves the pages has no internet. Without the sheet
+# every page renders as bare HTML.
+"dbabrain.lib" = ["vendor/tabler/tabler.min.css", "vendor/tabler/LICENSE"]
 "dbabrain.webhost" = ["templates/**/*", "static/**/*", "catalogue/*.json"]
 # catalogue/ is the empty restore_config.json `init` writes. Missing from this line on the day it was
 # added (2026-09-11), so the source tree's tests passed while an installed node's `init` skipped the

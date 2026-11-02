@@ -12,6 +12,7 @@ server (e.g. lab VMs with no metrics) untouched.
 
 from __future__ import annotations
 from dbabrain.reports.server_series import QUERY_STORE_CODE  # noqa: F401 - one definition, see that module
+from dbabrain.reports.server_series import OS_DISK_NOT_A_VOLUME_ITEMS
 from dbabrain.lib import data_sources
 from dbabrain.lib.coerce import as_float
 from dbabrain.lib.inventory_render import (  # moved to common: shared with control
@@ -30,7 +31,7 @@ from pathlib import Path
 
 from dbabrain.lib import backup_policy
 from dbabrain.reports import workload
-from dbabrain.lib import health_model
+from dbabrain.lib import health_model, report_windows
 from dbabrain.db.metric_store import MetricStore
 from dbabrain.lib.timezone import display_now, file_stamp, format_display
 
@@ -155,6 +156,12 @@ def _datafile_size_gb(code_map):
     ``tablespace`` counts: SQL Server and PostgreSQL write this metric too, in other shapes, and
     have a size metric of their own.
     """
+    total_gb, _files = _datafiles(code_map)
+    return total_gb
+
+
+def _datafiles(code_map):
+    """``(GB, files)`` of an Oracle database's data files - ``(None, None)`` when none says a size."""
     total_mb, files = 0.0, 0
     for _item, row in items_for(code_map, "STORAGE_DATA_FILE_SPACE"):
         fields = parse_kv(row.get("message") or "")
@@ -164,7 +171,7 @@ def _datafile_size_gb(code_map):
         if size is not None:
             total_mb += size
             files += 1
-    return round(total_mb / 1024, 2) if files else None
+    return (round(total_mb / 1024, 2), files) if files else (None, None)
 
 
 def parse_kv(message):
@@ -338,7 +345,7 @@ def build_database_health(code_map):
         # about one is visible.
         names = sorted(current | {name for name in names if name in SYSTEM_DATABASE_NAMES})
     users = build_database_users(code_map)
-    datafile_size_gb = _datafile_size_gb(code_map)
+    datafile_size_gb, datafile_count = _datafiles(code_map)
     out = []
     for db in names:
         status_row = one(code_map, "DATABASE_STATUS", db)
@@ -382,6 +389,11 @@ def build_database_health(code_map):
             "data_size_gb": (as_float(data_row["metric_value"]) if data_row
                              else (datafile_size_gb if len(names) == 1 else None)),
             "log_size_gb": as_float(log_row["metric_value"]) if log_row else None,
+            # How many files each size is spread over, as the collectors count them: SQL Server's
+            # size metrics carry `files` / `log_files`, Oracle's are its data files counted.
+            "data_files": (_to_int_or_none(parse_kv(data_row["message"]).get("files")) if data_row
+                           else (datafile_count if len(names) == 1 else None)),
+            "log_files": _to_int_or_none(parse_kv(log_row["message"]).get("log_files")) if log_row else None,
             "log_used_percent": as_float(logspace_row["metric_value"]) if logspace_row else None,
             # Why the log cannot truncate — LOG_BACKUP here plus a stale log backup age is the
             # broken-chain diagnosis in one row.
@@ -744,6 +756,8 @@ def build_database_rows(health_block, backup_block, *, static_sizes=None) -> lis
             "recovery": h.get("recovery_model") or b.get("recovery_model") or "",
             "dataGB": data_gb,
             "logGB": as_float(h.get("log_size_gb")),
+            "dataFiles": h.get("data_files"),
+            "logFiles": h.get("log_files"),
             "logUsedPct": as_float(h.get("log_used_percent")),
             "logReuseWait": h.get("log_reuse_wait") or "",
             "compat": h.get("compatibility_level"),
@@ -889,10 +903,17 @@ def build_sql_governance(code_map):
             continue
         kv = parse_kv(row["message"])
         total_mb = as_float(kv.get("total_physical_memory_mb"))
-        if total_mb and not out["memory"].get("host_physical_memory_gb"):
+        # On SQL Server on Linux the engine's total is its own limit (mssql-conf
+        # memory.memorylimitmb), not the host's RAM: 24 GB on a host of about 64 (0.31.0 sheet
+        # 1.191). The host's figure is OS_MEMORY_USAGE's, which the report prefers anyway.
+        host_scope = kv.get("memory_scope") != "sql_server_limit"
+        if total_mb and host_scope and not out["memory"].get("host_physical_memory_gb"):
             out["memory"]["host_physical_memory_gb"] = round(total_mb / 1024, 2)
         if item == "sql_memory":
-            in_use = as_float(kv.get("sql_physical_memory_in_use_mb"))
+            # The collector's own choice of figure first: committed on Linux, where the process
+            # figure read 4.1 GB beside a Total Server Memory of 21.2. Older rows have only that one.
+            in_use = (as_float(kv.get("sql_memory_held_mb"))
+                      or as_float(kv.get("sql_physical_memory_in_use_mb")))
             if in_use is not None:
                 out["memory"]["sql_committed_mb"] = in_use
                 seen = True
@@ -1268,6 +1289,105 @@ def _blank_na(value):
     return "" if text.upper() in ("N/A", "NULL", "NONE") else text
 
 
+def instance_identity_rows(inst) -> list:
+    """What an instance says about itself, as ``[label, value]`` rows: build, edition, host, endpoint.
+
+    Shared by the inventory's Server Detail and the per-server page's Instance section. The page
+    had none until 0.34.0: an operator looking at one server for its version and patch level found
+    the role, the address and the platform, and had to go back to the inventory for the rest
+    (2026-10-23). One function, so the two pages cannot describe one instance two ways.
+
+    Engine build first. "RTM" on its own reads as an unpatched instance, so the cumulative update
+    and its KB are shown next to it - SQL Server 2022 RTM-CU26 is 26 CUs in, not fresh.
+    """
+    if not inst:
+        return []
+    out = []
+    build = " ".join(x for x in (inst.get("product_version"), inst.get("product_level")) if x)
+    patch = " ".join(x for x in (inst.get("cumulative_update"), inst.get("update_reference")) if x)
+    if build or patch:
+        out.append(["Engine build", " · ".join(x for x in (build, patch) if x)])
+    edition = " · ".join(x for x in (inst.get("edition"), inst.get("engine_edition")) if x)
+    if edition:
+        out.append(["Edition", edition])
+    host_bits = [inst.get("machine_name"), inst.get("physical_name")]
+    host = " · ".join(dict.fromkeys(x for x in host_bits if x))
+    if inst.get("clustered"):
+        host += f" · clustered {inst['clustered']}"
+    if host.strip(" ·"):
+        out.append(["Instance host", host])
+    endpoint = ":".join(x for x in (inst.get("listen_ip"), inst.get("listen_port")) if x)
+    endpoint_bits = [endpoint, inst.get("transport"), inst.get("auth_scheme")]
+    endpoint_txt = " · ".join(x for x in endpoint_bits if x)
+    if endpoint_txt:
+        out.append(["Listening on", endpoint_txt])
+    if inst.get("collation"):
+        out.append(["Server collation", inst["collation"]])
+    if inst.get("started_at"):
+        out.append(["Engine started", inst["started_at"]])
+    out.extend(engine_own_facts(inst))
+    return out
+
+
+def instance_summary(inst) -> str:
+    """One line for a page's header: the build, its patch and the edition, each where stated."""
+    if not inst:
+        return ""
+    build = " ".join(x for x in (inst.get("product_version"), inst.get("product_level")) if x)
+    patch = " ".join(x for x in (inst.get("cumulative_update"), inst.get("update_reference")) if x)
+    return " · ".join(x for x in (build, patch, inst.get("edition")) if x)
+
+
+def engine_own_facts(inst) -> list:
+    """What Oracle and PostgreSQL state about themselves, as ``[label, value]`` rows (0.28.0).
+
+    Until then an Oracle or PostgreSQL server's detail stopped at its version, beside a dozen rows
+    for SQL Server - not because the engines say less, but because their collectors asked less.
+    Each row appears only where the engine stated the fact. A blank row would read as a zero, and
+    a SQL Server label over an Oracle value as a claim nobody measured: a role, a log mode and a
+    character set are each engine's own word and are shown under it.
+    """
+    out = []
+    if inst.get("banner"):
+        out.append(["Engine banner", inst["banner"]])
+    database = " · ".join(dict.fromkeys(
+        x for x in (inst.get("database_name"), inst.get("unique_name")) if x))
+    if database:
+        out.append(["Database name", database])
+    # Oracle 8i states an open mode and no role: under "Role" its READ WRITE would read as one.
+    role = " · ".join(x for x in (inst.get("role"), inst.get("open_mode")) if x)
+    if role:
+        out.append(["Role" if inst.get("role") else "Open mode", role])
+    if inst.get("platform"):
+        out.append(["Platform", inst["platform"]])
+    if inst.get("charset"):
+        out.append(["Character set", inst["charset"]])
+    if inst.get("database_collation"):
+        of = f" (database {inst['connected_database']})" if inst.get("connected_database") else ""
+        out.append(["Database collation", inst["database_collation"] + of])
+    log_bits = [inst.get("log_mode"),
+                f"archiver {inst['archiver']}" if inst.get("archiver") else ""]
+    log = " · ".join(x for x in log_bits if x)
+    if log:
+        out.append(["Log mode", log])
+    wal_bits = [f"wal_level {inst['wal_level']}" if inst.get("wal_level") else "",
+                f"archive_mode {inst['archive_mode']}" if inst.get("archive_mode") else ""]
+    wal = " · ".join(x for x in wal_bits if x)
+    if wal:
+        out.append(["WAL", wal])
+    if inst.get("rac"):
+        out.append(["RAC", inst["rac"]])
+    if inst.get("logins"):
+        out.append(["Logins", inst["logins"]])
+    setting_bits = [f"max_connections {inst['max_connections']}" if inst.get("max_connections") else "",
+                    f"timezone {inst['timezone']}" if inst.get("timezone") else "",
+                    f"ssl {inst['ssl']}" if inst.get("ssl") else ""]
+    settings = " · ".join(x for x in setting_bits if x)
+    if settings:
+        out.append(["Server settings", settings])
+    return out
+
+
 def build_os_health(code_map):
     """Host-level health from the OS (cmd) collectors.
 
@@ -1344,8 +1464,7 @@ def build_os_health(code_map):
     # metric, not mount points. Charting them is right; listing them as drives is not.
     disks = {}
     for mount, row in latest_items_for(code_map, "OS_DISK_USAGE"):
-        if mount in ("disk_queue_length", "disk_iops", "disk_usage",
-                     "disk_read_kbps", "disk_write_kbps"):
+        if mount in OS_DISK_NOT_A_VOLUME_ITEMS or mount == "disk_usage":
             continue
         kv = parse_os_kv(row["message"])
         free_pct = as_float(kv.get("free_percent"))
@@ -1679,6 +1798,15 @@ def build_metric_problems(rows: list[dict], *, now: int | None = None) -> list[d
     return health_model.group_findings(findings, now=now)
 
 
+def _windowed(server_id: str, row: dict, history: dict) -> dict:
+    """``row`` judged on its window of stored rows, when it is one a page judges so."""
+    code, item = str(row.get("metric_code") or ""), str(row.get("metric_item") or "")
+    if not report_windows.is_judged(code, item):
+        return row
+    return report_windows.rejudged_row(
+        row, report_windows.history_for(history, server_id, code, item))
+
+
 def build_inventory_health(*, sqlite_path, config=None, output_dir=None, days=2,
                            date=None, logger=None) -> dict:
     rows = load_metrics(sqlite_path, int(days))
@@ -1693,6 +1821,30 @@ def build_inventory_health(*, sqlite_path, config=None, output_dir=None, days=2,
         workload_rows.setdefault(str(row.get("server_id") or row.get("ip") or ""), []).append(row)
     severity = store.fetch_severity_by_server(days=int(days))
     problem_rows = store.fetch_current_problems(days=int(days))
+    # Disk latency, page life expectancy, CPU, the disk queue and the wait sample are judged here
+    # on the last hour of their stored rows, as the server page judges them - not on the newest
+    # row, which for disk latency is the average since the engine started and for the others one
+    # sample (dbabrain.lib.report_windows). Both places a newest row is read from are rewritten:
+    # the snapshot the overlay's columns come from, and the problem list.
+    window_history = report_windows.history_by_item(store.fetch_health_metrics(
+        codes=list(report_windows.HISTORY_CODES), days=report_windows.HISTORY_DAYS))
+    for sid, (_ip, code_map) in servers.items():
+        for key, row in list(code_map.items()):
+            if report_windows.is_judged(str(key[0] or ""), str(key[1] or "")):
+                code_map[key] = _windowed(sid, row, window_history)
+    problem_rows = {sid: [_windowed(sid, row, window_history) for row in rows]
+                    for sid, rows in problem_rows.items()}
+    # The store's problem query keeps only rows that were not OK when collected. A CPU whose
+    # newest sample was fine and whose hour was not is a finding the hour makes, so the judged
+    # snapshot rows join the list (the report-judged codes are in it already, whatever their status).
+    for sid, (_ip, code_map) in servers.items():
+        listed = {(row.get("metric_code"), row.get("metric_item")) for row in problem_rows.get(sid, [])}
+        extra = [row for key, row in code_map.items()
+                 if report_windows.is_sustained(str(key[0] or ""), str(key[1] or ""))
+                 and (row.get("metric_code"), row.get("metric_item")) not in listed
+                 and health_model.severity_of(str(row.get("status") or "")) != "OK"]
+        if extra:
+            problem_rows.setdefault(sid, []).extend(extra)
     freshness_rows = store.fetch_metric_freshness(days=int(days))
     now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
     overlay_servers = [

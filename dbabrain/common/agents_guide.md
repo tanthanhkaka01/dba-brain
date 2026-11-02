@@ -139,7 +139,7 @@ dbabrain metrics summary-latest                 # reads the result back
 | `app_commands.json` | which apps the daemon runs, and when | `app-command-set` |
 | `metric_definitions.json` | the metrics, their SQL/commands and schedules (shipped; edit with care) | - |
 | `sql_commands.json` / `sql_targets.json` | scheduled SQL: WHAT runs / WHERE and WHEN | `sql-command-add` / `sql-target-add` |
-| `restore_config.json` | backups (`backups[]`) and restore drills (`restores[]`) | `backup-add`, `restore-add` |
+| `restore_config.json` | backups (`backups[]`) and restore drills (`restores[]`) | `backup-add`, `restore-add`, `entry-active` |
 | `reports_config.json` | the scheduled reports, the inventory included (`rp_inventory_health`) | - (edit; `check-objects` after) |
 | `telegram_config.json`, `telegram_groups.json` | alert routing | `telegram use-bot`, `group-level` |
 | `store_config.json` | where results go: SQLite (default) or PostgreSQL | `db use-store` |

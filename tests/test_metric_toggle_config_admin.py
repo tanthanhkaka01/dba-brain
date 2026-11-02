@@ -92,7 +92,7 @@ def test_toggle_single_metric_sets_override_and_cleans_legacy_list(tmp_path):
     result = set_metric_toggle(server_id="ACME-10-0-0-1", scope="OS_DISK_USAGE", enabled=True, data_dir=data)
     assert result["changed"]
     instance = _instance(data, "ACME-10-0-0-1")
-    assert "OS_DISK_USAGE" not in instance["metrics"]["metric_overrides"]
+    assert "OS_DISK_USAGE" not in instance["metrics"].get("metric_overrides", {})
     assert instance["report_policy"]["disabled_metric_codes"] == []
 
 
@@ -128,7 +128,32 @@ def test_clearing_a_stale_reason_is_not_reported_as_nothing_to_change(tmp_path):
     result = set_metric_toggle(server_id="ACME-10-0-0-1", scope="OS_DISK_USAGE", enabled=True, data_dir=data)
 
     assert result["changed"] and not result["warnings"]
-    assert "OS_DISK_USAGE" not in _instance(data, "ACME-10-0-0-1")["metrics"]["metric_overrides"]
+    assert "OS_DISK_USAGE" not in _instance(data, "ACME-10-0-0-1")["metrics"].get("metric_overrides", {})
+
+
+def test_switching_a_metric_off_can_say_why(tmp_path):
+    """No command wrote `disabled_reason` before 0.31.0, so a metric switched off by the toggle
+    carried no reason: the Oracle 8i records' RMAN metrics, whose SQL is 9i+, said why only in an
+    audit. The reason goes with `enabled: false` and is cleared by switching the metric on."""
+    data = _seed(tmp_path)
+
+    result = set_metric_toggle(server_id="ACME-10-0-0-2", scope="INSTANCE_STATUS", enabled=False,
+                               reason="its SQL needs 9i+ views", data_dir=data)
+
+    override = _instance(data, "ACME-10-0-0-2")["metrics"]["metric_overrides"]["INSTANCE_STATUS"]
+    assert result["changed"] and override == {"enabled": False, "disabled_reason": "its SQL needs 9i+ views"}
+
+    set_metric_toggle(server_id="ACME-10-0-0-2", scope="INSTANCE_STATUS", enabled=True, data_dir=data)
+    # Nothing left behind that means "default" - not even an empty metric_overrides.
+    assert "metric_overrides" not in _instance(data, "ACME-10-0-0-2")["metrics"]
+
+
+def test_a_reason_is_refused_where_there_is_no_one_metric_switched_off(tmp_path):
+    data = _seed(tmp_path)
+    for scope, enabled in (("INSTANCE_STATUS", True), ("all", False), ("collector:cmd", False)):
+        with pytest.raises(ConfigAdminError, match="reason says why one metric is off"):
+            set_metric_toggle(server_id="ACME-10-0-0-1", scope=scope, enabled=enabled,
+                              reason="because", data_dir=data)
 
 
 def test_toggle_rejects_unknown_inputs(tmp_path):

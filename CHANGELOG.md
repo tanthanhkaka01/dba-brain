@@ -15,6 +15,336 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-02
+
+0.31.0, 0.32.0 and 0.33.0 were built and run on a worker and never released (the operator, 2026-10-26, 2026-10-29 and 2026-10-31); everything they carried is here, in the version that is.
+
+### Security
+
+- **Ransomware on a database host takes the backups kept on that host with it.** Recorded during a
+  ransomware wave on 2026-10-30: C3RB3R hit Synology / Xpenology NAS through CVE-2024-10441 (DSM
+  7.2.1-69057 Update 5 and older, its web login exposed to the internet). It leaves a `read-me3.txt`
+  in every folder and renames files to `*.L0CK3D`. Ransomware encrypts every drive and every share
+  the infected host can write. A backup on the same disk as the data - or on another drive of the
+  same host - is encrypted with it, and there is nothing left to restore from.
+
+  **How dbabrain defends: every backup is proven at each step, and a proven copy is kept isolated
+  from the database.** Done in this version (**done**) or planned (**planned**):
+
+  1. **Back up, verified by the engine** (**done**) - SQL Server `RESTORE VERIFYONLY ... WITH
+     CHECKSUM`, PostgreSQL `pg_verifybackup`, Oracle `VALIDATE BACKUPSET`. A file that fails is an
+     error, not a success.
+  2. **Hash it where it was written, and store the hash** (**done**) - sha256 and size in bytes,
+     taken on the database host the moment the backup ends, kept in dbabrain's store, on another
+     host. The first checksum can never be changed, by dbabrain or by a direct `UPDATE` (a trigger
+     refuses it).
+  3. **Check it again later** (**done** by hand: `verify-backup-files`; **planned** on every cycle)
+     - re-hashed on its server and held to the stored hash. An encrypted or altered backup no longer
+     matches, and is named as changed or missing.
+  4. **Scan it** (**planned**) - a virus scan of each file (the columns are in the catalog), and the
+     ransomware markers in every backup folder: a ransom note such as `read-me3.txt`, files such as
+     `*.L0CK3D`, and a canary file with a known hash that nothing else ever touches.
+  5. **Copy it off the database host, proven by hash before and after** (**done**: the repository
+     copy after every backup, `offload_enabled`; and *copy only*, a scheduled copy to another
+     server) - the source hashed before the copy, the copy hashed on its destination after it and
+     held to the source's checksum and size, copied again on a mismatch up to `copy_max_retry`,
+     every attempt and both hashes stored.
+  6. **Store the copy isolated from the database** (**planned**) - separate storage, not on the
+     database host and not on its disks. The storage **pulls** the copy, so neither the database
+     hosts nor dbabrain hold a login that can delete there. The storage itself refuses a delete or
+     overwrite for a retention period (immutable / object lock). The copy is hashed and scanned
+     again there, and the hash is stored.
+  7. **Delete on the database host only after the copy is proven** (**done**, the switch
+     `offload_delete_source`, off as written) - the repository copy hashed again right before the
+     delete, never on the copy's word alone, never the newest chain of a database; the store
+     refuses a deletion recorded before its copy is verified.
+  8. **Restore only from a proven copy** (**done**) - copied from the storage to the target, hashed
+     before and after, the restore run only when every file matches what its backup recorded, then
+     the databases checked to open.
+  9. **When an attack shows, stop deleting** (**planned**) - a hash mismatch, a ransomware marker or
+     a canary hit raises CRITICAL and locks every prune and delete while backups and checks keep
+     running. The restore then picks a chain from before the first signal.
+
+  **Also planned:** grading where backups sit - the same drive as the data is CRITICAL, only on the
+  database host is WARNING - on every engine.
+
+  **What to do now:** take any NAS whose web login faces the internet off the network and update
+  it; move backup folders off the data drives; add a `copy_only` restore entry from every
+  production server to another machine (step 5); run `catalog-backfill` and `verify-backup-files`
+  (steps 2 and 3).
+
+### Added
+
+- **An AI assistant in Telegram, answering with dbabrain's own tools** (1.256 - 1.262). Every plain
+  message in a chat listed in the new `data/ai_assist.json` is a question to Claude (the official
+  `anthropic` SDK, `requirements.txt` and the extra `ai`), answered by its own job, `APP-TELEGRAM-AI`
+  (`telegram.cli ai-assist`, every 3 s), so an alert never waits for an answer. The model reads the
+  estate through read-only tools that run **on the node** - the runtime store (`store_schema`,
+  `store_query`: one SELECT in a read-only transaction, always rolled back), the tool root's files
+  (`list_files`, `read_file`, `grep_files`, inside `file_roots`, never a `file_denied` path), a
+  monitored server (`run_sql`, through the never-committed `run-sql` path) and the bot's commands
+  (`bot_commands`, so an answer proposes the exact `/spbot_*` command the user may run). Tool use is
+  client-side: every exchange is opened by dbabrain, nothing on the internet connects in. Every
+  result and every answer is redacted of every value in the encrypted secret store.
+- **Everything the assistant does is kept** in five store tables: `ai_requests` (every message it
+  read - a refused question too, with why - with its tokens, cost, turns and answer),
+  `ai_conversations`, `ai_messages` (the conversation exactly as the model takes it), `ai_api_calls`
+  (each call, its served model, Anthropic's request-id, the four token counts and the price) and
+  `ai_tool_runs`. `telegram.cli ai-usage` and `ai-show` read them back; `/usage` answers in the chat.
+- **A quota in USD, for the system and for each user** (the operator: *$10 a month for the system,
+  $5 for a user*), and in tokens and questions per day and month, checked before every turn of a
+  question; a question holds its place before its first call; duplicates, a cooldown and a rate
+  window refuse a question before it costs anything. Nobody may ask unless listed in `users[]` with
+  `"active": true`. Every field of `ai_assist.json` is mandatory (R50) and described in the
+  reference (`ai_assist_settings`, `ai_assist_price`, `ai_assist_user`); `upgrade-config`'s new step
+  `stated-ai-assist` writes the shipped values, and never switches a user on.
+
+- **The repository copy: every backup file copied off its server, proven there, then released**
+  (1.240, 1.246, 1.247). An entry with `offload_enabled` has each file its backups write - and
+  every file written before it was turned on - copied to `<offload_folder>/<server_id>/...` on its
+  repository, by the scheduled workflow after its restores, or `backup_restore.cli offload`.
+  - Each copy goes through the copy gate: the source is hashed on its own server and held to the
+    backup's checksum, and the copy is hashed on the repository and held to the source's checksum
+    and size, copied again up to `offload_copy_max_retry` times.
+  - Only then is the file `verified`, with where, by which run and when. A copy that cannot be
+    proven is `failed` with its reason, its source untouched, and is tried again after the
+    entry's `retry_interval`.
+  - With `offload_delete_source`, a verified file's source is deleted after the copy is hashed
+    again, never inside the newest chain of its database; a base backup directory is never deleted.
+  - A run of its own (`offload_job` in `job_runs`, an `offload` run in the catalog) - never a
+    restore, never a drill, and an entry with nothing to copy writes nothing.
+  - **The repository keeps each copy by its file type** (`offload_retention_full` / `_diff` /
+    `_log`): by its own level's age, never the newest chain of its database, a full never while a
+    copy that depends on it is kept, a certificate never. The copy is deleted on the repository and
+    marked `expired`.
+  - **Every number the pass runs by is the entry's**: `offload_files_per_pass`,
+    `offload_copy_retry_interval_seconds`, `offload_retry_interval_seconds`,
+    `offload_run_timeout_seconds`, `offload_copy_timeout_seconds`, `offload_hash_timeout_seconds`,
+    `offload_stall_seconds` - mandatory, ranged, written by `upgrade-config`.
+  - Refused by name until built: `offload_scan: clamav`, a repository that is not an SSH host.
+- **`restore_from: repository`**: a script-driven PostgreSQL or SQL Server restore onto another server
+  copies from the repository, the folder found from the catalog, every file held to the checksum and
+  size its offload proved; anything on the repository no offload proved is refused. A share-driven
+  SQL Server entry, Oracle and an in-place entry are refused by name.
+- **`common.cli copy-files`**: named files from one host to another, streamed through the worker
+  (SFTP, or a Windows share through `smbclient` into a FIFO - nothing staged on the worker's disk),
+  each under a temporary name until whole, and nothing removed on either side - unlike
+  `copy-backup-dir`, which mirrors.
+- **The fleet's Backup & restore page (`backup-restore.html`)**, beside Fleet inventory, Server
+  metrics, SLA and Index usage: every server's backup files and every restore that used them in one
+  table, filterable by server, database, file type, use in a restore and problems only. A server
+  page's header links to its own files.
+- **Every backup file says whether it is encrypted.** Each backup script's `FILE` line carries
+  `encrypted=yes|no` - what it wrote the file with - the catalog stores it, and both backup tables
+  show it; a file catalogued before, or by `catalog-backfill`, reads "not recorded", never "no".
+- **The report pages' head is dbabrain.dev's, with a light / dark switch.** The product's mark and
+  name, the pages on the right, and Tabler's dark theme on a click - the reader's choice kept in
+  their browser only, else the system's.
+- **Copy only: a restore entry that copies from `server_id` to its target, proves every file by
+  checksum, and restores nothing.** Each restore entry states `"action": "restore" | "copy_only"`;
+  `upgrade-config` and `restore-add` write `"restore"` into every entry, and one without it is
+  refused. `restore-workflow --copy-only` makes one run copy only, and `/spbot_copy_backup` does it
+  from the bot. A copy-only run never counts as a restore drill.
+- **`backup-stop` stops a running backup the right way round**: the backup script's own process tree
+  on its host first, then every database session that run opened (named by the run), then what is
+  left is reported. The run is recorded as stopped by the operator. Killing only the session let
+  the script move on to the next database.
+- **`catalog-backfill` gives the backups taken before this version a checksum**, hashed where they lie
+  and recorded as a backfill (SQL Server so far). `file-checksum` takes a `folder`.
+- **Every restore is recorded to its end**: the copy, the restore, the check, how many databases
+  opened, and the scheduler run it belongs to - a restore in place, which copies nothing, too.
+
+- **The server page lists every backup file and every restore that used it.** A new *Backup &
+  restore files* section, newest first, filterable by file type and by whether a restore used the
+  file. Each row shows the size in bytes, the SHA-256, the engine's verification, whether the file
+  is still on disk and unchanged, the virus scan, and the restore mark. Each restore marks every
+  file it used: when, onto which target, the result. A file is "restored OK" only by a restore that
+  copied it intact, restored it, and verified the databases.
+- **Every backup file records its size in bytes, once.** A file whose size could not be read is
+  `size_failed`, not `ok`. The first size, like the first checksum, is never updated.
+- **A restore's copy is held to the checksum on the Linux worker.** Every file of a share-driven SQL
+  Server restore is hashed as the worker read it from the share and again on the target after the
+  copy, copied again over itself up to `copy_max_retry` when they differ, and recorded file by file.
+  A file already on the target is skipped only when its hash is the one its backup recorded - no
+  longer because its size matched. **Behaviour change:** a file that is not proven fails the copy,
+  and the restore does not run; an entry with no `integrity` block is refused (run `upgrade-config`).
+- **Every backup run records each file it wrote, with its sha256, and is verified.** The five
+  engine scripts print one `FILE` line per file - the hash taken where the file lies, and the
+  engine's own check: SQL Server `RESTORE VERIFYONLY ... WITH CHECKSUM` (the page checksums are now
+  re-read), PostgreSQL `pg_verifybackup` against the backup's manifest, Oracle `VALIDATE
+  BACKUPSET` on the run's sets; archived WAL segments are hashed as they are archived. Every run is
+  written to the backup catalog. **Behaviour change:** a file the script could not hash, or whose
+  check failed, now fails the run, and so does a catalog that cannot be written - a backup that was
+  neither verified nor recorded no longer reads as success.
+- **Where each backup file is on its server, and whether it still is.** The catalog keeps a file's
+  path on the server itself beside the path its engine wrote inside a container, and `on_disk` /
+  `checksum_matches` - held to the checksum the catalog stored. A copied file keeps the same on both
+  the source and the target side. **`backup_restore.cli verify-backup-files`** re-hashes catalogued
+  backup files on their own servers (read-only), updates both answers, names every file that
+  changed or vanished, and exits 1 when one did.
+- **The first checksum a backup or a copy records is never updated** - it is what every later
+  check is held to. A later check is recorded beside it; the store refuses a different value over a
+  stored one, and so does the database itself, by a trigger, whoever writes.
+- **Every restore entry states an `integrity` block, with `copy_max_retry`.** It says how a staged
+  file is proven before it is used: hashed at the source before the copy and at the target after it,
+  and copied again over itself up to `copy_max_retry` times (default 3, 0-10) when the two differ.
+  **Upgrading:** `upgrade-config` writes `{"copy_max_retry": 3, ...}` into every entry that has none
+  (its `stated-integrity` step), and `restore-add` writes it into every new one; an entry without it
+  is a `check-objects` violation.
+- **The backup catalog in the store.** Six tables - `backup_runs`, `backup_files`,
+  `backup_file_checks`, `restore_runs`, `restore_run_files`, `copy_attempts` - record every backup
+  file and every copied file whole: the server(s), the file name and type, and the checksum after the
+  backup, before the copy and after it, every copy attempt, and nullable virus-scan columns. They are
+  created on first use; nothing writes them yet but the copy gate, which the restore paths take up
+  next.
+- **`common.cli file-checksum` hashes files on the host that holds them.** `{"paths": [...],
+  "host": {...}}` answers one sha256 per file with its size and time, and lists the paths that are
+  not there - on Linux through `sha256sum`, on Windows through .NET, so Server 2008 R2's PowerShell
+  2.0 works too. It is the checksum the backup catalog and the restore gate are built on, and
+  `pack-backup`, `pull-file`, `push-file` and `pack-files` now take theirs from it.
+- **A python-fed SQL task reads a second database by its credential name.**
+  `input.source_connection: {"server_id", "db_type", "credential_name"}` - never a password - is
+  resolved like a target (the instance, the login from `users.json`, the password by its
+  `password_ref`) and written to the program's stdin as `{"source_connection": {...}}`. Until now a
+  fetcher could reach a source that needs no login, or hold a password in a file.
+- **`input.payload_format: "xml"`** sends each batch as `<rows><row key="value" .../></rows>`, for a
+  SQL Server older than 2016, which has no `OPENJSON`. `json` stays the default.
+- **`rotate-password` changes a SQL Server password the server has expired.** A login refused with
+  18487 / 18488 was `SKIPPED` - no session exists for `ALTER LOGIN` - and the password had to be
+  changed by hand. It is now changed at login (ODBC's `SQL_COPT_SS_OLDPWD`), re-authenticated on a
+  new connection and stored; a dry run says the password has expired. ODBC 17 or 18 only.
+- **PostgreSQL's `LOG_FILE_SPACE`: the WAL** - files, size, `max_wal_size`, `wal_keep_size` -
+  WARNING when it holds more than twice what the settings keep. Needs superuser or `pg_monitor`.
+- **`DOCKER_CONTAINER_STATS` `:cpu_share` and `:disk:<mount>` rows**, and `OS_CPU_USAGE`'s
+  `cores_per_socket` / `logical_per_socket`; Oracle's workload counters carry `timed_statistics`.
+- **The server page carries everything the inventory says about the server, and more.** A Server
+  detail section, before Databases: the fleet row and every Server Detail row (the engine build and
+  patch, edition, endpoint, each engine's own facts, deployment, FCI, backup jobs, notes), the
+  Config tab with its advice, every host field the OS collectors keep, services, top processes,
+  network and event log, security counts and the findings - from the inventory's own record, no
+  query added. The build and edition also join the page's header line. Until now the page showed
+  no version on any engine.
+- **`backup_restore entry-active`: backup and restore entries switched on or off by their flag
+  alone.** `{"backup_ids": [...], "restore_ids": [...], "active": false, "note": "..."}` writes each
+  named entry's `active` and nothing else - every id named or none, the note appended to the
+  entry's own, and an entry switched on first held to the loader the scheduled app uses. Until now
+  the only way was `backup-add` / `restore-add` with `replace`, which restates the whole entry.
+- **`metric-severity` with `metric_code` `"*"`: every metric of one server at once.** It writes the
+  target-level `metrics.severity_map`, with its reason in `metrics.severity_map_note`; a metric's
+  or an item's own map still wins key by key. For a server whose every alert is expected, such as
+  a VM that is switched off.
+- **`metric-toggle` takes a `reason`.** With `state` off on one metric it is written as that
+  override's `disabled_reason`; switching the metric on clears it, as before.
+
+### Changed
+
+- **A copy is proven by its checksum and its size in bytes** (1.245), on every copy path - a
+  restore's, a copy-only run's and the repository copy. The same hash with another size is never
+  proof; the attempt names both sizes and the file is copied again. The store holds it too
+  (`ck_restore_run_files_size`). The backup catalog is schema 2, reached in place on PostgreSQL.
+- **A backup job names its databases as a list.** Every job states `"databases": [...]` and
+  `"all_databases"` (true for every user database), as a restore entry does. The old comma string
+  in `env.MSSQL_DATABASES` is moved into the list by `upgrade-config` and refused in `env` from now
+  on. PostgreSQL, Oracle and MySQL jobs take the whole cluster: `all_databases: true`.
+- **Every backup entry states where its backups go, and every restore entry where it reads them.**
+  New mandatory fields `offload_*` (a repository, its folder, the copy retries, a scan, deleting
+  the source after a proven copy, a Windows source share, and how long the repository keeps each
+  copy by file type - full, diff, log) and `restore_from`. `upgrade-config`
+  writes them as "off" / `server`, so nothing changes until an entry turns the new flow on. The
+  flow itself is the next work.
+- **Every copy path is held to the checksum**, not only the Linux worker's: a Windows node's share
+  copy and the host-to-host copy of PostgreSQL, Oracle and container SQL Server restores.
+  `copy-backup-dir` takes `plan_only` and `replace` and answers `files`.
+- **The CPU tile says "logical CPUs"**, and "N threads per core" when the two counts divide:
+  *32 / 32 logical CPUs online / total · 1 socket, 16 cores, 2 threads per core*.
+
+- **A PostgreSQL or Oracle server page states what SQL Server's does, from what it reads.** A
+  container's CPU tile is its share of the CPUs it may use with *1.35 of 8 CPUs busy* and what the 8
+  is (its limit, or the host's count), not `docker stats`' 319 %; its Disk space tile is the volume
+  it writes to, from `df` inside it. An Oracle with no host access takes its CPU from its own
+  counters, and reads *not timed* where `timed_statistics` is off. The Disk space tile takes only
+  fullness, never a file's or a database's size. The Databases table gives an Oracle database its
+  size and file count, says n/a for CHECKDB on an engine that has none, and puts PostgreSQL's WAL
+  on its header line.
+- **The CPU tile prints the processors in one form for every host**, as the OS counted them:
+  *3 sockets, 17 cores (8 + 6 + 3)*, *1 socket, 30 cores* - no longer `N sockets × M cores` where
+  the total happened to divide.
+- **A metric that only failed to collect is told to fix the collection** on both report pages'
+  problem lists, not given its metric's advice (*find the top process*, *free space*) for a
+  reading that was never taken. A real reading beside the failure keeps the metric's advice.
+- **Disk latency and page life expectancy are judged on the last hour on both report pages.** The
+  server page and the inventory graded the newest row: for disk latency that is the average since
+  the engine started, so a stall eight days old stayed CRITICAL and a file slow right now could be
+  missing; for page life expectancy, one reading. They now difference the file counters the store
+  already keeps (the slower of read and write over the last hour, each direction with at least 20
+  I/Os) and average the last hour of PLE readings, with the same thresholds. The latest interval,
+  the last 24 hours and the since-boot figure are printed beside the grade; the latency chart draws
+  each interval. The collector and the alert reports are unchanged.
+- **Oracle's `PERFORMANCE_IO_LATENCY` carries its raw counters** (`reads`, `writes`,
+  `io_stall_read_ms`, `io_stall_write_ms`, `counters_since`) on 9i+ and 8i, so an Oracle file gets
+  the same windows.
+- **CPU, the disk queue and the wait sample are read over the last hour on both report pages.**
+  The page keeps the severity the collector stored on at least half of the hour's samples - its
+  own thresholds and remaps - and prints the hour's average, peak and samples not OK beside it. One
+  sample over the line no longer colours a tile; half an hour of them does, even when the newest
+  sample is calm. A wait finding the hour did not hold is lowered. Alerts are unchanged.
+
+- **An instance's `report_policy` keeps only `disabled_metric_codes`.** `enabled`,
+  `severity_overrides`, `disabled_event_codes` and `disabled_report_events` were read by nothing;
+  `upgrade-config` removes them where they hold their empty default (step `unread-report-keys`)
+  and names any that holds a value. To lower a status on one server use `metrics.severity_map`.
+- **`report_policy.disabled_metric_codes` silences alerts and no longer stops collection.** The
+  metrics it names on a target are collected and stored, and kept out of the warning / critical
+  reports that go to Telegram - the per-target twin of `collect_only`. A list kept for a noisy
+  alert had also emptied the store: a SQL Server whose nine `OS_*` codes were listed from before it
+  had SSH showed no sockets, cores or host RAM. **Upgrading:** a code listed because the metric
+  cannot run on that target (no SQL for its version, no rights) starts running; switch it off with
+  `metric-toggle` (`state` off, its `reason`) instead. A metric without a way onto the host is
+  skipped by itself, as before.
+- **SQL Server on Linux: `SYSTEM_CPU_MEMORY` reads what SQLPAL can see.** The scheduler monitor's
+  system idle time read 0 on every sample (a host 17 % busy showed `CPU 100 pct`), the process
+  memory read 4.1 GB beside a Total Server Memory of 21 GB, and the "physical memory" is the
+  engine's own limit (`memory.memorylimitmb`). On Linux the `cpu` row now grades SQL Server's own
+  share (`cpu_basis=sql_process`), what the engine holds is its committed memory
+  (`sql_memory_held_mb`, `sql_committed_mb`), and the memory rows grade their low-memory flags only
+  (`memory_scope=sql_server_limit`). Windows is unchanged. The server page says which share and
+  which limit it is showing, and the inventory takes no host RAM from a Linux limit.
+
+### Fixed
+
+- **A PostgreSQL WAL job no longer fails its first run after the catalog exists** with
+  `env[CATALOG_AFTER] is empty`.
+- **A PostgreSQL WAL job no longer re-lists segments it already recorded.** Its script compared
+  segment names as numbers whenever both looked numeric, so once the newest recorded name was all
+  digits it listed older segments again (every run failed on a duplicate key) and missed the new one.
+
+- **`rotate-password` counts what it rotated.** It read an `ok` no result carries, so a clean
+  rotation printed *rotated 0 of 1 login(s)* with `failed: 1`; a failure's reason named no ref.
+- **A Windows host whose performance counters are slow to load keeps its free-space rows.**
+  `OS_DISK_USAGE` read the PhysicalDisk counters without a limit, and the first read after the
+  WMI provider had gone idle took 41 s on one host - past the metric's 30 s - so the script was
+  killed and the volume rows, read in milliseconds, were lost on 33 runs of 33. The reads now run
+  to a 22 s budget, and one that runs out leaves `disk_perf_counters = TIMEOUT` at `LOGGING`
+  beside the volumes. The inventory no longer lists that note, or `NOT_REGISTERED`, as a drive:
+  the three page builders read one list of the rows that are not a volume.
+- **An Oracle older than 10g no longer runs the RMAN backup SQL.** `BACKUP_AGE` and
+  `BACKUP_LAST_RESULT` read `v$rman_backup_job_details` (10g Release 2); their one Oracle variant
+  claimed every release, so on 8i they failed every cycle unless each target switched them off. The
+  catalogue now bounds them to 10g and later, with an unsupported variant naming the reason.
+- **The Workload sections print the online / total CPU pair wherever the engine stated it**,
+  `32 of 32` included, as the CPU tile does - one server read `32 / 32` on its tile and `32 CPUs`
+  below it.
+- **`build-showcase` no longer breaks a page's `\u003e` escapes.** It read a `login` value raw,
+  took the backslash of `\u003cnot-provided\u003e` for a `DOMAIN\login` separator and learnt
+  `u003e` as a credential: sixteen invalid JSON escapes on the 0.30.0 showcase's inventory page. A
+  page's value is decoded before it is read as a name, and a `<placeholder>` is not a name.
+- **A backup or restore that finished is no longer recorded `TIMEOUT`.** The stale-run check read
+  the open rows, and a run that wrote its own `DONE` and exited before the check wrote had the
+  `TIMEOUT` written over it, with a timeout alert, in the same second. The check now writes only a
+  row that still says RUNNING. Named in the v0.30.0 note's *Known not to work*.
+- **`metric-toggle` no longer leaves `"metric_overrides": {}` behind**, and no longer says *nothing
+  to change* when switching a metric on took it off `report_policy.disabled_metric_codes`.
+
 ## [0.30.0] - 2026-10-19
 
 ### Added

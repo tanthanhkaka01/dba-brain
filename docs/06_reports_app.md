@@ -243,7 +243,8 @@ written this run, or already on disk, are offered — a link to a 404 looks like
 picker is HTML only: the stored copy feeds Telegram, where a fleet-sized nav block would eat the
 4096-character budget.
 
-**The page is built like the other report pages** (`lib.page_style`, 2026-10-02): a masthead with
+**The page is built like the other report pages** (`lib.page_style`, 2026-10-02; drawn with
+Tabler since 2026-10-30, see [How the pages look](#how-the-pages-look---tabler-vendored-2026-10-30)): a masthead with
 the server and its engine (*SQL Server · index usage*, *Oracle · index inventory*), the totals as
 stat cards - a disabled or unusable index red, drop candidates, fragmented indexes and stale
 statistics amber, a zero never coloured - then the picker, the restart caveat as a banner, and every
@@ -276,6 +277,57 @@ instances, Oracle and PostgreSQL databases and bare hosts, so "the Oracle server
 `server-metrics.html` the section comes from the inventory's `db_type` (`osOnly` is Host only) and a
 target with nothing collected sorts to the end of its row; on the index pages an entry is Oracle or
 PostgreSQL by the rows it holds, and SQL Server otherwise.
+
+
+## How the pages look - Tabler, vendored (2026-10-30)
+
+The operator: *restyle the report pages in petweb's style, using open-source UI libraries - do not
+design anything by hand*. petweb is built on **Tabler** (Bootstrap 5 underneath), so every page
+this tool publishes - `database-inventory.html`, `server-metrics.html`, `backup-restore.html`,
+`sla.html`, `index-usage_<server>.html` and the hub `index.html` - is drawn with it:
+its cards, tables, badges, buttons, alerts, selects, type scale and colour tokens. Until then the
+pages took Tabler only as a *vocabulary* (`lib.page_style`, 2026-10-02) and drew it by hand.
+
+- **Vendored, never fetched.** `dbabrain/lib/vendor/tabler/tabler.min.css` is Tabler **1.6.1**
+  (MIT, its `LICENSE` beside it), shipped as package data of `dbabrain.lib`. The worker serving the
+  pages has no internet, and a page mailed on, printed or opened from disk must look the same, so
+  each page carries its own copy inline, like the rest of its stylesheet. Every copy opens with the
+  library's own copyright comment, which the MIT license asks for.
+- **Only what the page uses.** `lib.page_kit.inline(page)` adds, as the page's first `<style>`, the
+  rules of Tabler's that can apply to it: a rule is kept when every class it selects is a word
+  somewhere in the page - markup or script, since most of these pages draw themselves in
+  JavaScript. The tokens on `:root` and the element base are always kept. About 65-75 KB a page
+  instead of 635 KB; what is kept is the library's text, never edited.
+- **The pages' own names are Tabler classes.** The pages name things for what they are (`b-crit`,
+  `tbl-scroll`, `callout`, `sev`, `kpi`) and much of their markup is built by scripts that tests and
+  readers rely on, so the names stay. `page_kit.ALIASES` says which Tabler class each one *is* -
+  `.b-crit` is `.bg-red-lt`, `.tbl-scroll` is `.card.table-responsive`, `table.rpt` is
+  `.table.table-sm.card-table`, the banner is the `.navbar` - and the kit copies Tabler's rules
+  for that class onto the page's selector, what Sass's `@extend` does. Nothing is restated by hand.
+- **The head is dbabrain.dev's, light or dark** (the operator, 2026-10-30). `lib.page_banner` draws
+  the product's mark (the site's own, inline) and name, the sibling pages as the navbar's ghost
+  buttons on the right (the page on show the primary one), and a light / dark switch - Tabler
+  Icons' moon and sun - with the page's title, scope and snapshot under them. The switch sets
+  Tabler's `data-bs-theme` on the page: the reader's choice if they made one (kept in this browser
+  only, `localStorage`, guarded), else the system's. Every colour on the pages is a Tabler variable,
+  so the page follows; the kit carries Tabler's dark-theme rules because the switch names
+  `data-bs-theme`. The head carries no contact, repository or author link - only the product.
+- **A page word Tabler uses for something else keeps its meaning** (`page_kit.SHADOWED`): a stat
+  card flagged `alert` is a red number, not Tabler's alert box; `legend`, `empty`, `grid`, `d-grid`,
+  `toolbar` and `prose` are the pages' own too.
+- **What the pages' stylesheets still hold** is what Tabler has no class for: layout grids, the
+  picker's two columns, a column's width, the fill bars, and the state edges (a red left border, a
+  red row) - in Tabler's colours, since every token (`--crit`, `--line`, `--mono` ...) is now one of
+  Tabler's variables. The hand-drawn SVG charts keep their own colours: an SVG attribute cannot read
+  a CSS variable.
+
+Style only: no figure, label, threshold or row changed, and every placeholder, element id and
+script the pages run is as it was. One fix rode along: an index page now lists itself in its own
+head on the run that first writes it (it used to appear only from the next run). The showcase
+leaves the kit's block out of the words it never pseudonymises - Tabler's class names are ordinary
+words (`alert`, `card`, `container`), and a customer table called one of them must still be renamed.
+
+Guarded by `tests/test_report_pages_are_drawn_with_tabler.py`.
 
 
 ## Runtime Tables
@@ -429,6 +481,34 @@ injects the computed `SCOPE` / `SERVERS` / `TRIAGE` data the template renders fr
 (Priority Attention) items are **auto-derived from thresholds** (violated backup RPO, low disk,
 low PLE, config drift, xp_cmdshell, un-collected hosts) plus one card per current metric problem
 (see "What 'current' means" below).
+
+## Backup & restore - the fleet page (`backup-restore.html`, 0.34.0)
+
+Asked for on 2026-10-30, beside Fleet inventory, Server metrics, SLA and Index usage. Every
+server's backup files and every restore that used them, on one page, from the backup catalog
+(`docs/08_backup_restore_app.md`).
+
+- **One table.** Each row is what a backup wrote: its size in bytes, its SHA-256 recorded once, the
+  engine's verification, whether it is still on disk and still the same bytes, the virus scan, and
+  each restore or copy that used it. There is a **Server** column, and filters by server,
+  database, file type, "used for a restore" and problems only. The **Database** choices are the
+  databases on the page - only the picked server's once a server is picked.
+- **The same table as a server page's section** (1.217), built one way and drawn one way:
+  - `backup_catalog_sections.build_fleet` is each server's `build_files`, tagged with the server
+    (`host`) and counted by the same `summarize`;
+  - the page draws it with the server page's own `templates/backup_files.js`, injected into both;
+  - its stylesheet is the server page's own, read from that template at render time.
+- **A copy is one row.** It sits on the source file's row (its mark and last restore), so a
+  restore onto another server is not listed a second time as "restored here".
+- **Built first.** `inventory_report` writes it before the server pages and the inventory, so every
+  banner built in that run finds it on disk. `page_banner.SIBLING_PAGES`, the console's
+  `REPORT_PAGES` and `webhost_endpoints.STABLE_PAGES` offer it, each only once the file exists. A
+  catalog that cannot be opened writes no page, so nothing links to one.
+- **Today's only.** The page is written under its stable name and its day (`?date=`). The catalog
+  holds no history of itself, so a past day's page is never rebuilt from today's rows.
+
+**On a server page** the header carries `backup & restore files (N) ↓` once that server has files.
+It opens the folded section and goes to it.
 
 ## Linked servers (on `server-metrics.html`)
 
@@ -749,6 +829,72 @@ when findings exist, but preserved for clean sources so an intact engine confirm
 were present in the latest reading. Rows are fetched for at most one day (`DIAGNOSTICS_DAYS = 1`).
 The section folds open automatically when any source reports a WARNING or CRITICAL finding, with
 findings ordered worst-first and capped at twenty rows per source.
+
+## Backup & restore files — every file, and every restore that used it (on `server-metrics.html`, 0.34.0)
+
+**The ask** (the operator, 2026-10-29):
+- backup and restore on the server page, as one report, not two;
+- every file's information, newest first, filterable by file type;
+- the size in bytes, the checksum, the verification, the virus scan;
+- a field saying whether the file was restored OK;
+- a filter for the files a restore has used.
+
+`backup_catalog_sections.build_files` reads the backup catalog's own rows
+(`BackupCatalogStore.server_backup_files`, `server_restore_files`, at most 500 of each) into one
+table, `backupFiles` in the payload. There are three kinds of row:
+
+| Kind | What it is |
+| --- | --- |
+| `backup` | a file a backup of this server wrote, with its restore mark, its last restore or copy (target, copy verdict, SHA-256 after the copy, the target still on disk and unchanged), and how many times it was used and restored OK |
+| `restored here` | a file a restore or copy carried ONTO this server from another one |
+| `copied out` | a file carried from this server that no catalogued backup matches (a copy made before its backup was catalogued), kept so no copy is missing from its page |
+
+Columns:
+- when, database, type, the file and its path on the server;
+- **size in bytes** (exact, `61,203,447,808 B`; the human size is in the tooltip);
+- SHA-256 as first recorded;
+- the verdict and the engine's verification;
+- **encrypted**: `yes` / `no` as the backup script wrote the file (its `FILE` line's `encrypted=`),
+  `not recorded` for a file written before the scripts said, or catalogued by `catalog-backfill` -
+  unknown is never shown as `no`; a copy row has none of its own;
+- on disk, and "= catalog";
+- the virus scan;
+- **used for restore**: the last use, and `used N×` / `restored OK N×` - **each restore or copy
+  that uses the file adds one** (one `restore_run_files` row per run and file, counted by the store
+  over every run; the retries of one copy are that run's attempts, not more uses).
+
+Three selects filter the rows already drawn:
+- **database**;
+- **file type**;
+- **used for a restore**: used / restored OK / used but not restored OK / never used.
+
+The section opens by itself when a file is not ok, changed, missing, infected, or its last copy was
+not proven. A page rebuilt for a past day (`as_of`) shows no files rather than today's. A store
+without the catalog yet shows nothing, and the page is still built.
+
+## Server detail — everything the inventory says about this server, and more (on `server-metrics.html`, 0.34.0)
+
+**The rule** (the operator, 2026-10-23): *the server metrics page is the page of one instance; it
+carries more than the inventory, never less.* It carried less: no version, patch or edition on any
+engine, no configuration, no security counts, no host facts - the inventory's Server Detail and
+Config tab had them all, one page away.
+
+The section comes before Databases and is built from the inventory's own record for the server
+(`server_sections.build_server_detail(model)`, the model `inventory_report.build_models` made), so
+the two pages read one set of values and no query is added:
+
+| Block | What it holds |
+| --- | --- |
+| the first table | the fleet row and the Server Detail grid - company, platform, OS, endpoint, databases online, host RAM, HA / DR, the backup verdict, PLE, sessions, disks - then every Server Detail row: the instance's build and patch, edition, host, endpoint, collation, start, each engine's own facts (an Oracle's banner, open mode, log mode, pools, tablespaces; a PostgreSQL's role and WAL), server name, deployment, FCI cluster, governance, Oracle parameters, backup jobs, notes; a row from the canonical file is marked *static* |
+| Configuration | the inventory's Config tab: CPUs and schedulers (live or stored, and when asked), MAXDOP, cost threshold, max and committed memory, TempDB, backup compression, remote DAC, ad hoc, blocked process threshold, CLR, xp_cmdshell, and the inventory's advice lines |
+| Host | every OS field the inventory keeps, not only the five it prints - hostname, OS, architecture, timezone, uptime, last boot, CPU model / cores / logical / usage, load, memory, swap, pending reboot - then services, top processes by CPU and memory, network interfaces, the event log |
+| Security | failed logins in 24 h and by login, passwords past their age, certificates expired and expiring |
+| Findings | the inventory's findings and configuration warnings |
+
+The engine build, patch and edition also join the header line, beside the address. A page rebuilt
+for a past day (`as_of`) has no section: the model is today's.
+`tests/test_the_server_page_carries_everything_the_inventory_says_about_a_server.py` reads the
+inventory's template and fails on a per-server field it shows that this page has no place for.
 
 ## Databases — what is on this instance (on `server-metrics.html`)
 
@@ -1132,13 +1278,67 @@ Three things about this data are easy to get wrong, and each is a test in
   OS row wins a shared volume; it is the one that knows the file system.
 - **`OS_DISK_USAGE` is not only volumes.** Throughput, IOPS and queue length share the metric code
   and have no size; they belong to the Storage activity area and are excluded by name plus a
-  "reported a `total_gb`" check.
+  "reported a `total_gb`" check. So is `disk_perf_counters`, the Windows note that they could not
+  be read, which no tile shows. The names are one list, `server_series.OS_DISK_NOT_A_VOLUME_ITEMS`,
+  read by the inventory, the tiles and the volume table alike.
 - **A size the host does not know is not a size of zero.** A SQL Server too old for
   `sys.dm_os_volume_stats` falls back to `xp_fixeddrives`, which returns free space and
   `total_gb=unknown` — all three volumes on `192.0.2.253` read that way. Those rows are listed
   (free space is the column that decides anything), and the **host-level ratio is withheld** rather
   than computed over a partial sum: the header says `N with no size reported` instead of a
   percentage that understates the machine.
+
+## Disk latency and page life expectancy - judged on the last hour of stored rows (both pages, 2026-10-26)
+
+**The rule** (the operator, 2026-10-26): the collector and the alert reports alert on the instant and
+never read the store; the inventory and the server page read only the store, and may judge a metric
+differently from the alert. The two metrics the *report* grades (`health_model.REPORT_JUDGED_CODES`
+- their SQL returns OK, or grades at 200 / 500 ms) were graded on their newest row, and for both
+that row answers the wrong question:
+
+| Metric | The newest row is | Judged now on |
+| --- | --- | --- |
+| `PERFORMANCE_IO_LATENCY` | the average **since the engine started** (`sys.dm_io_virtual_file_stats`, `v$filestat`) | the file's counters differenced over the **last hour**, the slower of read and write, each direction only with at least 20 I/Os - the same 20 / 50 ms rule |
+| `PAGE_LIFE_EXPECTANCY` | one reading of a gauge, every 10 minutes | the **last hour's average** - the same 2000 / 300 s rule |
+
+Measured the day it was written, on the fleet page's findings: one server's eleven CRITICAL files
+(the worst a data file at 72.95 ms, its average since a restart eight days earlier, and 2.3 ms over
+the hour) became four WARNING tempdb data files (writes 26 - 43 ms over the hour, 54 - 67 over the
+day); two other servers' 43 and 2 findings went; and two files at 1,752 ms and 223 ms over the last
+hour, on two more servers, appeared - their since-boot averages had kept them off the list.
+
+The latest interval and the last 24 hours are printed beside the graded hour (the tile's second line,
+and the first sentence of each problem's detail), and so is the since-boot figure - labelled, never
+graded. The chart draws one point per collection interval instead of the running average. No pair
+(a restart in the hour, a single collection) is no grade - *no interval yet* - never the since-boot
+average. The arithmetic is `interval_rates`; the windows, the gate and the sentences are
+`dbabrain.lib.report_windows`, read by `server_series._apply_report_window` (the server page) and
+`inventory_health._windowed` (the fleet page's findings and its PLE column), which loads one day of
+the two metrics' rows. Oracle's two variants carry the counters from 2026-10-26; their rows from
+before have none, and are not graded until two collections with them exist.
+
+Neither the collector nor the hourly alert reports changed: `PERFORMANCE_IO_LATENCY_INTERVAL`
+(two reads 10 s apart inside one run) is still what alerts on a stall as it happens.
+
+**CPU, the disk queue and the wait sample - the severity that held (the same day).** These the
+collector grades itself, from one sample: `OS_CPU_USAGE[cpu_usage]`, `SYSTEM_CPU_MEMORY[cpu]`,
+`OS_DISK_USAGE[disk_queue_length]` and `PERFORMANCE_WAIT_STATS`. Their thresholds are the
+collector's, per metric and per server (`metric_overrides`, `severity_map`), so the pages do not
+re-grade the values: they read the severity the collector **stored on each sample** of the last
+hour and keep the highest one **at least half of the samples reached** (`held_severity`). One CPU
+sample at 96 % among five at 20 % is OK; four at 92 % and two at 30 % are CRITICAL though the
+newest is calm. A remap that lowered the samples lowered the hour too - a page never un-silences
+what a `severity_map` decided. The value shown is the hour's average; the tile's source line and
+the problem's detail carry the hour and the day (average, peak, samples not OK). The wait sample
+names a different top wait in each collection, so it is read per collection across its items and
+can only **lower** a finding the hour did not hold - it has no item of its own to raise. On the
+fleet page a CPU or disk queue the hour held joins the problem list even when its newest sample was
+OK. The day it was written no status on the estate moved: the windows changed the figures printed
+beside the tiles, not a verdict.
+
+What stays on the newest row, on purpose: blocking, long-running queries, disk space, backups,
+availability, the error log - their question is *what is true now*, and the newest collection is
+the answer to it.
 
 ## Health-area tiles: a value that breaks the rule printed beside it
 
@@ -1269,19 +1469,67 @@ cannot tell the two apart.
 `(severity, selector priority, value)`. Comparing raw values first is what let disk read
 throughput in KB/s decide an area measured in percent, and SQL memory % stand in for CPU.
 
+**A metric that only failed to collect is told to fix the collection (2026-10-27).** A Problems row
+(and a fleet card) says what to do from its metric's `ACTIONS` entry - *find the top process*, *free
+space* - and that answers a reading. When every finding of the metric is the `__collector__` row,
+there was none, and the row takes `health_model.COLLECTOR_FAILURE_ACTION` instead: fix what the
+error names. Thirteen OS rows on a host whose SSH login was refused had read as a server short of
+CPU, memory and disk. A real reading beside the failure keeps the metric's advice. Decided once in
+`health_model.group_findings`, which both pages build their list through.
+
 **A tile states what its percentage is of (2026-10-16).** The CPU, Memory and Disk space tiles carry
 a `capacity` line read back from the totals their collectors already write, on every engine:
-**48 / 60 CPUs online / total · 1 socket × 30 cores**, and where the two differ what that does to the
+**48 / 60 logical CPUs online / total · 1 socket, 30 cores, 2 threads per core**, and where the two differ what that does to the
 tile (*SQL Server saturated reads about 80% on this tile*, under a CRITICAL line of 90);
 **254 / 400 GB used / total · 146 GB available · SQL Server holds 240 GB** (or a container's usage
 against its limit); **F: 852 / 1,024 GB used / total · 172 GB free · 8 volumes, 3.22 TB free of
 6.50 TB**, a volume seen by both the host and the instance counted once. A tile whose collector
 wrote no totals has no capacity line rather than a guessed one (`server_health._cpu_capacity`,
 `_memory_capacity`, `_disk_capacity`). The CPU pair is printed whenever the engine's scheduler count
-is known - **32 / 32** where it may use them all, a bare **32 CPUs** only where it was not asked. The
-collectors' `cores` is the host's total over its sockets, so it is stated per socket only where it
-divides: **2 sockets × 16 cores**, but **3 sockets, 17 cores** (2026-10-20: printed as per socket it
-read 51 cores on a 32-CPU host).
+is known - **32 / 32** where it may use them all, a bare **32 logical CPUs** only where it was not
+asked. **Logical, said so (2026-10-30):** "32 CPUs · 16 cores" read as a contradiction on .245; the
+count is the OS's logical processors, and the topology adds **2 threads per core** when the two
+counts the collector read divide evenly, and nothing when they do not.
+The processors are printed in one form for every host, from what the OS collector wrote socket by
+socket: **1 socket, 30 cores**; **3 sockets, 17 cores (8 + 6 + 3)**. Until 2026-10-26 the tile chose
+between `2 sockets × 16 cores` and `3 sockets, 17 cores` by whether the total divided - two servers'
+tiles read differently for it, and the `×` claimed the sockets alike, which the guest behind the
+second is not (asked by the operator: *don't hard-code, show what is real, don't guess*). A row from
+before `cores_per_socket` was collected prints the totals only; a host that states no socket gets none.
+
+**A database in a container, and one without a host (2026-10-26).** The CPU tile of a container is
+its **share of the CPUs it may use** (`<container>:cpu_share`) with **1.35 of 8 CPUs busy** beside
+it and what the 8 is - `--cpus`, a CPU quota, a cpuset, or the host's count with no limit set - all
+read by the docker collector; `docker stats`' own figure is in CPUs (319 % = 3.19 busy) and is kept
+only as the fallback for older rows, which then say they do not know the denominator. Its Disk
+space tile is the **volume the container writes to**, from `df` inside it (`<container>:disk:<mount>`,
+85 / 95 % like any volume). An engine with neither a host nor an engine CPU row - Oracle reached
+without host access - takes its CPU tile from its own counters in the Workload section, judged by
+the tile's printed rule; an instance whose `timed_statistics` is FALSE times nothing, and its tile
+reads **not timed** with the parameter named rather than 0 %. The Disk space tile takes only
+**fullness** - percentages: Oracle 8i's data-file rows are sizes in MB and PostgreSQL's database rows
+sizes in bytes, and the tile had printed `20000 MB` and `48803043007 bytes` as if they were how full
+a disk was. Where no fullness is collected it says *not collected*.
+
+The **Databases** table is told what each engine has: an engine the catalogue gives no
+`DATABASE_CHECKDB` reads **n/a** in that column instead of a red *never* (Oracle and PostgreSQL were
+counted *never CHECKDB'd*); an Oracle database's size is the sum of its data files and how many
+(`STORAGE_DATA_FILE_SPACE`, now among the section's codes - the fleet page had it, this page did
+not); every size says how many files it is spread over where the collector counted them; and
+PostgreSQL's one WAL for the cluster goes on the table's header line - its size, its files and
+`max_wal_size` (`LOG_FILE_SPACE`'s `pg_wal` row).
+
+**SQL Server on Linux: its own share, and its own limit (0.34.0).** Through SQLPAL, two of the
+engine's readings are not the host's (`docs/04`, *SQL Server on Linux*), and one server's tiles printed
+both as if they were: `CPU 100 pct` on a host 17 % busy, and `22.0 / 24.0 GB used / total · SQL
+Server holds 4.1 GB` where 24 GB is the engine's memory limit and it had committed 21.2. The
+collector now names its basis and the tiles read it back. The CPU tile, when it shows the engine's
+row, adds *SQL Server on Linux does not report the host's idle time: this is SQL Server's own share of
+the CPU, not the host's*; with the host collected, `OS_CPU_USAGE` is the row shown and no such note
+is needed. The memory tile takes the OS's total first, and otherwise says **used / SQL Server's
+limit**; *SQL Server holds* reads `sql_memory_held_mb` (committed on Linux, the process figure on
+Windows), and a row from before 0.34.0 its `sql_physical_memory_in_use_mb`. The inventory takes no
+host RAM from a Linux limit (`inventory_health.build_sql_governance`).
 
 **A database in a container reads its container's CPU and memory (2026-10-03).** It has no host
 login, so no `OS_*` collector runs for it, and its CPU and Memory tiles read *not collected* - the

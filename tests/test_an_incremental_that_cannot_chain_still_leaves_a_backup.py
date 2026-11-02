@@ -70,7 +70,8 @@ def test_the_script_never_creates_the_backup_directory_itself(code: str):
     2026-09-24 the backup folder itself when another user made it and it has to be taken over (as
     root, then handed to the engine). This asserted exactly one `mkdir` until that change added two,
     and the count, not the rule, is what went stale."""
-    made = [line for line in code.splitlines() if "mkdir" in line]
+    # The run's pid file folder in the host's temp (1.238) is no backup directory: it is left out.
+    made = [line for line in code.splitlines() if "mkdir" in line and "run_file" not in line]
 
     assert made, "the script must create base/ itself"
     for line in made:

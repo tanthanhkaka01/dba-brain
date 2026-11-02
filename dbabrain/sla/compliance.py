@@ -216,6 +216,10 @@ def _expected_scope(policy: SlaPolicy, *, data_dir: str | Path | None = None) ->
 def _policy_is_switched_off_for(policy: SlaPolicy, raw_config) -> bool:
     """True when EVERY metric this policy reads is deliberately disabled on this target.
 
+    Disabled means not collected (`metric_overrides.<CODE>.enabled: false`, a collector class off)
+    or kept out of the reports (`report_policy.disabled_metric_codes` - collected since 0.34.0, and
+    still not judged here: the list is the operator saying this target is not reported on).
+
     A target that is not measured on purpose is out of scope, not a gap. Emitting NO_DATA for it
     would be worse than the disappearance this population fix replaces: the fleet verdict counts
     NO_DATA as a required failure, so switching a metric off on one host would turn the whole

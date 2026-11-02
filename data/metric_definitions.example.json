@@ -323,6 +323,15 @@
         },
         {
           "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
+          "supported": false,
+          "unsupported_reason": "v$rman_backup_job_details, which this SQL reads, exists from 10g Release 2; on 8i the statement fails with ORA-00933 / ORA-00900 every cycle."
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 10,
           "name": "oracle_rman",
           "file": "oracle/005_oracle_backup_age.sql"
         },
@@ -487,9 +496,9 @@
         },
         {
           "db_type": "postgresql",
-          "name": "postgresql_todo",
-          "supported": false,
-          "unsupported_reason": "PostgreSQL implementation has not been authored yet."
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/007_postgresql_wal_space.sql"
         },
         {
           "db_type": "oracle",
@@ -1632,6 +1641,15 @@
         },
         {
           "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "oracle_pre_10g_unsupported",
+          "supported": false,
+          "unsupported_reason": "v$rman_backup_job_details, which this SQL reads, exists from 10g Release 2; on 8i the statement fails with ORA-00933 / ORA-00900 every cycle."
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 10,
           "name": "oracle_rman",
           "file": "oracle/022_oracle_last_backup_result.sql"
         },

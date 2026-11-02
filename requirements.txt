@@ -44,3 +44,9 @@ cryptography>=42.0.0
 # on Windows, so without this every IANA name raises ZoneInfoNotFoundError there while working in
 # the Linux image. Pure data, no transitive dependencies. A fixed offset ("+07:00") needs none of it.
 tzdata>=2024.1
+
+# The AI assistant in Telegram (0.34.0, data/ai_assist.json): the official Claude SDK. Only the
+# assistant imports it, inside its own modules, so a node without it runs everything else and the
+# assistant's job says it is not installed. The worker reaches api.anthropic.com outward; nothing
+# reaches the worker.
+anthropic>=2.3.0

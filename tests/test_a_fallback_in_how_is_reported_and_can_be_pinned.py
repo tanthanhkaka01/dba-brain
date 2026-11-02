@@ -27,6 +27,7 @@ import types
 import pytest
 
 from dbabrain.common import backup_copy, remote_exec, ssh_relay
+from dbabrain.lib.integrity import RestoreIntegrity
 from dbabrain.lib.restore import copy_mode
 
 
@@ -164,7 +165,7 @@ def test_the_restore_entry_s_copy_mode_reaches_the_copy_command(monkeypatch):
         restore_id="PG_DRILL", db_type="postgresql", server_id="SRC", backup_dir="/backup",
         script="restore.sh", time_window=TimeWindow(), target_server_id="DST",
         target_backup_dir="/opt/db_ops/backup/pg_restore", source_backup_host_dir="/opt/backup/pg",
-        copy_mode="tar")
+        copy_mode="tar", integrity=RestoreIntegrity())
     sent: dict[str, dict] = {}
 
     def run(command, request, **_kwargs):

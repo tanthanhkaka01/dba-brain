@@ -32,6 +32,10 @@ from typing import Any
 
 from dbabrain.common import field_migration
 from dbabrain.lib import config_references, earlier_defaults, package_rename, shared_objects
+from dbabrain.lib import integrity as restore_integrity
+from dbabrain.lib import offload as offload_rules
+from dbabrain.lib import backup_scope
+from dbabrain.lib import ai_assist as ai_assist_rules
 from dbabrain.lib.json_io import atomic_write_text, indent_of
 from dbabrain.lib.moved_commands import MOVED_COMMANDS
 from dbabrain.lib.paths import PACKAGED_CATALOGUE
@@ -85,6 +89,26 @@ Steps, in order (each one idempotent - a file already moved plans nothing):
                       last-run column is read from the store, which only db.cli opens)
   console-apps        an app this version's console lists and webhost_config.json does not is
                       added to it. Only added: an entry the file already holds is left as it is
+  unread-report-keys  an instance's report_policy loses enabled, severity_overrides,
+                      disabled_event_codes and disabled_report_events - read by nothing, ever.
+                      Only an empty default is removed; one holding a value is a conflict, named
+                      for the operator, since whatever it was meant to do never happened
+  stated-integrity    a restore entry with no integrity block is given one: copy_max_retry 3,
+                      30 s between copies, the source hashed before the copy, sha256 (0.34.0 -
+                      mandatory on every entry), and "action": "restore" into an entry that
+                      states none (copy_only is the other); every backup entry its offload_*
+                      fields (offload off, as it ran) and every restore entry "restore_from":
+                      "server"; and every backup job its databases as a list - env
+                      MSSQL_DATABASES moved into databases, all_databases true where none was
+                      named. What is stated is left as it is (dbabrain/lib/integrity.py,
+                      dbabrain/lib/offload.py, dbabrain/lib/backup_scope.py)
+  stated-ai-assist    0.34.0: a node with no ai_assist.json is given the shipped one (off, no key,
+                      nobody switched on); a node's own file gets every field it does not state at
+                      its shipped value - a user row's missing "active" is false, so nobody is
+                      switched on by an upgrade - and its old chat_ids list becomes the level
+                      (telegram_chat, "ai_assist") on each listed group that has no level yet; a
+                      group with another level is a conflict, named. What is stated is left as it
+                      is (dbabrain/lib/ai_assist.py)
 
 A record whose two spellings DISAGREE is a conflict: its file is not written, and the answer names
 the record. After a write, check-objects and check-references are run and their counts reported -
@@ -97,7 +121,8 @@ Exit code 1 when a conflict left a file unwritten.
 """
 
 STEPS = ("reference-files", "package-rename", "field-names", "restore-machine-ids", "earlier-defaults",
-         "telegram-active", "inventory-into-reports", "moved-commands", "console-apps")
+         "telegram-active", "inventory-into-reports", "moved-commands", "console-apps",
+         "unread-report-keys", "stated-integrity", "stated-ai-assist")
 
 
 #: The app command that was a report (0.22.0), and the report it becomes.
@@ -399,6 +424,87 @@ def _console_apps(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, 
                        "written": written}]}
 
 
+#: An instance's ``report_policy`` keys no code has read. ``severity_overrides`` had a reader in the
+#: policy engine (``_apply_instance_policy``, removed in 0.34.0) that nothing called; the other three
+#: had none at all. Each with the values that mean "nothing set". ``disabled_metric_codes`` stays:
+#: since 0.34.0 the alert reports read it (``reports.metrics_reports._report_disabled_metric_codes``).
+UNREAD_REPORT_KEYS = {"enabled": (True, None), "severity_overrides": ({}, None),
+                      "disabled_event_codes": ([], None), "disabled_report_events": ([], None)}
+INSTANCES_FILE = "db_instances.json"
+
+
+def _unread_report_keys(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Remove the four ``report_policy`` keys of an instance that nothing reads (0.34.0).
+
+    Found on 2026-10-23 looking for what silences an alert on one server: 25 records carried
+    ``enabled``, ``severity_overrides``, ``disabled_event_codes`` and ``disabled_report_events``, all
+    at their empty defaults, and none of them did anything - a reader of the file could believe an
+    override was in force. Only an empty default goes; a key holding a value is a conflict and its
+    file is left as it is, because what it was meant to do never happened and the operator says
+    whether it should (``metrics.severity_map`` / ``metric_overrides`` is what lowers a status).
+    """
+    files: list[dict[str, Any]] = []
+    for name in (INSTANCES_FILE, INSTANCES_FILE.replace(".json", ".example.json")):
+        path = root / name
+        if not path.is_file():
+            continue
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        records = document.get("db_instances") if isinstance(document, dict) else None
+        if not isinstance(records, list):
+            continue
+        changes: list[dict[str, Any]] = []
+        conflicts: list[dict[str, Any]] = []
+        for index, record in enumerate(records):
+            policy = record.get("report_policy") if isinstance(record, dict) else None
+            if not isinstance(policy, dict):
+                continue
+            where = f"db_instances[{index}] {record.get('server_id') or ''}".strip()
+            held = {key: policy[key] for key in UNREAD_REPORT_KEYS
+                    if key in policy and policy[key] not in UNREAD_REPORT_KEYS[key]}
+            if held:
+                conflicts.append({"where": where, "values": held,
+                                  "reason": "a value in a report_policy key nothing reads"})
+                continue
+            gone = [key for key in UNREAD_REPORT_KEYS if key in policy]
+            for key in gone:
+                del policy[key]
+            if gone:
+                changes.append({"where": where, "field": "report_policy", "removed": gone})
+        written = bool(changes) and not conflicts and not dry_run
+        if written:
+            before_write(path)
+            # The file's own text first, so a hand-formatted example keeps its layout; trusted
+            # only when it parses to exactly the migrated document.
+            text = _without_unread_report_lines(path.read_bytes().decode("utf-8-sig"))
+            if json.loads(text) != document:
+                text = json.dumps(document, ensure_ascii=False,
+                                  indent=indent_of(path, default=2)) + "\n"
+            atomic_write_text(path, text)
+        files.append({"file": name, "records_changed": len(changes), "changes": changes,
+                      "conflicts": conflicts, "written": written})
+    return {"files": files}
+
+
+_UNREAD_LINE = re.compile(
+    r'^[ \t]*"(?:enabled|severity_overrides|disabled_event_codes|disabled_report_events)"'
+    r'[ \t]*:[ \t]*(?:true|\{[ \t]*\}|\[[ \t]*\])[ \t]*,?[ \t]*\r?\n', re.M)
+_REPORT_POLICY_BLOCK = re.compile(r'("report_policy"[ \t]*:[ \t]*\{)([^{}]*(?:\{[ \t]*\}[^{}]*)*)(\})')
+
+
+def _without_unread_report_lines(raw: str) -> str:
+    """Each ``report_policy`` block of ``raw`` without the lines of its unread empty keys.
+
+    Line by line inside the block, so the rest of the file - inline arrays, blank lines - is left
+    exactly as written; a comma left dangling before the closing brace is taken off.
+    """
+    def block(match: "re.Match[str]") -> str:
+        body = _UNREAD_LINE.sub("", match.group(2))
+        body = re.sub(r",([ \t]*\r?\n[ \t]*)$", r"\1", body)
+        return match.group(1) + body + match.group(3)
+
+    return _REPORT_POLICY_BLOCK.sub(block, raw)
+
+
 #: The files this version ships as REFERENCE rather than configuration: nobody edits them, every node
 #: holds the same bytes, and the other steps are checked against them. They go first, because an
 #: older copy calls every field the next step moves an unknown one.
@@ -546,6 +652,100 @@ def _earlier_defaults(root: Path, *, dry_run: bool, before_write: Any) -> dict[s
     return {"files": files}
 
 
+def _stated_integrity(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Write ``integrity`` into every restore entry that states none (0.34.0).
+
+    The example file too: it is the worked entry a person copies, and an example without the
+    block would teach the one shape check-objects now refuses.
+    """
+    files: list[dict[str, Any]] = []
+    for name in ("restore_config.json", "restore_config.example.json"):
+        path = root / name
+        if not path.is_file():
+            continue
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        changes = (restore_integrity.state_restore_integrity(document)
+                   + offload_rules.state_offload(document)
+                   + backup_scope.state_backup_databases(document))
+        written = bool(changes) and not dry_run
+        if written:
+            before_write(path)
+            atomic_write_text(path, json.dumps(document, ensure_ascii=False,
+                                               indent=indent_of(path)) + "\n")
+        # Records, not fields: one entry given both integrity and action is one record changed.
+        files.append({"file": name, "records_changed": len({change["where"] for change in changes}),
+                      "changes": changes, "conflicts": [], "written": written})
+    return {"files": files}
+
+
+def _stated_ai_assist(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Every field of ``ai_assist.json`` stated (0.34.0, R50): the shipped file where a node has
+    none, the missing fields of its own file where it has one."""
+    files: list[dict[str, Any]] = []
+    path = root / ai_assist_rules.FILE_NAME
+    if not path.is_file():
+        shipped = Path(ai_assist_rules.__file__).resolve().parents[1] / "telegram" / "catalogue" / path.name
+        if shipped.is_file():
+            if not dry_run:
+                atomic_write_text(path, shipped.read_bytes().decode("utf-8-sig"))
+            files.append({"file": path.name, "records_changed": 1, "conflicts": [], "written": not dry_run,
+                          "changes": [{"where": path.name, "field": "(the file)",
+                                       "value": "created from the shipped one: off, no key, nobody switched on"}]})
+        return {"files": files}
+    groups_path = root / "telegram_groups.json"
+    for name in (ai_assist_rules.FILE_NAME, "ai_assist.example.json"):
+        path = root / name
+        if not path.is_file():
+            continue
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        changes: list[dict[str, Any]] = []
+        conflicts: list[dict[str, Any]] = []
+        # 2.87.58 - 2.87.61 named the assistant's chats by id. A chat is named by its level now, on
+        # its own row: each listed group with no level takes the assistant's, then the list goes.
+        chat_ids = document.get(ai_assist_rules.RETIRED_CHAT_IDS)
+        if chat_ids is not None and name == ai_assist_rules.FILE_NAME:
+            level = str(document.get("telegram_chat") or ai_assist_rules.AI_ASSIST_LEVEL)
+            if groups_path.is_file():
+                groups_document = json.loads(groups_path.read_bytes().decode("utf-8-sig"))
+                rows = groups_document.get("telegram_groups") or []
+                groups_changed = False
+                for chat_id in chat_ids:
+                    row = next((item for item in rows if str(item.get("group_id")) == str(chat_id)), None)
+                    if row is None:
+                        continue
+                    current = str(row.get("notify_level") or "").strip().lower()
+                    if current == level:
+                        continue
+                    if current:
+                        conflicts.append({"where": f"telegram_groups.json[{chat_id}]", "field": "notify_level",
+                                          "value": f"is {current!r}; the assistant's chat needs {level!r} - "
+                                                   "set it with telegram group-level"})
+                        continue
+                    row["notify_level"] = level
+                    groups_changed = True
+                    changes.append({"where": f"telegram_groups.json[{chat_id}]", "field": "notify_level",
+                                    "value": f"{level} (was chat_ids in {name})"})
+                if groups_changed and not dry_run:
+                    before_write(groups_path)
+                    atomic_write_text(groups_path, json.dumps(groups_document, ensure_ascii=False,
+                                                              indent=indent_of(groups_path)) + "\n")
+            document.pop(ai_assist_rules.RETIRED_CHAT_IDS, None)
+            changes.append({"where": name, "field": ai_assist_rules.RETIRED_CHAT_IDS,
+                            "value": "removed - the chat is the group with notify_level telegram_chat"})
+        elif chat_ids is not None:
+            document.pop(ai_assist_rules.RETIRED_CHAT_IDS, None)
+            changes.append({"where": name, "field": ai_assist_rules.RETIRED_CHAT_IDS, "value": "removed"})
+        changes += [{"where": name, "field": field, "value": "the shipped value"}
+                    for field in ai_assist_rules.state_ai_assist(document)]
+        written = bool(changes) and not dry_run
+        if written:
+            before_write(path)
+            atomic_write_text(path, json.dumps(document, ensure_ascii=False, indent=indent_of(path)) + "\n")
+        files.append({"file": name, "records_changed": 1 if changes else 0, "changes": changes,
+                      "conflicts": conflicts, "written": written})
+    return {"files": files}
+
+
 def upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     root = shared_objects.data_root(request.get("data_dir") or None)
     dry_run = request.get("dry_run", True) is not False
@@ -593,6 +793,12 @@ def upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             files = _moved_commands(root, dry_run=dry_run, before_write=before_write)["files"]
         elif step == "console-apps":
             files = _console_apps(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "unread-report-keys":
+            files = _unread_report_keys(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "stated-integrity":
+            files = _stated_integrity(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "stated-ai-assist":
+            files = _stated_ai_assist(root, dry_run=dry_run, before_write=before_write)["files"]
         else:
             files = _inventory_into_reports(root, dry_run=dry_run, before_write=before_write)["files"]
         results.append({

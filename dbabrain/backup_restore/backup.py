@@ -37,11 +37,17 @@ from dbabrain.backup_restore.server_metadata import (
     parse_server_metadata,
     summarize as summarize_server_metadata,
 )
-from dbabrain.lib import data_sources
+from dbabrain.lib import data_sources, errors
 from dbabrain.lib.data_sources import resolve_ssh_key, resolve_ssh_password
 from dbabrain.lib.ssh_errors import SshError
 from dbabrain.lib.notify import NotifyConfig
 from dbabrain.lib import cleanup_retention
+from dbabrain.lib import integrity
+from dbabrain.lib.backup_run import RUN_TAG_ENV, run_tag
+from dbabrain.lib import offload as offload_rules
+from dbabrain.lib import backup_scope
+from dbabrain.lib.version import __version__
+from dbabrain.db.backup_catalog import BackupCatalogStore
 from dbabrain.lib.time_window import TimeWindow, is_time_window_open, job_due, parse_time_window_config
 from dbabrain.lib.config import DbaBrainConfig
 from dbabrain.db.job_runs import JobRun
@@ -96,6 +102,12 @@ class BackupJob:
     # Per-job notify object (dbabrain.lib.notify), inherited from the backup entry and
     # overridable rule by rule on the sub-job.
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    # Where the run's files go after it (0.34.0): the repository copy, its scan, the delete at the
+    # source - dbabrain.lib.offload. ``None`` only for an entry upgrade-config has not reached.
+    offload: Any = None
+    # Which databases the job takes, as a list (0.34.0, dbabrain.lib.backup_scope) - handed to the
+    # script by the app. ``None`` only for a job upgrade-config has not reached.
+    scope: Any = None
 
     @property
     def retention_days(self) -> int | None:
@@ -187,6 +199,8 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
         entry_notify = parse_backup_restore_notify(
             entry, context=f"backup_restore.backups[{index}] ({backup_id})"
         )
+        entry_offload = offload_rules.parse_backup_offload(
+            entry, label=f"backup_restore.backups[{index}] ({backup_id})", db_type=db_type)
         raw_jobs = entry.get("jobs") or []
         if not isinstance(raw_jobs, list) or not raw_jobs:
             raise ValueError(f"backup_restore.backups[{index}] ({backup_id}) requires a non-empty jobs array.")
@@ -236,6 +250,8 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
                 # This is why a full backup can report every run while the log/WAL job beside
                 # it — running every 15 minutes — stays quiet.
                 notify=parse_backup_restore_notify(raw_job, context=context, inherit=entry_notify),
+                offload=entry_offload,
+                scope=backup_scope.parse_backup_databases(raw_job, label=f"{backup_id}.{job_name}", db_type=db_type),
             )
             if item.job_code in seen:
                 raise ValueError(f"Duplicate backup job: {item.label}. backup_id + job must be unique.")
@@ -402,6 +418,272 @@ class BackupRunResult:
     stdout: str
     stderr: str
     error_text: str | None = None
+    #: The files the script wrote, from its FILE lines (``common.cli backup-database``'s ``files``).
+    files: list[dict[str, Any]] = field(default_factory=list)
+
+
+def record_in_catalog(
+    catalog: BackupCatalogStore,
+    item: BackupJob,
+    result: BackupRunResult,
+    *,
+    job_run_id: int | None,
+    started_at: str,
+    finished_at: str,
+) -> dict[str, Any]:
+    """Write one finished run and its files into the backup catalog; answer what was verified.
+
+    The operator, 2026-10-29: *every backup run is saved into the db - file name, server, checksum
+    - so every run is verified*. A file the script could not hash, or whose engine check failed,
+    is recorded as such and makes the run an error: a backup nobody can verify is not a success.
+    The run's level is its files' (``lib.integrity.LEVEL_OF_FILE_TYPE``) - a PostgreSQL job asked
+    for an incremental may have taken a full - and is NULL for a run that wrote nothing.
+    """
+    engine = str(item.db_type or "").strip().lower()
+    files = [dict(entry) for entry in result.files or []]
+    levels = {integrity.LEVEL_OF_FILE_TYPE.get(str(entry.get("file_type") or "")) for entry in files}
+    levels.discard(None)
+    # One level when the files agree; the strongest otherwise (a level 0 run also writes archivelogs).
+    level = next((name for name in ("full", "diff", "log") if name in levels), None)
+    rows = []
+    for entry in files:
+        verdict = integrity.file_verdict(entry)
+        rows.append({
+            "backup_id": item.backup_id, "job_run_id": job_run_id, "server_id": item.server_id,
+            "database_name": entry.get("database_name") or "", "engine": engine,
+            "file_name": entry.get("file_name") or "", "file_type": entry.get("file_type") or "",
+            "file_path": entry.get("path") or "", "file_folder": entry.get("file_folder") or "",
+            "host_path": entry.get("host_path") or "", "container_name": entry.get("container_name") or "",
+            "backup_ended_at": finished_at, "size_bytes": entry.get("size_bytes"),
+            "checksum_algo": integrity.SHA256, "checksum_after_backup": entry.get("sha256"),
+            "engine_verify": entry.get("engine_verify"),
+            "engine_verify_text": entry.get("engine_verify_text") or "", "verdict": verdict,
+            # As the script wrote it (its FILE line); NULL when the script did not say.
+            "encrypted": entry.get("encrypted"),
+            # Written this minute, so on disk and the stored checksum is its own; verify-backup-files
+            # keeps both answers true afterwards. Unknown for a file that could not be hashed.
+            "on_disk": 1, "checksum_matches": 1 if entry.get("sha256") else None,
+            "last_checked_at": finished_at if entry.get("sha256") else None,
+            "last_check_result": "match" if entry.get("sha256") else None,
+            "checksum_last_check": entry.get("sha256"),
+            # Waiting for its repository copy, when the entry has one (1.240); NULL when it has none.
+            "offload_state": "pending" if (item.offload is not None and item.offload.enabled) else None,
+        })
+    unverified = [row for row in rows if row["verdict"] != "ok"]
+    status = "DONE" if result.status == "done" and not unverified else "ERROR"
+    verify_results = {row["engine_verify"] for row in rows}
+    run = {
+        "backup_id": item.backup_id, "job_run_id": job_run_id, "server_id": item.server_id,
+        "engine": engine, "level": level, "node_host": socket.gethostname(),
+        "app_version": __version__, "started_at": started_at, "ended_at": finished_at,
+        "status": status, "files_count": len(rows),
+        "bytes_total": sum(int(row["size_bytes"] or 0) for row in rows),
+        "engine_verify": ("failed" if "failed" in verify_results else "passed" if "passed" in verify_results
+                          else "not_run" if rows else None),
+        "error_text": str(result.error_text or "")[:2000],
+    }
+    backup_run_id = catalog.record_backup(run=run, files=rows)
+    return {"backup_run_id": backup_run_id, "files": len(rows), "level": level,
+            "verified": len(rows) - len(unverified),
+            "unverified": [f"{row['file_name']} ({row['verdict']})" for row in unverified]}
+
+
+class _UnavailableCatalog:
+    """Stands in for a catalog that could not be opened: every write raises with the reason, so each
+    run records "the backup catalog could not be written" on its own row - one bad store does not
+    stop the pass, and no run reads as recorded when it was not."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def record_backup(self, **_kwargs: Any) -> int:
+        # The run's own error, of the kind it is: the catalog could not be opened.
+        raise errors.OperationFailed(self.reason)
+
+
+def _open_catalog(app_config: Any) -> Any:
+    try:
+        return BackupCatalogStore.from_config(app_config)
+    except Exception as exc:  # noqa: BLE001 - becomes each run's own error, see _UnavailableCatalog
+        return _UnavailableCatalog(f"{type(exc).__name__}: {exc}")
+
+
+#: What a backup folder holds that a restore uses, per engine catalog-backfill reads (1.215). Only
+#: SQL Server so far: its layout `<DB>/FULL|DIFF|LOG/<file>` types every file. A PostgreSQL base backup
+#: is a directory catalogued by its manifest, and an RMAN piece is typed by its tag - their own rules.
+BACKFILL_PATTERNS = {"sqlserver": ["*.bak", "*.trn", "*.cer", "*.pvk"]}
+#: A file written this recently may be a backup still being written: it is left for the next pass.
+BACKFILL_SETTLE_SECONDS = 600
+
+
+def catalog_backfill(
+    *,
+    app_config: DbaBrainConfig,
+    config_path: str | Path,
+    backup_id: str,
+    apply: bool = False,
+    max_files: int = 5000,
+    data_dir: str | Path | None = None,
+    key: str | None = None,
+    key_base64: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Catalog the backups an entry wrote before 0.34.0 - hashed as they are found (1.215, plan B.6).
+
+    Every file a restore copies is held to the checksum its backup recorded; a file taken before
+    the catalog existed has none, so the gate can only compare the copy with the source
+    (``uncatalogued: compare_copy``) and an entry that says ``refuse`` cannot restore it at all. This
+    hashes each such file **on its own server** (``file-checksum`` with a ``folder``) and records it
+    with ``baseline='backfill'`` and ``engine_verify='not_run'``. That proves the file has not changed
+    since the backfill - not that it was good when written - and the row says which it is.
+
+    A dry run unless ``apply``: the answer lists what would be written. Files already catalogued are
+    left alone, and so is a file written in the last ``BACKFILL_SETTLE_SECONDS`` (a backup running now).
+    """
+    from dbabrain.backup_restore.spec_builder import host_block
+
+    jobs = [job for job in load_backup_jobs(config_path) if job.backup_id == backup_id]
+    if not jobs:
+        raise ValueError(f"No backup entry found with backup_id={backup_id}.")
+    job = jobs[0]
+    engine = str(job.db_type or "").strip().lower()
+    if engine not in BACKFILL_PATTERNS:
+        raise ValueError(
+            f"{backup_id}: catalog-backfill reads the SQL Server layout (<DB>/FULL|DIFF|LOG) only so far; "
+            f"a {engine} backup is typed by its own rules, which are not built yet.")
+    catalog = BackupCatalogStore.from_config(app_config)
+    target = resolve_backup_target(job, data_dir=data_dir)
+    needs_password = not target.key_file and bool(target.password_ref)
+    secrets = _load_secrets(data_dir=data_dir, key=key, key_base64=key_base64) if needs_password else {}
+    host = host_block(target, secrets=secrets, data_dir=data_dir)
+    settled_before = (now or datetime.now(timezone.utc)).timestamp() - BACKFILL_SETTLE_SECONDS
+    summary: dict[str, Any] = {"backup_id": backup_id, "server_id": job.server_id, "apply": bool(apply),
+                               "folders": [], "found": 0, "catalogued_already": 0, "too_new": 0,
+                               "written": 0, "would_write": 0, "failed": [], "truncated": False, "files": []}
+
+    for folder in sorted({j.backup_dir for j in jobs if j.backup_dir}):
+        answer = common_cli.run("file-checksum", {
+            "host": host, "folder": folder, "include": BACKFILL_PATTERNS[engine],
+            "container": target.container_name or "", "max_files": int(max_files)})
+        host_folder = str(answer.get("host_folder") or folder)
+        files = list(answer.get("files") or [])
+        summary["folders"].append({"folder": folder, "host_folder": host_folder,
+                                   "found": bool(answer.get("folder_found")), "files": len(files)})
+        summary["found"] += len(files)
+        summary["truncated"] = summary["truncated"] or bool(answer.get("truncated"))
+        names = sorted({str(item["path"]).replace("\\", "/").rsplit("/", 1)[-1] for item in files})
+        known = catalog.stored_files(server_id=job.server_id, file_names=names) if names else {}
+        windows = "\\" in host_folder or ":" in host_folder[:3]
+        root = host_folder.replace("\\", "/").rstrip("/")
+        for item in files:
+            host_path = str(item["path"])
+            normalized = host_path.replace("\\", "/")
+            name = normalized.rsplit("/", 1)[-1]
+            if name in known:
+                summary["catalogued_already"] += 1
+                continue
+            mtime = item.get("mtime_utc")
+            if mtime and datetime.fromisoformat(str(mtime).replace("Z", "+00:00")).timestamp() > settled_before:
+                summary["too_new"] += 1
+                continue
+            relative = (normalized[len(root) + 1:] if normalized.lower().startswith(root.lower() + "/")
+                        else name)
+            parts = [part for part in relative.split("/") if part]
+            file_type = integrity.sqlserver_file_type(relative)
+            separator = "\\" if windows else "/"
+            file_path = folder.rstrip("/\\") + separator + relative.replace("/", separator)
+            row = {
+                "backup_id": backup_id, "server_id": job.server_id, "engine": engine,
+                "database_name": parts[0] if len(parts) > 1 and file_type != "CERT" else "",
+                "file_name": name, "file_type": file_type, "file_path": file_path,
+                "file_folder": file_path[: -len(name)].rstrip("/\\"), "host_path": host_path,
+                "container_name": target.container_name or "", "size_bytes": item.get("size_bytes"),
+                "mtime_utc": mtime, "checksum_after_backup": item.get("sha256"), "verdict": "ok",
+                "engine_verify": "not_run", "baseline": "backfill", "state": "present", "on_disk": 1,
+                "checksum_matches": 1,
+                "engine_verify_text": "catalog-backfill: hashed as found on the server, not verified by the engine",
+            }
+            if len(summary["files"]) < 50:
+                summary["files"].append({"file": relative, "type": file_type, "size_bytes": row["size_bytes"]})
+            if not apply:
+                summary["would_write"] += 1
+                continue
+            try:
+                catalog.record_backup_file(**row)
+                summary["written"] += 1
+            except Exception as exc:  # noqa: BLE001 - one file's row must not stop the others
+                summary["failed"].append({"file": relative, "why": f"{type(exc).__name__}: {exc}"[:300]})
+    return summary
+
+
+def verify_backup_files(
+    *,
+    app_config: DbaBrainConfig,
+    config_path: str | Path,
+    backup_id: str | None = None,
+    server_id: str | None = None,
+    limit: int = 500,
+    data_dir: str | Path | None = None,
+    key: str | None = None,
+    key_base64: str | None = None,
+) -> dict[str, Any]:
+    """Is each catalogued backup file still on disk, and still the bytes the backup wrote?
+
+    The files checked longest ago (or never) first, ``limit`` of them. Each is hashed on its own
+    server at its ``host_path`` - the server's own path, so a stopped container does not stop the
+    check - through ``common.cli file-checksum``, and the catalog holds the answer to the checksum
+    IT stored (``check_backup_file``): ``on_disk``, ``checksum_matches``, ``state``. A mismatch is a
+    backup that changed after it was written - the ransomware signal - and is named in the answer.
+    """
+    from dbabrain.backup_restore.spec_builder import host_block
+
+    catalog = BackupCatalogStore.from_config(app_config)
+    files = catalog.files_to_check(server_id=server_id or "", backup_id=backup_id or "", limit=limit)
+    jobs: dict[str, BackupJob] = {}
+    for job in load_backup_jobs(config_path):
+        jobs.setdefault(job.backup_id, job)
+    summary: dict[str, Any] = {"checked": 0, "match": 0, "mismatch": [], "missing": [], "skipped": []}
+    by_entry: dict[str, list[dict[str, Any]]] = {}
+    for row in files:
+        by_entry.setdefault(str(row["backup_id"]), []).append(row)
+
+    for entry_id, rows in by_entry.items():
+        job = jobs.get(entry_id)
+        if job is None:
+            summary["skipped"] += [{"file": r["file_name"], "why": f"backup entry {entry_id} is no longer configured"}
+                                   for r in rows]
+            continue
+        checkable = [r for r in rows if r.get("host_path")]
+        summary["skipped"] += [{"file": r["file_name"], "why": "in no mount of its container - no path on the server"}
+                               for r in rows if not r.get("host_path")]
+        if not checkable:
+            continue
+        try:
+            target = resolve_backup_target(job, data_dir=data_dir)
+            needs_password = not target.key_file and bool(target.password_ref)
+            secrets = (_load_secrets(data_dir=data_dir, key=key, key_base64=key_base64)
+                       if needs_password else {})
+            paths = {r["file_id"]: integrity.hashed_path(r["file_type"], r["host_path"]) for r in checkable}
+            answer = common_cli.run("file-checksum", {
+                "host": host_block(target, secrets=secrets, data_dir=data_dir),
+                "paths": sorted(set(paths.values()))})
+        except Exception as exc:  # noqa: BLE001 - one unreachable server must not stop the others
+            summary["skipped"] += [{"file": r["file_name"], "why": f"{job.server_id}: {exc}"} for r in checkable]
+            continue
+        found = {item["path"]: item for item in answer.get("files") or []}
+        for row in checkable:
+            item = found.get(paths[row["file_id"]])
+            result = catalog.check_backup_file(
+                row["file_id"], checksum_now=item["sha256"] if item else None,
+                size_now=item.get("size_bytes") if item else None,
+                checked_by="scrub", by_run_id="verify-backup-files")
+            summary["checked"] += 1
+            if result == "match":
+                summary["match"] += 1
+            else:
+                summary[result].append({"server_id": row["server_id"], "file": row["file_name"],
+                                        "host_path": row["host_path"]})
+    return summary
 
 
 def _script_path(script: str, *, label: str) -> Path:
@@ -492,6 +774,24 @@ def execute_backup_job(
     transport all live below now, so a one-off run against an unregistered machine gets exactly the
     behaviour the scheduled run gets.
     """
+    request = _backup_request(job, target=target, data_dir=data_dir, key=key, key_base64=key_base64,
+                              env_overrides=env_overrides, backup_type=backup_type)
+    # `run_allowing_failure`, not `run`: a backup that fails is an outcome this app records, not
+    # an exception it stops on. The CLI answers `success: false` with the exit code, stderr and
+    # error text still in `data` — which is exactly what the job_runs row below is made of.
+    _ok, result, error = common_cli.run_allowing_failure("backup-database", request)
+    return BackupRunResult(
+        job=job, status=result.get("status") or "error", exit_code=result.get("exit_code"),
+        duration_ms=result.get("duration_ms"), stdout=result.get("stdout"), stderr=result.get("stderr"),
+        error_text=result.get("error") or error or None, files=list(result.get("files") or []),
+    )
+
+
+def _backup_request(job: BackupJob, *, target: BackupTarget, data_dir: str | Path | None, key: str | None,
+                    key_base64: str | None, env_overrides: dict[str, str] | None = None,
+                    backup_type: str | None = None) -> dict[str, Any]:
+    """The ``backup-database`` request for ``job`` - built once, for the run and for its stop, so a
+    stop reaches the run's host with the run's own login (1.238)."""
     from dbabrain.backup_restore.spec_builder import backup_request_from_job
 
     # The store is read when *the spec* will need a secret — which is more than when the job
@@ -507,19 +807,88 @@ def execute_backup_job(
         # Still conditional: a key-auth job that decrypts nothing keeps working on a node where
         # the passphrase is not available.
         secrets = _load_secrets(data_dir=data_dir, key=key, key_base64=key_base64)
-    request = backup_request_from_job(
+    return backup_request_from_job(
         job, target=target, secrets=secrets, level=str(backup_type or ""),
         env_overrides=env_overrides, data_dir=data_dir,
     )
-    # `run_allowing_failure`, not `run`: a backup that fails is an outcome this app records, not
-    # an exception it stops on. The CLI answers `success: false` with the exit code, stderr and
-    # error text still in `data` — which is exactly what the job_runs row below is made of.
-    _ok, result, error = common_cli.run_allowing_failure("backup-database", request)
-    return BackupRunResult(
-        job=job, status=result.get("status") or "error", exit_code=result.get("exit_code"),
-        duration_ms=result.get("duration_ms"), stdout=result.get("stdout"), stderr=result.get("stderr"),
-        error_text=result.get("error") or error or None,
-    )
+
+
+def _stopped_by_operator(store: Any, log_id: int) -> bool:
+    """Whether ``backup-stop`` closed this run's row (its metadata says so)."""
+    try:
+        row = store.fetch_job_run(log_id)
+    except Exception:  # noqa: BLE001 - a store that cannot answer leaves the runner to write its row
+        return False
+    if row is None:
+        return False
+    try:
+        return bool(json.loads(row["metadata_json"] or "{}").get("stopped_by_operator"))
+    except (TypeError, ValueError):
+        return False
+
+
+def stop_backup_run(
+    *,
+    app_config: DbaBrainConfig,
+    config_path: str | Path,
+    backup_id: str,
+    data_dir: str | Path | None = None,
+    key: str | None = None,
+    key_base64: str | None = None,
+    logger: Any = None,
+) -> dict[str, Any]:
+    """Stop every running run of ``backup_id`` on its host, and close its row as stopped (1.238).
+
+    The order is ``common.cli backup-stop``'s: the run's process tree first, then its sessions - on
+    192.0.2.245 (2026-10-29) the session alone was killed and the script backed up the next
+    database. The row is closed only while it still says RUNNING, and says *stopped by the
+    operator* with what was ended; the runner, when its call returns, finds that and leaves it.
+    """
+    jobs = [job for job in load_backup_jobs(config_path) if job.backup_id == backup_id]
+    if not jobs:
+        raise ValueError(f"No backup entry found with backup_id={backup_id}.")
+    store = DbaBrainStore.from_config(app_config)
+    stops: list[dict[str, Any]] = []
+    for job in jobs:
+        for row in store.fetch_running_job_runs(job.job_code):
+            if row["job_code"] != job.job_code:
+                continue
+            log_id = int(row["log_id"])
+            tag = run_tag(job.backup_id, log_id)
+            target = resolve_backup_target(job, data_dir=data_dir)
+            request = _backup_request(job, target=target, data_dir=data_dir, key=key, key_base64=key_base64)
+            _ok, data, error = common_cli.run_allowing_failure("backup-stop", {
+                "run_tag": tag, "db_type": request["db_type"], "host": request["host"],
+                "env": request.get("env") or {}})
+            data = dict(data or {})
+            ended = (f"{len(data.get('killed') or [])} process(es), "
+                     f"{len(data.get('sessions_killed') or [])} session(s) ended")
+            stopped = bool(data.get("stopped"))
+            message = (f"Backup {job.label} stopped by the operator - {ended}."
+                       if stopped else
+                       f"Backup {job.label} stop asked by the operator - {ended}, NOT fully stopped: "
+                       f"{error or data.get('error') or 'something of the run is still there'}")
+            try:
+                previous = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, ValueError):
+                previous = {}
+            metadata = {**previous, "run_tag": tag, "stopped_by_operator": {
+                "at": utc_now_text(), "stopped": stopped, "pid": data.get("pid"),
+                "killed": data.get("killed") or [], "sessions_killed": data.get("sessions_killed") or [],
+                "sessions_left": data.get("sessions_left") or [], "process_alive": data.get("process_alive")}}
+            closed = store.update_job_run(
+                log_id=log_id, level="error", status="ERROR", message=message, finished_at=utc_now_text(),
+                error_text=None if stopped else (error or data.get("error") or message)[:2000],
+                metadata=metadata, only_if_running=True)
+            if closed:
+                emit_backup_restore_event(
+                    app_config=app_config, command="backup", phase="ERROR", level="warning",
+                    message=message, logger=logger, started_at=row["started_at"], finished_at=utc_now_text(),
+                    metadata=metadata, notify=job.notify)
+            stops.append({"backup_id": job.backup_id, "job": job.job, "log_id": log_id, "run_tag": tag,
+                          "stopped": stopped, "row_closed": bool(closed), "message": message, "stop": data})
+    return {"backup_id": backup_id, "running": len(stops), "stops": stops,
+            "stopped": bool(stops) and all(item["stopped"] for item in stops)}
 
 
 def run_backup(
@@ -554,6 +923,7 @@ def run_backup(
             raise ValueError(f"No backup job named {job_name}.")
 
     store = DbaBrainStore.from_config(app_config)
+    catalog = _open_catalog(app_config)
     # Close and report runs abandoned at RUNNING past their timeout — a job whose process was
     # killed never got to report its own failure. See schedule.reap_stale_runs.
     stale = schedule.reap_stale_runs(
@@ -626,12 +996,27 @@ def run_backup(
         )
         try:
             target = resolve_backup_target(item, data_dir=data_dir)
+            job_env = dict(env_overrides or {})
+            # What a stop finds this run by on its host: the script's pid file and its sessions'
+            # host_name (0.34.0, 1.238).
+            job_env[RUN_TAG_ENV] = run_tag(item.backup_id, log_id)
+            if str(item.db_type).lower() == "postgresql" and not isinstance(catalog, _UnavailableCatalog):
+                # The WAL job lists the segments after the newest one the catalog holds: the
+                # archive is written by PostgreSQL, not by the job, so only the store knows where
+                # the last run left off (0.34.0). Ignored by the base backup script.
+                # Absent, not empty, before the catalog holds a segment: the spec refuses an empty
+                # env value (it is how a missing secret arrives), and the script reads absent as
+                # "from the first segment". Sent empty, the store's own WAL job failed its first run
+                # on the worker (2.87.51, 2026-10-29).
+                last_wal = catalog.last_file_name(backup_id=item.backup_id, file_type="WAL")
+                if last_wal:
+                    job_env.setdefault("CATALOG_AFTER", last_wal)
             # backup_type travels as a word, not as a translated BACKUP_LEVEL: the same word maps
             # to a different level per engine (and a --backup-id can select jobs of more than one),
             # so the translation belongs where the engine is known — once, in the spec.
             result = execute_backup_job(
                 item, target=target, data_dir=data_dir, key=key, key_base64=key_base64,
-                env_overrides=dict(env_overrides or {}), backup_type=backup_type,
+                env_overrides=job_env, backup_type=backup_type,
             )
         except (ValueError, SshError, OSError) as exc:
             result = BackupRunResult(
@@ -663,6 +1048,23 @@ def run_backup(
             )
 
         finished_at = utc_now_text()
+        # Every run into the backup catalog, a failed one too (0.34.0). A file left unverified, or
+        # a catalog that cannot be written, turns the run into an error: the operator's rule is
+        # that every run is verified and recorded, and a green run that is neither is the failure
+        # this exists to end.
+        catalog_summary: dict[str, Any] | None = None
+        try:
+            catalog_summary = record_in_catalog(catalog, item, result, job_run_id=log_id,
+                                                started_at=started_at, finished_at=finished_at)
+            if catalog_summary["unverified"] and result.status == "done":
+                result.status = "error"
+                result.error_text = ("written but not verified: "
+                                     + ", ".join(catalog_summary["unverified"][:10]))
+        except Exception as exc:  # noqa: BLE001 - recorded on the run, never lost in a traceback
+            if result.status == "done":
+                result.status = "error"
+            result.error_text = " ".join(filter(None, [
+                result.error_text, f"the backup catalog could not be written: {type(exc).__name__}: {exc}"]))
         level = "logging" if result.status == "done" else "error"
         message = (
             f"Backup {item.label} finished: {result.status}"
@@ -685,30 +1087,40 @@ def run_backup(
             "duration_ms": result.duration_ms,
             "stdout_tail": stdout_excerpt(result.stdout),
         }
+        if catalog_summary is not None:
+            metadata["catalog"] = catalog_summary
+            if catalog_summary["files"]:
+                message += (f" - {catalog_summary['verified']}/{catalog_summary['files']} file(s) "
+                            "hashed and verified")
         if server_metadata_result is not None:
             metadata["server_metadata"] = summarize_server_metadata(server_metadata_result)
             # Named in the message because the alternative is an operator having to open the run
             # row to discover the bundle beside tonight's backup is yesterday's.
             if not server_metadata_result.get("ok", False):
                 message += " (server metadata export FAILED - see metadata.server_metadata)"
-        store.update_job_run(
-            log_id=log_id,
-            level=level,
-            status=result.status.upper(),
-            message=message,
-            finished_at=finished_at,
-            duration_ms=result.duration_ms,
-            error_text=result.error_text,
-            metadata=metadata,
-        )
-        emit_backup_restore_event(
-            app_config=app_config, command="backup",
-            phase="END" if result.status == "done" else "ERROR",
-            level=level, message=message, logger=logger,
-            started_at=started_at, finished_at=finished_at,
-            duration_ms=result.duration_ms, error_text=result.error_text, metadata=metadata,
-            notify=item.notify,
-        )
+        if _stopped_by_operator(store, log_id):
+            # backup-stop closed this row and said so; what the killed script left behind (a WinRM
+            # error, a broken pipe) is not news, and must not replace "stopped by the operator".
+            result.status = "stopped"
+        else:
+            store.update_job_run(
+                log_id=log_id,
+                level=level,
+                status=result.status.upper(),
+                message=message,
+                finished_at=finished_at,
+                duration_ms=result.duration_ms,
+                error_text=result.error_text,
+                metadata=metadata,
+            )
+            emit_backup_restore_event(
+                app_config=app_config, command="backup",
+                phase="END" if result.status == "done" else "ERROR",
+                level=level, message=message, logger=logger,
+                started_at=started_at, finished_at=finished_at,
+                duration_ms=result.duration_ms, error_text=result.error_text, metadata=metadata,
+                notify=item.notify,
+            )
         if result.status == "done":
             summary["succeeded"] += 1
         else:

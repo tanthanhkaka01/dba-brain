@@ -65,6 +65,12 @@ TEXT_SUFFIXES: frozenset[str] = frozenset({
     # cannot write a compose file without its `.j2`. Twenty-seven files, and the packages that
     # need them do not function without them.
     ".j2", ".html",
+    # A template's script shared by two pages (0.34.0: the backup catalog's file table, injected
+    # into server-metrics.html and backup-restore.html) - text the scanner reads like the .html.
+    ".js",
+    # The vendored UI kit the report pages are drawn with (lib.page_kit, 2026-10-30): Tabler's
+    # minified stylesheet - text, read and filtered by the code, never executed.
+    ".css",
     # The typed overloads of `transport.common_cli.run`, rendered from the reference (0.26.0,
     # `control.cli request-types`). The public CI runs mypy over them - refused here, the tree it
     # checks would type every answer as `Any` and the answer-key guard would pass on nothing.

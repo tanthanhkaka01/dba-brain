@@ -56,6 +56,11 @@ SAFE_REQUEST: dict[str, dict] = {
     #: `{}` renders the real inventory and **writes** a dated summary into runtime/reports.
     #: An inventory path that does not exist fails on the read instead.
     "inventory-summary": {"inventory": "__no_such_inventory__.json"},
+    #: `{}` scrubs and certifies every page in runtime/reports and writes runtime/showcase: on the
+    #: master that is the estate's real pages - about an hour per call (twice in this file) - and
+    #: it overwrote a showcase being built beside the suite (0.34.0 release, 2026-11-02). A source
+    #: that does not exist fails on the read instead.
+    "build-showcase": {"source": "__no_such_reports__", "output": "__no_such_showcase__"},
     #: `{}` scaffolds a whole tool root **in the working directory** - the repository. Here that
     #: went unnoticed because most of the files exist; on a public checkout it wrote `config.json`,
     #: `AGENTS.md` and every `data/*.json`, and nine later tests read those instead of the shipped

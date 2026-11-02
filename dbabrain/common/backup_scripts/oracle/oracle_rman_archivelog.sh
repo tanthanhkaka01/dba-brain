@@ -33,6 +33,8 @@
 #      user is unrestorable),
 #      RMAN_CONFIGURE (apply|skip, default apply; see the block that builds the CONFIGURE lines -
 #      `skip` is NOT free here, because the deletes below lean on the deletion policy).
+# Receipt (0.34.0): one `FILE` line per backup piece - its type from the RMAN tag, its sha256, and
+# RMAN VALIDATE BACKUPSET's verdict on this run's sets.
 # Exit: 0 on success, non-zero on failure (the runner records status from this).
 set -u
 
@@ -41,6 +43,8 @@ backup_dir="${BACKUP_DIR:-}"
 retention_days="${RETENTION_DAYS:-7}"
 retention_seconds="${RETENTION_SECONDS:-}"
 oracle_sid="${ORACLE_SID:-}"
+# When this run began: the receipt validates the backup sets completed since (0.34.0).
+run_started="$(date +%s)"
 rman_configure="${RMAN_CONFIGURE:-apply}"
 oracle_os_user="${ORACLE_OS_USER:-}"
 
@@ -54,6 +58,15 @@ exec_user=""
 [ -n "$oracle_os_user" ] && exec_user="-u ${oracle_os_user}"
 
 die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
+
+# Where a stop finds this run (0.34.0, 1.238): this shell's pid, under the run's tag, removed on exit.
+# backup-stop ends the tree under it - killing the engine session alone left the script to start the
+# next database a second later (a production SQL Server, 2026-10-29).
+if [ -n "${DBABRAIN_RUN_TAG:-}" ]; then
+    run_file="${TMPDIR:-/tmp}/dbabrain_runs/${DBABRAIN_RUN_TAG}.pid"
+    mkdir -p "${run_file%/*}" 2>/dev/null && printf '%s\n' "$$" > "$run_file" 2>/dev/null \
+        && trap 'rm -f "$run_file"' EXIT
+fi
 
 [ -n "$backup_dir" ] || die "BACKUP_DIR is not set."
 
@@ -188,6 +201,78 @@ else
 # already has, which may allow removing an archivelog that has not been backed up."
 fi
 
+# The file's path on this server, not inside the container (0.34.0): through the container's
+# mount that holds it, the longest one first. Empty for a file in no mount - it then lives only in
+# the container's own layer, gone with the container, which is worth the catalog saying.
+_dbabrain_mounts=""
+if [ -n "$container" ]; then
+    _dbabrain_mounts="$($DOCKER inspect -f '{{range .Mounts}}{{.Destination}}|{{.Source}}{{"\n"}}{{end}}' "$container" 2>/dev/null)"
+fi
+host_path_of() {
+    if [ -z "$container" ]; then printf '%s' "$1"; return 0; fi
+    _best_dst=""; _best_src=""
+    while IFS='|' read -r _dst _src; do
+        [ -n "$_dst" ] || continue
+        case "$1" in
+            "$_dst"|"$_dst"/*)
+                if [ "${#_dst}" -gt "${#_best_dst}" ]; then _best_dst="$_dst"; _best_src="$_src"; fi ;;
+        esac
+    done <<HOSTPATHS
+$_dbabrain_mounts
+HOSTPATHS
+    if [ -n "$_best_dst" ]; then printf '%s%s' "$_best_src" "${1#"$_best_dst"}"; fi
+    return 0
+}
+
+# --- The receipt (0.34.0): one FILE line per backup piece this run wrote ------------------------
+# RMAN names every piece it writes - `piece handle=<file> tag=<TAG>` - and the tag says what it is.
+# RMAN then validates the backup sets this run completed (VALIDATE BACKUPSET reads every block of
+# every piece, the RMAN analogue of SQL Server's RESTORE VERIFYONLY), and each piece is hashed
+# where it lies. A validation that fails fails the run: the pieces are on disk and unusable.
+emit_pieces() {
+    pieces="$(printf '%s\n' "$1" | sed -n 's/.*piece handle=\([^ ]*\).*/\1/p' | sort -u)"
+    [ -n "$pieces" ] || return 0
+    elapsed=$(( $(date +%s) - run_started + 60 ))
+    keys="$(printf 'LIST BACKUP SUMMARY COMPLETED AFTER %s;\nEXIT;\n' "'SYSDATE-${elapsed}/86400'" \
+        | run_rman "${sid_export}rman target / log /dev/stdout 2>&1" \
+        | awk '$1 ~ /^[0-9]+$/ && $2 == "B" {print $1}' | sort -un | tr '\n' ',' | sed 's/,$//')"
+    verify=not_run
+    verify_note="no backup set of this run found to validate"
+    if [ -n "$keys" ]; then
+        val_out="$(printf 'VALIDATE BACKUPSET %s;\nEXIT;\n' "$keys" \
+            | run_rman "${sid_export}rman target / log /dev/stdout 2>&1")"
+        if printf '%s\n' "$val_out" | grep -qE 'RMAN-00569|RMAN-0600|ORA-19'; then
+            verify=failed
+            verify_note="VALIDATE BACKUPSET ${keys} reported errors"
+            printf '%s\n' "$val_out" >&2
+        else
+            verify=passed
+            verify_note="VALIDATE BACKUPSET ${keys}"
+        fi
+    fi
+    for piece in $pieces; do
+        tag="$(printf '%s\n' "$1" | grep -F "piece handle=${piece}" | sed -n 's/.* tag=\([^ ]*\).*/\1/p' | head -1)"
+        case "$tag" in
+            DBOPS_L0) ptype=RMAN_L0 ;;
+            DBOPS_L1) ptype=RMAN_L1 ;;
+            DBOPS_ARCH) ptype=ARCHIVELOG ;;
+            DBOPS_SPFILE) ptype=SPFILE ;;
+            *) ptype=CONTROLFILE ;;   # DBOPS_CTL and the controlfile autobackup
+        esac
+        p_size="$(run_db "stat -c %s '${piece}'" 2>/dev/null | tr -d '[:space:]')"
+        p_sha="$(run_db "sha256sum '${piece}'" 2>/dev/null | cut -d' ' -f1 | tr -d '[:space:]')"
+        [ "${#p_sha}" -eq 64 ] || { printf 'warning: could not hash %s\n' "$piece" >&2; p_sha=""; }
+        # Encrypted exactly when this run SET ENCRYPTION ON - when a passphrase was given.
+        p_encrypted=no
+        [ -n "$enc_line" ] && p_encrypted=yes
+        printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=%s\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
+            "${oracle_sid:-database}" "$ptype" "${p_size:-}" "$p_sha" "$verify" "$p_encrypted" "$verify_note" \
+            "$(host_path_of "$piece")" "$container" "$piece"
+    done
+    [ "$verify" = "failed" ] && die "RMAN VALIDATE found a backup set of this run unusable."
+    return 0
+}
+
 RMAN_IN="$(cat <<RMANEOF
 ${enc_line}
 SHOW ALL;
@@ -229,6 +314,8 @@ if [ "$rman_rc" -ne 0 ] || printf '%s\n' "$rman_out" | grep -qE 'RMAN-00569|RMAN
     printf 'RESULT=error rman_rc=%s\n' "$rman_rc" >&2
     exit 1
 fi
+
+emit_pieces "$rman_out"
 
 # Keep the pieces readable to the host's SSH user, for the same reason the PostgreSQL backup
 # does: a cross-machine restore reads this directory over SFTP as an ordinary account that

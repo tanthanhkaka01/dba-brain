@@ -333,10 +333,10 @@ def _handle_store_info(args) -> int:
     return 0
 
 
-#: The store's schema is created by seven classes, each owning its own tables. ``init``/``check``
+#: The store's schema is created by eight classes, each owning its own tables. ``init``/``check``
 #: drive all of them so neither command has a partial view of the store.
 STORE_CLASSES = ("DbaBrainStore", "MetricStore", "SlaStore", "BackupRestoreHistory", "ConfigStore",
-                 "WebAuthStore", "RunRequestStore")
+                 "WebAuthStore", "RunRequestStore", "BackupCatalogStore")
 
 
 def _store_classes():
@@ -344,6 +344,7 @@ def _store_classes():
     # composing the schema here meant importing *up* into `sla` and `backup_restore` — the standing
     # exception in tests/test_import_boundaries.py. Moving the two stores into `common` retired it,
     # rather than documenting the inversion a third time.
+    from dbabrain.db.backup_catalog import BackupCatalogStore
     from dbabrain.db.backup_restore_history import BackupRestoreHistory
     from dbabrain.db.config_store import ConfigStore
     from dbabrain.db.metric_store import MetricStore
@@ -353,7 +354,7 @@ def _store_classes():
     from dbabrain.db import DbaBrainStore
 
     return (DbaBrainStore, MetricStore, SlaStore, BackupRestoreHistory, ConfigStore, WebAuthStore,
-            RunRequestStore)
+            RunRequestStore, BackupCatalogStore)
 
 
 def _active_target(args):

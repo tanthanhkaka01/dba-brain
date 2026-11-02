@@ -31,7 +31,7 @@ from typing import Any
 TARGET_PLACEHOLDERS: tuple[str, ...] = ("target_server_id", "target_database")
 
 __all__ = ["TARGET_PLACEHOLDERS", "DEFAULT_BATCH_ROWS", "DEFAULT_FETCH_TIMEOUT_SECONDS", "PythonSource",
-           "PythonSourceError", "parse"]
+           "PythonSourceError", "SourceRef", "PAYLOAD_FORMATS", "parse"]
 
 
 #: How many rows go into one execution of the SQL. Not one big parameter: the estate's first user
@@ -49,6 +49,11 @@ DEFAULT_BATCH_ROWS = 2000
 #: two rules is how the second gets found by whoever is debugging why the first did not apply.
 DEFAULT_FETCH_TIMEOUT_SECONDS = 900
 
+#: How a batch is written into its parameter. ``json`` is read with ``OPENJSON``, which SQL Server
+#: has only from 2016; ``xml`` is ``<rows><row col="value" .../></rows>``, read with ``nodes()`` /
+#: ``value()`` on any version - the first source-fed task writes to a SQL Server 2008 R2.
+PAYLOAD_FORMATS = ("json", "xml")
+
 
 class PythonSourceError(errors.DbaBrainError, RuntimeError):
     """The task's Python step produced no rows, so the task's SQL never ran.
@@ -60,6 +65,29 @@ class PythonSourceError(errors.DbaBrainError, RuntimeError):
     """
 
     kind = errors.KIND_CONFIG
+
+
+@dataclass(frozen=True)
+class SourceRef:
+    """A second server a task's program reads from, named the way a target is - never a password.
+
+    The runner resolves it like a target: the instance from ``db_instances.json``, the login by
+    ``credential_name`` from ``users.json``, the password by that login's ``password_ref`` from
+    the secret store. Switching the login is then one edit in ``users.json``, and nothing in the
+    task or the program changes.
+    """
+
+    server_id: str
+    db_type: str
+    credential_name: str
+    instance_name: str = ""
+    service_name: str = ""
+
+    def as_dict(self) -> dict[str, str]:
+        return {key: value for key, value in (
+            ("server_id", self.server_id), ("db_type", self.db_type),
+            ("credential_name", self.credential_name), ("instance_name", self.instance_name),
+            ("service_name", self.service_name)) if value}
 
 
 @dataclass(frozen=True)
@@ -83,6 +111,37 @@ class PythonSource:
     #: with "No decryption key provided" (2026-10-05). Handing it the passphrase would undo F4.2
     #: for every credential in the estate; handing it the one connection it needs does not.
     target_connection: bool = False
+    #: A second server the program reads from, resolved by the runner and written to its stdin as
+    #: ``{"source_connection": {...}}`` beside ``connection``. For a program whose rows live in
+    #: another database: the attendance fetchers read an open API and a device, and needed no login,
+    #: but an asset system on MariaDB does, and a fetcher has no way to open the secret store (F4.2).
+    source_connection: SourceRef | None = None
+    #: ``json`` (default) or ``xml`` - see :data:`PAYLOAD_FORMATS`.
+    payload_format: str = "json"
+
+
+def parse_source_ref(raw: Any, *, command_name: str) -> SourceRef | None:
+    """Read ``input.source_connection``, or say what is missing. ``None`` when absent."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise PythonSourceError(
+            f"SQL command {command_name} input.source_connection must be an object: "
+            '{"server_id": ..., "db_type": ..., "credential_name": ...}.')
+    named = {key: str(raw.get(key) or "").strip()
+             for key in ("server_id", "db_type", "credential_name", "instance_name", "service_name")}
+    unknown = sorted(set(raw) - set(named))
+    if unknown:
+        # A password here would be the copy of a credential this exists to avoid.
+        raise PythonSourceError(
+            f"SQL command {command_name} input.source_connection does not take {unknown}: the "
+            "source is named by server_id, db_type and credential_name, and its login comes from "
+            "users.json and the secret store.")
+    missing = [key for key in ("server_id", "db_type", "credential_name") if not named[key]]
+    if missing:
+        raise PythonSourceError(
+            f"SQL command {command_name} input.source_connection is missing {', '.join(missing)}.")
+    return SourceRef(**{**named, "db_type": named["db_type"].lower()})
 
 
 def parse(block: dict[str, Any], *, command_name: str) -> PythonSource:
@@ -128,6 +187,12 @@ def parse(block: dict[str, Any], *, command_name: str) -> PythonSource:
             f"{target_connection!r}. true writes the target's connection to the script's stdin - "
             "only for a program that reaches the database itself.")
 
+    payload_format = str(block.get("payload_format") or "json").strip().lower()
+    if payload_format not in PAYLOAD_FORMATS:
+        raise PythonSourceError(
+            f"SQL command {command_name} input.payload_format must be one of {list(PAYLOAD_FORMATS)}, "
+            f"got {payload_format!r}. xml is for a SQL Server older than 2016, which has no OPENJSON.")
+
     return PythonSource(
         script_path=script_path,
         args=tuple(str(value) for value in raw_args),
@@ -137,4 +202,6 @@ def parse(block: dict[str, Any], *, command_name: str) -> PythonSource:
         timeout_seconds=int(block.get("timeout_seconds") or DEFAULT_FETCH_TIMEOUT_SECONDS),
         accept_exit_codes=accept,
         target_connection=target_connection,
+        source_connection=parse_source_ref(block.get("source_connection"), command_name=command_name),
+        payload_format=payload_format,
     )

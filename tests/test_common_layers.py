@@ -265,6 +265,10 @@ CONFIG_FREE_BY_NAME: tuple[str, ...] = (
     "cli_backup_files.py", "backupfiles/", "deletefiles.py",
     "cli_restorestep.py", "restorestep/", "restorekey.py", "restoremetadata.py", "verifyrestore.py",
     "cli_filetransfer.py", "filetransfer.py",
+    # 0.34.0 (1.210): the one checksum, taken where the file is.
+    "cli_filechecksum.py", "filechecksum.py",
+    # 0.34.0 (1.240): the repository copy's transport - named files, nothing removed.
+    "cli_filecopy.py", "filecopy.py",
     "cli_docker_db.py", "docker_db/",
     "cli_sqlcmd.py", "sqlcmd_run.py",
     # 0.23.0 (1.48): a restore's copy and staging cleanup, moved out of the app.

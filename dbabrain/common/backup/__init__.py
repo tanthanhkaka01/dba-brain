@@ -26,6 +26,7 @@ from dbabrain.common.backup.spec import (
     parse_backup_spec,
 )
 from dbabrain.common.hostcmd import HostCommandError, run_script
+from dbabrain.lib import integrity
 
 __all__ = [
     "BACKUP_LEVEL_BY_ENGINE",
@@ -74,7 +75,7 @@ def run_backup(spec: BackupSpec) -> dict[str, Any]:
         # Could not run at all - a host that refused the connection. Distinct from a backup that
         # ran and failed, because the fix is somewhere else entirely.
         return {**planned, "status": "error", "exit_code": None, "duration_ms": _ms(started),
-                "stdout": "", "stderr": "", "error": str(exc), "receipt": False}
+                "stdout": "", "stderr": "", "error": str(exc), "receipt": False, "files": []}
 
     out = result.get("stdout") or ""
     err = result.get("stderr") or ""
@@ -92,8 +93,11 @@ def run_backup(spec: BackupSpec) -> dict[str, Any]:
     else:
         error = (err.strip() or out.strip())[-EXCERPT:] or f"exit {exit_code}"
 
+    # The files the script wrote, each with the sha256 it took where the file lies and its engine's
+    # verdict (0.34.0) - read from the script's own FILE lines, never by listing a folder after it.
+    files = integrity.parse_file_lines(out)
     result = {**planned, "status": status, "exit_code": exit_code, "duration_ms": _ms(started),
-              "stdout": out, "stderr": err, "error": error, "receipt": receipt}
+              "stdout": out, "stderr": err, "error": error, "receipt": receipt, "files": files}
     return result
 
 

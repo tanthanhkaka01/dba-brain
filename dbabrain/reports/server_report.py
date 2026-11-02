@@ -41,11 +41,12 @@ from dbabrain.lib import backup_policy, capacity_forecast
 from dbabrain.lib import engine_sections, health_model, interval_rates
 from dbabrain.db.metric_store import MetricStore
 from dbabrain.db.metric_store import _parse_as_of as metric_store_as_of
+from dbabrain.reports import backup_catalog_sections
 from dbabrain.reports import inventory_health
 from dbabrain.reports import workload as workload_block
 from dbabrain.reports import workload_attribution
 from dbabrain.lib.paths import DEFAULT_DATA_DIR
-from dbabrain.lib import page_banner
+from dbabrain.lib import page_banner, page_kit
 from dbabrain.lib.timezone import format_offset, offset_minutes
 from dbabrain.lib.time_window import window_of
 from dbabrain.reports.server_series import (  # noqa: F401 - re-exported: every name kept its address
@@ -139,6 +140,7 @@ from dbabrain.reports.server_sections import (  # noqa: F401 - re-exported: ever
     build_linked_servers,
     build_query_store,
     build_query_store_findings,
+    build_server_detail,
     build_volumes,
 )
 from dbabrain.reports.server_oracle import (  # noqa: F401 - re-exported: every name kept its address
@@ -194,6 +196,8 @@ from dbabrain.reports.server_diagnostics import (  # noqa: F401 - re-exported: e
 
 
 TEMPLATE_HTML = Path(__file__).resolve().parent / "templates" / "server_report.html"
+#: The backup catalog's file table, shared with the fleet page (backup_restore_report).
+BACKUP_FILES_JS = TEMPLATE_HTML.parent / "backup_files.js"
 
 
 PAGE_NAME = "server-metrics.html"
@@ -231,7 +235,10 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
                   database_code_map: dict | None = None,
                   latency_rows: list[dict] | None = None,
                   probe_rows: list[dict] | None = None,
-                  diagnostics_rows: list[dict] | None = None) -> dict:
+                  diagnostics_rows: list[dict] | None = None,
+                  server_detail: dict | None = None,
+                  backup_file_rows: list[dict] | None = None,
+                  restore_file_rows: list[dict] | None = None) -> dict:
     """Everything the page renders for one server.
 
     ``backup`` and ``freshness`` are computed from the raw store rows rather than from ``series``
@@ -268,7 +275,17 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
         "access": build_access(access_rows or []),
         "queryStore": build_query_store(query_store_rows or []),
         "queryStoreFindings": build_query_store_findings(query_store_issue_rows or []),
-        "databases": build_databases(database_code_map or {}, backup),
+        # Everything the inventory says about this server - the instance's build and edition, the
+        # configuration, the host, security, findings - built by the caller from the inventory's
+        # own record (server_sections.build_server_detail). Never less than the inventory.
+        "serverDetail": server_detail or {},
+        # The backup catalog, file by file, in ONE section (0.34.0; the operator: backup and restore
+        # need not be two reports): what each backup wrote and every restore or copy that used it -
+        # newest first, filterable on the page by file type and by whether it was used for a restore.
+        "backupFiles": backup_catalog_sections.build_files(backup_file_rows or [], restore_file_rows or [],
+                                                           server_id=server_id),
+        "databases": _per_engine(build_databases(database_code_map or {}, backup),
+                                 database_code_map or {}, freshness),
         "tablespaces": build_tablespaces(tablespace_rows or []),
         # Four Oracle sections. Each renders nothing when its metrics produced no rows, which is
         # how a SQL Server or PostgreSQL page stays exactly as it was without the builder being
@@ -301,6 +318,35 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
     }
 
 
+def _per_engine(databases: dict, code_map: dict, freshness: dict | None) -> dict:
+    """The Databases table, told what this engine has and has not.
+
+    The table is SQL Server's shape. On Oracle and PostgreSQL its Last CHECKDB column read *never*
+    in red and the header counted every database as never checked - for an engine that has no
+    CHECKDB (2026-10-26). Which metrics fit a target is the catalogue's word, carried in the
+    freshness block; where DATABASE_CHECKDB is not among them the column says n/a. And
+    PostgreSQL's log is one WAL for the cluster, not a file per database: its files and size go
+    on the table's header line, from LOG_FILE_SPACE's ``pg_wal`` row.
+    """
+    summary = databases.get("summary") or {}
+    if freshness is not None:
+        fits = ({row.get("code") for row in freshness.get("metrics", [])}
+                | {row.get("code") for row in freshness.get("notCollected", [])})
+        if fits and "DATABASE_CHECKDB" not in fits:
+            for row in databases.get("databases") or []:
+                row["checkdb"] = None
+            summary["neverCheckdb"] = 0
+            summary["checkdbApplies"] = False
+    wal = code_map.get(("LOG_FILE_SPACE", "pg_wal"))
+    if wal:
+        fields = interval_rates.message_fields(wal.get("message"))
+        summary["wal"] = {"files": as_float(fields.get("wal_files")),
+                          "sizeMB": as_float(fields.get("wal_size_mb")),
+                          "maxWalSizeMB": as_float(fields.get("max_wal_size_mb")),
+                          "status": str(wal.get("status") or "")}
+    return databases
+
+
 def render_page(*, servers: list[dict], snapshot_date: str, stamp: str,
                 days: int, inventory_href: str, report_dir=None) -> str:
     """The shared page. It carries only the server index; the series are fetched per server."""
@@ -315,6 +361,7 @@ def render_page(*, servers: list[dict], snapshot_date: str, stamp: str,
         "__UTC_OFFSET_MINUTES__": str(offset_minutes()),
         "__UTC_OFFSET_LABEL__": format_offset(offset_minutes()),
         "__BANNER_CSS__": page_banner.CSS,
+        "__BACKUP_FILES_JS__": BACKUP_FILES_JS.read_text(encoding="utf-8"),
         # snapshot_date is the day the numbers are for, which is what a page rebuilt
         # for a past day must say - never today.
         # The head used to name three pages and never the index reports - so an estate could
@@ -336,7 +383,7 @@ def render_page(*, servers: list[dict], snapshot_date: str, stamp: str,
     }
     for key, value in replacements.items():
         html = html.replace(key, value)
-    return html
+    return page_kit.inline(html)
 
 
 def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_dir: str | Path,
@@ -457,6 +504,17 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
     # mark every one of that day's collections stale by two days and paint the whole fleet
     # UNKNOWN — a rebuilt past report has to be judged by its own date.
     now = int((metric_store_as_of(as_of) or datetime.datetime.now(datetime.timezone.utc)).timestamp())
+    # The backup catalog, read per server - today's only: a page rebuilt for a past day (as_of)
+    # shows none rather than today's files. A store without the catalog yet shows an empty section.
+    catalog = None
+    if not as_of:
+        try:
+            from dbabrain.db.backup_catalog import BackupCatalogStore
+
+            catalog = BackupCatalogStore(sqlite_path)
+            catalog.initialize()
+        except Exception:  # noqa: BLE001 - the page is still built, without the two sections
+            catalog = None
 
     index: list[dict] = []
     links: dict[str, str] = {}
@@ -495,7 +553,14 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
                                 database_code_map=database_index.get(server_id, [None, {}])[1],
                                 latency_rows=latency_rows.get(server_id, []),
                                 probe_rows=probe_rows.get(server_id, []),
-                                diagnostics_rows=diagnostics_rows.get(server_id, []))
+                                diagnostics_rows=diagnostics_rows.get(server_id, []),
+                                # The model's facts are the inventory's, read now: a page rebuilt
+                                # for a past day (as_of) gets none rather than today's values.
+                                server_detail=None if as_of else build_server_detail(model),
+                                backup_file_rows=(catalog.server_backup_files(
+                                    server_id, limit=backup_catalog_sections.ROW_LIMIT) if catalog else []),
+                                restore_file_rows=(catalog.server_restore_files(
+                                    server_id, limit=backup_catalog_sections.ROW_LIMIT) if catalog else []))
         file_name = series_file_name(server_id)
         # archive_only is a backfill: it produces the dated copy of a past day and must leave the
         # live file alone. Writing the stable name would publish 1 August's data as "now".

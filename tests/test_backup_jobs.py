@@ -242,12 +242,15 @@ def test_time_window_hours_gate_the_job():
 # the spec below it carries values only. Same two rules, asserted where they now live.
 def _job_and_target(**over):
     from dbabrain.backup_restore.backup import BackupJob, BackupTarget
+    from dbabrain.lib.backup_scope import BackupScope
     from dbabrain.lib.time_window import TimeWindow
 
     fields = dict(
         backup_id="CLOUD_MSSQL_HA_PRIMARY", job="full", db_type="sqlserver",
         server_id="S", script="assets/backup/sqlserver/mssql_backup_database.sh",
         backup_dir="/b", cleanup_retention=14 * 86400, time_window=TimeWindow(),
+        # Every job states its databases (0.34.0); this one takes every user database.
+        scope=BackupScope(databases=(), all_databases=True),
     )
     fields.update(over)
     target = BackupTarget(server_id="S", host="h", username="u", container_name="c",

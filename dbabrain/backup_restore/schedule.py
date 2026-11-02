@@ -29,6 +29,8 @@ from dbabrain.db.store import DbaBrainStore, utc_now_text
 # emit_backup_restore_event writes: these rows carry schedule state and must not be mixed in.
 BACKUP_JOB_PREFIX = "backup_restore.backup_job"
 RESTORE_JOB_PREFIX = "backup_restore.restore_job"
+#: A backup entry's repository copy (0.34.0, 1.240) - its own run, never counted as a backup job.
+OFFLOAD_JOB_PREFIX = "backup_restore.offload_job"
 
 # Matches the sql_tasks default: work with no repeat_interval is reconsidered every 5 minutes.
 DEFAULT_REPEAT_SECONDS = 300
@@ -40,6 +42,10 @@ def backup_job_code(backup_id: str, job: str) -> str:
 
 def restore_job_code(restore_id: str) -> str:
     return f"{RESTORE_JOB_PREFIX}.{restore_id}"
+
+
+def offload_job_code(backup_id: str) -> str:
+    return f"{OFFLOAD_JOB_PREFIX}.{backup_id}"
 
 
 def is_due(
@@ -164,7 +170,7 @@ def reap_stale_runs(
     now = now or datetime.now(timezone.utc)
     reaped: list[dict[str, Any]] = []
 
-    for prefix in (BACKUP_JOB_PREFIX, RESTORE_JOB_PREFIX):
+    for prefix in (BACKUP_JOB_PREFIX, RESTORE_JOB_PREFIX, OFFLOAD_JOB_PREFIX):
         for row in store.fetch_running_job_runs(prefix):
             job_code = str(row["job_code"])
             timeout = timeouts.get(job_code)
@@ -204,7 +210,12 @@ def reap_stale_runs(
                 f"(timeout={int(timeout)}s). The run died without reporting — process killed, "
                 f"container restarted, or host rebooted."
             )
-            store.update_job_run(
+            # Only while the row still says RUNNING. It was read at the top of this pass; a run that
+            # finished since then wrote its own verdict and exited, and its pid being gone is then
+            # the end of a run, not the death of one. Unguarded, the TIMEOUT landed on top of the
+            # run's DONE in the same second, with a timeout alert for a restore that had verified
+            # (2026-10-18, 2026-10-19 - 0.31.0 sheet 1.184).
+            closed = store.update_job_run(
                 log_id=int(row["log_id"]),
                 level="error",
                 status="TIMEOUT",
@@ -214,7 +225,10 @@ def reap_stale_runs(
                 error_text=message,
                 metadata={**metadata, "timeout_seconds": int(timeout), "elapsed_seconds": elapsed,
                           "reaped_by": socket.gethostname()},
+                only_if_running=True,
             )
+            if not closed:
+                continue
             if app_config is not None:
                 _emit_timeout_event(
                     app_config=app_config, job_code=job_code, message=message,
@@ -243,6 +257,8 @@ def _row_metadata(row: Any) -> dict[str, Any]:
 def _run_ids(job_code: str, metadata: dict[str, Any]) -> dict[str, Any]:
     """The id of the run, from its metadata or — if that is missing — from the job_code,
     which embeds it by construction (``backup_restore.restore_job.<restore_id>``)."""
+    if job_code.startswith(OFFLOAD_JOB_PREFIX):
+        return {"backup_id": str(metadata.get("backup_id") or job_code[len(OFFLOAD_JOB_PREFIX) + 1:])}
     if job_code.startswith(BACKUP_JOB_PREFIX):
         suffix = job_code[len(BACKUP_JOB_PREFIX) + 1:]
         backup_id = str(metadata.get("backup_id") or suffix.rsplit(".", 1)[0] or "")
@@ -271,7 +287,8 @@ def _emit_timeout_event(
         # The run's own command, with TIMEOUT as the phase: a timeout is something that happened
         # *to* this run, not a different kind of run. Encoding it in the command was the other
         # half of the two-conventions problem - a step is a phase, never a command suffix.
-        command="backup" if is_backup else "restore-workflow",
+        command=("offload" if job_code.startswith(OFFLOAD_JOB_PREFIX)
+                 else "backup" if is_backup else "restore-workflow"),
         phase="TIMEOUT",
         level="critical",
         message=message,

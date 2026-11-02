@@ -603,6 +603,32 @@ def test_pull_file(host, monkeypatch, capsys, tmp_path):
         "pull-file")
 
 
+def test_file_checksum(host, monkeypatch, capsys):
+    host.files["/backup/APPDB_full.bak"] = b"a full backup"
+    _holds(_answer(monkeypatch, capsys, "file-checksum", {
+        "host": _LOGIN, "paths": ["/backup/APPDB_full.bak"]}), "file-checksum")
+
+
+def test_copy_files(host, monkeypatch, capsys):
+    host.files["/backup/APPDB/FULL/APPDB_full.bak"] = b"a full backup"
+    body = _answer(monkeypatch, capsys, "copy-files", {
+        "source": _LOGIN, "target": _LOGIN,
+        "files": [{"source": "/backup/APPDB/FULL/APPDB_full.bak",
+                   "target": "/repository/SRV-01/APPDB/FULL/APPDB_full.bak"}]})
+    _holds(body, "copy-files")
+    assert host.files["/repository/SRV-01/APPDB/FULL/APPDB_full.bak"] == b"a full backup"
+
+
+def test_backup_stop(host, monkeypatch, capsys):
+    host.answers["dbabrain_runs"] = (0, "STOP\tpid=4242\nSTOP\tkilled=4243\nSTOP\tkilled=4242\n"
+                                        "STOP\talive=0\nSTOP\tsession_killed=508\tdb=APPDB\nRESULT=ok\n")
+    body = _answer(monkeypatch, capsys, "backup-stop", {
+        "run_tag": "ACME_250_APPDB_FULL_7", "db_type": "sqlserver", "host": _LOGIN,
+        "env": {"MSSQL_USER": "u", "MSSQL_PASSWORD": "p"}})
+    _holds(body, "backup-stop")
+    assert body["data"]["stopped"] is True and body["data"]["killed"] == [4243, 4242]
+
+
 def test_push_file(host, monkeypatch, capsys, tmp_path):
     (tmp_path / "APPDB.tar").write_bytes(b"an archive")
     _holds(_answer(monkeypatch, capsys, "push-file", {
@@ -807,7 +833,7 @@ ANSWERED_WITH_A_FAKE_SERVER = frozenset({
     "host-restart", "fetch-file", "send-file", "relay-file", "pack-files", "pack-backup",
     "pull-file", "push-file", "backup-chain", "copy-backup-dir", "prune-staged-backups",
     "move-db-docker", "run-sqlcmd", "smb-list", "smb-delete", "smb-credential", "copy-schema",
-    "rotate-password",
+    "rotate-password", "file-checksum", "backup-stop", "copy-files",
 })
 
 

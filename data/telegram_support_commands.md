@@ -25,6 +25,7 @@ spbot_run_sql_task - Run one SQL task now by sql_id, ignoring its schedule (opti
 spbot_metric_toggle - Enable/disable metrics for one server (all, one collector class, or one metric)
 spbot_backup - Run one backup by backup_id, optionally forcing full/diff/log
 spbot_restore - Run point-in-time restore workflow by restore_id and point_in_time
+spbot_copy_backup - Copy a restore entry's backups from server_id to its target, proven, nothing restored
 spbot_create_db_docker - Create a lab database container (postgres/mysql/mssql/oracle) on the worker
 spbot_shrink_log - EMERGENCY: shrink one database's log file to N MB (asks yes once)
 spbot_start_job - EMERGENCY: start one SQL Server Agent job by name (asks yes once)
@@ -58,9 +59,10 @@ spbot_restart_server - EMERGENCY: restart a server (asks yes, then the server id
 | `/spbot_add_sql` | Register and enable a new SQL task from a conversation: **server_id → display_name → schedule → output → sql_text**. `db_type`, instance and credential are read from `db_instances.json` by `server_id`, never typed. Schedule accepts `manual` (runs only via `/spbot_run_sql_task`), `default`, or `from_hour to_hour repeat_interval timeout`. Output accepts `xlsx` (send a workbook), `plain` (rows as text), `none` (status only). Private chat only. |
 | `/spbot_run_sql_task` | Run one SQL task now by `sql_id`, `--force`: it ignores the schedule, the interval and the active flag, but never a run already in flight. Each target replies separately. **Optional second argument and beyond: `NAME=VALUE` pairs** for the parameters that task declares in `sql_commands.json` — e.g. `/spbot_run_sql_task 12 spid=505 db=SALESDB`. The script reads them as `@spid` / `@db`; the values are **bound**, never pasted into the SQL, so a chat message cannot become a statement. A value containing spaces goes in quotes. A task that declares no parameters takes no extra arguments. Use `/spbot_list_sql_tasks` for the id. |
 | `/spbot_run_sql_task` | Run one SQL task now by `sql_id` (the number `/spbot_list_sql_tasks` shows). Runs every target configured for that task, in the background, and each target reports its own result as a separate message — the runner already queues those. Always `--force`, which the CLI requires for a targeted run: it ignores the time window, the repeat interval **and the active flag**, so an id that `/spbot_list_sql_tasks` hides as inactive will still run if you name it. Requires clearance 10, the same as `/spbot_restore` and `/spbot_add_sql`, because a task may be an UPDATE against production. |
-| `/spbot_metric_toggle` | Enable/disable metric collection for one `server_id` in `db_instances.json` (atomic write; the bot runs the `common.cli metric-toggle` command itself, so there is one engine and one caller path). Scope: `all` (the target's `metrics.enabled`), `collector:<sql\|cmd\|docker\|k8s>` (one collector class via `disabled_collector_types`), or one metric_code (`metric_overrides.<CODE>.enabled`; enabling also removes the code from the legacy `report_policy.disabled_metric_codes`). Clearance 10, private chat only — switching collection off produces no alert of its own. Afterwards, pull the change back to the master with `control worker-pull-data-config --all-json --overwrite`. |
+| `/spbot_metric_toggle` | Enable/disable metric collection for one `server_id` in `db_instances.json` (atomic write; the bot runs the `common.cli metric-toggle` command itself, so there is one engine and one caller path). Scope: `all` (the target's `metrics.enabled`), `collector:<sql\|cmd\|docker\|k8s>` (one collector class via `disabled_collector_types`), or one metric_code (`metric_overrides.<CODE>.enabled`; enabling also removes the code from `report_policy.disabled_metric_codes`, the list that keeps a metric's alerts out of the reports - so *on* means collected and reported). Clearance 10, private chat only — switching collection off produces no alert of its own. Afterwards, pull the change back to the master with `control worker-pull-data-config --all-json --overwrite`. |
 | `/spbot_backup` | Run one backup now by `backup_id`, always with `--force` (ignores the schedule, but never a run already in flight). Optional second argument sets the level: `full` \| `diff` \| `log`, or `-` to let the script decide as it would on a scheduled run. One word for every engine — it is translated to that engine's own name (Oracle 0/1, PostgreSQL full/incr, SQL Server full/diff/log). Use `/spbot_list_backup_id` to find the id. |
 | `/spbot_restore` | Run point-in-time restore workflow by restore_id and point_in_time |
+| `/spbot_copy_backup` | Copy only (0.34.0): the restore entry's copy from its `server_id` to its target, every file proven by checksum, then stop - nothing restored, no metadata replayed, the staged files kept. `restore-workflow --copy-only`. The same arguments and clearance (10) as `/spbot_restore`. |
 | `/spbot_create_db_docker` | Create a lab database container, on the worker host **or directly on a remote Ubuntu VM over SSH** — one unified parameter set for every engine. Private chat only. Fourteen parameters, in order: **name · engine · version · mode · host_port · password_env (DB secret ref) · password_text (DB password value) · deploy_target · remote_user · remote_password_ref · remote_password_text · remote_key_name · recreate · install_docker**. See the Usage section below for what each means and inline examples. Both passwords come in two forms — a **ref** already in the encrypted secret store, or a **text value** (handed to the CLI through the environment, never rendered onto a command line). `deploy_target` = `worker` runs in-container on the worker host (as before); an **IP** provisions on that Ubuntu VM over SSH (`remote_user` + one of the SSH password forms). Engines: `postgres`/`mysql`/`mssql`/`oracle` (26ai = tag `23.26.2`/`latest`; oracle `ha-lab` = Data Guard 1+1). `recreate=yes` = `--force`: **destroys the existing containers and their data volumes**. Afterwards pull the new connection + secret back to the master with `control worker-pull-data-config --all-json --include-secrets --overwrite`. |
 | `/spbot_shrink_log` | **EMERGENCY, clearance 50.** `DBCC SHRINKFILE` one database's log down to a size you give in MB. Asks for the server, the database, the size, then one `yes`. Before it asks it reports the file's current size, how much is in use, the recovery model and `log_reuse_wait` — a log waiting on `LOG_BACKUP` is warned about, because shrinking one frees nothing and it grows straight back. Never touches the recovery model: flipping to SIMPLE to force truncation is what breaks a log chain. |
 | `/spbot_start_job` | **EMERGENCY, clearance 50.** Start one SQL Server Agent job by exact name. Asks for the server, the job name, then one `yes`. Refuses a job that is already running, warns when the job is disabled (starting it runs it once; it stays disabled on its schedule), and says plainly that success means *started*, not *finished* — check the job history for the outcome. |
@@ -373,7 +375,7 @@ Enable/disable metric collection for one server (admin, private chat only). Thre
 - `state`: `on` or `off`
 - `scope`: `all` = the whole target (`metrics.enabled`) · `collector:<sql|cmd|docker|k8s>` = one collector class (`metrics.disabled_collector_types`) · a metric_code = one metric (`metrics.metric_overrides.<CODE>.enabled`; see `/spbot_list_metrics`)
 
-The change is written atomically to the worker's `data/db_instances.json` and takes effect on the next collection tick. Enabling a single metric also removes it from the legacy `report_policy.disabled_metric_codes` list. The reply reminds you to pull the config back to the master (`control worker-pull-data-config --all-json --overwrite`).
+The change is written atomically to the worker's `data/db_instances.json` and takes effect on the next collection tick. Enabling a single metric also removes it from `report_policy.disabled_metric_codes`, the list that keeps a metric's alerts out of the reports on that server (since 0.34.0 it no longer stops collection). The reply reminds you to pull the config back to the master (`control worker-pull-data-config --all-json --overwrite`).
 
 ### `/spbot_backup`
 
@@ -414,6 +416,23 @@ LATEST
 `point_in_time` accepts:
 - `LATEST` — restore to the newest available backup
 - `YYYY-MM-DD HH:MM:SS +HH:MM` — restore to a specific point in time (requires log backups)
+
+### `/spbot_copy_backup`
+
+Copy only, from a restore entry (0.34.0). The same copy a restore makes - from the entry's
+`server_id` to its target, every file hashed on both sides and copied again up to the entry's
+`integrity.copy_max_retry` - then it stops: no RESTORE, no verify, no logins or Agent jobs replayed,
+and the staged files are kept. The catalog records the run as `copy_only`; it never counts as a
+restore drill.
+
+```
+/spbot_copy_backup ACME_TO_SQLSERVER_192_168_18_31 LATEST
+/spbot_copy_backup ACME_TO_SQLSERVER_192_168_18_31 2026-06-13 21:00:00 +07:00
+```
+
+`point_in_time` is read as for `/spbot_restore`: `LATEST` copies the newest chain, a moment copies
+the chain that moment needs. An entry whose `action` is `copy_only` also copies only through
+`/spbot_restore`, and on its own schedule.
 ### `/spbot_create_db_docker`
 
 One command, one parameter set, every engine — deploys either **in-container on the worker host** or **directly on a remote Ubuntu VM over SSH**. Private chat only (passwords are involved). Fourteen positional parameters:

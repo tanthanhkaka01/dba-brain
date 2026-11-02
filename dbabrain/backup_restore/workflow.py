@@ -33,6 +33,8 @@ from dbabrain.backup_restore.restore_script import (
 )
 from dbabrain.backup_restore.events import emit_backup_restore_event, stdout_excerpt
 from dbabrain.backup_restore.server_metadata import replay_phase
+from dbabrain.lib.integrity import ACTION_COPY_ONLY, IntegrityConfigError, require_restore_action
+from dbabrain.lib.offload import OffloadConfigError, require_restore_from
 from dbabrain.lib import instance_bundle
 from dbabrain.db.store import DbaBrainStore, RunAlreadyClaimed, utc_now_text
 
@@ -126,6 +128,38 @@ def replay_engine_phase(
     return line, ({phase: report} if report else {})
 
 
+def _entry_action(entry: Any, *, copy_only: bool) -> tuple[str | None, Exception | None]:
+    """What this run of ``entry`` does: copy only when the run says so, else the entry's stated
+    ``action`` - or the refusal for an entry that states none, raised inside its own run (R50)."""
+    label = f"restore_id={entry.restore_id}"
+    try:
+        # Stated on every entry (R50). `repository` reads the offload's proven copies: built for the
+        # script-driven restores of the engines whose chain the folder's layout states; refused by
+        # name elsewhere rather than read as `server`.
+        source = require_restore_from(getattr(entry, "restore_from", None), label=label)
+        if source == "repository":
+            from dbabrain.backup_restore.restore_script import REPOSITORY_ENGINES, ScriptRestore
+
+            engine = str(getattr(entry, "db_type", "") or "").lower()
+            if not isinstance(entry, ScriptRestore) or engine not in REPOSITORY_ENGINES:
+                raise OffloadConfigError(
+                    f"{label}: restore_from repository is built for the script-driven {' and '.join(REPOSITORY_ENGINES)} "
+                    "restores (an SSH copy from the repository); this entry is "
+                    f"{'share-driven SQL Server' if not isinstance(entry, ScriptRestore) else engine} - "
+                    "state restore_from: server.")
+            if not entry.is_remote:
+                # In place nothing is copied: the script reads the server's own folder, which is not
+                # the repository - read so, the entry would say one thing and do another.
+                raise OffloadConfigError(f"{label}: restore_from repository copies the repository's files to the "
+                                         "target's staging; an in-place entry copies nothing - give it a target "
+                                         "server, or state restore_from: server.")
+        if copy_only:
+            return ACTION_COPY_ONLY, None
+        return require_restore_action(entry.action, label=label), None
+    except (IntegrityConfigError, OffloadConfigError) as exc:
+        return None, exc
+
+
 def run_scheduled_restores(
     *,
     app_config: Any,
@@ -140,8 +174,14 @@ def run_scheduled_restores(
     key_base64: str | None = None,
     on_demand: bool = False,
     point_in_time: str = "",
+    copy_only: bool = False,
 ) -> dict[str, Any]:
     """Run every restore entry that is due, recording each under its own restore_id.
+
+    Each entry does what its ``action`` states (0.34.0, 1.216): ``restore``, or ``copy_only`` - the
+    copy from ``server_id`` to the target through the checksum gate, and nothing restored. An entry
+    that states none is that entry's error (R50). ``copy_only=True`` makes this one run copy only,
+    whatever the entries state (``restore-workflow --copy-only``).
 
     ``on_demand`` is an operator naming one entry (``restore-workflow --restore-id``, which is
     what ``/spbot_restore`` runs): it runs whether or not the entry is active, as the SQL Server
@@ -212,11 +252,15 @@ def run_scheduled_restores(
             summary["skipped"] += 1
             summary["restores"].append({"restore_id": config.restore_id, "status": "taken-by-another-run"})
             continue
-        metadata = {"restore_id": config.restore_id, "source_id": config.source_id, "target_id": config.target_id}
+        action, action_error = _entry_action(config, copy_only=copy_only)
+        is_copy = action == ACTION_COPY_ONLY
+        noun = "Copy only" if is_copy else "Restore"
+        metadata = {"restore_id": config.restore_id, "source_id": config.source_id, "target_id": config.target_id,
+                    "action": action or ""}
         try:
             log_id, _started_at = schedule.start_run(
                 store=store, job_code=job_code,
-                message=f"Restore {config.restore_id} started.", metadata=metadata,
+                message=f"{noun} {config.restore_id} started.", metadata=metadata,
             )
         except RunAlreadyClaimed as exc:
             summary["skipped"] += 1
@@ -234,7 +278,7 @@ def run_scheduled_restores(
         # operator like it had hung at "certificate import finished" for hours.
         emit_backup_restore_event(
             app_config=app_config, command="restore-workflow", phase="START", level="logging",
-            message=f"Restore {config.restore_id} started.", logger=logger,
+            message=f"{noun} {config.restore_id} started.", logger=logger,
             started_at=started_at, metadata=metadata, notify=config.notify,
         )
 
@@ -248,10 +292,13 @@ def run_scheduled_restores(
         # The same two phases the script path runs, from the same shared function - see
         # server_metadata.replay_phase. This path names its target by ip rather than by
         # container, which is the only difference and the reason the arguments differ here.
-        metadata_lines, phase_reports = replay_engine_phase(
+        # A copy-only run touches nothing on the target instance: no metadata replayed, before or after.
+        metadata_lines, phase_reports = ("", {}) if (is_copy or action_error) else replay_engine_phase(
             config, phase=instance_bundle.PRE_DATABASE, announce=announce,
         )
         try:
+            if action_error is not None:
+                raise action_error
             output = run_restore_workflow(
                 restore_configs=[config],
                 app_config=app_config,
@@ -264,6 +311,9 @@ def run_scheduled_restores(
                 # boundaries come from. The script path announces them from restore_by_id. Both
                 # now emit the same two events, which is the point.
                 on_phase=announce,
+                copy_only=is_copy,
+                # The catalog's run row points at this one (1.214).
+                job_run_id=log_id,
             )
             # Returning without raising is NOT the same as the restore having worked. A database
             # that fails is caught per-database on purpose, so the remaining ones still run - which
@@ -294,7 +344,7 @@ def run_scheduled_restores(
             error_text = str(exc)[-2000:]
 
         # Only after a restore that worked: Agent job steps name databases that have to exist.
-        if status == "done":
+        if status == "done" and not is_copy:
             post_lines, post_reports = replay_engine_phase(
                 config, phase=instance_bundle.POST_DATABASE, announce=announce,
             )
@@ -313,7 +363,8 @@ def run_scheduled_restores(
         if phase_reports:
             end_metadata["server_metadata"] = phase_reports
             end_metadata["stdout_tail"] = metadata_lines.strip()
-        end_message = f"Restore {config.restore_id} finished: {status}."
+        end_message = f"{noun} {config.restore_id} finished: {status}." + (
+            " Nothing restored - the files are staged and proven on the target." if is_copy and status == "done" else "")
         schedule.finish_run(
             store=store, log_id=log_id, status=status,
             message=end_message,
@@ -352,11 +403,14 @@ def run_scheduled_restores(
             summary["restores"].append({"restore_id": job.restore_id, "db_type": job.db_type,
                                         "status": "taken-by-another-run"})
             continue
-        metadata = {**script_restore_metadata(job), **restore_mode_metadata(point_in_time)}
+        action, action_error = _entry_action(job, copy_only=copy_only)
+        is_copy = action == ACTION_COPY_ONLY
+        noun = "Copy only" if is_copy else "Restore"
+        metadata = {**script_restore_metadata(job), **restore_mode_metadata(point_in_time), "action": action or ""}
         try:
             log_id, _started = schedule.start_run(
                 store=store, job_code=job.job_code,
-                message=f"Restore {job.label} started.", metadata=metadata,
+                message=f"{noun} {job.label} started.", metadata=metadata,
             )
         except RunAlreadyClaimed as exc:
             # Another run of this same restore is in flight. Skipped, not failed, and not counted
@@ -371,7 +425,7 @@ def run_scheduled_restores(
         started_at = utc_now_text()
         emit_backup_restore_event(
             app_config=app_config, command="restore-workflow", phase="START", level="logging",
-            message=f"Restore {job.label} started.", logger=logger,
+            message=f"{noun} {job.label} started.", logger=logger,
             started_at=started_at, metadata=metadata, notify=job.notify,
         )
         # The copy is the long half of a remote drill - 17 GB over two internet hops took hours
@@ -391,15 +445,22 @@ def run_scheduled_restores(
             # shell script. The script remains on disk and still works; what changed is that the
             # nightly run now exercises the same code an operator reaches through the CLI, so a
             # bug in one is a bug in both rather than a surprise in whichever was not tested.
+            from dbabrain.backup_restore.cli import _open_catalog
             from dbabrain.backup_restore.restore_by_id import restore_by_id
 
+            if action_error is not None:
+                raise action_error
             outcome = restore_by_id(
                 {"restore_id": job.restore_id,
-                 **({"point_in_time": point_in_time} if point_in_time else {})},
+                 **({"point_in_time": point_in_time} if point_in_time else {}),
+                 **({"copy_only": True} if is_copy else {})},
                 key=key, key_base64=key_base64,
                 # The copy boundaries, so the long silence in the middle of a remote drill is
                 # bounded by two events instead of looking like a hang.
                 on_phase=on_phase,
+                # The copy's checksum gate records into it (0.34.0, 1.213b); None still gates.
+                catalog=_open_catalog(app_config, logger),
+                job_run_id=log_id,
             )
             status, exit_code = "done", 0
             out = json.dumps(outcome, default=str)
@@ -419,7 +480,8 @@ def run_scheduled_restores(
         end_metadata = {**metadata, "exit_code": exit_code, "duration_ms": duration_ms,
                         "status": status, **restored,
                         "stdout_tail": stdout_excerpt(out)}
-        end_message = f"Restore {job.label} finished: {status}."
+        end_message = f"{noun} {job.label} finished: {status}." + (
+            " Nothing restored - the files are staged and proven on the target." if is_copy and status == "done" else "")
         if warnings:
             # Done, and something the operator must hear about - a piece passed over (1.23). Said
             # in the message and raised to `warning`, so the alert is not a quiet success.
@@ -464,9 +526,17 @@ def run_workflow(
     delete_retention: int | None = None,
     skip_backup: bool = False,
     skip_restore: bool = False,
+    copy_only: bool = False,
+    skip_offload: bool = False,
 ) -> dict[str, Any]:
-    """Run the due backup jobs, then the due restore entries."""
-    result: dict[str, Any] = {"backup": None, "restore": None}
+    """Run the due backup jobs, then the due restore entries, then the repository copies.
+
+    The repository copy (0.34.0, 1.240) is the backup half's last step and runs with it: an entry
+    with ``offload_enabled`` has its written files copied off the server, proven there, and - with
+    ``offload_delete_source`` - released. Last, so a long copy never delays a due restore in this
+    pass; and it writes nothing at all for an entry with nothing to copy.
+    """
+    result: dict[str, Any] = {"backup": None, "restore": None, "offload": None}
 
     if not skip_backup:
         result["backup"] = run_backup(
@@ -479,8 +549,16 @@ def run_workflow(
         result["restore"] = run_scheduled_restores(
             app_config=app_config, config_path=config_path, logger=logger,
             restore_id=restore_id, copy_hours=copy_hours, delete_retention=delete_retention,
-            dry_run=dry_run, force=force, key=key, key_base64=key_base64,
+            dry_run=dry_run, force=force, key=key, key_base64=key_base64, copy_only=copy_only,
         )
 
-    result["failed"] = sum(int((part or {}).get("failed") or 0) for part in (result["backup"], result["restore"]))
+    if not skip_backup and not skip_offload:
+        from dbabrain.backup_restore.offload import run_offloads
+
+        result["offload"] = run_offloads(
+            app_config=app_config, config_path=config_path, logger=logger, backup_id=backup_id,
+            key=key, key_base64=key_base64, dry_run=dry_run)
+
+    result["failed"] = sum(int((part or {}).get("failed") or 0)
+                           for part in (result["backup"], result["restore"], result["offload"]))
     return result

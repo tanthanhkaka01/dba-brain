@@ -52,7 +52,7 @@ GAUGE_ITEMS = {"cached_plans", "cache_baseline_minutes",
 #: marker, and what the CPU rows need to be read - how many CPUs the host has and how many the
 #: engine may use, whether the engine counts its own CPU, and which process the host figures are of.
 MESSAGE_FIELDS = ("counters_since", "cpu_count", "schedulers_online", "pools_account_cpu",
-                  "edition", "logical_cpus", "process_since", "db_process")
+                  "edition", "logical_cpus", "process_since", "db_process", "timed_statistics")
 #: Keys of a pivoted sample that are not counters.
 META_FIELDS = frozenset({"collected_at", "sources", *MESSAGE_FIELDS})
 
@@ -388,6 +388,8 @@ def cpu_facts(counter_samples: list[dict[str, Any]],
         "edition": edition,
         "label": label.strip() or engine,
         "limit": _limit_reason(engine, edition, online_i, total_i),
+        # Oracle's parameter, as the instance states it: FALSE means its CPU totals are not kept.
+        "timedStatistics": _latest(counter_samples, "timed_statistics").upper(),
     }
 
 

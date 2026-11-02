@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from dbabrain.lib import engine_sections, page_banner, page_style, report_archive
+from dbabrain.lib import engine_sections, page_banner, page_kit, page_style, report_archive
 from dbabrain.db.metric_store import MetricStore
 from dbabrain.lib.timezone import display_now, format_display, format_display_text
 from dbabrain.db import DbaBrainStore
@@ -573,8 +573,10 @@ def write_index_report_html(entry: dict[str, Any], text: str, out_dir: Path,
             # Its own page, so the head says where the reader is rather than offering a way out
             # of a family it does not mention. `here` marks it current; every index page carries a
             # picker over the others.
+            # The page itself counts as present: on its first run its file is not written yet, and
+            # its own tab went missing from its head until the next run.
             links=page_banner.siblings_present(
-                lambda name: (out_dir / name).exists(),
+                lambda name: name == html_file_name(server_id) or (out_dir / name).exists(),
                 index_usage=html_file_name(server_id)))
         + f'<h1 class="title">{_escape(server_id)}</h1>'
         + f'<p class="subtitle">{_escape(engine)} · index '
@@ -585,6 +587,7 @@ def write_index_report_html(entry: dict[str, Any], text: str, out_dir: Path,
         + _markdown_tables_to_html(body)
         + "</div></body></html>"
     )
+    page = page_kit.inline(page)
     if stamp:
         (out_dir / report_archive.archive_name(
             stamp, html_file_name(entry["server_id"]))).write_text(page, encoding="utf-8")
@@ -612,10 +615,9 @@ def write_index_report_html(entry: dict[str, Any], text: str, out_dir: Path,
 #: in each wherever there is room; on a narrow window the sixteen-column table takes what it needs
 #: and the name gives way, as before.
 _INDEX_PAGE_CSS = (
-    ".banner{font-size:17px;font-weight:700;line-height:1.35;margin:18px 0 6px;padding:13px 16px;"
-    "border-left:6px solid var(--warn);background:var(--warn-bg);color:#7c2d12;border-radius:6px}"
-    ".content > p{margin:6px 0;font-size:13px;color:#3a4757}"
-    ".content thead th,.content tbody td{padding:7px 8px}"
+    # The restart caveat is Tabler's warning alert (lib.page_kit.ALIASES); only its size is the page's.
+    ".banner{font-size:17px;font-weight:700;line-height:1.35;margin:18px 0 6px}"
+    ".content > p{margin:6px 0}"
     ".content thead th:first-child,.content tbody td:first-child{width:34%}"
     ".content tbody td:first-child{overflow-wrap:anywhere;min-width:200px}"
 )

@@ -39,11 +39,14 @@ def _sql_target():
     return dataclasses.replace(_target(), credential={"username": "monitor", "password": "pw"})
 
 
-def test_report_policy_disabled_metric_codes_disable_collection_case_insensitive():
+def test_a_metric_kept_out_of_the_reports_is_still_collected():
+    # report_policy.disabled_metric_codes silences a metric's alerts on one target. It stopped the
+    # collection too until 0.31.0, and one server's OS metrics, listed for a reason long gone, never
+    # reached the store - its CPU tile could not name a socket (0.31.0 sheet 1.189).
     target = _target()
     target.report_policy["disabled_metric_codes"] = ["os_cpu_usage"]
 
-    assert not _metric_enabled_for_target(_definition(metric_code="OS_CPU_USAGE"), target)
+    assert _metric_enabled_for_target(_definition(metric_code="OS_CPU_USAGE"), target)
     assert _metric_enabled_for_target(_definition(metric_code="OS_MEMORY_USAGE"), target)
 
 
@@ -125,7 +128,7 @@ def test_metric_level_severity_map_wins_over_target_level():
     assert _remap(target, metric_code="INSTANCE_STATUS", status="CRITICAL") == "LOGGING"
 
 
-def test_collect_metrics_skips_report_policy_disabled_metric_codes(tmp_path, monkeypatch):
+def test_collect_metrics_runs_a_metric_kept_out_of_the_reports(tmp_path, monkeypatch):
     target = _target()
     target.report_policy["disabled_metric_codes"] = ["OS_CPU_USAGE"]
     executed = []
@@ -154,9 +157,9 @@ def test_collect_metrics_skips_report_policy_disabled_metric_codes(tmp_path, mon
         force=True,
     )
 
-    assert executed == ["OS_MEMORY_USAGE"]
-    assert summary.disabled_count == 1
-    assert "SKIP disabled OS_CPU_USAGE" in summary.message
+    assert executed == ["OS_CPU_USAGE", "OS_MEMORY_USAGE"]
+    assert summary.disabled_count == 0
+    assert "SKIP disabled" not in summary.message
 
 
 def _definition(**overrides):

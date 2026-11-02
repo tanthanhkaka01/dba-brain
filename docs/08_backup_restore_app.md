@@ -381,6 +381,29 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
 
 Verify with `list-backups` / `list-restores`, then `backup --dry-run`.
 
+### Switching entries off and on: `entry-active`
+
+```bash
+python -m dbabrain.backup_restore.cli entry-active @request.json
+# {"backup_ids": ["ACME_APPDB_FULL", "ACME_APPDB_LOG"], "restore_ids": ["ACME_APPDB_TO_LAB"],
+#  "active": false, "note": "Off since 2026-10-22: the lab VM is switched off."}
+```
+
+It writes each named entry's `active` flag and nothing else - the jobs, windows, notify routes
+and secret refs stay as written, so switching an entry back on is the same call with `true`.
+Until 2026-10-22 the only command that could do it was `backup-add` / `restore-add` with
+`replace`, which restates the whole entry; that day two lab VMs were switched off and eleven
+entries (seven backups from one, four restores into the other) needed stopping.
+
+* **Every entry named, or none.** An id that is not in the file is refused before anything is
+  written; so is a field it does not take (`server_id` would read as "every entry of that server",
+  which it does not do).
+* **`note` is appended** to the note of each entry that changes, so the file says why it is off.
+  An entry already in the asked state is not rewritten.
+* **Switching on is held to the loader**, the way a new entry is: the candidate document is loaded
+  by `load_backup_jobs` and, per restore, both restore loaders - an entry that could never run is
+  not switched on. Switching off needs no check; an inactive entry is skipped.
+
 ## Data Flow
 
 Restore config -> copy recent backup files into import location -> optionally import certificate -> locate latest FULL backup -> generate/execute SQL Server restore SQL -> verify restored database -> write `backup_restore_history` and logs -> delete old copied files when requested.
@@ -487,7 +510,29 @@ python -m dbabrain.backup_restore.cli restore-workflow --config config.json --re
 python -m dbabrain.common.cli verify-restore @verify.json
 #   {"db_type": "sqlserver", "database_names": ["APPDB_Prod_DR"],
 #    "target": {"host": "...", "port": 1453, "username": "...", "password": "..."}}
+
+# Copy only (1.216): the entry's copy from server_id to its target, proven, nothing restored
+python -m dbabrain.backup_restore.cli restore-workflow --config config.json --restore-id ACME_TO_SQLSERVER_192_168_18_31 --copy-only
+
+# Stop a running backup (1.238): its script's process tree on the host FIRST, then (SQL Server)
+# every session the run opened; the run's row says "stopped by the operator". Never KILL the
+# session alone - the script then starts the next database (a production SQL Server, 2026-10-29).
+python -m dbabrain.backup_restore.cli backup-stop --config config.json --backup-id ACME_MSSQL_SALES_FULL
 ```
+
+**Stopping a backup (1.238).** `backup-stop --backup-id` works through every RUNNING row of that
+entry:
+
+1. It rebuilds the run's tag (`<backup_id>_<job_runs id>`) and the run's own `backup-database`
+   request (`_backup_request`, the one builder): the same host, the same login.
+2. It asks `common.cli backup-stop` to end the run (`docs/13_common.md`).
+3. It closes the row, only while it is still RUNNING, as *Backup X stopped by the operator - N
+   process(es), M session(s) ended*. The row's metadata `stopped_by_operator` holds the pids and
+   sessions, and a `warning` event is sent.
+
+When the killed script's call returns, the runner finds that mark (`_stopped_by_operator`) and leaves
+the row and the alert as the stop wrote them. A run started before 0.34.0 has no pid file: its
+sessions are still ended, and the answer says `pid_file: missing`.
 
 ## CLI as the cross-app boundary
 
@@ -499,6 +544,321 @@ subprocess**; they do **not** import `dbabrain.backup_restore` and do **not** re
 backup restore app resolves its own config and secrets. New "expose restore data
 to another app" features must follow the same rule: add a CLI subcommand here, not
 a cross-app import or a second reader of `restore_config.json`.
+
+## The copy gate: every staged file proven, `copy_max_retry` (0.34.0)
+
+**The operator, 2026-10-29:** *a restore stores the checksum before the copy and after it; only when
+they match does the restore run; when they differ, copy again over it, with a copy max retry in the
+restore config* - mandatory, 3 by default, declared in full in the shared object reference.
+
+Every restore entry states an **`integrity`** block (`dbabrain/lib/integrity.py`; the reference's
+`integrity` object, required on `restore_entry`):
+
+```jsonc
+"integrity": {
+  "copy_max_retry": 3,                   // REQUIRED, 0-10: copies after the first
+  "copy_retry_interval_seconds": 30,     // the pause before the next copy
+  "verify_source_before_copy": true,     // the source is held to what its backup recorded
+  "uncatalogued": "compare_copy",        // a file no backup recorded: compare | refuse
+  "engine_verify_before_restore": false, // VERIFYONLY / pg_verifybackup / RMAN VALIDATE as well
+  "algorithm": "sha256"
+}
+```
+
+It is never left to the code: `upgrade-config`'s `stated-integrity` step writes it into every entry
+that has none (24 on the master on 2026-10-29, at the next deploy on the worker), `restore-add` writes
+it into every new entry (what was given, the rest from the defaults), `check-objects` names an entry
+without it, and the gate refuses one (rules R50).
+
+`backup_restore/copy_gate.py::copy_verified` is the rule for one file, in this order:
+
+| Step | Result | Copied? |
+| --- | --- | --- |
+| The source, hashed on its own server, is not there | `source_missing` | no |
+| The source differs from the backup's `checksum_after_backup` | `source_mismatch` - the backup changed after it was written; copying again cannot fix that | no |
+| No backup recorded the file, and the entry says `refuse` | `uncatalogued_refused` | no |
+| The target already holds the same bytes | `match` | no |
+| A copy, then the target hashed on its own server: equal | `copied` (first attempt) / `recopied` (a later one) | yes |
+| Different, or the copy failed on the way (a network error, a vanished file) | an attempt spent: wait, copy again **over** it | yes |
+| `copy_max_retry + 1` attempts, none equal | `copy_failed_after_retries` - the file is not used | yes |
+
+**"Equal" is the checksum and the size in bytes** (1.245, the operator's scenario of 2026-10-30).
+A size is read by a different call than the hash, so two readings that disagree about one file are
+never proof, and the attempt names both sizes. A size nobody read is no difference. A file confirmed
+against the catalog alone (`confirm_on_target`) is held to the size its backup recorded. The store
+holds the same rule as `ck_restore_run_files_size`.
+
+Only `match`, `copied` and `recopied` are **proven**, and only a run whose every file is proven may
+restore. A source server that cannot be asked at all raises: that is a run that cannot go on, not a
+verdict about one file. Each step is written to the catalog as it happens - `restore_run_files`
+(both `server_id`s, file name and type, the checksums before and after the copy) and `copy_attempts`
+(one row per attempt, with the hash it produced) - so a run that dies on attempt 2 leaves attempt 1
+behind (`docs/01_runtime_store.md`, *Backup Catalog*).
+
+**Where it runs (1.213).** On the Linux worker's two copy paths - smbclient + SFTP (a share as
+the source) and plain SFTP (a folder on the node) - every file of a share-driven SQL Server restore
+goes through it, in batches (`copy_verified_batch`): the sources hashed as this node read them, the
+target hashed in one `common.cli file-checksum` call before the copy and one after each round, a
+round's failures copied again together after one pause. Each copy lands under a temporary name and is
+renamed, keeping the source's time. Then:
+
+| Before 0.34.0 | From 0.34.0 |
+| --- | --- |
+| a file the target held at the source's size was never downloaded | it is skipped only when its hash on the target IS the one its backup recorded (`confirm_on_target` - the stronger proof, and the source is not read again); otherwise it is downloaded and copied through the gate |
+| a copied file was trusted when its size matched | its hash on the target must equal the source's, or it is copied again over itself, up to `copy_max_retry` |
+| the copy's answer: copied / skipped / failed counts | the same, plus `restore_run_id` and the gate's `integrity` summary (verdict counts, `proven`, the reasons a file is not) |
+
+A file not proven makes the copy `FAILED`, so the workflow stops before any `RESTORE`. The catalog's
+`restore_runs` row goes `copying` -> `verified` (or `refused`, with the reasons), and the workflow
+closes it `done` or `error` with the restore's own outcome. An entry with no `integrity` block is
+refused before anything is copied (R50). Until a source's backups are catalogued - the backups taken
+from 0.34.0 on - a file already staged is downloaded again on each run: correct, and slower for a
+while.
+
+**A Windows node's copy (1.213b)** - share to share (`share`) or path to path (`python`) - goes
+through the same gate since 0.34.0; `checksum_gate=off` is gone, and no engine copies without an
+`integrity` block. Both sides are paths this node reads, so both are hashed here: the target as the
+share serves it, which is what the restore reads. A file at the source's size is skipped only when its
+hash is its backup's recorded checksum; every copy goes to `<name>.dbabrain_partial` and is renamed
+over the real name (`os.replace`). `--force` skips nothing on the catalog's word; the gate still
+leaves a target already equal to the source alone. The attempts name the engine (`share` / `python`).
+
+**A script-driven restore's copy between two hosts (1.213b)** - PostgreSQL, Oracle, container SQL
+Server, everything `restore_by_id` and `run_script_restore` stage - goes through the same gate
+(`restore_script._copy_gated_between_hosts`):
+
+1. `copy-backup-dir` with `plan_only` names the files the request selects, read from the source.
+2. `copy_verified_batch` hashes them with `file-checksum`: the sources on the source host, the targets
+   on the target host, one call each per round.
+3. Each round's copies are one `copy-backup-dir` - the request as asked, plus `replace` naming the
+   files still to copy, so a same-size copy with other bytes is copied over.
+
+A run with nothing to copy still makes one plain copy call, for the mirror, the marker and the
+engine's read access. A stored checksum is used only at the path the backup recorded it (a rebuilt
+PostgreSQL cluster names its WAL from `...0001` again, and every base backup has a
+`backup_manifest`); a file no backup recorded follows the entry's `uncatalogued`. The file type is
+the catalog's when the backup recorded the file, else read from the layout (`base/`, `wal/`, RMAN
+piece names). A copy not proven raises `CopyNotProvenError` - no restore runs - and its run row ends
+`refused`. `restore_by_id` takes the `catalog` (the scheduled workflow and `restore-by-id` open it)
+and closes the row `done` / `error` with the restore, through `copy_gate.close_restore_runs`, which
+the share-driven workflow uses too. `run_script_restore` gates without a catalog: it decides, and
+records nothing.
+
+**Every restore has a run row (1.214).** Both paths, to the end.
+
+- The share-driven workflow and `restore_by_id` move each `restore_runs` row
+  `verified` -> `restoring` -> `verifying_db` -> `done` (or `error`).
+- The row gets `job_run_id` (the scheduler's row), `point_in_time` (`LATEST` or the moment) and
+  `databases_ok` / `databases_failed` from `verify-restore`. The counts are written before a failed
+  check raises.
+- A script restore in place copies nothing and has no gate, so it starts its own row
+  (`_start_unstaged_run`, no files).
+- Every write goes through `copy_gate.record_run`, which never fails a restore for its record.
+- `backup_restore_history` (per database, read by drill status and the SLA) is written as before;
+  turning it into a view over `restore_runs` is left to the operator.
+
+## Copy only: from `server_id` to the target, proven, nothing restored (0.34.0, 1.216)
+
+A restore entry keeps its format and gains one field, **`action`**: `restore` (copy, gate, RESTORE,
+verify, cleanup - what every entry always did) or `copy_only` (the same copy from the entry's
+`server_id` to its target, the same checksum gate, then stop). It is required, like `integrity`:
+`upgrade-config` (`stated-integrity`) and `restore-add` write `"restore"`, check-objects counts an
+entry without it, and the scheduler refuses such an entry inside its own run rather than read it as
+a restore (R50).
+
+| Way | What runs |
+| --- | --- |
+| Schedule | an entry with `"action": "copy_only"`, on its own `time_window` |
+| By hand, one run of any entry | `restore-workflow --restore-id <id> --copy-only` - whatever the entry states |
+| By hand, an entry that says so | `restore-workflow --restore-id <id>` - an entry stating `copy_only` copies only |
+| Bot | `/spbot_copy_backup <restore_id> <LATEST\|moment>` - `/spbot_restore` with `--copy-only`, the same clearance |
+
+What a copy-only run does, on both paths (share-driven SQL Server, and script-driven PostgreSQL /
+Oracle / container SQL Server through `restore_by_id`):
+
+- the preflight and its room check as the entry states them, then the copy through the gate;
+- **nothing on the target instance**: no RESTORE, no verify, no instance metadata replayed before or
+  after;
+- **no staging cleanup** - the staged chain is the product (the keep-the-newest-chain rule, plan D8,
+  is not built yet, so a scheduled copy-only entry keeps everything it was given);
+- the catalog's `restore_runs` row has `action = copy_only` and ends `copied`;
+- the messages say *Copy only <id> started.* and *... finished: done. Nothing restored - the files
+  are staged and proven on the target.*
+
+**It never counts as a drill.** Drill status and the SLA read `backup_restore_history`, which only
+the RESTORE step writes, and a copy-only run returns before it.
+
+A script entry that restores in place (no `target_server_id` other than the source) is refused: the
+target reads the source's own folder, so nothing travels. On the command line, one run either
+restores or it does not: entries that disagree on `action` are refused together - run them one at a
+time.
+
+## Which databases a backup job takes: `databases` (0.34.0)
+
+Every backup job states, as a restore entry does (`database_mappings` / `restore_all_databases`):
+`"databases": ["HR", "SALESDB"]` with `"all_databases": false`, or `"databases": []` with
+`"all_databases": true` for every user database. Both are mandatory (`dbabrain/lib/backup_scope.py`).
+The app hands the list to the script (`MSSQL_DATABASES`, the script's own input), so naming it in
+`env` as well is refused - until 0.34.0 the names were a comma string there, which the operator
+ruled out on 2026-10-30. `upgrade-config` (`stated-integrity`) moves an existing
+`env.MSSQL_DATABASES` into the list; a job that named none takes every user database, as its script
+did. A PostgreSQL, Oracle or MySQL backup takes the whole cluster / instance:
+`all_databases: true`, and `backup-add` states that for them.
+
+## Where a backup goes after it is written: the `offload_*` fields (0.34.0)
+
+The operator, 2026-10-30: each run's files go to a repository (a shared folder or another VM),
+proven by checksum + bytes there as a restore's copy is, optionally scanned, and only then deleted
+on the database server; a restore may read from the repository. Every field is **mandatory on every
+entry** (R50) - `upgrade-config` (`stated-integrity`) and `backup-add` / `restore-add` write the
+values that keep today's flow - and the rules are `dbabrain/lib/offload.py`.
+
+| Field (backup entry) | Written as | Meaning |
+| --- | --- | --- |
+| `offload_enabled` | `false` | copy every run's files to the repository |
+| `offload_server_id`, `offload_folder` | `""` | the repository by `server_id`, and its folder - required when enabled |
+| `offload_copy_max_retry` | `3` | copies again on a checksum or size difference, 0 - 10 |
+| `offload_scan` | `"none"` | `none` / `clamav` on the repository |
+| `offload_delete_source` | `false` | delete on the server only after the copy is proven (and clean); refused on Oracle and without `offload_enabled` |
+| `offload_source_share`, `_username`, `_password_ref` | `""` | a Windows source read over SMB; the three together |
+| `offload_retention_full`, `_diff`, `_log` | `0` | how long the repository keeps a copy, in seconds, by its file type's level (FULL / base / RMAN L0 with the control file and spfile; DIFF / incremental / RMAN L1; LOG / WAL / archivelog); 0 keeps it for good. A certificate is never expired |
+| `offload_files_per_pass` | `100` | catalog rows one pass takes per entry, 1 - 10000 (`offload --limit` overrides it for one run) |
+| `offload_copy_retry_interval_seconds` | `30` | the pause between two copies of one file inside a run, 0 - 3600 |
+| `offload_retry_interval_seconds` | `3600` | a `failed` copy waits this long before a later pass tries it again, 0 and up |
+| `offload_run_timeout_seconds` | `86400` | a run's `RUNNING` row is reaped as dead after this, 60 and up (a live process on this host keeps its claim) |
+| `offload_copy_timeout_seconds` | `86400` | one `copy-files` call - one round of copies - 60 and up |
+| `offload_hash_timeout_seconds` | `21600` | one `file-checksum` call on the source or the repository, 60 and up |
+| `offload_stall_seconds` | `300` | a read or write of one file that stops moving this long fails that file, 10 - 86400 |
+
+The seven run fields came on 2026-10-31 (the operator: *every config complete and usable, dynamic,
+nothing hard-coded*): the pass has no number of its own left. A value out of its range is refused by
+name when the entry is read; `upgrade-config` writes the seven into an entry that lacks them.
+
+A restore entry states **`restore_from`**: `server` (written; the source's own folder, as before)
+or `repository` (only the offload's proven copies - see *Restoring from the repository* below).
+
+### The repository copy (1.240, 1.246, 1.247 - `dbabrain/backup_restore/offload.py`)
+
+**A pass of its own.** The scheduled `workflow` runs the backups, then the restores, then
+`run_offloads` (`--skip-offload` leaves it for the next pass; `backup_restore.cli offload
+[--backup-id] [--dry-run] [--limit N]` runs it alone). It is not a step inside the backup run. A
+500 GB FULL takes hours to cross the network: inside the run it would hold the backup job's claim,
+and so the next LOG backup, for all of them. And a repository that is down would turn every backup
+red. An entry with nothing to copy, release or expire writes nothing at all, so a pass every second
+costs a few catalog reads per entry.
+
+**One run per entry at a time.** Each entry has its own claim, `backup_restore.offload_job.<backup_id>`
+in `job_runs`, and a run that dies is reaped like a backup's, after `offload_run_timeout_seconds`. Each run is also an **`offload` run in the catalog** (`restore_runs.action`,
+with its `restore_run_files` and `copy_attempts`). That run is never a restore, never a drill, and
+never marks a file as used.
+
+**What it copies.** Every catalogued file of the entry still on its server with verdict `ok` and no
+verified copy yet. That includes files written before the offload was turned on, because a
+repository holding tonight's LOGs without the FULL under them restores nothing. The oldest go first,
+a full before what depends on it, at most `offload_files_per_pass` per pass. A backup written while
+the entry offloads is recorded `offload_state = pending`. A `failed` copy is tried again only after
+`offload_retry_interval_seconds` - filtered in the query, so failures waiting out their pause never
+fill the batch.
+
+**Where a copy goes.** `<offload_folder>/<server_id>/<path under backup_dir>` - the server's own
+layout, so a restore from the repository reads what it would read on the server. A file outside the
+backup folder goes under its database (or type).
+
+**How it is proven - the copy gate, as a restore's copy is:**
+1. The source is hashed on its own server (a Windows server through WinRM, at its own path) and held
+   to the checksum its backup recorded. A changed backup is never copied.
+2. The copy travels by `common.cli copy-files`: SFTP from a Linux server, the
+   `offload_source_share` from a Windows one.
+3. It is hashed on the repository and held to the source's checksum **and size** (1.245).
+4. A copy that is not equal is copied again, up to `offload_copy_max_retry` times, after
+   `offload_copy_retry_interval_seconds`.
+
+A base backup (a directory) is copied file by file. Its `backup_manifest` is held to the checksum
+the backup recorded; the other files are compared against the source as it is now.
+
+**`verified`** (1.247) means all of that held. The row then names the copy - `offload_server_id`,
+`offload_path`, the `offload_run_id` that proved it, `offload_verified_at` - and a
+`backup_file_checks` row (`checked_by offload`, `location repository`) keeps the repository's hash.
+A repository check never rewrites the source's own latest-check columns. A copy that cannot be proven
+is `failed`, with `offload_error`, and its source is untouched. A file gone from its server before
+its copy is marked `missing` and is not tried again.
+
+**The source is released only on proof** (1.246, with `offload_delete_source`):
+- the repository copy is hashed **again** right before the delete; a copy that changed or vanished
+  since it was proven turns `failed`, and its source is kept and copied again;
+- the **newest chain of each database stays on the server** - everything from the START of its
+  newest full's run, so a LOG or WAL written while that full ran stays with it - and the server can
+  still restore its latest point by itself, and an incremental keeps its base (plan D8's proposed
+  answer). A database with no full on the server releases nothing. The rule is in the catalog's
+  query (`files_to_release`), so a file that may never be released is never offered, and a pass
+  with nothing to release writes nothing;
+- a base backup directory is never deleted here; the script's chain retention owns it;
+- the delete is `common.cli delete-files`, fenced (`must_be_under`) to the entry's backup folder as
+  the host names it. The row turns `pruned` with `source_deleted_at`.
+
+The store holds three rules itself. A `verified` copy must name its place, run and time. An
+`expired` copy must have been verified and say when it expired. And `source_deleted_at` is accepted
+**only for a copy that was verified** (`verified`, or later `expired`). They are enforced on every
+backend by the store class, and on PostgreSQL also as constraints.
+
+### The repository's retention (`offload_retention_full` / `_diff` / `_log`)
+
+The operator, 2026-10-31: *each file type's retention in the repository comes from config*. Every
+pass asks `expiry_plan` which verified copies have outlived it - only when some level is not 0 - and
+`prune_repository` deletes them. Per database:
+1. **A copy goes by its own level's age** - `retention_of(file_type)` seconds after its backup
+   ended; 0 keeps that level for good.
+2. **Never the newest chain** - nothing from the start of the newest full's run on, so the
+   repository can always restore its latest point, whatever the numbers say.
+3. **A full is the floor of its chain** - it expires only when every DIFF and LOG that depends on it
+   (after it, before the next full) expires too; otherwise it is kept, and the run says why.
+4. **A certificate never expires there** - every encrypted backup made with it needs it.
+
+The delete is `delete-files` on the repository, fenced to `<offload_folder>/<server_id>`; a base
+backup is deleted file by file (its emptied folder stays - `delete-files` removes files, never
+trees). The row turns `expired` with `offload_expired_at`: it proves nothing any more, is never
+copied again, and a restore from the repository no longer uses it. The server's own copy is not the
+repository's to touch.
+
+**Refused by name, not half-done** (the run fails and says why):
+- `offload_scan: clamav` - the scanner is 1.242 / V-3, so no copy can be called scanned;
+- a repository that is the backup's own server, or that is not an SSH (Linux) host;
+- a Windows source without `offload_source_share`.
+
+### Restoring from the repository (`restore_from: repository`)
+
+For the script-driven PostgreSQL and SQL Server restores onto another server
+(`restore_script.REPOSITORY_ENGINES`):
+- **The folder is found from the catalog.** The repository keeps the server's layout, so a verified
+  copy's path and its file's path on the server end the same way. `repository_source` translates the
+  entry's `source_backup_host_dir` through that common ending. No entry is looked up. A server whose
+  copies went to two repositories, or that has none under that folder, is refused by name.
+- **The repository host is the copy's source**: `backup-chain` reads the chain there, and
+  `copy-backup-dir` copies from there to the target's staging, through the copy gate.
+- **Every file is held to what its offload proved.** `repository_proofs` takes the offload runs' own
+  file rows - each repository path, the checksum and size it was proven at - so a member of a base
+  backup has its proof too. Only copies still `verified` count; an expired one proves nothing.
+- **Anything else on the repository is refused**: the entry's `integrity.uncatalogued` is `refuse`
+  for this run, whatever it states for its server. A file that changed since its offload is
+  `source_mismatch`. Nothing is restored from an unproven copy.
+- `copy-backup-dir` never selects a `<name>.dbabrain_partial` - a copy that died half way is not a
+  backup, on a repository or anywhere.
+- The run's file rows name the repository as their source server. The backup files they came from
+  are marked as used, as from the server.
+
+**Refused by name:** a share-driven SQL Server entry (that path reads a Windows share; the repository
+is an SSH host), Oracle (RMAN catalogs its own pieces - a later item), and an in-place entry (it
+copies nothing, so it would read the server's own folder).
+
+**Catalog schema 2** adds the columns above to `backup_files`, the `offload` run action, the
+`repository` check location, and a proven copy's size held to its source's. **Schema 3** adds
+`expired`, `offload_expired_at` and `ck_backup_files_offload_expired`, and makes `offload_state`'s
+list CHECK a named one. An older catalog is brought up in place by `_migrate`:
+- on PostgreSQL, everything is added; each list CHECK and each added rule is dropped and added again
+  with today's text. The size rule is added `NOT VALID`, so it is held for new rows and not
+  re-proven over old ones. Schema 2 was tried on the live store inside a transaction and rolled back
+  (2026-10-31), then reached for real at 2.87.56's first backup;
+- on SQLite, only the columns are added; no older SQLite catalog exists outside a test.
 
 ## Where a backup actually runs (since 2026-08-07)
 
@@ -791,7 +1151,7 @@ Three things a second entry against the same source must get right:
   ~190 logs each.
 
 **Not every database is eligible.** Measured on 2.248 on 2026-08-13, the Agent tree had no log
-for `APPDB` or `DtradeProduction` and no full at all for `APPDB`. Eleven databases had a complete
+for `APPDB` or `SALESDB` and no full at all for `APPDB`. Eleven databases had a complete
 current chain; those are the ones the entry names.
 
 **Do not close the gap by adding a LOG job to dbabrain instead.** A log backup *truncates* the
@@ -1154,6 +1514,66 @@ it. Two consequences bite immediately after a drill and neither is a failure of 
 
 So a drill is verified against the *source's* credentials, and "cannot log in to the target with the
 target's stored password" after a restore is the expected outcome, not a finding.
+
+## Every backup run in the catalog (0.34.0)
+
+The scheduled `backup` pass writes each run - a failed one too - into the backup catalog
+(`backup_runs` + `backup_files`, `docs/01_runtime_store.md`) from the files `backup-database`
+answered (`docs/13_common.md`, *`files`*): the server, the database, the file's name, type, path and
+size, `checksum_after_backup`, the engine's verdict, and the FULL a DIFF or LOG belongs to.
+`record_in_catalog` in `backup.py`.
+
+Two outcomes are new, both on the operator's rule (2026-10-29: *every run is saved and verified*):
+
+- **A file left unverified makes the run an error** - no hash, or the engine's check failed. The
+  message names it: `written but not verified: APPDB_FULL_...bak (hash_failed)`.
+- **A catalog that cannot be written makes the run an error**, the reason on the run row. A backup
+  that ran and was not recorded is not one a restore can find.
+
+### Is the file still there, and still the same? `verify-backup-files`
+
+```bash
+python -m dbabrain.backup_restore.cli verify-backup-files [--backup-id ID] [--server-id ID] [--limit 500]
+```
+
+Read-only on the servers. The catalogued files checked longest ago (or never) come first; each is
+hashed on its own server at its `host_path` - the server's own path, so a stopped container does not
+stop the check - through `common.cli file-checksum` (a PostgreSQL base backup through its
+`backup_manifest`, whose hash is the one stored), and the catalog holds the answer to the checksum it
+stored: `on_disk`, `checksum_matches`, `state`. The answer lists `mismatch` - a backup changed after
+it was written - and `missing`, and exits 1 when there is either; a file in no mount of its
+container, or an entry no longer configured, is `skipped` with the reason. The scheduled scrub
+(1.218) is this, run every cycle.
+
+A verified run says so: `... finished: done - 3/3 file(s) hashed and verified`, and the run row's
+metadata carries `catalog` (`backup_run_id`, `files`, `verified`, `unverified`, `level`). A
+PostgreSQL job is handed `CATALOG_AFTER`, the newest WAL segment the catalog holds for that entry,
+so the WAL job lists exactly what is new.
+
+### The backups taken before the catalog: `catalog-backfill` (1.215)
+
+```bash
+python -m dbabrain.backup_restore.cli catalog-backfill --backup-id ACME_MSSQL_SALES_FULL            # dry run
+python -m dbabrain.backup_restore.cli catalog-backfill --backup-id ACME_MSSQL_SALES_FULL --apply
+```
+
+A backup taken before 0.34.0 has no catalog row, so a restore's gate has nothing to hold it to: it
+compares the copy with the source (`uncatalogued: compare_copy`), or refuses it (`refuse`). The
+backfill does three things:
+
+1. It hashes every file in each folder the entry's jobs write to, **on the server itself**, with one
+   `file-checksum` call per folder in its `folder` form, through the container's mounts when there
+   is one.
+2. It leaves out what the catalog already holds, and any file modified in the last 10 minutes
+   (`BACKFILL_SETTLE_SECONDS`), which may be a backup still being written.
+3. It records the rest with `baseline = 'backfill'` and `engine_verify = 'not_run'`. Each file's
+   type and database come from the scripts' layout `<DB>/FULL|DIFF|LOG/`, and `_cert/` is CERT.
+
+A backfilled checksum proves the file has not changed since the backfill, not that it was good when
+written; the row says which it is. The command is a dry run unless `--apply`, and a second pass
+writes nothing new. Only SQL Server so far: a PostgreSQL base backup is a directory catalogued by
+its `backup_manifest`, and an RMAN piece is typed by its tag. Each needs its own rules, and the
+command refuses those engines by name.
 
 ## What `RESULT=ok` Proves — Liveness Is Not Enough
 
@@ -1778,6 +2198,14 @@ OOM. Before it, the row stayed RUNNING forever and the operator saw the last ste
 succeeded followed by silence. All entries are considered, not only the due ones, and a
 stale row is still reaped after a newer run has overtaken it (it is no longer the latest row
 for its `job_code`, but it is still open).
+
+**It writes only a row that still says RUNNING (0.34.0).** The pass reads the open rows first and
+decides about each one afterwards; a run that finished in between has written its own verdict and
+exited, and its pid being gone is then the end of the run, not its death. The write was
+unconditional until 0.34.0, and twice a restore that had finished and verified was left `TIMEOUT`,
+with a timeout alert, by a pass that wrote in the same second (a lab Oracle restore on 2026-10-18,
+a lab PostgreSQL one on 2026-10-19). `update_job_run(..., only_if_running=True)` is a compare-and-set;
+a row it did not write is neither reported nor alerted.
 
 The reaper **does not stop anything**. Process control belongs to the daemon, which already
 kills a command that overruns its own timeout; stopping a restore mid-`RESTORE DATABASE`

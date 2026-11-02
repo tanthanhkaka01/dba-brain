@@ -1215,7 +1215,27 @@ def _filter_rows_for_reports(rows: list[object]) -> list[object]:
     if not targets:
         return rows
     reports_enabled_by_id = {str(target.target_id): bool(getattr(target, "reports_enabled", True)) for target in targets}
-    return [row for row in rows if reports_enabled_by_id.get(str(row["target_id"] or ""), True)]
+    silenced_by_id = {str(target.target_id): _report_disabled_metric_codes(target) for target in targets}
+    return [row for row in rows
+            if reports_enabled_by_id.get(str(row["target_id"] or ""), True)
+            and row_text(row, "metric_code").upper()
+            not in silenced_by_id.get(str(row["target_id"] or ""), frozenset())]
+
+
+def _report_disabled_metric_codes(target: object) -> frozenset[str]:
+    """``report_policy.disabled_metric_codes``: metrics collected on this target and not alerted on.
+
+    The per-target twin of ``collect_only``. Until 0.34.0 the collector read the list too, and a
+    code put there for a noisy alert stopped being collected - the store and the server page lost
+    it with the alert (0.31.0 sheet 1.189). Now the reports read it, here and in the SLA's scope
+    (``sla.compliance``), and collection does not.
+    """
+    raw = getattr(target, "raw_config", None)
+    policy = raw.get("report_policy") if isinstance(raw, dict) else None
+    codes = policy.get("disabled_metric_codes") if isinstance(policy, dict) else None
+    if not isinstance(codes, list):
+        return frozenset()
+    return frozenset(str(code or "").strip().upper() for code in codes if str(code or "").strip())
 
 
 def _target_alerts_enabled(target_id: str) -> bool:

@@ -37,7 +37,7 @@ import posixpath
 import shlex
 import stat
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -71,11 +71,15 @@ class TransferResult:
     # What the space check measured before the first byte moved - ``None`` when there was nothing
     # to copy, or no rule was given.
     space: dict[str, Any] | None = None
+    # Every file the request selected, copied or not, as ``(relative path, size)`` (0.34.0, 1.213b):
+    # the caller's checksum gate hashes each one on both hosts, and it cannot hash what it is not told.
+    files: list[tuple[str, int]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         answer = {"copied": self.copied, "skipped": self.skipped, "bytes_copied": self.bytes_copied,
                   "removed_absent_at_source": self.removed,
-                  "copy_mode": self.copy_mode, "copy_fell_back": self.fell_back}
+                  "copy_mode": self.copy_mode, "copy_fell_back": self.fell_back,
+                  "files": [{"path": rel, "size_bytes": size} for rel, size in self.files]}
         if self.space is not None:
             answer["space_check"] = self.space
         return answer
@@ -461,6 +465,48 @@ def check_room(target_session, target_dir: str, pending: list[tuple[str, int]],
             "factor": verdict.factor, "detail": verdict.text}
 
 
+def _selected(files: list[tuple[str, int]], dirs: list[str], mtimes: dict[str, int], *,
+              include: tuple[str, ...], window_since: float | None) -> tuple[list[tuple[str, int]], list[str]]:
+    """The files and directories a request selects from a source listing: ``include``'s prefixes,
+    widened by the window. One rule for the copy and for :func:`plan_backup_dir`, so the files a
+    gate is told about are the files the copy moves.
+
+    A ``<name>.dbabrain_partial`` is never selected: it is this tool's own name for a file still being
+    written (``copy-files``, ``relay-file``), and one left by a copy that died is not a backup - on a
+    repository it would otherwise be staged beside the real files (0.34.0)."""
+    from dbabrain.common.ssh_relay import PARTIAL_SUFFIX
+
+    files = [(rel, size) for rel, size in files if not rel.endswith(PARTIAL_SUFFIX)]
+    if not include:
+        return files, dirs
+
+    # The chain, and - for a window copy - every file written inside the window. A window
+    # never narrows the chain: the restore always finds the backups it is going to apply.
+    def kept(rel: str) -> bool:
+        if rel.replace("\\", "/").startswith(include):
+            return True
+        return window_since is not None and mtimes.get(rel, 0) >= window_since
+
+    files = [(rel, size) for rel, size in files if kept(rel)]
+    parents = {posixpath.dirname(rel.replace("\\", "/")) for rel, _size in files}
+    ancestors = {"/".join(p.split("/")[:n]) for p in parents for n in range(1, p.count("/") + 2) if p}
+    dirs = [rel for rel in dirs
+            if rel.replace("\\", "/").startswith(include) or rel.replace("\\", "/") in ancestors]
+    return files, dirs
+
+
+def plan_backup_dir(*, source_session, source_dir: str, include: tuple[str, ...] = (),
+                    window_since: float | None = None) -> TransferResult:
+    """What :func:`sync_backup_dir` would select, read from the source alone - no target is opened.
+
+    The checksum gate (0.34.0, 1.213b) hashes every file before anything is copied; this is how it
+    learns which files those are without the copy moving them first."""
+    mtimes: dict[str, int] = {}
+    files, dirs = _walk_remote(source_session.sftp(), source_dir, mtimes)
+    files, _dirs = _selected(files, dirs, mtimes, include=include, window_since=window_since)
+    return TransferResult(files=sorted((rel.replace("\\", "/"), size) for rel, size in files))
+
+
 def sync_backup_dir(
     *,
     source_session,
@@ -473,6 +519,7 @@ def sync_backup_dir(
     space_check: restore_space.SpaceCheck | None = None,
     window_since: float | None = None,
     marker: str = STAGING_MARKER,
+    replace: tuple[str, ...] = (),
 ) -> TransferResult:
     """Copy ``source_dir`` to ``target_dir`` on another host, skipping identical files.
 
@@ -485,6 +532,8 @@ def sync_backup_dir(
     window``: the chain, and every other restore point of the window. ``copy_mode`` is one of
     :data:`COPY_MODES`; the result says which way the files went. ``space_check`` is the rule the
     files to copy are held to before the first one moves (:func:`check_room`); ``None`` asks nothing.
+    ``replace`` names relative paths copied even when the target holds them at the same size and not
+    older: a copy the caller's checksum gate found different, which size and time cannot see.
     """
     if copy_mode not in COPY_MODES:
         raise ValueError(f"copy_mode must be one of {', '.join(COPY_MODES)}, got: {copy_mode!r}")
@@ -496,19 +545,9 @@ def sync_backup_dir(
     files, dirs = _walk_remote(source_sftp, source_dir, source_mtimes)
     at_source = {rel.replace("\\", "/") for rel, _size in files}
     dirs_at_source = {rel.replace("\\", "/").rstrip("/") for rel in dirs}
-    if include:
-        # The chain, and - for a window copy - every file written inside the window. A window
-        # never narrows the chain: the restore always finds the backups it is going to apply.
-        def kept(rel: str) -> bool:
-            if rel.replace("\\", "/").startswith(include):
-                return True
-            return window_since is not None and source_mtimes.get(rel, 0) >= window_since
-
-        files = [(rel, size) for rel, size in files if kept(rel)]
-        parents = {posixpath.dirname(rel.replace("\\", "/")) for rel, _size in files}
-        ancestors = {"/".join(p.split("/")[:n]) for p in parents for n in range(1, p.count("/") + 2) if p}
-        dirs = [rel for rel in dirs
-                if rel.replace("\\", "/").startswith(include) or rel.replace("\\", "/") in ancestors]
+    files, dirs = _selected(files, dirs, source_mtimes, include=include, window_since=window_since)
+    result.files = sorted((rel.replace("\\", "/"), size) for rel, size in files)
+    forced = {rel.replace("\\", "/") for rel in replace}
     # Created before it is walked. The walk refuses a directory it cannot list - rightly, on
     # the source - and a target folder a first run has not made yet is exactly that, so every
     # new cross-machine restore failed its first run with "[Errno 2] No such file".
@@ -582,7 +621,8 @@ def sync_backup_dir(
         # replayed the old cluster's WAL: "WAL file is from different database system",
         # a target crash-looping (2026-09-24). The tar stream keeps each file's time, so a
         # repeat run still skips what it sent before.
-        if existing.get(rel) == size and not _older(target_mtimes.get(rel), source_mtimes.get(rel)):
+        if (rel.replace("\\", "/") not in forced and existing.get(rel) == size
+                and not _older(target_mtimes.get(rel), source_mtimes.get(rel))):
             result.skipped += 1
             continue
         pending.append((rel, size))

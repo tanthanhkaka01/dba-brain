@@ -355,7 +355,11 @@ Read `PERFORMANCE_IO_LATENCY` with that in mind. `019_sqlserver_io_latency.sql` 
 grades itself on that average, at **200 ms warning / 500 ms critical** — so it catches a file that
 has been slow for as long as the instance has been up, and it does not catch a spike. The raw
 counters (`io_stall_read_ms`, `io_stall_write_ms`, `reads`, `writes`, `counters_since`) are still
-carried through to the message for anyone diagnosing by hand.
+carried through to the message - and from 2026-10-26 the report pages difference them into the last
+hour, which is what they grade (`docs/06`, *Disk latency and page life expectancy*); the collector
+itself is unchanged. Oracle's two variants (`v$filestat`, 9i+ and 8i) write the same five fields
+from that day, the stall in milliseconds (`readtim` / `writetim` are centiseconds, and stay 0 where
+`timed_statistics` is off - as on the estate's 8i servers).
 
 ### `PERFORMANCE_WAIT_STATS` samples its own interval
 
@@ -674,7 +678,10 @@ execution failure**, never a connection one: the louder claim is never made on a
 **Per-target tuning still wins.** `metrics.severity_map` (target-level, metric-level or item-level
 in `db_instances.json`) is applied *after* this grading, so an instance that is *expected* to
 refuse every connect — a mounted Data Guard physical standby answering ORA-01033 — can be remapped
-to `LOGGING` without weakening the metric for the rest of the estate.
+to `LOGGING` without weakening the metric for the rest of the estate. The target-level map is
+written by `common.cli metric-severity` with `"metric_code": "*"` (2026-10-22, for two lab VMs the
+operator switched off), with its reason in `metrics.severity_map_note`; a metric's or an item's own
+map still wins over it key by key.
 
 Today only `INSTANCE_STATUS` is `CRITICAL`/`CRITICAL`; every other metric in the catalog is
 `WARNING`/`WARNING`. `INSTANCE_STATUS` is one multi-engine metric with SQL Server, Oracle, MySQL
@@ -751,6 +758,13 @@ three concerns, kept separate so nothing is double-collected:
    every pass for months after one restart. Since 0.26.0 it is WARNING while the current run started
    less than `DOCKER_RESTART_WARN_MINUTES` ago (default 60; set it in the target's `collector_env`),
    and OK after - the count still in the message (review 0.25.0, F3.4).
+   **What 100 % is, and the disk (2026-10-26).** `docker stats` counts CPU in CPUs, so the `:cpu`
+   row carries `cpus` and `cpus_basis` - the container's `--cpus`, its CPU quota, its cpuset, else
+   the daemon's `NCPU` with no limit set (`limit_cpus` / `limit_cpu_quota` / `cpuset_<list>` /
+   `host_no_limit`, one token so the message reads back) - and a `:cpu_share` row is that share,
+   WARNING >= 80 %, CRITICAL >= 90 %. Each mount's volume is read with `df` inside the container,
+   one row per filesystem (`<container>:disk:<mount>`: `total_gb`, `used_gb`, `free_gb`,
+   WARNING >= 85 %, CRITICAL >= 95 %); a container with no `df` writes none.
 3. **SQL as usual** — the DB target still collects its `sql` metrics over its published port.
 
 So a DB-in-Docker target collects `sql` + `docker`; the shared host OS lives on the VM target;
@@ -1142,10 +1156,14 @@ Oracle metrics under `dbabrain/metrics/collectors/oracle/legacy_8i/`. Two rules 
   `DATABASE_USER_PERMISSIONS`, `DATABASE_CONSTRAINT_HEALTH`, `MAINTENANCE_INDEX_FRAGMENTATION` and
   `MAINTENANCE_STATISTICS_AGE` all running and failing every cycle. Set it; the four version-bounded
   ones then skip cleanly.
-- **The RMAN metrics have no version bound to skip on.** `BACKUP_AGE` / `BACKUP_LAST_RESULT` use
-  an `oracle_rman` variant that claims every release, and their SQL is written for the 9i+ RMAN
-  views (ORA-00933 / ORA-00900 on 8i). Turn them off per target with
-  `report_policy.disabled_metric_codes`.
+- **The RMAN metrics skip an instance older than 10g (0.34.0).** `BACKUP_AGE` /
+  `BACKUP_LAST_RESULT` read `v$rman_backup_job_details`, which exists from 10g Release 2. Their
+  one Oracle variant used to claim every release, so the SQL failed with ORA-00933 / ORA-00900
+  every cycle on 8i and each 8i record switched the two metrics off for itself. The catalogue now
+  bounds `oracle_rman` to `min_major_version` 10 and gives older releases an unsupported variant
+  with its reason, as `JOB_FAILED` has - every 8i skips them with nothing to set. (The estate's
+  three 8i records also carry `metric_overrides.<CODE>.enabled: false` with a `disabled_reason`,
+  written before the bound; it is harmless.)
 
 Beyond the ported core, these exist only for 8i because the failure they describe only exists
 there: `SEGMENT_EXTENT_LIMIT` (a dictionary-managed segment hits `MAX_EXTENTS` and fails with
@@ -1181,8 +1199,19 @@ PostgreSQL support (added for the SRE lab DBs) currently collects a core set: `I
 |---|---|---|
 | `metrics.enabled: false` | `db_instances.json` | Collect nothing at all from this target. |
 | `metrics.disabled_collector_types: ["cmd"]` | `db_instances.json` | **A whole class of collector.** `cmd` = every OS metric, `sql` = every database metric. Use it when the target has no OS to log into (a database in a container) — listing the OS metric codes one by one means every OS metric added *later* starts producing noise until someone remembers to extend the list. An unknown value (`["command"]`) raises rather than silently collecting everything. |
-| `report_policy.disabled_metric_codes: ["BACKUP_AGE"]` | `db_instances.json` | One named metric. |
-| `metric_overrides.<CODE>.enabled: false` | `db_instances.json` | Same, next to that metric's other overrides. |
+| `metric_overrides.<CODE>.enabled: false` | `db_instances.json` | One named metric, next to its other overrides. Say why with `disabled_reason` (`metric-toggle` with `reason`, 0.34.0); switching it on clears it. |
+
+**`report_policy.disabled_metric_codes` is not on this list (0.34.0).** It keeps one metric's
+alerts out of the reports on one target - the per-target twin of `collect_only` - and the metric is
+still collected and stored, so the server page, the inventory and the charts keep it. Until 0.34.0
+the collector read it as well, and a code put there for a noisy alert stopped being collected:
+One SQL Server had listed its nine `OS_*` codes since its `cmd_access` was `local`, kept them after SSH
+worked, and its CPU tile could name no socket and its memory tile not the host's RAM (0.31.0 sheet
+1.189). The six records whose lists were collection switches were rewritten through `metric-toggle`
+the same day: the `OS_*` codes taken off (a target without host access skips them by itself) and
+the Oracle 8i records' `BACKUP_AGE` / `BACKUP_LAST_RESULT` switched off with their reason.
+`reports.metrics_reports._filter_rows_for_reports` applies the list; the SLA app still leaves a
+policy out of scope on a target where every metric it reads is listed.
 
 A `cmd` metric is also skipped automatically when the target has no `cmd_access` at all — an OS metric needs a way onto the host, and not having one is "not applicable", not a failure.
 
@@ -1333,7 +1362,7 @@ Fourteen OS metric codes exist under `category: "os"`:
 | Code | Rows it returns |
 | --- | --- |
 | `OS_INFO` | `os_name` (family/edition/version/build/architecture in the message), `hostname`, `timezone`, `last_boot_time` (+ `uptime_seconds`) |
-| `OS_CPU_USAGE` | `cpu_usage` % (+ model/sockets/cores/logical_cpus), and `load_average` on Linux / `processor_queue_length` on Windows |
+| `OS_CPU_USAGE` | `cpu_usage` % (+ model, sockets, cores, `cores_per_socket` and `logical_per_socket` counted socket by socket - a VM's sockets need not be alike - and logical_cpus), and `load_average` on Linux / `processor_queue_length` on Windows |
 | `OS_MEMORY_USAGE` | `memory_usage` % of **physical** memory (+ total/used/available GB), and `swap_usage` / `pagefile_usage` |
 | `OS_DISK_USAGE` | one row per mount/drive: used % (+ total/used/free GB, free %, filesystem, label), plus **host-wide** IO rows — `disk_read_kbps` / `disk_write_kbps` on both, `disk_iops` on Linux, `disk_queue_length` on Windows (see below) |
 | `OS_NETWORK` | one row per interface: IP address (+ link, speed, bytes sent/received, errors, dropped) |
@@ -1344,6 +1373,36 @@ Fourteen OS metric codes exist under `category: "os"`:
 | `OS_EVENTLOG_CRITICAL` | Windows: one row per event log with the count of Critical/Error events in the window. Linux: journald priority ≤ 3. Both read at most `OS_EVENTLOG_MAX_EVENTS` (500) newest events — see below |
 | `OS_REBOOT_PENDING`, `OS_UPTIME`, `OS_TIME_SYNC` | as before |
 | `OS_TCP_PORT_STATUS` | one row per configured port: `OPEN` / `LOOPBACK_ONLY` / `CLOSED` (see below) |
+
+### `SYSTEM_CPU_MEMORY` on SQL Server on Linux: its own share, and its own limit (0.34.0)
+
+SQL Server on Linux sees the machine through SQLPAL, and two of its readings are of SQLPAL rather
+than of the host. Measured on 2026-10-23 on both Linux instances of the estate (0.31.0 sheet 1.190,
+1.191):
+
+| Reading | What it said | What the host said |
+| --- | --- | --- |
+| scheduler monitor `SystemIdle` | 0 on 4,047 of 4,047 samples on one instance (`CPU 100 pct`); 51 on the other | `/proc/stat`: the first host 16.7 % busy; the second's `OS_CPU_USAGE` 25 % |
+| `dm_os_process_memory.physical_memory_in_use_kb` | 4.1 GB on both, the same figure for days | Total Server Memory 21.2 / 14.2 GB; `sqlservr` 22.3 GB in `ps` |
+| `dm_os_sys_memory.total_physical_memory_kb` | 24 GB on the first | the engine's limit (`mssql-conf memory.memorylimitmb`); the host has about 64 GB |
+
+The ring buffer's `ProcessUtilization` - SQL Server's own share - agreed with `/proc/stat`. So on
+Linux (`@@VERSION LIKE '% on Linux%'`; `dm_os_host_info` does not exist before 2017 and the file
+runs from 2012) the collector:
+
+- grades the **SQL share** as the `cpu` row (the same 90 / 95 lines) and writes
+  `system_cpu_used_pct=N/A, cpu_basis=sql_process, reason=system_idle_not_reported_on_linux`;
+- reads what the engine holds from `dm_os_sys_info.committed_kb` - `sql_committed_mb` on every
+  platform, `sql_memory_held_mb` the figure to trust (committed on Linux, the process figure on
+  Windows, where the two agree within a few percent on every instance of the estate), with
+  `sql_memory_basis`; `sql_physical_memory_in_use_mb` is still written as the DMV says;
+- writes `memory_scope=sql_server_limit` and grades `sql_memory` and `system_memory` by their
+  low-memory flags only: a percentage of the engine's own limit, which it fills by design, is not
+  pressure. On Windows `memory_scope=host` and the grading is unchanged.
+
+Tried with `collect --test-run` on the two Linux instances (both 2025) and three Windows ones (2022,
+2019 and 2017); the estate's one 2012 instance did not answer from the master. The
+server page and the inventory read the new fields (`docs/06`).
 
 ### `OS_CPU_COUNTERS`: the host's CPU, and the database process's, as totals (2026-10-16)
 
@@ -1430,10 +1489,23 @@ The metric mixes two kinds of row, and reading one as the other is the mistake t
 
 - **Per drive/mount** — `C:`, `D:`, `/`, `/var`. `metric_value` is used %; the message carries
   the GB figures. These are the rows the reports treat as disks.
-- **Host-wide IO** — `disk_read_kbps`, `disk_write_kbps`, `disk_iops`, `disk_queue_length`.
-  These are **not** mount points. `inventory_health.build_os_health` filters them out of
-  `os_health.disks` by item name; a reader that does not would list a drive called
-  `disk_read_kbps` whose "free space" is a throughput number.
+- **Host-wide IO** — `disk_read_kbps`, `disk_write_kbps`, `disk_iops`, `disk_queue_length`,
+  and on Windows `disk_perf_counters`, the note that they could not be read (below).
+  These are **not** mount points. Every page builder filters them out by item name, from the
+  one list in `server_series` (`OS_DISK_NOT_A_VOLUME_ITEMS`); a reader that does not would list
+  a drive called `disk_read_kbps` whose "free space" is a throughput number.
+
+**On Windows the IO rows never cost the drive rows.** The drives come from
+`[System.IO.DriveInfo]` in milliseconds; the IO rows from two reads of
+`Win32_PerfRawData_PerfDisk_PhysicalDisk` a second apart, and the first read after the WMI
+performance provider has gone idle loads it again - 41 s on one host, 72 s on a workstation,
+against the metric's 30 s timeout. Unbounded, the whole script was killed and the drive rows went
+with it on every run. The reads now run to a budget (`$PerfBudgetSeconds = 22` from the start of
+the script, each read getting what is left), and one that runs out leaves a
+`disk_perf_counters = TIMEOUT` row at `LOGGING` beside the drives. A class missing from the
+host's counter registry is `disk_perf_counters = NOT_REGISTERED` (repaired with `lodctr /R`).
+Neither is a disk fault, and neither is shown on a tile: Storage activity reads
+`not collected` when only the note is there.
 
 **`disk_queue_length` is a sum over every physical disk, not one disk.** It comes from the
 Windows `PhysicalDisk` `_Total` instance (`Win32_PerfRawData_PerfDisk_PhysicalDisk`), so on a
@@ -1869,7 +1941,8 @@ collected.
 
 High-cardinality queries are bounded and normal collection does not expose query text. Disable any
 metric per target with `metrics.metric_overrides.<CODE>.enabled=false`;
-`report_policy.disabled_metric_codes` stays canonical for broad report/OS exclusions. Numeric
+`report_policy.disabled_metric_codes` keeps a metric's alerts out of the reports and no longer stops
+its collection (0.34.0). Numeric
 defaults can be replaced per target with `warning_threshold`, `critical_threshold`, and
 `higher_is_worse` under the same override. They grade the number of a row the metric left at OK, LOGGING or
 WARNING, and **never overrule a CRITICAL, ERROR or NO_DATA the metric decided itself** (0.26.0): a

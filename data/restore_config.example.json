@@ -53,7 +53,9 @@
                                 "telegram_chat": "backup",
                                 "chat_id": ""
                             }
-                        }
+                        },
+                        "databases": [],
+                        "all_databases": true
                     },
                     {
                         "job": "log",
@@ -79,9 +81,30 @@
                                 "telegram_chat": "backup",
                                 "chat_id": ""
                             }
-                        }
+                        },
+                        "databases": [],
+                        "all_databases": true
                     }
-                ]
+                ],
+                "offload_enabled": false,
+                "offload_server_id": "",
+                "offload_folder": "",
+                "offload_copy_max_retry": 3,
+                "offload_scan": "none",
+                "offload_delete_source": false,
+                "offload_source_share": "",
+                "offload_source_username": "",
+                "offload_source_password_ref": "",
+                "offload_retention_full": 0,
+                "offload_retention_diff": 0,
+                "offload_retention_log": 0,
+                "offload_files_per_pass": 100,
+                "offload_copy_retry_interval_seconds": 30,
+                "offload_retry_interval_seconds": 3600,
+                "offload_run_timeout_seconds": 86400,
+                "offload_copy_timeout_seconds": 86400,
+                "offload_hash_timeout_seconds": 21600,
+                "offload_stall_seconds": 300
             },
             {
                 "backup_id": "ACME_SALESDB_BASEBACKUP",
@@ -122,7 +145,9 @@
                         "env": {
                             "BACKUP_LEVEL": "full"
                         },
-                        "_note": "Sunday only. Together with the sibling job these cover all seven days exactly once - a gap is a night with no backup, and an overlap is two levels racing for the same night."
+                        "_note": "Sunday only. Together with the sibling job these cover all seven days exactly once - a gap is a night with no backup, and an overlap is two levels racing for the same night.",
+                        "databases": [],
+                        "all_databases": true
                     },
                     {
                         "job": "database",
@@ -159,9 +184,30 @@
                         "env": {
                             "BACKUP_LEVEL": "incr"
                         },
-                        "_note": "Monday to Saturday. Keep repeat_interval well under a day: weekdays says WHICH day and repeat_interval says whether it is due, so a multi-day interval lets the due moment walk past the window and skip whole weeks."
+                        "_note": "Monday to Saturday. Keep repeat_interval well under a day: weekdays says WHICH day and repeat_interval says whether it is due, so a multi-day interval lets the due moment walk past the window and skip whole weeks.",
+                        "databases": [],
+                        "all_databases": true
                     }
-                ]
+                ],
+                "offload_enabled": false,
+                "offload_server_id": "",
+                "offload_folder": "",
+                "offload_copy_max_retry": 3,
+                "offload_scan": "none",
+                "offload_delete_source": false,
+                "offload_source_share": "",
+                "offload_source_username": "",
+                "offload_source_password_ref": "",
+                "offload_retention_full": 0,
+                "offload_retention_diff": 0,
+                "offload_retention_log": 0,
+                "offload_files_per_pass": 100,
+                "offload_copy_retry_interval_seconds": 30,
+                "offload_retry_interval_seconds": 3600,
+                "offload_run_timeout_seconds": 86400,
+                "offload_copy_timeout_seconds": 86400,
+                "offload_hash_timeout_seconds": 21600,
+                "offload_stall_seconds": 300
             }
         ],
         "restores": [
@@ -221,7 +267,17 @@
                         "post-database"
                     ],
                     "note": "Replays the source instance's server-level metadata - logins, roles, Agent jobs - around the database restore, so the restored databases have no orphaned users. It reads a bundle written by that instance's own backup entry, so turning it on without one only produces a warning every run."
-                }
+                },
+                "integrity": {
+                    "algorithm": "sha256",
+                    "copy_max_retry": 3,
+                    "copy_retry_interval_seconds": 30,
+                    "verify_source_before_copy": true,
+                    "uncatalogued": "compare_copy",
+                    "engine_verify_before_restore": false
+                },
+                "action": "restore",
+                "restore_from": "server"
             }
         ]
     }

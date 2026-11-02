@@ -91,7 +91,8 @@ an SLO dashboard is read (overall verdict, a panel per group, a status grid, the
 detail). It was rebuilt on 2026-10-02 at the operator's word: the old page listed SLI codes per
 question with no instance named (*AVAILABILITY_SUCCESS_RATIO: STALE* sixteen times) and could not
 say "PostgreSQL is fine, SQL Server is not". It inlines `lib.page_style` - the stylesheet the
-report pages share - plus its own few rules (engine cards, the matrix's group rows, the folded
+report pages share - and, since 2026-10-30, the Tabler rules it uses (`lib.page_kit`, see
+`docs/06_reports_app.md`), plus its own few rules (engine cards, the matrix's group rows, the folded
 instance blocks).
 
 | Section | What it answers |

@@ -49,8 +49,11 @@ def _all_links(prefix="/report_dba"):
 def test_the_sidebar_names_every_stable_page():
     markup = pages._sidebar("/dbabrain", [], "", _all_links())
     assert "Reports" in markup
+    from html import escape
+
     for label, page in pages.REPORT_PAGES:
-        assert label in markup
+        # As the page writes it: "Backup & restore" is "Backup &amp; restore" in the markup.
+        assert escape(label, quote=False) in markup
         assert f'href="/report_dba/{page}"' in markup
 
 

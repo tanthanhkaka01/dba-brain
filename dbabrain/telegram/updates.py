@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dbabrain.lib import errors
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +130,11 @@ def _save_updates_unlocked(
             if merged_group != existing_group:
                 groups_by_id[group["group_id"]] = merged_group
                 groups_changed = True
+            # Telegram made the group a supergroup: the old chat's last message names the new id,
+            # the new chat's first names the old one. Either carries the old row's settings over.
+            moved = migration_of(message)
+            if moved and migrate_group(groups_by_id, old_id=moved[0], new_id=moved[1], chat=chat):
+                groups_changed = True
 
         for user in iter_message_users(message):
             user_record = build_user_record(user)
@@ -217,6 +223,81 @@ def build_group_record(chat: dict[str, Any]) -> dict[str, Any]:
         "active": True,
         "note": "Loaded from Telegram getUpdates.",
     }
+
+
+#: What a group's row says about WHAT IT IS FOR - carried to the new id when Telegram makes the
+#: group a supergroup. Identity (id, title, type), the switch and the row's own note are the new chat's.
+_IDENTITY_FIELDS = ("group_id", "title", "group_type", "active", "note")
+
+
+def migration_of(message: dict[str, Any]) -> tuple[str, str] | None:
+    """``(old_id, new_id)`` when this message records Telegram turning a group into a supergroup."""
+    chat_id = str((message.get("chat") or {}).get("id", ""))
+    if message.get("migrate_to_chat_id"):
+        return chat_id, str(message["migrate_to_chat_id"])
+    if message.get("migrate_from_chat_id"):
+        return str(message["migrate_from_chat_id"]), chat_id
+    return None
+
+
+def migrate_group(groups_by_id: dict[str, dict[str, Any]], *, old_id: str, new_id: str,
+                  chat: dict[str, Any] | None = None, when: str = "") -> bool:
+    """Carry the old row's settings to the new id and retire the old row; True when anything changed.
+
+    When Telegram upgrades a group to a supergroup (an admin change, a history setting) the chat
+    gets a new id and every message after it arrives under that id. Discovered as a new chat, the
+    row was inert - no level, no commands - so an alert group that moved lost its alerts in
+    silence, and on 2026-10-31 a question in *System - AI assists* waited, unread, under its new
+    id. The new row takes the old row's level, command level and every other setting; the old row
+    is kept, ``active: false``, with a note naming its successor - it is the history of where
+    messages went, and an inactive row routes nothing.
+
+    Idempotent: a row already retired by this move changes nothing, so a setting changed on the new
+    row since is never overwritten by a second pass.
+    """
+    old = groups_by_id.get(str(old_id))
+    if not old or str(old_id) == str(new_id):
+        return False
+    if old.get("active") is False and str(new_id) in str(old.get("note", "")):
+        return False
+    when = when or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new = groups_by_id.get(str(new_id)) or build_group_record(chat or {"id": new_id, "type": "supergroup"})
+    for key, value in old.items():
+        if key not in _IDENTITY_FIELDS:
+            new[key] = value
+    new["group_id"] = str(new_id)
+    new["title"] = str((chat or {}).get("title") or new.get("title") or old.get("title") or "")
+    new["group_type"] = str((chat or {}).get("type") or "supergroup")
+    new["active"] = True
+    new["note"] = (f"Telegram made group {old_id} a supergroup with this id ({when}); its settings were carried "
+                   f"over. Earlier: {old.get('note', '')}").strip()
+    old["active"] = False
+    old["note"] = (f"Superseded by {new_id}: Telegram made this group a supergroup ({when}). "
+                   f"{old.get('note', '')}").strip()
+    groups_by_id[str(new_id)] = new
+    return True
+
+
+def migrate_group_record(*, from_id: str, to_id: str, groups_path: Path | None = None) -> dict[str, Any]:
+    """``group-migrate``: the same move by hand - for one the intake did not see (it happened before
+    this version) or a groups file restored from before it."""
+    path = Path(groups_path) if groups_path else GROUPS_PATH
+    with FileLock(path):
+        records = load_json_list(path, root_key="telegram_groups")
+        by_id = {str(item.get("group_id", "")): item for item in records}
+        if str(from_id) not in by_id:
+            raise errors.InvalidRequest(f"no group {from_id} in {path}.")
+        before = {key: dict(value) for key, value in by_id.items() if key in (str(from_id), str(to_id))}
+        known = set(by_id)
+        changed = migrate_group(by_id, old_id=str(from_id), new_id=str(to_id))
+        if changed:
+            ordered = [by_id[str(item.get("group_id", ""))] for item in records]
+            if str(to_id) not in known:
+                ordered.append(by_id[str(to_id)])
+            write_json_list(path, root_key="telegram_groups", items=ordered)
+        return {"changed": changed, "before": before,
+                "after": {key: by_id[key] for key in (str(from_id), str(to_id)) if key in by_id},
+                "path": str(path)}
 
 
 def merge_group_record(existing_group: dict[str, Any], update_group: dict[str, Any]) -> dict[str, Any]:
@@ -314,6 +395,8 @@ def write_json_list(path: Path, *, root_key: str, items: list[dict[str, Any]]) -
 KNOWN_NOTIFY_LEVELS: tuple[str, ...] = (
     "logging", "warning", "error", "critical",
     "sla", "backup", "restore", "sql", "control", "test",
+    # 0.34.0: the chat the AI assistant answers in (data/ai_assist.json telegram_chat).
+    "ai_assist",
 )
 
 
@@ -467,6 +550,10 @@ def _set_group_level_unlocked(
              or str(item.get("title", "")).casefold() == wanted.casefold()]
     matches = exact or [item for item in records
                         if wanted.casefold() in str(item.get("title", "")).casefold()]
+    # A group Telegram made a supergroup keeps its title on a retired row: the live one is meant.
+    live = [item for item in matches if item.get("active") is not False]
+    if live and len(live) < len(matches):
+        matches = live
     if not matches:
         titles = ", ".join(sorted(str(item.get("title") or item.get("group_id")) for item in records))
         raise errors.InvalidRequest(f"no group matches {wanted!r}. Known: {titles}")

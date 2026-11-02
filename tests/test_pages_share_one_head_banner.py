@@ -70,8 +70,28 @@ def test_a_report_root_holding_nothing_yet_gets_a_banner_with_no_links():
 
 def test_a_title_carrying_markup_cannot_break_out_of_the_banner():
     markup = page_banner.render(title='<script>x</script>', scope='" onmouseover="x')
-    assert "<script>" not in markup
+    assert "<script>x" not in markup and "&lt;script&gt;x" in markup
     assert 'onmouseover="x' not in markup
+
+
+def test_the_banner_switches_light_and_dark_and_keeps_the_choice_in_this_browser_only():
+    """As dbabrain.dev does (2026-10-30): the reader's choice, else the system's; kept in this
+    browser's storage, guarded - a private window or a page opened from disk must still render -
+    and sent nowhere."""
+    markup = page_banner.render(title="Backup & restore")
+    assert 'class="dbo-theme"' in markup and "data-bs-theme" in markup
+    assert "prefers-color-scheme: dark" in markup
+    assert "try{t=localStorage.getItem" in markup and "try{localStorage.setItem" in markup
+    assert "fetch(" not in markup and "XMLHttpRequest" not in markup
+
+
+def test_the_banner_leads_with_the_products_mark_and_nothing_about_its_author():
+    """The head is the product's, as on dbabrain.dev - the mark and the name - and carries no
+    contact, repository or author link (the operator, 2026-10-30)."""
+    markup = page_banner.render(title="Backup & restore")
+    assert 'class="dbo-mark"' in markup and "DBA Brain" in markup
+    for word in ("github", "mailto:", "@gmail", "Contact"):
+        assert word not in markup
 
 
 def test_the_index_usage_page_carries_the_banner_with_its_own_snapshot(tmp_path):

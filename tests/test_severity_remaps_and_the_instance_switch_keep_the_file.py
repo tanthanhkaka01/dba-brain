@@ -108,6 +108,56 @@ def test_the_command_takes_a_list_and_refuses_a_single_remap_beside_it(tmp_path)
     assert refused["success"] is False and "only items and data_dir" in refused["message"]
 
 
+def test_every_metric_of_a_server_is_remapped_by_one_target_level_map_and_removed_by_null(tmp_path):
+    # A switched-off lab VM answers every metric with a connect failure (2026-10-22). One remap
+    # per metric code would leave every metric added later alerting again; `*` is the map the
+    # collector merges under each metric's own.
+    data = _seed(tmp_path)
+    set_metric_severity_map(server_id="ACME-192-0-2-10", metric_code="LOG_FILE_SPACE",
+                            severity_map={"WARNING": "OK"}, data_dir=data)
+    answer = set_metric_severity_map(server_id="ACME-192-0-2-10", metric_code="*",
+                                     severity_map={"CRITICAL": "LOGGING", "WARNING": "LOGGING"},
+                                     note="the VM is switched off", data_dir=data)
+    metrics = _instances(data)["ACME-192-0-2-10"]["metrics"]
+    assert answer["changed"] is True and answer["metric_code"] == "*"
+    assert metrics["severity_map"] == {"CRITICAL": "LOGGING", "WARNING": "LOGGING"}
+    assert metrics["severity_map_note"] == "the VM is switched off"
+    # A metric's own map is left where it is - it is the more specific answer, and still wins.
+    assert metrics["metric_overrides"]["LOG_FILE_SPACE"]["severity_map"] == {"WARNING": "OK"}
+    assert set_metric_severity_map(server_id="ACME-192-0-2-10", metric_code="*",
+                                   severity_map={"CRITICAL": "LOGGING", "WARNING": "LOGGING"},
+                                   note="the VM is switched off", data_dir=data)["changed"] is False
+
+    set_metric_severity_map(server_id="ACME-192-0-2-10", metric_code="*", severity_map=None, data_dir=data)
+    metrics = _instances(data)["ACME-192-0-2-10"]["metrics"]
+    assert "severity_map" not in metrics and "severity_map_note" not in metrics
+    assert metrics["enabled"] is True and "LOG_FILE_SPACE" in metrics["metric_overrides"]
+
+
+def test_a_target_level_map_takes_no_metric_item(tmp_path):
+    data = _seed(tmp_path)
+    before = (data / "db_instances.json").read_bytes()
+    with pytest.raises(ConfigAdminError, match="no metric for it to be an item of"):
+        set_metric_severity_map(server_id="ACME-192-0-2-10", metric_code="*", metric_item="app_db",
+                                severity_map={"CRITICAL": "LOGGING"}, data_dir=data)
+    assert (data / "db_instances.json").read_bytes() == before
+
+
+def test_the_collector_reads_the_map_the_command_writes(tmp_path):
+    # The two halves were written months apart; this holds them to the same key.
+    from types import SimpleNamespace
+
+    from dbabrain.metrics.collector import _resolve_severity_map
+
+    data = _seed(tmp_path)
+    set_metric_severity_map(server_id="ACME-192-0-2-10", metric_code="*",
+                            severity_map={"CRITICAL": "LOGGING", "WARNING": "LOGGING"}, data_dir=data)
+    target = SimpleNamespace(metrics_config=_instances(data)["ACME-192-0-2-10"]["metrics"])
+    assert _resolve_severity_map({}, None, target=target) == {"CRITICAL": "LOGGING", "WARNING": "LOGGING"}
+    assert _resolve_severity_map({"severity_map": {"WARNING": "OK"}}, None, target=target) == {
+        "CRITICAL": "LOGGING", "WARNING": "OK"}
+
+
 def test_an_instance_is_switched_on_by_its_active_flag_alone(tmp_path):
     data = _seed(tmp_path)
     before = _instances(data)["ACME-192-0-2-11"]

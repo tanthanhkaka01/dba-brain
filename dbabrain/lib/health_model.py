@@ -40,6 +40,13 @@ SEVERITY_RANK = {"CRITICAL": 3, "WARNING": 2, "OK": 1, "UNKNOWN": 0}
 #: could still display its last successful value as the current one.
 COLLECTOR_ITEM = "__collector__"
 
+#: The action for a metric whose every finding is the collector failing. The metric's own advice
+#: ("Find the top process", "Free space") answers a reading, and there was none: thirteen rows of
+#: it on a host whose SSH login was refused read as a machine short of CPU and disk (0.32.0 sheet).
+COLLECTOR_FAILURE_ACTION = ("Nothing was read, so this says nothing about the server: fix what the "
+                            "error names - the credential or its auth type, the host's access, a "
+                            "permission or the network path - and the next run fills it in.")
+
 #: Metrics whose SQL returns ``OK`` on every branch: they are logging-only by design, so the
 #: report has to judge them or the page shows a green tile next to 300 ms reads. The thresholds
 #: are stated on the tile so nobody reads a report rule as an alerting one.
@@ -202,6 +209,10 @@ def group_findings(findings: list[dict], *, now: int) -> list[dict]:
     for group in groups.values():
         group["items"].sort(key=lambda row: (-SEVERITY_RANK[row["severity"]], row["item"]))
         group["count"] = len(group["items"])
+        # Only when nothing but the failure is there: a real reading beside it is still a reading,
+        # and its advice still applies.
+        if all(row["item"] == COLLECTOR_ITEM for row in group["items"]):
+            group["action"] = COLLECTOR_FAILURE_ACTION
         worst = group["items"][0]
         group["headline"] = (
             f"{worst['item']} · {worst['value']}" if group["count"] == 1

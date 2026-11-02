@@ -38,7 +38,10 @@ def _spec(engine, mode="single", **overrides):
 # --------------------------------------------------------------------------- #
 # The backup scripts
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("script", sorted(SCRIPTS.glob("*/*.sh")), ids=lambda p: p.name)
+# The backup scripts only: stop/backup_stop.sh ends a run, and a stopped container holds no session
+# of it to end - it says so (container_running=0) instead of asking anyone to start it (1.238).
+@pytest.mark.parametrize("script", sorted(p for p in SCRIPTS.glob("*/*.sh") if p.parent.name != "stop"),
+                         ids=lambda p: p.name)
 def test_every_backup_script_says_a_stopped_container_is_stopped(script):
     text = script.read_text(encoding="utf-8")
 

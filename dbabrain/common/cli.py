@@ -628,15 +628,17 @@ def _rotate_password_command(argv: list[str]) -> int:
     # envelope is printed, logged and forwarded. Redact before building the response, not after.
     safe = password_rotation.strip_secrets(outcome)
     results = safe.get("results") or []
-    rotated = [item for item in results if item.get("ok")]
-    failed = [item for item in results if not item.get("ok")]
+    # By status: a result carries no `ok`, and reading one made a clean rotation print
+    # "rotated 0 of 1 login(s)" with failed=1 (2026-10-27).
+    rotated = [item for item in results if item.get("status") == "SUCCESS"]
+    failed = [item for item in results if item.get("status") == "FAILED"]
     message = f"rotated {len(rotated)} of {len(results)} login(s)"
     if outcome.get("ok"):
         return response.emit(response.ok(
             "rotate-password", message=message + ".", data=safe,
             metrics={"rotated": len(rotated), "failed": len(failed)}))
     reason = str(safe.get("error") or "") or (
-        "; ".join(f"{item.get('ref') or item.get('credential_name')}: {item.get('error')}"
+        "; ".join(f"{item.get('password_ref')}: {item.get('detail')}"
                   for item in failed) or "rotation did not succeed")
     if outcome.get("stranded"):
         reason = ("LOCKED OUT: the new password of " + ", ".join(outcome["stranded"])
@@ -1212,6 +1214,14 @@ def _dispatch(argv: list[str]) -> int:
         from dbabrain.common import cli_filetransfer
 
         return cli_filetransfer.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] == "file-checksum":
+        from dbabrain.common import cli_filechecksum
+
+        return cli_filechecksum.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] == "copy-files":
+        from dbabrain.common import cli_filecopy
+
+        return cli_filecopy.run(argv[0], argv[1:], read_request=_read_json_request)
     if argv[0] in {"list-backup-files", "prune-backup-files"}:
         from dbabrain.common import cli_backup_files
 
@@ -1255,6 +1265,11 @@ def _dispatch(argv: list[str]) -> int:
         from dbabrain.common import cli_backup
 
         return cli_backup.run(argv[1:], read_request=_read_json_request)
+    if argv[0] == "backup-stop":
+        # 0.34.0 (1.238): the run's process tree on its host first, then its sessions.
+        from dbabrain.common import cli_backup_stop
+
+        return cli_backup_stop.run(argv[1:], read_request=_read_json_request)
     if argv[0] == "check-credentials":
         # 0.24.0, from the root package (rules R41): its two resolvers are lib's now.
         from dbabrain.common import cli_check_credentials

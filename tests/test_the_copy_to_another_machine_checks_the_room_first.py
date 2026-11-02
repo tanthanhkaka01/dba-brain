@@ -24,6 +24,8 @@ import types
 
 import pytest
 
+from dbabrain.lib.integrity import RestoreIntegrity
+
 from dbabrain.backup_restore import restore_script
 from dbabrain.common import backup_copy, cli_backup_copy
 from dbabrain.lib import restore_space
@@ -282,7 +284,7 @@ def _sent_by(monkeypatch, **entry_fields) -> dict:
         restore_id="PG_DRILL", db_type="postgresql", server_id="SRC", backup_dir="/backup",
         script="restore.sh", time_window=TimeWindow(), target_server_id="DST",
         target_backup_dir="/opt/db_ops/backup/pg_restore", source_backup_host_dir="/opt/backup/pg",
-        **entry_fields)
+        integrity=RestoreIntegrity(), **entry_fields)
     sent: dict[str, dict] = {}
 
     def run(command, request, **_kwargs):

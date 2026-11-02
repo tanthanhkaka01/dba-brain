@@ -67,6 +67,8 @@ def test_the_eighteen_shared_objects_are_described_and_nothing_else_is(reference
         "time_window", "notify", "notify_rule", "output", "cmd_access", "sql_access",
         "cleanup_retention", "app_command",
         "backup_entry", "backup_job", "restore_entry",
+        # 0.34.0: how a restore proves each staged file - copy_max_retry, mandatory on every entry.
+        "integrity",
         # 0.22.0: the records a person edits by hand or through a registrar.
         "sql_command", "sql_target", "db_instance", "telegram_support_command",
         "telegram_cli_execute", "metric_definition", "metric_variant",
@@ -90,7 +92,9 @@ def test_the_eighteen_shared_objects_are_described_and_nothing_else_is(reference
         "webhost_settings", "monitor_user", "metric_collection", "reports_config",
         "backup_restore_config", "maintenance_policy",
         # 0.23.0: the reference describes itself - an entry, a field, a site, a constraint.
-        "reference_entry", "reference_field", "reference_site", "reference_constraint"]
+        "reference_entry", "reference_field", "reference_site", "reference_constraint",
+        # 0.34.0: the AI assistant in Telegram - its settings, a model's price, a user switched on.
+        "ai_assist_settings", "ai_assist_price", "ai_assist_user"]
 
 
 def test_every_entry_states_its_shape_before_a_reader_has_to_count(reference):

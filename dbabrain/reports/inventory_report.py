@@ -34,7 +34,7 @@ from dbabrain.lib import backup_policy
 from dbabrain.reports import inventory_health
 from dbabrain.reports.inventory_health import merged_drives, merged_sql_resources
 from dbabrain.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
-from dbabrain.lib import page_banner
+from dbabrain.lib import page_banner, page_kit
 from dbabrain.lib.timezone import (file_stamp, format_offset, label_from_file_stamp,
                                  offset_minutes)
 
@@ -294,56 +294,6 @@ def _build_disks(server) -> list:
     return out
 
 
-def _engine_own_facts(inst) -> list:
-    """What Oracle and PostgreSQL state about themselves, as ``[label, value]`` rows (0.28.0).
-
-    Until then an Oracle or PostgreSQL server's detail stopped at its version, beside a dozen rows
-    for SQL Server - not because the engines say less, but because their collectors asked less.
-    Each row appears only where the engine stated the fact. A blank row would read as a zero, and
-    a SQL Server label over an Oracle value as a claim nobody measured: a role, a log mode and a
-    character set are each engine's own word and are shown under it.
-    """
-    out = []
-    if inst.get("banner"):
-        out.append(["Engine banner", inst["banner"]])
-    database = " · ".join(dict.fromkeys(
-        x for x in (inst.get("database_name"), inst.get("unique_name")) if x))
-    if database:
-        out.append(["Database name", database])
-    # Oracle 8i states an open mode and no role: under "Role" its READ WRITE would read as one.
-    role = " · ".join(x for x in (inst.get("role"), inst.get("open_mode")) if x)
-    if role:
-        out.append(["Role" if inst.get("role") else "Open mode", role])
-    if inst.get("platform"):
-        out.append(["Platform", inst["platform"]])
-    if inst.get("charset"):
-        out.append(["Character set", inst["charset"]])
-    if inst.get("database_collation"):
-        of = f" (database {inst['connected_database']})" if inst.get("connected_database") else ""
-        out.append(["Database collation", inst["database_collation"] + of])
-    log_bits = [inst.get("log_mode"),
-                f"archiver {inst['archiver']}" if inst.get("archiver") else ""]
-    log = " · ".join(x for x in log_bits if x)
-    if log:
-        out.append(["Log mode", log])
-    wal_bits = [f"wal_level {inst['wal_level']}" if inst.get("wal_level") else "",
-                f"archive_mode {inst['archive_mode']}" if inst.get("archive_mode") else ""]
-    wal = " · ".join(x for x in wal_bits if x)
-    if wal:
-        out.append(["WAL", wal])
-    if inst.get("rac"):
-        out.append(["RAC", inst["rac"]])
-    if inst.get("logins"):
-        out.append(["Logins", inst["logins"]])
-    setting_bits = [f"max_connections {inst['max_connections']}" if inst.get("max_connections") else "",
-                    f"timezone {inst['timezone']}" if inst.get("timezone") else "",
-                    f"ssl {inst['ssl']}" if inst.get("ssl") else ""]
-    settings = " · ".join(x for x in setting_bits if x)
-    if settings:
-        out.append(["Server settings", settings])
-    return out
-
-
 def _build_detail(server, db0) -> list:
     """Extra structured fields surfaced in Server Detail that the template's base schema
     doesn't already render (database sizes, FCI mapping, governance extras, deployment,
@@ -351,33 +301,9 @@ def _build_detail(server, db0) -> list:
     out = []
     sr = merged_sql_resources(server)
 
-    # Engine build first. "RTM" on its own reads as an unpatched instance, so the cumulative
-    # update and its KB are shown next to it - SQL Server 2022 RTM-CU26 is 26 CUs in, not fresh.
-    inst = server.get("instance_health") or {}
-    if inst:
-        build = " ".join(x for x in (inst.get("product_version"), inst.get("product_level")) if x)
-        patch = " ".join(x for x in (inst.get("cumulative_update"), inst.get("update_reference")) if x)
-        if build or patch:
-            out.append(["Engine build", " · ".join(x for x in (build, patch) if x)])
-        edition = " · ".join(x for x in (inst.get("edition"), inst.get("engine_edition")) if x)
-        if edition:
-            out.append(["Edition", edition])
-        host_bits = [inst.get("machine_name"), inst.get("physical_name")]
-        host = " · ".join(dict.fromkeys(x for x in host_bits if x))
-        if inst.get("clustered"):
-            host += f" · clustered {inst['clustered']}"
-        if host.strip(" ·"):
-            out.append(["Instance host", host])
-        endpoint = ":".join(x for x in (inst.get("listen_ip"), inst.get("listen_port")) if x)
-        endpoint_bits = [endpoint, inst.get("transport"), inst.get("auth_scheme")]
-        endpoint_txt = " · ".join(x for x in endpoint_bits if x)
-        if endpoint_txt:
-            out.append(["Listening on", endpoint_txt])
-        if inst.get("collation"):
-            out.append(["Server collation", inst["collation"]])
-        if inst.get("started_at"):
-            out.append(["Engine started", inst["started_at"]])
-        out.extend(_engine_own_facts(inst))
+    # Engine build first - the same rows the per-server page's Instance section prints
+    # (inventory_health.instance_identity_rows), so the two pages say one thing about a server.
+    out.extend(inventory_health.instance_identity_rows(server.get("instance_health") or {}))
 
     # What the engine collects under its own name - the process ceiling, the tablespaces, the
     # wraparound horizon. One row per metric, in the collector's words, with its status in front
@@ -1107,7 +1033,7 @@ def build_fleet_linked_servers(sqlite_path, *, days: int, as_of: str | None = No
 
 def render_html(scope, models, triage, date_iso, linked_servers=None, report_dir=None) -> str:
     template = TEMPLATE_HTML.read_text(encoding="utf-8")
-    return (template
+    return page_kit.inline(template
             .replace("__BANNER_CSS__", page_banner.CSS)
             # The head offered three pages and never the index reports, which is how an estate
             # published fourteen of them nightly with nothing linking to any. `report_dir` is
@@ -1413,7 +1339,12 @@ def build_inventory_report(*, inventory: str | Path = DEFAULT_INVENTORY,
     if sqlite_path:
         # Imported here so the fleet report still renders from the JSON alone (no SQLite).
         from dbabrain.reports.server_report import build_server_pages
+        from dbabrain.reports import backup_restore_report
 
+        # The fleet's backup & restore page first, so every page built after it in this run - the
+        # server page, this report - finds it on disk and offers it in its banner (0.34.0).
+        backup_restore_report.build_page(sqlite_path=sqlite_path, output_dir=out_dir, stamp=stamp,
+                                         snapshot_date=date_iso)
         # The charts page has a stable name (see server_report), so it links back to the stable
         # inventory link the web host serves, not to this run's stamped file.
         server_pages = build_server_pages(

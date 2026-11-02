@@ -22,6 +22,8 @@ from dbabrain.lib.notify import (
 from dbabrain.lib import (
     cleanup_retention, errors, field_names, restore_space, sqlserver_certificate, stated_facts,
 )
+from dbabrain.lib import integrity as restore_integrity
+from dbabrain.lib import offload as offload_rules
 from dbabrain.lib.time_window import TimeWindow, parse_time_window_config
 from dbabrain.lib.config import DEFAULT_CONFIG_PATH
 
@@ -213,6 +215,16 @@ class BackupRestoreConfig:
     # the run that made it non-optional.
     space_check: restore_space.SpaceCheck = dataclasses.field(
         default_factory=restore_space.SpaceCheck)
+    # How each staged file is proven before it is used - `copy_max_retry` among it (0.34.0).
+    # ``None`` when the entry states none: the copy gate refuses that rather than assume 3 (R50);
+    # upgrade-config and restore-add write it into every entry.
+    integrity: restore_integrity.RestoreIntegrity | None = None
+    # What the entry does (0.34.0, 1.216): `restore`, or `copy_only` - copy from server_id to the
+    # target, held to the gate, and stop. ``None`` when unstated: the scheduler refuses it (R50).
+    action: str | None = None
+    # Where the restore reads its backups (0.34.0): `server` - the source's own folder, as always -
+    # or `repository` - the verified copies an offload made. ``None`` when unstated (R50).
+    restore_from: str | None = None
     full_backup_subdir: str = "FULL"
     sqlcmd_path: str = "sqlcmd"
     robocopy_path: str = "robocopy"
@@ -705,6 +717,12 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         copy_selection=_parse_copy_selection(values.get("copy_selection")),
         cleanup_retention=parse_cleanup_retention(values, context="backup_restore"),
         space_check=restore_space.parse_space_check(values),
+        integrity=restore_integrity.parse_restore_integrity(
+            values, label=f"backup_restore.restores[{restore_id_for_label or '?'}]"),
+        action=restore_integrity.parse_restore_action(
+            values, label=f"backup_restore.restores[{restore_id_for_label or '?'}]"),
+        restore_from=offload_rules.parse_restore_from(
+            values, label=f"backup_restore.restores[{restore_id_for_label or '?'}]"),
         prod_smb_credential_target=str(values.get("prod_smb_credential_target") or ""),
         prod_smb_username=str(values.get("prod_smb_username") or ""),
         prod_smb_password_env=str(values.get("prod_smb_password_env") or ""),

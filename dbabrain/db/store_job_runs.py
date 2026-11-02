@@ -210,6 +210,15 @@ class JobRunsMixin:
         with self.connect() as conn:
             return list(conn.execute(sql, params).fetchall())
 
+    def fetch_job_run(self, log_id: int) -> sqlite3.Row | None:
+        """One run row by its id - a runner about to close its row asks whether someone else did
+        (a backup stopped by the operator, 0.34.0 1.238)."""
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT log_id, job_code, status, message, finished_at, error_text, metadata_json "
+                "FROM job_runs WHERE log_id = ?;", (int(log_id),)).fetchone()
+
     def update_job_run(
         self,
         *,
@@ -221,12 +230,21 @@ class JobRunsMixin:
         duration_ms: int | None = None,
         error_text: str | None = None,
         metadata: dict | None = None,
-    ) -> None:
+        only_if_running: bool = False,
+    ) -> bool:
+        """Close or rewrite one run row. ``True`` when a row was written.
+
+        ``only_if_running`` makes it a compare-and-set: the row is written only while it still
+        says RUNNING. A pass that read the row as RUNNING and decides about it later needs it -
+        a restore wrote DONE and exited between the stale-run check's read and its write, and the
+        check's TIMEOUT landed on top of the DONE (2026-10-18 and 2026-10-19, 0.31.0 sheet 1.184).
+        """
         self.initialize()
         metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
+        guard = " AND lower(status) = 'running'" if only_if_running else ""
         with self.connect() as conn:
-            conn.execute(
-                """
+            cursor = conn.execute(
+                f"""
                 UPDATE job_runs
                 SET
                     finished_at = ?,
@@ -236,7 +254,7 @@ class JobRunsMixin:
                     duration_ms = ?,
                     error_text = ?,
                     metadata_json = ?
-                WHERE log_id = ?;
+                WHERE log_id = ?{guard};
                 """,
                 (
                     finished_at,
@@ -249,6 +267,7 @@ class JobRunsMixin:
                     log_id,
                 ),
             )
+            return int(cursor.rowcount or 0) > 0
 
     def record_runtime_node(
         self,

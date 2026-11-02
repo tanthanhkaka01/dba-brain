@@ -1,4 +1,11 @@
 $ErrorActionPreference = 'Stop'
+# Seconds from the start of this script that the performance-counter reads may run to (see
+# below): the metric's timeout is 30 s, and the rest is the remote session's own start and return.
+$PerfBudgetSeconds = 22
+$scriptWatch = [System.Diagnostics.Stopwatch]::StartNew()
+function Get-PerfTimeout {
+    [uint32][math]::Max(1, [math]::Floor($PerfBudgetSeconds - $scriptWatch.Elapsed.TotalSeconds))
+}
 function New-MetricRow($Item, $Value, $Unit, $Status, $Message) {
     [ordered]@{ metric_item = [string]$Item; metric_value = [string]$Value; metric_unit = [string]$Unit; status = [string]$Status; message = [string]$Message }
 }
@@ -28,10 +35,16 @@ try {
     try {
         # Every physical disk instance, not just "_Total": the per-disk queue lengths are what
         # make the total interpretable, and their count is what the queue threshold scales by.
-        $before = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk
+        # Bounded: the first read after the WMI performance provider has gone idle loads it again,
+        # and on one host (2026-10-23) that took 41 s - past the metric's 30 s, so the whole script
+        # was killed and the volume rows above, read in 8 ms, were lost with it on every run. Each
+        # read gets what is left of the budget rather than a fixed share of it, so a host whose
+        # provider loads in 20 s still gets its throughput, and one that takes longer loses only
+        # that. A local CIM read that runs out fails with "Timed out".
+        $before = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk -OperationTimeoutSec (Get-PerfTimeout)
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
         Start-Sleep -Seconds 1
-        $after = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk
+        $after = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk -OperationTimeoutSec (Get-PerfTimeout)
         $watch.Stop()
         $seconds = [math]::Max($watch.Elapsed.TotalSeconds, 0.001)
 
@@ -79,7 +92,18 @@ try {
         # alerted. Throughput and queue are genuinely unavailable until it is fixed - the row
         # says so instead of implying zero.
         $message = [string]$_.Exception.Message
-        if ($message -match 'Invalid class|not found|0x80041010') {
+        if ($message -match 'timed out|OperationTimeout') {
+            # The provider did not answer in time - a slow or cold WMI performance provider on the
+            # host, not a disk that is slow. Logged, like a missing class: retrying every poll
+            # cannot make it answer, and the volume rows above are what this metric is for.
+            $rows += New-MetricRow 'disk_perf_counters' 'TIMEOUT' 'status' 'LOGGING' (
+                "The PerfDisk performance counters did not answer within $PerfBudgetSeconds s, so disk " +
+                "throughput and queue length were not read this time (volume free space above is " +
+                "unaffected). This is a MONITORING gap on the host, not a disk fault: the WMI " +
+                "performance provider is slow to load there. " +
+                "wmi_class=Win32_PerfRawData_PerfDisk_PhysicalDisk, error=$message")
+        }
+        elseif ($message -match 'Invalid class|not found|0x80041010') {
             $rows += New-MetricRow 'disk_perf_counters' 'NOT_REGISTERED' 'status' 'LOGGING' (
                 "The PerfDisk performance-counter class is not registered on this host, so disk " +
                 "throughput and queue length cannot be read (volume free space above is " +

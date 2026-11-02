@@ -10,7 +10,7 @@ page, and no page carries a private copy of the parts.
 
 from __future__ import annotations
 
-from dbabrain.lib import page_style
+from dbabrain.lib import page_kit, page_style
 from dbabrain.reports import index_report as ir
 from dbabrain.sla.models import SlaValidationSummary
 from dbabrain.sla.publish import render_html
@@ -22,8 +22,11 @@ def _entry(**totals):
 
 
 def test_the_stylesheet_carries_the_shared_parts():
-    for part in (".masthead", ".kpi-strip", ".sec-head", ".tbl-scroll", ".b-crit", ".picker", ".callout"):
+    """Since 2026-10-30 the look of each part is Tabler's (``lib.page_kit``): the shared sheet keeps
+    their layout, and the status badges are Tabler's own colours, aliased by the kit."""
+    for part in (".masthead", ".kpi-strip", ".sec-head", ".tbl-scroll", ".picker", ".callout"):
         assert part in page_style.CSS, part
+    assert ".b-crit" in page_kit.ALIASES["bg-red-lt"]
 
 
 def test_a_counter_is_coloured_only_when_it_is_not_zero():

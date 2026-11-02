@@ -410,6 +410,7 @@ REPORT_PAGES = (
     ("Fleet inventory", "database-inventory.html"),
     ("Server metrics", "server-metrics.html"),
     ("SLA", "sla.html"),
+    ("Backup & restore", "backup-restore.html"),
 )
 
 

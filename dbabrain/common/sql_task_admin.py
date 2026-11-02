@@ -53,7 +53,8 @@ from dbabrain.lib.notify import NotifyConfigError, parse_notify_config
 from dbabrain.lib.sql_access import SQL_TASK_DB_TYPES
 from dbabrain.lib.sql_text import NAMED_BIND_DB_TYPES, named_placeholders, sqlplus_substitution_names
 from dbabrain.lib.sql_task_target import instance_matches, instance_not_found_message
-from dbabrain.lib.task_input import TARGET_PLACEHOLDERS
+from dbabrain.lib.task_input import (PAYLOAD_FORMATS, TARGET_PLACEHOLDERS, PythonSourceError,
+                                     parse_source_ref)
 from dbabrain.lib.task_output import TaskOutputError
 from dbabrain.lib.time_window import window_of
 
@@ -120,6 +121,11 @@ Registers WHAT a SQL task runs, in data/sql_commands.json. Where it runs is sql-
 
 A script that reaches the database itself adds "target_connection": true to "input" and reads
 {"connection": {...}} - its target's one login - from stdin. No script is handed DBABRAIN_SECRET_KEY.
+A script that reads a SECOND database names it, never with a password:
+  "source_connection": {"server_id": "...", "db_type": "mysql", "credential_name": "..."}
+and reads {"source_connection": {...}} from stdin, resolved like a target (users.json + the store).
+"payload_format": "xml" sends each batch as <rows><row col="value" .../></rows> for a SQL Server
+older than 2016, which has no OPENJSON; "json" is the default.
 
 Every script named must already exist: a command that points at a file nobody has written is a
 task that fails on its schedule rather than here. {name} in input.args must be a declared
@@ -180,7 +186,8 @@ def _require_file(root: Path, relpath: str, *, field: str) -> str:
     return text
 
 
-def _check_input_block(raw: Any, parameters: list[dict[str, Any]], root: Path) -> dict[str, Any]:
+def _check_input_block(raw: Any, parameters: list[dict[str, Any]], root: Path,
+                       data_root: Path) -> dict[str, Any]:
     """The ``input`` block of an ``input_type: "python"`` command, refused early when wrong."""
     if not isinstance(raw, dict):
         raise SqlTaskAdminError('input_type "python" requires an "input" object.')
@@ -240,6 +247,26 @@ def _check_input_block(raw: Any, parameters: list[dict[str, Any]], root: Path) -
             "reaches the database itself.")
     if target_connection:
         block["target_connection"] = True
+
+    # The second server the program reads from, by name only; the runner's own parser reads it, so
+    # the two cannot disagree, and its instance must be in the inventory as a target's must.
+    try:
+        source = parse_source_ref(raw.get("source_connection"), command_name="this command")
+    except PythonSourceError as exc:
+        raise SqlTaskAdminError(str(exc)) from None
+    if source is not None:
+        _refuse_an_instance_the_inventory_lacks(source.as_dict(), command={},
+                                                server_id=source.server_id, data_root=data_root)
+        block["source_connection"] = source.as_dict()
+
+    payload_format = str(raw.get("payload_format") or "json").strip().lower()
+    if payload_format not in PAYLOAD_FORMATS:
+        raise SqlTaskAdminError(
+            f"input.payload_format must be one of {list(PAYLOAD_FORMATS)}, got {payload_format!r}. "
+            "xml is for a SQL Server older than 2016, which has no OPENJSON.")
+    if payload_format != "json":
+        # Written only when not the default, so every command registered before it keeps its bytes.
+        block["payload_format"] = payload_format
     return block
 
 
@@ -441,7 +468,7 @@ def add_sql_command(request: dict[str, Any], *, data_dir: str | Path | None = No
         raise SqlTaskAdminError(f"input_type must be one of {INPUT_TYPES}, got {input_type!r}.")
     if input_type == "python":
         entry["input_type"] = "python"
-        entry["input"] = _check_input_block(request.get("input"), parameters, root)
+        entry["input"] = _check_input_block(request.get("input"), parameters, root, data_root)
     if parameters:
         entry["parameters"] = parameters
 

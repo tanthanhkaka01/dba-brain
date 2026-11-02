@@ -293,6 +293,10 @@ def rotate_ref(
     try:
         connection = sql_run.connect_target(target, timeout_seconds=timeout_seconds)
     except Exception as exc:  # noqa: BLE001 - an unreachable host is an operator message.
+        if engine == "sqlserver" and password_expired(str(exc)):
+            return _rotate_expired(ref, target, old_password, result, dry_run=dry_run,
+                                   new_password=new_password, password_length=password_length,
+                                   timeout_seconds=timeout_seconds, persist=persist)
         result.update(status="SKIPPED",
                       detail=f"current password/host not usable: {str(exc)[:200]}")
         return result
@@ -350,6 +354,71 @@ def rotate_ref(
 
     result.update(status="SUCCESS", detail="changed and re-authenticated on a new connection")
     result["_new_password"] = generated
+    return result
+
+
+def password_expired(error_text: str) -> bool:
+    """SQL Server refused the login because the password expired, or must be changed first.
+
+    18487 and 18488. The stored password is still the right one - the server says so by naming
+    the reason - so this is not the "store was already wrong" skip.
+    """
+    return bool(re.search(r"\((18487|18488)\)", error_text))
+
+
+def _rotate_expired(ref: str, target: dict[str, Any], old_password: str, result: dict[str, Any],
+                    *, dry_run: bool, new_password: str, password_length: int,
+                    timeout_seconds: int,
+                    persist: Callable[[str, str], None] | None) -> dict[str, Any]:
+    """Change an expired SQL Server password at login, then prove and store it as any other.
+
+    An expired login has no session, so ``ALTER LOGIN`` cannot run: the change is the login
+    itself (``SQL_COPT_SS_OLDPWD``), and a successful login means the server took it. There is no
+    rollback - the previous password is expired and cannot be put back - so once the server has
+    the new one it is **stored even if the verify fails**: losing it would leave a password
+    nothing holds, which is the one thing this module exists to prevent.
+    """
+    if dry_run:
+        result.update(status="READY", detail="the current password has expired (18487/18488); "
+                                             "a rotation changes it at login")
+        return result
+    generated = new_password or generate_password(password_length)
+    changed = dict(target)
+    changed["password"] = generated
+    try:
+        connection = sql_run.connect_target(changed, timeout_seconds=timeout_seconds,
+                                            sqlserver_old_password=old_password)
+    except Exception as exc:  # noqa: BLE001
+        result.update(status="FAILED", detail=f"expired; change at login refused: {str(exc)[:200]}")
+        return result
+    db_connect.close_quietly(connection)
+
+    verified = ""
+    try:
+        db_connect.close_quietly(sql_run.connect_target(changed, timeout_seconds=timeout_seconds))
+    except Exception as exc:  # noqa: BLE001
+        verified = str(exc)[:160]
+
+    if persist is not None:
+        try:
+            persist(ref, generated)
+        except Exception as exc:  # noqa: BLE001
+            # Nothing to roll back to: hand the value back so the CLI can still say where it is.
+            result.update(status="FAILED", store_failed=True,
+                          detail=f"expired; changed at login, but storing it failed "
+                                 f"({str(exc)[:160]})")
+            result["_new_password"] = generated
+            return result
+        result["stored"] = True
+    else:
+        result["_new_password"] = generated
+    if verified:
+        result.update(status="FAILED", detail=f"expired; changed at login and stored, but the "
+                                              f"verify on a new connection failed: {verified}")
+        return result
+    result.update(status="SUCCESS",
+                  detail="expired; changed at login, re-authenticated on a new connection"
+                         + (", and stored" if persist is not None else ""))
     return result
 
 

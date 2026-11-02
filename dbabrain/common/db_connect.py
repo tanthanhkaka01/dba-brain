@@ -124,6 +124,7 @@ def connect_engine(
     connect_timeout_seconds: int = DEFAULT_CONNECT_TIMEOUT_SECONDS,
     statement_timeout_seconds: int | None = DEFAULT_STATEMENT_TIMEOUT_SECONDS,
     autocommit: bool = False,
+    sqlserver_old_password: str = "",
 ) -> Any:
     """A DB-API connection to ``host``, for whichever engine ``db_type`` names.
 
@@ -181,6 +182,7 @@ def connect_engine(
             sqlserver_driver=sqlserver_driver, connect_timeout=connect_timeout,
             statement_timeout=statement_timeout_seconds, autocommit=autocommit,
             sqlserver_tls_verify=bool(sqlserver_tls_verify),
+            sqlserver_old_password=str(sqlserver_old_password or ""),
         )
     except DbConnectError:
         raise
@@ -190,13 +192,13 @@ def connect_engine(
 
 def _connect_sqlserver(*, host, port, database, username, password, sqlserver_driver,
                        connect_timeout, statement_timeout, autocommit, sqlserver_tls_verify=False,
-                       **_ignored) -> Any:
+                       sqlserver_old_password="", **_ignored) -> Any:
     return sql_execution.connect_sqlserver_with_fallback(
         host=host, port=port, database=database or "master",
         username=username, password=password,
         driver=str(sqlserver_driver or "").strip(), connect_timeout=connect_timeout,
         command_timeout=statement_timeout, autocommit=autocommit,
-        tls_verify=bool(sqlserver_tls_verify),
+        tls_verify=bool(sqlserver_tls_verify), old_password=sqlserver_old_password,
     )
 
 

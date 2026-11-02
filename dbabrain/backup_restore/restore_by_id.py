@@ -535,14 +535,61 @@ def _plan_summary(steps: list[dict[str, Any]]) -> str:
 
 def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
                   key: str | None = None, key_base64: str | None = None,
-                  on_phase: Any = None) -> dict[str, Any]:
+                  on_phase: Any = None, catalog: Any = None,
+                  job_run_id: int | None = None) -> dict[str, Any]:
     """Restore one configured entry through the common primitives.
 
     ``on_phase(phase, message, extra)`` is called at the copy boundaries (COPY_START/COPY_DONE),
     around the restore (RESTORE_START/RESTORE_DONE) and around the check (VERIFY_START/VERIFY_DONE),
     so a caller can announce every long stretch of a drill. It is optional: this function decides
     *what happened*, the caller decides *who hears about it*.
+
+    ``catalog`` records the copy's checksum gate (0.34.0, 1.213b); its run row is closed here with
+    the restore's outcome. Without one the gate still decides - it only has nowhere to record.
+    Every restore has a row (1.214) - one restoring in place, which copies nothing, too - moved
+    through ``restoring`` and ``verifying_db``, with ``job_run_id`` (the scheduler's row) and the
+    databases the check opened.
     """
+    from dbabrain.backup_restore.copy_gate import close_restore_runs
+
+    runs: list[tuple[int, bool]] = []
+    try:
+        result = _restore_by_id(request, data_dir=data_dir, key=key, key_base64=key_base64,
+                                on_phase=on_phase, catalog=catalog, runs=runs, job_run_id=job_run_id)
+    except Exception as exc:
+        close_restore_runs(catalog, runs, phase="error", error_text=f"{type(exc).__name__}: {exc}"[:2000])
+        raise
+    close_restore_runs(catalog, runs, phase="copied" if result.get("copy_only") else "done", error_text="")
+    return result
+
+
+def _start_unstaged_run(catalog: Any, job: Any, *, point_in_time: str,
+                        job_run_id: int | None) -> int | None:
+    """The run row of a restore that copies nothing - in place, the target reading the source's own
+    folder (1.214). No files: nothing travelled, so there is nothing for the gate to prove; the row
+    still says what ran, where, when, and whether the databases opened."""
+    import socket
+
+    from dbabrain.lib import integrity as restore_integrity
+    from dbabrain.lib.version import __version__
+
+    integrity = getattr(job, "integrity", None)
+    try:
+        return catalog.start_restore_run(
+            action=restore_integrity.ACTION_RESTORE, restore_id=job.restore_id, job_run_id=job_run_id,
+            source_server_id=job.server_id, target_server_id=job.target_server_id or job.server_id,
+            target_folder=str(getattr(job, "target_backup_dir", "") or ""),
+            point_in_time=point_in_time or "LATEST",
+            # Nothing is copied here, so no copy is retried; the entry's own number is recorded as stated.
+            copy_max_retry=integrity.copy_max_retry if integrity is not None else 0,
+            phase="restoring", node_host=socket.gethostname(), app_version=__version__)
+    except Exception:  # noqa: BLE001 - the record is not the restore (copy_gate.close_restore_runs)
+        return None
+
+
+def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, key_base64: str | None,
+                   on_phase: Any, catalog: Any, runs: list[tuple[int, bool]],
+                   job_run_id: int | None = None) -> dict[str, Any]:
     from dbabrain.backup_restore.backup import _load_secrets
     from dbabrain.backup_restore.restore_script import load_script_restores, unusable_reason
 
@@ -575,6 +622,18 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
                 f"--restore-id {restore_id} restores it - latest, or --point-in-time.")
         raise RestoreByIdError(f"No backup_restore entry found with restore_id={restore_id}.")
     job = jobs[0]
+    copy_only = bool(request.get("copy_only"))
+    if copy_only:
+        import dataclasses
+
+        from dbabrain.lib.integrity import ACTION_COPY_ONLY
+
+        if not getattr(job, "is_remote", False):
+            # In place, the target reads the source's own folder through a mount: nothing travels,
+            # so there is nothing to copy and nothing to prove.
+            raise RestoreByIdError(f"{restore_id}: copy only needs a target_server_id other than the "
+                                   "source - this entry restores in place, and nothing is copied.")
+        job = dataclasses.replace(job, action=ACTION_COPY_ONLY)
     engine = str(job.db_type or "").strip().lower()
     planner = _PLANNERS.get(engine)
     if planner is None:
@@ -608,8 +667,11 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
         transferred = transfer_backup_to_target(
             job, source=source, target=target_host,
             data_dir=data_dir, key=key, key_base64=key_base64, prune=False,
-            point_in_time=point_in_time,
+            point_in_time=point_in_time, catalog=catalog,
         )
+        if transferred.get("restore_run_id") is not None:
+            # Proven, or the transfer would have raised: closed done / error with the restore.
+            runs.append((int(transferred["restore_run_id"]), True))
         announce(on_phase, "COPY_DONE",
                   f"Restore {restore_id}: copy finished - {transferred['copied']} piece(s), "
                   f"{transferred['bytes_copied']} bytes, {transferred['skipped']} already present"
@@ -625,6 +687,21 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
                    **({"copy_mode": transferred["copy_mode"],
                        "copy_fell_back": bool(transferred.get("copy_fell_back"))}
                       if transferred.get("copy_mode") else {})})
+
+    from dbabrain.backup_restore.copy_gate import record_run
+
+    run_id = (transferred or {}).get("restore_run_id")
+    record_run(catalog, run_id, job_run_id=job_run_id, point_in_time=point_in_time or "LATEST")
+    if run_id is None and catalog is not None and not dry_run and not copy_only:
+        run_id = _start_unstaged_run(catalog, job, point_in_time=point_in_time, job_run_id=job_run_id)
+        if run_id is not None:
+            runs.append((run_id, True))
+
+    if copy_only:
+        # 1.216: copied from server_id to the target and proven - nothing restored, no metadata
+        # replayed, the staging kept (it is the product).
+        return {"restore_id": restore_id, "db_type": engine, "copy_only": True, "dry_run": dry_run,
+                "transfer": transferred, "steps": [], "warnings": []}
 
     steps = planner(job, secrets, point_in_time=point_in_time, host=host, data_dir=data_dir,
                     dry_run=dry_run)
@@ -650,6 +727,7 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
     moment = f"to {point_in_time}" if point_in_time else "to the newest backup"
     restoring = [s for s in steps
                  if s.get("request") and s["op"] != "verify-restore" and not s.get("done")]
+    record_run(catalog, run_id, phase="restoring")
     if restoring:
         announce(on_phase, "RESTORE_START", f"Restore {restore_id}: restoring {plan}, {moment}.",
                  {"plan": plan})
@@ -678,12 +756,16 @@ def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
             continue
         if step["op"] == "verify-restore":
             _restore_done()
+            record_run(catalog, run_id, phase="verifying_db")
             announce(on_phase, "VERIFY_START",
                      f"Restore {restore_id}: checking the restored database(s) can be opened.")
         outcome = _execute(step["op"], step["request"])
         results.append({"step": step["op"], "ok": bool(outcome.get("ok", True))})
         if step["op"] == "verify-restore":
             verify = {"checked": outcome.get("checked"), "failed": outcome.get("failed")}
+            # Before a failed check raises: the row says how many opened either way.
+            record_run(catalog, run_id, databases_failed=int(outcome.get("failed") or 0),
+                       databases_ok=max(int(outcome.get("checked") or 0) - int(outcome.get("failed") or 0), 0))
             announce(on_phase, "VERIFY_DONE",
                      f"Restore {restore_id}: {outcome.get('checked')} database(s) checked, "
                      f"{outcome.get('failed')} unusable.", verify)

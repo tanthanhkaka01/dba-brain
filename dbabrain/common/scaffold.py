@@ -497,6 +497,10 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     "data/sqlserver_instance_policy.json": "common/catalogue/sqlserver_instance_policy.json",
     "data/docker_db_connections.json": "sre/catalogue/docker_db_connections.json",
     "data/sre_config.json": "sre/catalogue/sre_config.json",
+    # 0.34.0: the AI assistant. Ships off, with no key, no chat and nobody switched on - each is
+    # this estate's to state - and every limit and price in force, so `upgrade-config` and a
+    # fresh `init` give the same file.
+    "data/ai_assist.json": "telegram/catalogue/ai_assist.json",
     "data/network_reservations.json": "control/catalogue/network_reservations.json",
     # What each dangerous operation costs to authorize. Without it every confirmed command is
     # priced at the STRICTEST level - two answers, the second the target's id typed out - while

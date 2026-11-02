@@ -161,6 +161,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     workflow.add_argument("--dry-run", action="store_true", help="List what would run without executing it.")
     workflow.add_argument("--skip-backup", action="store_true", help="Run only the restore half.")
     workflow.add_argument("--skip-restore", action="store_true", help="Run only the backup half.")
+    workflow.add_argument("--skip-offload", action="store_true",
+                          help="Leave the repository copies (offload_enabled entries) for the next pass.")
     workflow.add_argument("--copy-hours", type=int, default=None,
                           help="Hours for the restore copy step, overriding every entry's copy_recent_hours "
                                "for this run. Default: each entry's own (24 when it sets none).")
@@ -183,6 +185,49 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="List configured backup IDs with their engine, level and schedule.",
     )
 
+    # 0.34.0: is each catalogued backup file still on disk, and still the bytes the backup wrote?
+    verify_files = subparsers.add_parser(
+        "verify-backup-files", parents=[config_parent],
+        help="Re-hash catalogued backup files on their own server and hold each to the checksum the "
+             "catalog stored: sets on_disk and checksum_matches. Read-only on the servers.",
+    )
+    verify_files.add_argument("--backup-id", help="Only this backup entry's files.")
+    verify_files.add_argument("--server-id", help="Only this server's files.")
+    verify_files.add_argument("--limit", type=int, default=500,
+                              help="At most this many files, the ones checked longest ago first (500).")
+
+    # 0.34.0 (1.240): the repository copy on its own - what the workflow runs after its restores.
+    offload = subparsers.add_parser(
+        "offload", parents=[config_parent],
+        help="Copy every catalogued file of the entries with offload_enabled to their repository, prove "
+             "each copy there by checksum and size, and - with offload_delete_source - release the "
+             "source of a verified copy (never the newest chain).",
+    )
+    offload.add_argument("--backup-id", help="Only this backup entry.")
+    offload.add_argument("--dry-run", action="store_true", help="Say what each entry would copy and release.")
+    offload.add_argument("--limit", type=int, default=100, help="At most this many files per entry (100).")
+
+    # 0.34.0 (1.215): the backups taken before the catalog, hashed where they lie and recorded as
+    # `baseline=backfill` - so a restore's gate has a checksum to hold each one to.
+    backfill = subparsers.add_parser(
+        "catalog-backfill", parents=[config_parent],
+        help="Hash the backup files of one entry that the catalog does not hold yet (taken before "
+             "0.34.0), on their own server, and record them as baseline=backfill. A dry run unless --apply.",
+    )
+    backfill.add_argument("--backup-id", required=True, help="The backup entry whose folder is read.")
+    backfill.add_argument("--apply", action="store_true", help="Write the rows; without it, only say what would be written.")
+    backfill.add_argument("--max-files", type=int, default=5000,
+                          help="At most this many files per folder (5000); more is answered as truncated.")
+
+    # 0.34.0 (1.238): stop a running backup the right way round - its process tree on the host, then
+    # its sessions. Killing the session alone let the script back up the next database (.245).
+    backup_stop = subparsers.add_parser(
+        "backup-stop", parents=[config_parent],
+        help="Stop the running run(s) of one backup entry: its script's process tree on the host first, "
+             "then (SQL Server) every session the run opened; the run is recorded as stopped by the operator.",
+    )
+    backup_stop.add_argument("--backup-id", required=True, help="The backup entry whose running run is stopped.")
+
     # The JSON-request contract, the same one `instance-add` takes: one object, inline, @file or
     # `-`. Never flags for the payload - a backup entry is a nested object with an array of jobs
     # inside it, and flattening that into flags is how `--job-1-cleanup-retention` gets invented.
@@ -199,6 +244,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Register one restore entry from a JSON request object (see --help).",
     )
     restore_add.add_argument(
+        "request", nargs="?",
+        help="A JSON object, @path/to/file.json, or - to read stdin. Omit for the full help.")
+
+    entry_active = subparsers.add_parser(
+        "entry-active", parents=[config_parent],
+        help="Switch backup and restore entries on or off - their active flag only (see --help).",
+    )
+    entry_active.add_argument(
         "request", nargs="?",
         help="A JSON object, @path/to/file.json, or - to read stdin. Omit for the full help.")
 
@@ -253,6 +306,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Restore to a specific point in time (PITR). Format: 'YYYY-MM-DD HH:MM:SS +HH:MM'. "
              "Requires transaction log backups. If omitted, restores to the latest available state.",
     )
+    restore_workflow.add_argument(
+        "--copy-only", action="store_true",
+        help="Copy from the entry's server_id to its target and prove every file by checksum, then "
+             "stop: nothing is restored. An entry whose action is copy_only always runs this way.")
     restore_workflow.add_argument(
         "--execution-mode",
         default=None,
@@ -363,6 +420,34 @@ def _registration_command(args) -> int:
     return _emit(response.ok(
         args.command,
         message=f"{verb} {name} - wrote {', '.join(outcome['files_written'])}",
+        data=outcome))
+
+
+def _entry_active_command(args) -> int:
+    """``entry-active`` — the CLI face of :func:`registration.set_entries_active`, in the same
+    JSON-request contract and response envelope as ``backup-add`` / ``restore-add``."""
+    from dbabrain.backup_restore import registration
+    from dbabrain.lib import response
+    from dbabrain.lib.json_io import read_json_request
+
+    source = getattr(args, "request", None)
+    if not source:
+        sys.stdout.write(registration.ENTRY_ACTIVE_USAGE)
+        return 2
+    try:
+        request = read_json_request(source)
+    except ValueError as exc:
+        return _emit(response.fail(args.command, str(exc)))
+    try:
+        outcome = registration.set_entries_active(request)
+    except registration.RegistrationError as exc:
+        return _emit(response.fail(args.command, str(exc)))
+    changed = [item.get("backup_id") or item.get("restore_id") for item in outcome["items"] if item["changed"]]
+    state = "on" if outcome["active"] else "off"
+    return _emit(response.ok(
+        args.command,
+        message=(f"switched {state}: {', '.join(changed)} - wrote {', '.join(outcome['files_written'])}"
+                 if changed else f"already {state}: nothing changed"),
         data=outcome))
 
 
@@ -482,7 +567,8 @@ def _run_script_restore_on_demand(args, app_config, config_path: str, restore_id
         app_config=app_config, config_path=config_path, logger=logger, restore_id=restore_id,
         force=True, on_demand=True, key=getattr(args, "key", None),
         key_base64=getattr(args, "key_base64", None),
-        point_in_time=str(getattr(args, "point_in_time", "") or ""))
+        point_in_time=str(getattr(args, "point_in_time", "") or ""),
+        copy_only=bool(getattr(args, "copy_only", False)))
     sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
     if summary.get("failed") or not summary.get("succeeded"):
         return 1
@@ -495,7 +581,7 @@ def _default_log_scope(command: str) -> str:
     """Long-running, separately scheduled commands get their own runtime log file."""
     if command == "restore-workflow":
         return "restore_workflow"
-    if command in ("backup", "workflow"):
+    if command in ("backup", "workflow", "offload"):
         return "backup"
     return "backup_restore"
 
@@ -603,7 +689,8 @@ def main(argv: list[str]) -> int:
                 payload = _json.loads(args.request)
                 data = restore_by_id(payload, key=getattr(args, "key", None),
                                      key_base64=getattr(args, "key_base64", None),
-                                     on_phase=lambda p, m, e=None: _rbid_event(p, m, e))
+                                     on_phase=lambda p, m, e=None: _rbid_event(p, m, e),
+                                     catalog=None if payload.get("dry_run") else _open_catalog(_rbid_app_config, None))
                 result = _response.ok("restore-by-id",
                                       message=f"{data['restore_id']} restored ({data['db_type']}).",
                                       data=data)
@@ -621,6 +708,8 @@ def main(argv: list[str]) -> int:
 
         if args.command in {"backup-add", "restore-add"}:
             return _registration_command(args)
+        if args.command == "entry-active":
+            return _entry_active_command(args)
         if args.command == "export-instance-bundle":
             return _export_instance_bundle(resolved_config_path, str(args.backup_id))
         if args.command == "list-backups":
@@ -660,9 +749,55 @@ def main(argv: list[str]) -> int:
                     getattr(args, "delete_hours", None)),
                 skip_backup=bool(getattr(args, "skip_backup", False)),
                 skip_restore=bool(getattr(args, "skip_restore", False)),
+                skip_offload=bool(getattr(args, "skip_offload", False)),
             )
             sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
             return 1 if summary.get("failed") else 0
+        if args.command == "offload":
+            from dbabrain.backup_restore.offload import run_offloads
+
+            logger = setup_app_logger(app_config, app_name=log_scope, log_scope=log_scope,
+                                      enable_telegram_alerts=False, enable_console=False)
+            summary = run_offloads(
+                app_config=app_config, config_path=resolved_config_path, logger=logger,
+                backup_id=getattr(args, "backup_id", None), dry_run=bool(args.dry_run),
+                limit=int(args.limit or 100), key=getattr(args, "key", None),
+                key_base64=getattr(args, "key_base64", None))
+            sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
+            return 1 if summary["failed"] else 0
+        if args.command == "catalog-backfill":
+            from dbabrain.backup_restore.backup import catalog_backfill
+
+            summary = catalog_backfill(
+                app_config=app_config, config_path=resolved_config_path, backup_id=args.backup_id,
+                apply=bool(args.apply), max_files=int(args.max_files or 5000),
+                key=getattr(args, "key", None), key_base64=getattr(args, "key_base64", None))
+            sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
+            return 1 if summary["failed"] else 0
+        if args.command == "backup-stop":
+            from dbabrain.backup_restore.backup import stop_backup_run
+
+            logger = setup_app_logger(app_config, app_name=log_scope, log_scope=log_scope,
+                                      enable_telegram_alerts=False, enable_console=False)
+            summary = stop_backup_run(
+                app_config=app_config, config_path=resolved_config_path, backup_id=args.backup_id,
+                key=getattr(args, "key", None), key_base64=getattr(args, "key_base64", None), logger=logger)
+            sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
+            if not summary["running"]:
+                sys.stdout.write(f"backup-stop: {args.backup_id} has no running run - nothing to stop.\n")
+                return 0
+            return 0 if summary["stopped"] else 1
+        if args.command == "verify-backup-files":
+            from dbabrain.backup_restore.backup import verify_backup_files
+
+            summary = verify_backup_files(
+                app_config=app_config, config_path=resolved_config_path,
+                backup_id=getattr(args, "backup_id", None), server_id=getattr(args, "server_id", None),
+                limit=int(getattr(args, "limit", 500) or 500),
+                key=getattr(args, "key", None), key_base64=getattr(args, "key_base64", None))
+            sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+            # A changed or vanished backup is the answer this exists to give - a non-zero exit.
+            return 1 if summary["mismatch"] or summary["missing"] else 0
         if args.command == "backup":
             logger = setup_app_logger(app_config, app_name=log_scope, log_scope=log_scope,
                                       enable_telegram_alerts=False, enable_console=False)
@@ -767,6 +902,8 @@ def main(argv: list[str]) -> int:
         if execution_mode_override is not None:
             restore_configs = [dataclasses.replace(config, execution_mode=execution_mode_override) for config in restore_configs]
         restore_config = restore_configs[0]
+        _copy_only = (_decide_copy_only(restore_configs, asked=bool(getattr(args, "copy_only", False)))
+                      if args.command == "restore-workflow" else False)
         _id_meta = {"restore_ids": [config.restore_id for config in restore_configs]}
         if len(restore_configs) == 1:
             _id_meta["restore_id"] = restore_config.restore_id
@@ -781,6 +918,7 @@ def main(argv: list[str]) -> int:
         if args.command == "restore-workflow":
             _mappings = [_build_restore_mapping(c) for c in restore_configs]
             _rw_meta = {
+                "action": "copy_only" if _copy_only else "restore",
                 "restore_mode": restore_mode,
                 "restore_count": len(restore_configs),
                 "mappings": _mappings,
@@ -845,7 +983,8 @@ def main(argv: list[str]) -> int:
             for config in restore_configs:
                 if args.hours is not None:
                     config = dataclasses.replace(config, copy_recent_hours=int(args.hours))
-                result = run_copy_backup(config, logger=logger, force=bool(getattr(args, "force", False)))
+                result = run_copy_backup(config, logger=logger, force=bool(getattr(args, "force", False)),
+                                         catalog=_open_catalog(app_config, logger))
                 source_outputs.append(
                     {
                         "source_id": config.source_id,
@@ -857,6 +996,8 @@ def main(argv: list[str]) -> int:
                         "files_considered": result.files_considered,
                         "copied": result.copied,
                         "skipped": result.skipped,
+                        "restore_run_id": result.restore_run_id,
+                        "integrity": result.integrity,
                     }
                 )
             output = {
@@ -963,7 +1104,8 @@ def main(argv: list[str]) -> int:
             from dbabrain.lib import instance_bundle as _instance
 
             _meta_lines, _meta_reports = "", {}
-            for _cfg in restore_configs:
+            # A copy-only run touches nothing on the target instance.
+            for _cfg in ([] if _copy_only else restore_configs):
                 _line, _report = replay_engine_phase(
                     _cfg, phase=_instance.PRE_DATABASE, announce=_rw_announce)
                 _meta_lines += _line
@@ -980,10 +1122,11 @@ def main(argv: list[str]) -> int:
                 logger=logger,
                 point_in_time_utc=pit_utc,
                 on_phase=_rw_announce,
+                copy_only=_copy_only,
             )
 
             # Only after a restore that worked: Agent job steps name databases that have to exist.
-            for _cfg in restore_configs:
+            for _cfg in ([] if _copy_only else restore_configs):
                 _line, _report = replay_engine_phase(
                     _cfg, phase=_instance.POST_DATABASE, announce=_rw_announce)
                 _meta_lines += _line
@@ -999,6 +1142,8 @@ def main(argv: list[str]) -> int:
         log_event(logger, level="logging", message=sanitize_text(f"{_finished_rid}backup_restore.{args.command} finished status={output.get('status')}"))
         summary_output = _summarize_command_output(args.command, safe_output)
         end_level, end_message, end_metadata = _build_end_event(command=args.command, output=summary_output)
+        if args.command == "restore-workflow" and _rw_meta.get("action") == "copy_only":
+            end_message = f"Copy only - nothing restored. {end_message}"
         if args.command == "restore-workflow" and _rw_meta:
             end_metadata.update(_rw_meta)
             end_metadata["restore_mode"] = summary_output.get("restore_mode", restore_mode)
@@ -1155,8 +1300,14 @@ def run_restore_workflow(
     logger: object | None = None,
     point_in_time_utc: object = None,
     on_phase: object = None,
+    copy_only: bool = False,
+    job_run_id: int | None = None,
 ) -> dict[str, object]:
     """``on_phase(phase, message, extra)`` reports the copy boundaries, when a caller supplies it.
+
+    ``copy_only`` (0.34.0, 1.216): the same preflight, copy and checksum gate from ``server_id`` to the
+    target, then stop - no RESTORE, no verify, no cleanup of the staging, which is the product. The
+    catalog's run rows say ``copy_only`` and end ``copied``.
 
     The engine path copies inside this function, so without it a restore went ``START`` -> silence
     -> ``END`` while the script path (which copies in ``restore_by_id``) announced both. Same
@@ -1167,8 +1318,20 @@ def run_restore_workflow(
     def _say(phase: str, message: str, extra: dict[str, object] | None = None) -> None:
         announce(on_phase, phase, message, extra)
 
+    from dbabrain.backup_restore.copy_gate import record_run
+
     restore_mode = "POINT_IN_TIME" if point_in_time_utc is not None else "LATEST"
+    if copy_only:
+        from dbabrain.lib.integrity import ACTION_COPY_ONLY
+
+        restore_configs = [dataclasses.replace(c, action=ACTION_COPY_ONLY) for c in restore_configs]
     mappings = [_build_restore_mapping(c) for c in restore_configs]
+    # The backup catalog's run rows this workflow opens - one per source copied - closed at the end
+    # with the restore's own outcome (0.34.0). A copy the gate refused keeps its `refused`.
+    catalog = None if dry_run else _open_catalog(app_config, logger)
+    gated_runs: list[tuple[int, bool]] = []
+    # Each entry's run row, in the configs' order, moved through its phases below (1.214).
+    run_ids: list[int | None] = []
     summary: dict[str, object] = {
         "status": "RUNNING",
         "overall_workflow_status": "RUNNING",
@@ -1251,11 +1414,20 @@ def run_restore_workflow(
                     copy_window_start_utc=copy_window_start,
                     copy_window_end_utc=copy_window_end,
                 )
-                result = run_copy_backup(step_config, logger=logger, force=force)
+                result = run_copy_backup(step_config, logger=logger, force=force, catalog=catalog)
+                if result.restore_run_id is not None:
+                    gated_runs.append((result.restore_run_id, bool((result.integrity or {}).get("proven"))))
+                run_ids.append(result.restore_run_id)
+                # What the row cannot know at the gate: the moment asked for, and the scheduler's row.
+                record_run(catalog, result.restore_run_id, job_run_id=job_run_id,
+                           point_in_time=point_in_time_utc.isoformat() if point_in_time_utc is not None
+                           and hasattr(point_in_time_utc, "isoformat") else "LATEST")
                 copy_outputs.append(
                     {
                         "source_id": step_config.source_id,
                         "returncode": result.returncode,
+                        "restore_run_id": result.restore_run_id,
+                        "integrity": result.integrity,
                         "copy_recent_hours": step_config.copy_recent_hours,
                         "copy_window_start_utc": copy_window_start.isoformat() if copy_window_start is not None else None,
                         "copy_window_end_utc": copy_window_end.isoformat() if copy_window_end is not None else None,
@@ -1283,8 +1455,25 @@ def run_restore_workflow(
                  f"copy finished - {_copied} file(s), {_skipped} already present.",
                  {"copied": _copied, "skipped": _skipped})
 
+        if copy_only:
+            # Copied and proven, and nothing restored: the staged chain is what this run is for.
+            # Its cleanup is left alone - a copy-only target keeps every chain it was given until
+            # the keep-the-newest-chain rule exists (plan D8).
+            summary["status"] = "DRY_RUN" if dry_run else "SUCCESS"
+            summary["overall_workflow_status"] = summary["status"]
+            summary["copy_only"] = True
+            summary["duration_seconds"] = round(time.monotonic() - workflow_start, 3)
+            _close_catalog_runs(catalog, gated_runs, phase="copied", error_text="")
+            if logger:
+                log_event(logger, level="logging",
+                          message=f"{_rid}restore-workflow copy only - nothing restored status={summary['status']} "
+                                  f"elapsed_seconds={summary['duration_seconds']}")
+            return summary
+
         with _workflow_phase(logger, f"{_rid}restore-workflow restore-preparation", summary=summary, current_phase="restore-preparation", source_count=len(restore_configs)):
             restore_inputs = list(restore_configs)
+        for run_id in run_ids:
+            record_run(catalog, run_id, phase="restoring")
         with _workflow_phase(logger, f"{_rid}restore-workflow restore-execution", summary=summary, current_phase="restore-execution", source_count=len(restore_inputs)):
             restore_outputs = [
                 run_restore_all_latest(config=config, dbabrain_config=app_config, dry_run=dry_run, logger=logger, point_in_time_utc=point_in_time_utc)
@@ -1324,6 +1513,8 @@ def run_restore_workflow(
         # written; this path never called it. So the check existed and the nightly job skipped it.
         verify_outputs: list[dict[str, object]] = []
         if not dry_run:
+            for run_id in run_ids:
+                record_run(catalog, run_id, phase="verifying_db")
             _say("VERIFY_START",
                  f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
                  f"checking the restored database(s) can be opened.")
@@ -1341,7 +1532,7 @@ def run_restore_workflow(
                     _verify_unavailable = ""
                 # Each entry with its own restore's answer: one that states restore_all_databases is
                 # checked on every database its run restored, by the backup's name (1.101).
-                for config, restore_output in zip(restore_inputs, restore_outputs):
+                for position, (config, restore_output) in enumerate(zip(restore_inputs, restore_outputs)):
                     request, why_not = _verify_plan(config, verify_secrets,
                                                     _restored_databases(restore_output))
                     if request is None:
@@ -1352,6 +1543,11 @@ def run_restore_workflow(
                         })
                         continue
                     outcome = common_cli.run("verify-restore", request)
+                    # The entry's own row says how many of its databases opened (1.214).
+                    _checked_here = int(outcome.get("checked") or 0)
+                    _failed_here = int(outcome.get("failed") or 0)
+                    record_run(catalog, run_ids[position] if position < len(run_ids) else None,
+                               databases_ok=max(_checked_here - _failed_here, 0), databases_failed=_failed_here)
                     verify_outputs.append({
                         "restore_id": config.restore_id, "target_id": config.target_id,
                         "status": "SUCCESS" if outcome.get("ok") else "FAILED",
@@ -1431,6 +1627,7 @@ def run_restore_workflow(
         summary["status"] = "SUCCESS"
         summary["overall_workflow_status"] = "SUCCESS"
         summary["duration_seconds"] = round(time.monotonic() - workflow_start, 3)
+        _close_catalog_runs(catalog, gated_runs, phase="done", error_text="")
         if logger:
             log_event(logger, level="logging", message=f"{_rid}restore-workflow completion status=SUCCESS elapsed_seconds={summary['duration_seconds']}")
             log_event(logger, level="logging", message=f"{_rid}{_format_restore_workflow_stdout(summary)}")
@@ -1442,9 +1639,58 @@ def run_restore_workflow(
         summary["exception_type"] = type(exc).__name__
         summary["exception_message"] = sanitize_text(str(exc))
         summary["error_tail"] = summarize_error_tail(str(exc))
+        _close_catalog_runs(catalog, gated_runs, phase="error",
+                            error_text=sanitize_text(f"{type(exc).__name__}: {exc}")[:2000])
         if logger:
             log_event(logger, level="critical", message=sanitize_text(f"{_rid}restore-workflow failed error={type(exc).__name__}: {exc}"))
         raise RestoreWorkflowError(str(exc), metadata=summary) from exc
+
+
+def _decide_copy_only(restore_configs: list[BackupRestoreConfig], *, asked: bool) -> bool:
+    """Whether this run copies only (0.34.0, 1.216): ``--copy-only``, or every selected entry stating
+    ``action: copy_only``. An entry that states no action is refused (R50), and a run over entries that
+    disagree is refused - one run either restores or it does not."""
+    from dbabrain.lib.integrity import ACTION_COPY_ONLY, require_restore_action
+    from dbabrain.lib.offload import OffloadConfigError, require_restore_from
+
+    for c in restore_configs:
+        # Stated on every entry (R50). This path reads a Windows share; the repository is an SSH host, so
+        # restore_from repository is the script-driven restores' (restore_script.REPOSITORY_ENGINES).
+        source = require_restore_from(getattr(c, "restore_from", None), label=f"restore_id={c.restore_id}")
+        if source != "server":
+            raise OffloadConfigError(f"restore_id={c.restore_id}: restore_from {source!r} is built for the "
+                                     "script-driven restores; this share-driven SQL Server entry reads its "
+                                     "server's share (restore_from: server).")
+    actions = {require_restore_action(c.action, label=f"restore_id={c.restore_id}") for c in restore_configs}
+    if asked:
+        return True
+    if len(actions) > 1:
+        raise ValueError("these entries disagree on action (restore and copy_only): run them one at a time "
+                         "with --restore-id.")
+    return actions == {ACTION_COPY_ONLY}
+
+
+def _open_catalog(app_config: object, logger: object | None):
+    """The backup catalog on this node's store, or None when it cannot be opened. The copy's gate
+    still decides without it - every file is still proven - it only has nowhere to record."""
+    try:
+        from dbabrain.db.backup_catalog import BackupCatalogStore
+
+        catalog = BackupCatalogStore.from_config(app_config)
+        catalog.initialize()
+        return catalog
+    except Exception as exc:  # noqa: BLE001 - reported, and the restore still verifies every file
+        if logger:
+            log_event(logger, level="warning",
+                      message=sanitize_text(f"backup catalog unavailable, copies are verified but not recorded: {exc}"))
+        return None
+
+
+def _close_catalog_runs(catalog, gated_runs: list[tuple[int, bool]], *, phase: str, error_text: str) -> None:
+    """End each run row with the restore's outcome; a copy the gate refused stays `refused`."""
+    from dbabrain.backup_restore.copy_gate import close_restore_runs
+
+    close_restore_runs(catalog, gated_runs, phase=phase, error_text=error_text)
 
 
 class _workflow_phase:

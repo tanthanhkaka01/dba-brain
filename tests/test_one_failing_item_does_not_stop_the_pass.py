@@ -28,6 +28,11 @@ def test_a_backup_whose_common_cli_child_crashed_is_an_error_and_the_next_job_ru
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [first, second])
     monkeypatch.setattr(backup_module, "export_for_backup", lambda *a, **k: None)
+    # Every run is recorded in the backup catalog since 0.34.0, and a run that cannot be recorded is
+    # an error - so the pass is given a catalog that records, as the worker's store does.
+    monkeypatch.setattr(backup_module, "_open_catalog",
+                        lambda _config: SimpleNamespace(record_backup=lambda **_k: 1,
+                                                        last_file_name=lambda **_k: ""))
 
     def execute(item, **_k):
         executed.append(item.backup_id)

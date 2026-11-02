@@ -662,8 +662,12 @@ def resolve_connection_spec(
 
 
 def connect_target(target: dict[str, Any], *, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-                   connect_timeout_seconds: int = 0, autocommit: bool = False) -> Any:
+                   connect_timeout_seconds: int = 0, autocommit: bool = False,
+                   sqlserver_old_password: str = "") -> Any:
     """Open a connection to a resolved target, on whichever engine it names.
+
+    ``sqlserver_old_password`` turns the login into a password change, from it to the target's
+    ``password`` - for ``password_rotation`` and a password SQL Server has expired, nothing else.
 
     Every engine rule — driver choice and the ODBC→pymssql fallback, default ports and
     databases, and the in-server statement timeout each engine spells differently — belongs to
@@ -696,6 +700,7 @@ def connect_target(target: dict[str, Any], *, timeout_seconds: int = DEFAULT_TIM
             # wait twenty minutes to find out the host is down.
             connect_timeout_seconds=connect_timeout_seconds or timeout_seconds,
             statement_timeout_seconds=timeout_seconds,
+            sqlserver_old_password=sqlserver_old_password,
         )
     except db_connect.DbConnectError as exc:
         raise SqlRunError(str(exc)) from exc

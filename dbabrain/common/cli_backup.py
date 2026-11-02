@@ -61,7 +61,7 @@ SUCCESS MEANS THE SCRIPT PRINTED `RESULT=ok`, not that it exited 0. A script tha
 a clean status and no output has happened here, and a backup that silently reports success is only
 discovered by the restore that needed it.
 
-data: {"status": "done"|"error", "exit_code", "duration_ms", "receipt", "error",
+data: {"status": "done"|"error", "exit_code", "duration_ms", "receipt", "error", "files",
        "stdout", "stderr", "label", "level", "script", "host", "env_names", ...}
 env_names, never env values - half of them are passphrases.
 """

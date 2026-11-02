@@ -61,11 +61,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 # The placeholder vocabulary lives in `lib` because `common` validates it and this module fills it
 # (2026-09-19). The input block's shape and its reading joined it in 0.24.0, with the rest of the
@@ -159,7 +161,8 @@ def substitute(args: tuple[str, ...], values: dict[str, Any]) -> list[str]:
 def run(source: PythonSource, *, tool_root: Path,
         parameter_values: dict[str, Any] | None = None,
         target: dict[str, str] | None = None,
-        connection: dict[str, Any] | None = None) -> PythonResult:
+        connection: dict[str, Any] | None = None,
+        source_connection: dict[str, Any] | None = None) -> PythonResult:
     """Run the script and return its rows. Raises :class:`PythonSourceError` with the reason.
 
     ``target`` fills the reserved ``{target_server_id}`` / ``{target_database}`` placeholders from
@@ -169,6 +172,9 @@ def run(source: PythonSource, *, tool_root: Path,
     written to the script's stdin as ``{"connection": ...}`` when the command says
     ``input.target_connection: true``, and goes nowhere otherwise: never an argument (``ps`` shows
     those) and never the environment (every process the script starts inherits that).
+
+    ``source_connection`` is the same for the second server ``input.source_connection`` names, written
+    beside it as ``{"source_connection": ...}``.
     """
     import time
 
@@ -184,13 +190,21 @@ def run(source: PythonSource, *, tool_root: Path,
         environment.pop(name, None)
     # An empty stdin unless the connection goes there: a script that reads stdin gets end-of-file
     # at once, not whatever the daemon's own stdin happens to be on that host.
-    stdin_text = ""
+    handed: dict[str, Any] = {}
     if source.target_connection:
         if not connection:
             raise PythonSourceError(
                 f"{script.name} asks for its target's connection (input.target_connection) and "
                 "the runner has none to give it, so it did not run.")
-        stdin_text = json.dumps({"connection": connection}, ensure_ascii=False, default=str)
+        handed["connection"] = connection
+    if source.source_connection is not None:
+        if not source_connection:
+            raise PythonSourceError(
+                f"{script.name} reads from {source.source_connection.server_id} "
+                "(input.source_connection) and the runner has no connection to give it, so it did "
+                "not run.")
+        handed["source_connection"] = source_connection
+    stdin_text = json.dumps(handed, ensure_ascii=False, default=str) if handed else ""
     # Pinned for the same reason `transport.common_cli.spawn` pins it, and this end matters more: the
     # script prints JSON with `ensure_ascii=False`, so a Vietnamese name reaches stdout as UTF-8
     # bytes. Left to `locale.getpreferredencoding()` the child would encode cp1252 on this
@@ -268,14 +282,56 @@ def _rows_at(document: dict[str, Any], rows_path: str, *, script_name: str) -> l
     return node
 
 
-def batches(rows: list[Any], batch_rows: int) -> list[str]:
-    """The rows as JSON arrays of at most ``batch_rows`` each — **always at least one**.
+def batches(rows: list[Any], batch_rows: int, payload_format: str = "json") -> list[str]:
+    """The rows as JSON arrays (or XML documents) of at most ``batch_rows`` each — **always at least one**.
 
-    An empty pull still runs the SQL once, with ``[]``. The alternative is a task that silently
-    does nothing on a quiet day, and the SQL is then the only place that can say "nothing to load"
-    — which is also where a caller would put anything else the run must do regardless.
+    An empty pull still runs the SQL once, with ``[]`` (``<rows />``). The alternative is a task that
+    silently does nothing on a quiet day, and the SQL is then the only place that can say "nothing to
+    load" — which is also where a caller would put anything else the run must do regardless.
     """
-    if not rows:
-        return ["[]"]
-    return [json.dumps(rows[start:start + batch_rows], ensure_ascii=False, default=str)
-            for start in range(0, len(rows), batch_rows)]
+    chunks = [rows[start:start + batch_rows] for start in range(0, len(rows), batch_rows)] or [[]]
+    if payload_format == "xml":
+        return [xml_rows(chunk) for chunk in chunks]
+    return [json.dumps(chunk, ensure_ascii=False, default=str) for chunk in chunks]
+
+
+#: An XML attribute name: what a row's keys must be to become one.
+_XML_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+#: What XML 1.0 cannot carry at all, escaped or not; SQL Server refuses the whole document.
+_XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
+def xml_rows(rows: list[Any]) -> str:
+    """``<rows><row key="value" .../></rows>``: one element per row, one attribute per key.
+
+    For a SQL Server older than 2016, which has no ``OPENJSON`` but reads this with
+    ``@x.nodes('/rows/row')`` and ``r.value('@key', 'nvarchar(255)')``. A ``None`` leaves the
+    attribute out, so ``value()`` reads NULL - the same as a JSON null through ``OPENJSON``.
+
+    A key that cannot be an attribute name, or a character XML cannot carry, is refused with the row
+    named: changing either to fit would load a value that is not the source's.
+    """
+    root = ElementTree.Element("rows")
+    for number, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise PythonSourceError(
+                f"row {number} is a {type(row).__name__}, not an object: an xml payload makes one "
+                "attribute per key.")
+        attributes: dict[str, str] = {}
+        for key, value in row.items():
+            if not _XML_NAME.match(str(key)):
+                raise PythonSourceError(
+                    f"row {number} has the key {key!r}, which cannot be an XML attribute name. Alias "
+                    "the column in the program's query, or use payload_format json.")
+            if value is None:
+                continue
+            text = value if isinstance(value, str) else (
+                json.dumps(value) if isinstance(value, bool) else str(value))
+            bad = _XML_ILLEGAL.search(text)
+            if bad:
+                raise PythonSourceError(
+                    f"row {number}, {key}: holds the character U+{ord(bad.group()):04X}, which XML "
+                    "cannot carry, so SQL Server would refuse the batch. Clean it at the source.")
+            attributes[str(key)] = text
+        ElementTree.SubElement(root, "row", attributes)
+    return ElementTree.tostring(root, encoding="unicode")

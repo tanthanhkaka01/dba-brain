@@ -178,6 +178,56 @@ def test_reaping_pushes_a_critical_alert_naming_the_run(store, tmp_path, monkeyp
     assert source_id == "restore-workflow:ACME_TO_MSSQL2025_DOCKER"
 
 
+def _finishes_between_the_read_and_the_write(store, monkeypatch, log_id):
+    """The 1.184 timing: the pass reads the row as RUNNING, then the run writes DONE and exits."""
+    read = store.fetch_running_job_runs
+
+    def read_then_the_run_finishes(prefix=""):
+        rows = read(prefix)
+        # Only on the read that returns the run: the pass reads the backup rows first.
+        if any(int(row["log_id"]) == log_id for row in rows):
+            schedule.finish_run(store=store, log_id=log_id, status="done",
+                                message="Restore LAB_PG finished: done.", duration_ms=44000,
+                                error_text=None, metadata={"restore_id": "LAB_PG"})
+        return rows
+
+    monkeypatch.setattr(store, "fetch_running_job_runs", read_then_the_run_finishes)
+
+
+def test_a_run_that_finished_after_the_read_keeps_its_done(store, read_row, monkeypatch):
+    """A lab PostgreSQL restore on 2026-10-19: END *finished: done*, verified, and the same second
+    *timed out: pid 525315 is gone ... after 44s* - the job row kept TIMEOUT (0.31.0 sheet 1.184).
+    The pass had read the row as RUNNING; the run closed it and exited before the pass wrote."""
+    job_code = schedule.restore_job_code("LAB_PG")
+    # Past its timeout and owned by another host, so the pass does reach its write.
+    log_id = _running(store, job_code, started=NOW - timedelta(hours=14),
+                      metadata={"restore_id": "LAB_PG"})
+    _finishes_between_the_read_and_the_write(store, monkeypatch, log_id)
+
+    reaped = schedule.reap_stale_runs(store=store, timeouts={job_code: 21600}, now=NOW)
+
+    assert reaped == []
+    row = read_row(log_id)
+    assert row["status"] == "DONE"
+    assert row["message"] == "Restore LAB_PG finished: done."
+
+
+def test_no_timeout_alert_is_sent_for_a_run_that_finished(store, tmp_path, monkeypatch):
+    monkeypatch.setattr("dbabrain.lib.telegram_route.telegram_route",
+                        lambda level, **_: {"enabled": True, "alert": True, "chat_id": 42})
+    job_code = schedule.restore_job_code("LAB_PG")
+    log_id = _running(store, job_code, started=NOW - timedelta(hours=14),
+                      metadata={"restore_id": "LAB_PG"})
+    _finishes_between_the_read_and_the_write(store, monkeypatch, log_id)
+
+    schedule.reap_stale_runs(store=store, app_config=_Config(store.sqlite_path),
+                             timeouts={job_code: 21600}, now=NOW)
+
+    with sqlite3.connect(str(tmp_path / "runtime.sqlite")) as conn:
+        sent = conn.execute("SELECT message_text FROM telegram_send_messages").fetchall()
+    assert not [text for (text,) in sent if "timed out" in text]
+
+
 def test_reaping_runs_before_the_due_check_in_the_scheduler(tmp_path, monkeypatch):
     """A stale row must be closed in the same cycle that notices it, not left for whenever
     someone next reads the table."""

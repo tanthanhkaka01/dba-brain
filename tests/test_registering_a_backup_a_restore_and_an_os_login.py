@@ -51,6 +51,8 @@ def _backup(**over):
         "db_type": "sqlserver",
         "backup_dir": "/backup/appdb",
         "jobs": [{"job": "database", "script": "assets/backup/x.sh",
+                  # Which databases, as a list - stated on every job (0.34.0).
+                  "databases": ["APPDB"], "all_databases": False,
                   "cleanup_retention": 691200, "time_window": dict(WINDOW),
                   "notify": dict(NOTIFY)}],
     }
@@ -379,10 +381,15 @@ def test_db_type_is_taken_from_the_inventory_rather_than_retyped(tmp_path):
                                  "db_type": "postgresql", "db_name": "postgres"},
                                 data_dir=tmp_path)
 
-    outcome = registration.add_backup({k: v for k, v in _backup().items() if k != "db_type"},
-                                      data_dir=tmp_path, key=KEY)
+    request = {k: v for k, v in _backup().items() if k != "db_type"}
+    # A base backup takes the whole cluster: the registrar states that for a PostgreSQL job.
+    request["jobs"] = [{k: v for k, v in job.items() if k not in ("databases", "all_databases")}
+                       for job in request["jobs"]]
+    outcome = registration.add_backup(request, data_dir=tmp_path, key=KEY)
 
     assert outcome["db_type"] == "postgresql"
+    entry = json.loads((tmp_path / "restore_config.json").read_text(encoding="utf-8"))["backup_restore"]["backups"][0]
+    assert (entry["jobs"][0]["databases"], entry["jobs"][0]["all_databases"]) == ([], True)
 
 
 # ------------------------------------------------------------------------------ restore entries

@@ -184,6 +184,24 @@ def window_delta(samples: list[dict[str, Any]], *, fields: list[str], window_hou
     return None
 
 
+def consecutive_deltas(samples: list[dict[str, Any]], *, fields: list[str],
+                       max_pair_hours: float = MAX_PAIR_HOURS) -> list[dict[str, Any]]:
+    """Every neighbouring pair of usable samples that can honestly be subtracted, oldest first.
+
+    The series a chart of a rate draws: one point per collection interval rather than one running
+    average. A pair across a restart or wider than ``max_pair_hours`` is left out, by the same rules
+    as :func:`interval_delta`, so a gap in the chart is a gap in the evidence.
+    """
+    usable = _usable(samples, fields)
+    max_seconds = max_pair_hours * 3600
+    pairs = []
+    for older, newest in zip(usable, usable[1:]):
+        found = _pair(newest, older, fields, max_seconds)
+        if found is not None:
+            pairs.append(found)
+    return pairs
+
+
 def per_second(delta: dict[str, Any] | None) -> dict[str, float]:
     """``{field: units per second}`` for a delta, empty when there is no delta.
 

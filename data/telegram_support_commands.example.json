@@ -1003,6 +1003,84 @@
         },
         {
             "node_role": "worker",
+            "command_id": 33,
+            "sort_order": 22.5,
+            "command_text": "spbot_copy_backup",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 10,
+            "is_group": 1,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "action_config": {
+                "working_dir": "tools/dbabrain",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "dbabrain.backup_restore.cli",
+                    "restore-workflow",
+                    "--config",
+                    "{config_path}",
+                    "--restore-id",
+                    "{restore_id}",
+                    "--copy-only"
+                ],
+                "conditional_args": [
+                    {
+                        "parameter": "point_in_time",
+                        "not_equals": "LATEST",
+                        "argv": [
+                            "--point-in-time",
+                            "{point_in_time}"
+                        ]
+                    }
+                ],
+                "background": true,
+                "detached": true,
+                "requires_secret_key": true,
+                "startup_grace_seconds": 3,
+                "start_text": "Copy only started for {restore_id} (nothing is restored). point_in_time={point_in_time}",
+                "success_text": "Copy only completed for {restore_id}: the files are on the target and proven. Nothing was restored. point_in_time={point_in_time}",
+                "failure_text": "Copy only failed for {restore_id}. point_in_time={point_in_time}\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_text": "Copy only timed out for {restore_id}. point_in_time={point_in_time}. Exceeded {timeout_seconds}s.",
+                "success_output_contains": "restore-workflow completed status=SUCCESS",
+                "timeout_seconds": 7200,
+                "parameters": [
+                    {
+                        "name": "restore_id",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "prompt_text": "Please input restore_id"
+                    },
+                    {
+                        "name": "point_in_time",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "consume_rest": true,
+                        "validator": "regex",
+                        "pattern": "^(LATEST|\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} [+-]\\d{2}:\\d{2})$",
+                        "validation_error": "Use point_in_time format: LATEST or YYYY-MM-DD HH:MM:SS +HH:MM",
+                        "prompt_text": "Please input point_in_time: LATEST or YYYY-MM-DD HH:MM:SS +HH:MM"
+                    }
+                ],
+                "completion_probe": {
+                    "table": "job_runs",
+                    "success_job_code": "backup_restore.restore-workflow.end",
+                    "failure_job_code": "backup_restore.restore-workflow.error",
+                    "match_metadata": {
+                        "restore_id": "{restore_id}"
+                    }
+                }
+            },
+            "_note": "Copy only (0.34.0): the restore entry's copy from its server_id to its target, every file proven by checksum, and nothing restored - restore-workflow --copy-only. The same clearance as /spbot_restore: it writes onto the target's disk."
+        },
+        {
+            "node_role": "worker",
             "command_id": 19,
             "sort_order": 23.0,
             "command_text": "spbot_create_db_docker",

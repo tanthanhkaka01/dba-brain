@@ -23,6 +23,7 @@ import shlex
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from dbabrain.common import filechecksum
 from dbabrain.common.hostcmd import WINDOWS, Host, HostCommandError, open_session, parse_host, run
 
 TAR = "tar"
@@ -76,9 +77,9 @@ def _pack_command(host: Host, *, archive: str, folder: str, files: list[str],
 
 
 def _hash_command(host: Host, path: str) -> str:
-    if host.runtime == WINDOWS:
-        return f"(Get-FileHash -Algorithm SHA256 '{path}').Hash.ToLower()"
-    return f"sha256sum {shlex.quote(path)} | cut -d' ' -f1"
+    # `file-checksum`'s command (R43, 1.210): it prints `<hash>  <path>` or the bare hash, and
+    # every reader here takes the first word.
+    return filechecksum.hash_command("powershell" if host.runtime == WINDOWS else "bash", path)
 
 
 def _size_command(host: Host, path: str) -> str:

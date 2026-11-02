@@ -27,6 +27,8 @@ WITH meta AS (
     SELECT TO_CHAR(i.startup_time, 'YYYY-MM-DD HH24:MI:SS') AS counters_since,
            (SELECT TO_CHAR(value) FROM v$osstat WHERE stat_name = 'NUM_CPUS') AS host_cpus,
            p.cpu_param,
+           -- With it off the instance times nothing, and the CPU totals stay at 0 however busy.
+           (SELECT UPPER(value) FROM v$parameter WHERE name = 'timed_statistics') AS timed_statistics,
            NVL(REPLACE(b.banner, ',', ' '), 'unknown') AS banner,
            CASE
                WHEN b.banner LIKE '%Standard Edition%' THEN LEAST(p.cpu_param, 16)
@@ -107,6 +109,7 @@ SELECT
         || ', counters_since=' || m.counters_since
         || ', cpu_count=' || NVL(m.host_cpus, TO_CHAR(m.cpu_param))
         || ', schedulers_online=' || TO_CHAR(m.usable_cpus)
+        || ', timed_statistics=' || m.timed_statistics
         || ', edition=' || m.banner
         || ', source=' || c.source
         || ', note=cumulative_since_start_subtract_two_collections' AS message

@@ -13,12 +13,18 @@ try {
     $cpuUsage = [math]::Round((($samples | Measure-Object CookedValue -Average).Average), 2)
     $status = if ($cpuUsage -ge 90) { 'CRITICAL' } elseif ($cpuUsage -ge 80) { 'WARN' } else { 'OK' }
 
-    $cpus = @(Get-CimInstance Win32_Processor)
+    # One Win32_Processor per socket, each with its own counts. A virtual machine can present
+    # sockets of different sizes (8 + 6 + 3 cores on one guest of the estate, 2026-10-26), so the
+    # sockets are written one by one, in DeviceID order, and nothing reading the row has to assume
+    # they are alike.
+    $cpus = @(Get-CimInstance Win32_Processor | Sort-Object { [int]($_.DeviceID -replace '\D', '') })
     $model = ($cpus | Select-Object -First 1).Name
     $sockets = $cpus.Count
     $cores = ($cpus | Measure-Object -Property NumberOfCores -Sum).Sum
     $logical = ($cpus | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
-    $rows = @(New-MetricRow 'cpu_usage' $cpuUsage 'percent' $status "Average CPU usage is $cpuUsage percent. model=$model, sockets=$sockets, cores=$cores, logical_cpus=$logical")
+    $coresPerSocket = ($cpus | ForEach-Object { $_.NumberOfCores }) -join '+'
+    $logicalPerSocket = ($cpus | ForEach-Object { $_.NumberOfLogicalProcessors }) -join '+'
+    $rows = @(New-MetricRow 'cpu_usage' $cpuUsage 'percent' $status "Average CPU usage is $cpuUsage percent. model=$model, sockets=$sockets, cores=$cores, cores_per_socket=$coresPerSocket, logical_per_socket=$logicalPerSocket, logical_cpus=$logical")
 
     # Queue length is the Windows stand-in for load average: sustained > 2 threads per
     # logical CPU means runnable threads are waiting on the scheduler.

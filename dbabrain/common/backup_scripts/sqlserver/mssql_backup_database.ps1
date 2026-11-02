@@ -40,6 +40,8 @@
 #      BACKUP_CERT_NAME (default dbabrain_backup_cert), RETENTION_DAYS (default 14),
 #      RETENTION_SECONDS (optional; a window under a day, which wins over RETENTION_DAYS).
 # Exit: 0 on success, non-zero on failure. Prints RESULT=ok only on a completed run.
+# Receipt: one `FILE` line per backup file written (0.34.0), as the Linux script prints it:
+#   FILE<TAB>db=<DB><TAB>type=FULL|DIFF|LOG<TAB>size=<n><TAB>sha256=<hex><TAB>verify=passed|failed<TAB>encrypted=yes|no<TAB>path=<file>
 
 $ErrorActionPreference = 'Stop'
 
@@ -52,8 +54,26 @@ function Write-Stderr($text) { $Host.UI.WriteErrorLine($text) }
 
 function Die($reason) {
     Write-Stderr "RESULT=error reason=$reason"
+    Remove-RunFile
     exit 1
 }
+
+# Where a stop finds this run (0.34.0, 1.238): this process's id, under the run's tag - the WinRM host
+# of the run (wsmprovhost) or powershell over SSH. backup-stop ends its tree, sqlcmd included: killing
+# the engine session alone left this script to start the next database a second later (192.0.2.245,
+# 2026-10-29). Removed on every exit below; a file left behind is harmless, since the stop only ends a
+# process that started before the file was written.
+$runFile = $null
+if ($env:DBABRAIN_RUN_TAG) {
+    $runDir = Join-Path ([IO.Path]::GetTempPath()) 'dbabrain_runs'
+    New-Item -ItemType Directory -Force -Path $runDir -ErrorAction SilentlyContinue > $null
+    $runFile = Join-Path $runDir "$($env:DBABRAIN_RUN_TAG).pid"
+    Set-Content -LiteralPath $runFile -Value $PID -Encoding ASCII -ErrorAction SilentlyContinue
+}
+function Remove-RunFile { if ($runFile) { Remove-Item -LiteralPath $runFile -Force -ErrorAction SilentlyContinue } }
+# Every sqlcmd of this run names it as its session's host_name, so a stop ends this run's sessions
+# and never a native job's backup on the same instance.
+$runHost = if ($env:DBABRAIN_RUN_TAG) { @('-H', "dbabrain:$($env:DBABRAIN_RUN_TAG)") } else { @() }
 
 $backupDir  = $env:BACKUP_DIR
 $level      = "$($env:BACKUP_LEVEL)".ToLower()
@@ -118,7 +138,7 @@ function Get-TrustFlag {
 }
 
 function Invoke-Sql($query) {
-    $sqlArgs = @('-S', $server, '-b', '-Q', $query) + (Get-TrustFlag)
+    $sqlArgs = @('-S', $server, '-b', '-Q', $query) + (Get-TrustFlag) + $runHost
     if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser) } else { $sqlArgs += '-E' }
     $output = & $sqlcmdPath @sqlArgs 2>&1
     return @{ ok = ($LASTEXITCODE -eq 0); output = ($output -join "`n") }
@@ -130,7 +150,7 @@ function Invoke-SqlSecret($query) {
     $file = New-TemporaryFile
     try {
         Set-Content -LiteralPath $file.FullName -Value $query -Encoding UTF8
-        $sqlArgs = @('-S', $server, '-b', '-i', $file.FullName) + (Get-TrustFlag)
+        $sqlArgs = @('-S', $server, '-b', '-i', $file.FullName) + (Get-TrustFlag) + $runHost
         if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser) } else { $sqlArgs += '-E' }
         $output = & $sqlcmdPath @sqlArgs 2>&1
         return @{ ok = ($LASTEXITCODE -eq 0); output = ($output -join "`n") }
@@ -140,7 +160,7 @@ function Invoke-SqlSecret($query) {
 }
 
 function Get-SqlRows($query) {
-    $sqlArgs = @('-S', $server, '-b', '-h', '-1', '-W', '-Q', "SET NOCOUNT ON; $query") + (Get-TrustFlag)
+    $sqlArgs = @('-S', $server, '-b', '-h', '-1', '-W', '-Q', "SET NOCOUNT ON; $query") + (Get-TrustFlag) + $runHost
     if ($mssqlUser) { $sqlArgs += @('-U', $mssqlUser) } else { $sqlArgs += '-E' }
     $output = & $sqlcmdPath @sqlArgs 2>&1
     if ($LASTEXITCODE -ne 0) { Die "query failed: $($output -join ' ')" }
@@ -226,6 +246,7 @@ SELECT name FROM sys.databases
 if (-not $databases -or $databases.Count -eq 0) {
     "no database to back up at level=$level"
     'RESULT=ok'
+    Remove-RunFile
     exit 0
 }
 
@@ -237,6 +258,29 @@ if ($level -eq 'diff') {
         if ($count -notmatch '^\d+$') { Die "cannot read backup history for $db." }
         if ([int]$count -eq 0) { Die "no FULL backup exists for $db; a DIFF would have nothing to restore onto. Run the full job first." }
     }
+}
+
+# One receipt line per file written (0.34.0), the Linux script's line: the sha256 taken here, where
+# the file lies, through .NET - Get-FileHash arrived in PowerShell 4.0 and 2008 R2 hosts ship 2.0.
+# A file this account cannot read is still listed, with an empty sha256: recorded as unverified.
+function Write-FileReceipt([string]$db, [string]$type, [string]$path, [string]$verify) {
+    $size = ''
+    $sha = ''
+    try {
+        $item = Get-Item -LiteralPath $path
+        $size = [string]$item.Length
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        $stream = [System.IO.File]::OpenRead($item.FullName)
+        try { $sha = [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '').ToLower() }
+        finally { $stream.Close() }
+    } catch {
+        Write-Stderr "warning: could not hash $path - $($_.Exception.Message)"
+    }
+    # Whether the file is encrypted is what this script wrote it with: WITH ENCRYPTION exactly when
+    # a passphrase was given (a statement that cannot encrypt fails rather than writing it plain).
+    $fileEncrypted = if ($encPassword) { 'yes' } else { 'no' }
+    # No container on Windows: the path the engine wrote is the server's own.
+    "FILE`tdb=$db`ttype=$type`tsize=$size`tsha256=$sha`tverify=$verify`tencrypted=$fileEncrypted`thost_path=$path`tcontainer=`tpath=$path"
 }
 
 # --------------------------------------------------------------------------- #
@@ -273,11 +317,15 @@ foreach ($db in $databases) {
     if ($result.ok) {
         # CHECKSUM on the way in is only half of it: VERIFYONLY re-reads what landed on disk,
         # which is the difference between "the command returned" and "the file is restorable".
-        $verify = Invoke-Sql "RESTORE VERIFYONLY FROM DISK = '$escFile';"
+        # WITH CHECKSUM (0.34.0): every page checksum the backup carries is checked as it is read.
+        $verify = Invoke-Sql "RESTORE VERIFYONLY FROM DISK = '$escFile' WITH CHECKSUM;"
+        $verdict = 'passed'
         if (-not $verify.ok) {
             Write-Stderr "ERROR verify failed: $targetFile - $($verify.output)"
             $failed = 1
+            $verdict = 'failed'
         }
+        Write-FileReceipt $db $sub $targetFile $verdict
     } else {
         Write-Stderr "ERROR backup failed: $db ($level) - $($result.output)"
         $failed = 1
@@ -314,3 +362,4 @@ foreach ($db in $databases) {
 if ($failed -ne 0) { Die "one or more $level backups failed." }
 $encrypted = if ($encPassword) { 'yes' } else { 'no' }
 "RESULT=ok level=$level databases=$($databases -join ',') encrypted=$encrypted"
+Remove-RunFile

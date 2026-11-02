@@ -911,6 +911,122 @@ the session's login and transaction age and how many sessions are blocked behind
 current run state. A prompt that says "kill 723?" when 723 is already gone teaches an operator that
 the prompt is noise.
 
+## The AI assistant (0.34.0)
+
+The operator, 2026-10-31: *the group System - AI assists is special - an AI agent that supports me
+directly, like petweb; keep what was asked, what the AI answered and which dbabrain tools it used,
+with a quota in $.* A message addressed to the bot in the assistant's chat is a question to
+Claude, answered with dbabrain's own read-only tools.
+
+**Its chat is a level, as every app's is.** `data/ai_assist.json` `telegram_chat` (mandatory,
+shipped `ai_assist`) names a notify level, exactly as a SQL target's `notify.*.telegram_chat: "sql"`
+does; the chat is the **active** group in `telegram_groups.json` whose `notify_level` is that level,
+or `telegram_config.json` `level_chat_map`'s entry - resolved by `lib.config.chat_id_for_level`, the
+one resolver every app uses. No id is written in `ai_assist.json` (the operator, 2026-10-31: *a
+list of group ids is hard-coding*). Making a group the assistant's:
+`python -m dbabrain.telegram.cli group-level --group "System - AI assists" --level ai_assist`.
+`check-references` reports an `ai_assist.json` level no group carries.
+
+**Its own job.** `APP-TELEGRAM-AI` runs `python -m dbabrain.telegram.cli --config config.json
+ai-assist` every 3 s, one at a time, timeout 900 (above `run_budget_seconds`). `run-workflow` keeps
+receiving and sending as before - it saves the chat's messages into `telegram_messages` and sends
+whatever the assistant queues - so a question that takes a minute never holds up an alert. Off, no
+file, no key or no chat is *not configured*: said in the run's answer and skipped.
+
+**One run** (`dbabrain/telegram/ai_assist.py`) closes a question a dead run left `running` after
+`stale_running_seconds`, takes up to `questions_per_run` messages it has not read (newer than
+`max_message_age_seconds`), oldest first, and **claims** each one (`ai_requests`' unique
+`(chat_id, message_id)` - a message is answered once). Then:
+
+- a `/spbot_*` command, a bot's message, or a message with no text, photo or document: kept as
+  `stopped` and left to the bot;
+- a message **not addressed to the assistant**, with `require_mention` on (shipped): kept as
+  `stopped` **without its text** - people talking to each other are neither answered nor recorded
+  (the operator, 2026-10-31). Addressed is an `@<telegram_bot_username>` in the text (taken out of
+  the question), a `text_mention` of the bot's id, a reply to one of the bot's own messages when
+  `reply_to_assistant_is_mention`, or a group word; `@bot` alone answers with `/help`. A node
+  that does not know its bot's username or id skips the run and says so;
+- a user who is not in `users[]` with `"active": true`: refused by name (the reply carries the
+  `telegram_user_id` to add) and kept as `blocked`;
+- `/new` (closes the user's conversation), `/usage` (today and this month against every limit),
+  `/help`;
+- a question: checked by `lib.ai_assist.decide` - a duplicate (the same text from the same user
+  within `duplicate_window_seconds`), `cooldown_seconds`, `rate_window_max_requests` per
+  `rate_window_seconds`, then the system's and the user's questions, tokens and USD per day and per
+  month (the config timezone's) - and refused before any call, with the limit and when it frees. A
+  question that goes **holds its place** (`est_tokens`, `est_cost_usd`) before the first call.
+
+**Conversations.** A reply to one of the assistant's answers continues that answer's conversation
+(found through `telegram_send_messages.source_id`); otherwise the user's latest open one updated
+within `conversation_idle_seconds`; one with `max_history_questions` questions starts over. The
+history goes to the model exactly as kept (`ai_messages`), repaired where a dead run left a tool
+call unanswered.
+
+**The loop** (`dbabrain/telegram/ai_agent.py`, petweb's `runAgent`). Before every turn the tokens,
+the money, the turns and the run's time are checked. Every `tool_use` gets a `tool_result`: run;
+refused when the tool calls are used up (then one more turn with `tool_choice: none`); or not run
+when the answer was cut off. A refusal is answered as Claude gave it, with its category - no
+fallback to another model (the operator's word). `output_config.effort` is always set; the tools and
+the system prompt never change between questions and are cached (`cache_control`); the time and the
+asker go in the question's `<dbabrain_context>`. Each call is priced by the model that served it, at
+`prices[]`.
+
+**Preserved thinking.** A thinking block is bound to the system prompt and the tools it was written
+under; a conversation kept across a deploy that changed either was refused whole (the first question
+after 2.87.59, 2026-10-31). Every call goes through the beta `thinking-binding-controls-2026-08-01`
+with `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`: the API drops the stale blocks
+and answers, and the response's `input_transformations` (kept in `ai_api_calls.response_json`) names
+them. The system prompt carries nothing a deploy changes - no version, no time - so a deploy that
+leaves the guide and the tools alone keeps every conversation's thinking and its cache.
+
+**The answer's language** is `reply_language`: `auto` (shipped) is the language of the question being answered - said in the system prompt and again as `answer_language` in the question's own `<dbabrain_context>`, because the rule in the system prompt alone lost to a long Vietnamese conversation and an English question was answered in Vietnamese (2026-10-31); a language's name fixes it.
+
+**Nothing reaches the node from the internet.** Tool use is client-side: Claude returns `tool_use`
+blocks in its answer to our request, the tool runs on the worker, and its result goes up in the
+next request. Telegram is long-polled. No MCP connector, no webhook.
+
+**The tools** (`dbabrain/telegram/ai_tools.py`), offered when `tools_mode` is `read_only` and each
+one's switch is on:
+
+| Tool | Reads | Held by |
+| --- | --- | --- |
+| `store_schema`, `store_query` | the runtime store | one `SELECT` / `WITH`, a refusal of every word and function that writes (`read_only_sql`), `store_query_blocked_tables`; PostgreSQL `SET TRANSACTION READ ONLY` + `statement_timeout`, SQLite `query_only`; always rolled back; `store_query_max_rows` |
+| `list_files`, `read_file`, `grep_files` | the tool root's `file_roots` (`data`, `assets`, `logs`, `runtime/output`, `dbabrain`, `config.json`) | `file_denied` (the encrypted store, `secrets/`, `ssh_keys/`, keys, sqlite files); no path outside the root |
+| `run_sql` | a monitored server, by `server_id` | the same read-only check, then `sql_commands.run_sql_to_xlsx` -> `common.cli run-sql` (never committed); `run_sql_server_ids`, `run_sql_credential_name`, `run_sql_max_rows`, `run_sql_timeout_seconds` |
+| `bot_commands` | `telegram_support_commands.json` and the BotFather menu | which `/spbot_*` command the asker may run, so an answer proposes one exactly - the user runs it |
+
+Every result is **redacted** of every value in the encrypted secret store (and of `password=`,
+`token=` shapes), cut to `tool_result_max_chars` with the cut said, and kept in `ai_tool_runs`. The
+model's own answer is redacted the same way before it is kept or sent.
+
+**The answer** is queued as plain text in parts of `reply_chunk_chars`, replying to the question,
+`source_type ai_requests`; with `show_cost_footer` it ends with the model, the tokens, the cost, the
+tools used and the user's month so far. `ack_message` queues *Working on it* first.
+
+**Every field of `ai_assist.json` is mandatory** (R50): the reference objects `ai_assist_settings`,
+`ai_assist_price` and `ai_assist_user` in `shared_config_objects.json`; `upgrade-config`'s
+`stated-ai-assist` step writes the shipped values (a user row's missing `active` is `false`).
+Shipped: `claude-sonnet-5-5`, effort `medium`, $10 a month for the system, $5 for a user, $0.50 a
+question. The SDK is the `anthropic` package (`requirements.txt`, extra `ai`); a node without it
+skips with *not installed*.
+
+## A group that becomes a supergroup (0.34.0)
+
+Telegram gives a group a new id when it becomes a supergroup - an admin change or the chat-history
+setting is enough - and every message after it arrives under that id. The intake (`save-updates`,
+`run-workflow`) sees the move in either of its two messages (`migrate_to_chat_id` in the old chat,
+`migrate_from_chat_id` in the new one) and `updates.migrate_group` **carries the old row's settings to
+the new id** - `notify_level`, `source_notify_level`, `allow_command`, every field but the id, title,
+type and note - and **sets the old row `active: false`**, with a note naming its successor (the
+operator, 2026-10-31). Every level that pointed at the old chat now resolves to the new one: alerts,
+reports, SQL tasks and the AI assistant follow without an edit. `telegram group-migrate --from-id
+<old> --to-id <new>` does the same for a move the intake did not see. `group-level --group <title>`
+means the live row when a retired twin shares its title.
+
+Found 2026-10-31: *System - AI assists* became a supergroup with a new id; the new chat was discovered as an
+inert row and a question waited under it, unread. Before this, an alert group that moved would have
+lost its alerts the same way.
+
 ## Common Issues
 
 - Pending queue is not sending: check `telegram.enabled`, bot token resolution, `tlgchat_id`, and `send_status`.

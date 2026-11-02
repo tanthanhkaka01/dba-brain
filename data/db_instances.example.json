@@ -58,11 +58,7 @@
         }
       },
       "report_policy": {
-        "enabled": true,
-        "severity_overrides": {},
-        "disabled_metric_codes": [],
-        "disabled_event_codes": [],
-        "disabled_report_events": []
+        "disabled_metric_codes": []
       },
       "note": "Primary application instance. Replace every value with your own."
     },

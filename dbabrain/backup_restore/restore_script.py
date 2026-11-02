@@ -62,6 +62,8 @@ from dbabrain.backup_restore.config import (
 )
 from dbabrain.transport import common_cli
 from dbabrain.lib import data_sources, instance_bundle, restore_space
+from dbabrain.lib import integrity as restore_integrity
+from dbabrain.lib import offload as offload_rules
 from dbabrain.lib.shell import docker_cli
 from dbabrain.lib.notify import NotifyConfig
 from dbabrain.lib.restore.copy_mode import parse_copy_mode
@@ -116,6 +118,12 @@ class ScriptRestore:
     # absent meaning on at x2. The tool checks it before the script runs; the script checks nothing
     # (the operator, 2026-10-02). Until then the field was read on a share-driven entry only.
     space_check: restore_space.SpaceCheck = field(default_factory=restore_space.SpaceCheck)
+    # How each staged file is proven before it is used (0.34.0) - see config.BackupRestoreConfig.
+    integrity: restore_integrity.RestoreIntegrity | None = None
+    # `restore` or `copy_only` (0.34.0, 1.216) - see config.BackupRestoreConfig.action.
+    action: str | None = None
+    # `server` or `repository` (0.34.0) - see config.BackupRestoreConfig.restore_from.
+    restore_from: str | None = None
     # What the copy to another machine takes (config.COPY_SELECTIONS): `chain` - the backups the
     # restore applies - or `window` - the chain and every file of `copy_recent_hours`. Read on a
     # script-driven entry since 2026-10-03; until then it was accepted and ignored here, so an
@@ -323,6 +331,10 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
     try:
         copy_mode = parse_copy_mode(entry.get("copy_mode"))
         space_check = restore_space.parse_space_check(entry)
+        integrity = restore_integrity.parse_restore_integrity(
+            entry, label=f"backup_restore.restores[{restore_id}]")
+        action = restore_integrity.parse_restore_action(entry, label=f"backup_restore.restores[{restore_id}]")
+        restore_from = offload_rules.parse_restore_from(entry, label=f"backup_restore.restores[{restore_id}]")
         copy_selection = _parse_copy_selection(entry.get("copy_selection"))
         # 0 is a value - a window with no limit - not "absent": `or 24` read it as a day.
         hours = entry.get("copy_recent_hours")
@@ -358,6 +370,9 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
         overwrite_existing=entry.get("overwrite_existing") is True,
         copy_mode=copy_mode,
         space_check=space_check,
+        integrity=integrity,
+        action=action,
+        restore_from=restore_from,
         copy_selection=copy_selection,
         copy_recent_hours=copy_recent_hours,
         staging_marker=str(entry.get("staging_marker") or "").strip(),
@@ -514,6 +529,7 @@ def transfer_backup_to_target(
     log=None,
     prune: bool = True,
     point_in_time: str = "",
+    catalog: Any = None,
 ) -> dict[str, Any]:
     """Copy the backup from the source host to the target host before the restore runs.
 
@@ -531,8 +547,16 @@ def transfer_backup_to_target(
 
     ``prune=False`` leaves the retention cleanup to the caller: ``restore_by_id`` runs it after the
     restored databases are verified (its DELETE step), as the engine path does.
+
+    Every file goes through the checksum gate (0.34.0, 1.213b, :func:`_copy_gated_between_hosts`);
+    a copy that is not proven raises, so no restore runs on it. ``catalog`` records the run (its id
+    is answered as ``restore_run_id``, for the caller to close with the restore's outcome).
     """
     del log
+    proofs: dict[str, dict[str, Any]] | None = None
+    source_dir = job.source_backup_host_dir
+    if getattr(job, "restore_from", None) == "repository":
+        source, source_dir, proofs = _repository_source(job, catalog=catalog, data_dir=data_dir)
     source_login = _ssh_login(source, data_dir=data_dir, key=key, key_base64=key_base64)
     target_login = _ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64)
     window = job.copy_selection == "window"
@@ -542,11 +566,11 @@ def transfer_backup_to_target(
     else:
         include = list(common_cli.run("backup-chain", {
             "db_type": job.db_type, "source": source_login,
-            "source_dir": job.source_backup_host_dir, "backup_dir": job.backup_dir,
+            "source_dir": source_dir, "backup_dir": job.backup_dir,
             "container": source.container_name, "point_in_time": point_in_time,
         }, stream_stderr=True).get("include") or [])
-    out = dict(common_cli.run("copy-backup-dir", {
-        "source": source_login, "source_dir": job.source_backup_host_dir,
+    request = {
+        "source": source_login, "source_dir": source_dir,
         "target": target_login, "target_dir": job.target_backup_dir,
         "include": include, "make_readable": True, "open_for_engine": True,
         "copy_mode": job.copy_mode,
@@ -554,7 +578,12 @@ def transfer_backup_to_target(
         # The chain AND every file of the window: never fewer backups than `chain` copies.
         **({"window_hours": job.copy_recent_hours} if window and job.copy_recent_hours > 0 else {}),
         **_staging_marker(job),
-    }, stream_stderr=True))
+    }
+    out = _copy_gated_between_hosts(job, request, source=source, target=target, catalog=catalog, proofs=proofs)
+    if proofs is not None:
+        out["restore_from"] = "repository"
+        out["repository_server_id"] = source.server_id
+        out["repository_dir"] = source_dir
     out["include"] = include
     out["copy_selection"] = job.copy_selection
     pruned = (prune_staged_backups(job, target=target, data_dir=data_dir, key=key,
@@ -563,6 +592,205 @@ def transfer_backup_to_target(
                              "skipped": "left to the caller"})
     out["pruned"] = pruned.get("pruned", 0)
     out["retention_seconds"] = pruned.get("retention_seconds", 0)
+    return out
+
+
+class CopyNotProvenError(errors.Refused):
+    """A host-to-host copy the checksum gate could not prove; the restore is not run on it."""
+
+
+#: The engines a restore can read from the repository: their chain is read from the folder's own
+#: layout, which the repository keeps. Oracle's pieces are RMAN's to catalog (a later item).
+REPOSITORY_ENGINES = ("postgresql", "sqlserver")
+
+
+def _repository_source(job: Any, *, catalog: Any, data_dir: Any) -> tuple[BackupTarget, str, dict[str, Any]]:
+    """``restore_from: repository`` (0.34.0): the repository host as the copy's source, the folder there
+    that stands for the entry's ``source_backup_host_dir``, and every repository file's offload proof."""
+    from dbabrain.backup_restore.backup import resolve_ssh_target
+    from dbabrain.backup_restore.offload import repository_source
+
+    engine = str(job.db_type or "").lower()
+    if engine not in REPOSITORY_ENGINES:
+        raise CopyNotProvenError(f"{job.label}: restore_from repository reads {', '.join(REPOSITORY_ENGINES)} "
+                                 f"backups; {engine} is not built (RMAN catalogs its own pieces).")
+    if catalog is None:
+        raise CopyNotProvenError(f"{job.label}: restore_from repository reads the backup catalog - where each "
+                                 "copy is and what it was proven as - and no catalog is open.")
+    server_id, folder = repository_source(
+        catalog.repository_locations(server_id=job.server_id, under=job.source_backup_host_dir),
+        job.source_backup_host_dir)
+    repository = resolve_ssh_target(server_id, label=f"{job.label} repository", data_dir=data_dir,
+                                    require_container=False)
+    proofs = catalog.repository_proofs(server_id=job.server_id, repository_server_id=server_id)
+    return repository, folder, proofs
+
+
+def _ssh_host_block(login: dict[str, Any]) -> dict[str, Any]:
+    """``file-checksum``'s ``host`` for a machine reached over SSH - the login ``copy-backup-dir`` uses."""
+    return {"runtime": "linux", "access": "ssh", **login}
+
+
+def _script_file_type(db_type: str, relative: str) -> str:
+    """A staged file's ``file_type`` from the layout the PostgreSQL and Oracle jobs write: ``base/`` and
+    ``wal/`` for PostgreSQL, RMAN's piece names for Oracle (a best reading - the catalog's own type is
+    used whenever the backup recorded the file); SQL Server's own layout."""
+    path = relative.replace("\\", "/")
+    name = posixpath.basename(path).upper()
+    engine = str(db_type or "").lower()
+    if engine == "postgresql":
+        if path.startswith("wal/") or "/wal/" in path:
+            return "WAL"
+        if name == "BACKUP_MANIFEST":
+            return "MANIFEST"
+        return "INCR_BASE" if "_INCR" in path.upper() else "FULL_BASE"
+    if engine == "oracle":
+        if name.startswith("C-"):
+            return "CONTROLFILE"      # RMAN's autobackup: c-<dbid>-<yyyymmdd>-<nn>
+        for marker, kind in (("CONTROLFILE", "CONTROLFILE"), ("SPFILE", "SPFILE"), ("ARCH", "ARCHIVELOG"),
+                             ("L1", "RMAN_L1"), ("INCR", "RMAN_L1")):
+            if marker in name:
+                return kind
+        return "RMAN_L0"
+    return restore_integrity.sqlserver_file_type(path)
+
+
+def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, source: BackupTarget,
+                              target: BackupTarget, catalog: Any = None,
+                              proofs: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """``copy-backup-dir`` held to the checksum gate (0.34.0, 1.213b) - the same rule as every other copy.
+
+    1. ``plan_only``: the files the request selects, read from the source.
+    2. :func:`copy_gate.copy_verified_batch` over them: the sources hashed on the source host, the
+       targets on the target, in one ``file-checksum`` call each per round.
+    3. Each round's copies are ONE ``copy-backup-dir`` - the request as asked, plus ``replace`` naming
+       the files still to copy, so a same-size copy with other bytes is copied over. The copy is lazy:
+       the gate asks for files one by one, and they travel together when it hashes the round.
+
+    A run whose files are all on the target already still makes one copy call, for what the command
+    does besides copying: the mirror (removing what the source no longer has), the marker, opening
+    the folder for the engine. Anything not proven raises :class:`CopyNotProvenError`.
+    """
+    from dbabrain.backup_restore import copy_gate
+
+    integrity = restore_integrity.require_restore_integrity(
+        {"integrity": job.integrity.as_record()} if job.integrity else {}, label=f"restore_id={job.label}")
+    source_dir = str(request.get("source_dir") or job.source_backup_host_dir).rstrip("/")
+    target_dir = job.target_backup_dir.rstrip("/")
+    if proofs is not None:
+        # From the repository, only what an offload proved: anything else there - a copy cut short,
+        # a stray file - is refused, never restored (the entry's own uncatalogued choice is for its
+        # server, where every file was written by a backup).
+        from dataclasses import replace as _replace
+
+        integrity = _replace(integrity, uncatalogued="refuse")
+    plan = common_cli.run("copy-backup-dir", {**request, "plan_only": True}, stream_stderr=True)
+    selected = [(str(item["path"]), int(item.get("size_bytes") or 0)) for item in plan.get("files") or []]
+
+    stored: dict[str, dict[str, Any]] = dict(proofs or {})
+    if proofs is None and catalog is not None and selected:
+        names = sorted({posixpath.basename(rel) for rel, _size in selected})
+        for name, row in catalog.stored_files(server_id=job.server_id, file_names=names).items():
+            # A name is held to its stored checksum only at the path the backup recorded it: a
+            # rebuilt PostgreSQL cluster names its WAL from ...0001 again, and every base backup
+            # has its own backup_manifest.
+            # host_path, or the file's own path when it lies in no container's mount (the catalog's
+            # column is file_path; "path" was a FILE line's word, and read None here - 1.213b).
+            stored[restore_integrity.hashed_path(row.get("file_type") or "",
+                                                 str(row.get("host_path") or row.get("file_path") or ""))] = row
+    items = []
+    for rel, _size in selected:
+        source_path = f"{source_dir}/{rel}"
+        row = stored.get(source_path) or {}
+        items.append(copy_gate.FileToCopy(
+            source_server_id=source.server_id if proofs is not None else job.server_id,
+            target_server_id=job.target_server_id,
+            # The type the backup recorded wins; the layout is read only for a file no backup recorded.
+            file_name=posixpath.basename(rel), file_type=row.get("file_type") or _script_file_type(job.db_type, rel),
+            source_path=source_path, target_path=f"{target_dir}/{rel}", engine=str(job.db_type or "").lower(),
+            checksum_after_backup=row.get("checksum_after_backup"), size_after_backup=row.get("size_bytes"),
+            file_id=row.get("file_id"), source_host_path=source_path, target_host_path=f"{target_dir}/{rel}",
+            backup_taken_at=row.get("backup_ended_at")))
+    relative_of = {item.target_path: rel for item, (rel, _size) in zip(items, selected)}
+
+    restore_run_id = None
+    if catalog is not None:
+        from dbabrain.lib.version import __version__
+        import socket
+
+        restore_run_id = catalog.start_restore_run(
+            action=restore_integrity.ACTION_COPY_ONLY if getattr(job, "action", None) == restore_integrity.ACTION_COPY_ONLY
+            else restore_integrity.ACTION_RESTORE, restore_id=job.restore_id, source_server_id=job.server_id,
+            target_server_id=job.target_server_id, target_folder=target_dir,
+            copy_max_retry=integrity.copy_max_retry, phase="copying",
+            node_host=socket.gethostname(), app_version=__version__)
+
+    copies: list[dict[str, Any]] = []
+    pending: list[str] = []
+
+    def flush(replace: list[str]) -> None:
+        answer = dict(common_cli.run("copy-backup-dir", {**request, "replace": replace}, stream_stderr=True))
+        copies.append(answer)
+
+    def hasher(host: dict[str, Any], *, copies_first: bool = False):
+        def batch(paths: list[str]) -> dict[str, tuple[str, int | None]]:
+            if pending and copies_first:
+                # The round's copies travel now, together, before the round is hashed.
+                round_files, pending[:] = list(pending), []
+                try:
+                    flush(round_files)
+                except Exception as exc:  # noqa: BLE001 - a failed round is an attempt spent, per file
+                    copies.append({"error": f"{type(exc).__name__}: {exc}"[:2000]})
+            if not paths:
+                return {}
+            answer = common_cli.run("file-checksum", {"host": host, "paths": list(paths)})
+            return {f["path"]: (f["sha256"], f.get("size_bytes")) for f in answer.get("files") or []}
+        return batch
+
+    source_host = _ssh_host_block(request["source"])
+    target_host = _ssh_host_block(request["target"])
+
+    def copy(item: Any) -> int:
+        pending.append(relative_of[item.target_path])
+        return 0
+
+    try:
+        outcomes = copy_gate.copy_verified_batch(
+            items, integrity=integrity, hash_sources=hasher(source_host), hash_targets=hasher(target_host, copies_first=True),
+            copy=copy, catalog=catalog, restore_run_id=restore_run_id, copy_engine="copy-backup-dir")
+        if not copies:
+            # Nothing needed copying: the mirror, the marker and the engine's read access are still
+            # this run's, and a failure here is the run's own error. (A round that failed is already
+            # an attempt spent, and its file says so.)
+            flush([])
+    except Exception as exc:
+        if catalog is not None and restore_run_id is not None:
+            catalog.set_restore_run(restore_run_id, phase="error", error_text=f"{type(exc).__name__}: {exc}"[:2000])
+        raise
+    summary = copy_gate.summarize(outcomes)
+    if catalog is not None and restore_run_id is not None:
+        catalog.set_restore_run(
+            restore_run_id, phase="verified" if summary["proven"] else "refused",
+            chain_files=summary["files"], files_matched=summary["verdicts"].get("match", 0),
+            files_recopied=summary["recopied"], refused_reason="; ".join(summary["unproven"])[:2000])
+    if not summary["proven"]:
+        if catalog is not None and restore_run_id is not None:
+            from dbabrain.db.store import utc_now_text
+
+            # Ended here: no restore follows a refused copy, so nobody else closes it.
+            catalog.set_restore_run(restore_run_id, ended_at=utc_now_text())
+        raise CopyNotProvenError(
+            f"{job.label}: the copy {job.server_id} -> {job.target_server_id} is not proven, so it is not "
+            f"restored - {'; '.join(summary['unproven'][:5])}")
+
+    done = [answer for answer in copies if "error" not in answer]
+    out = dict(done[0]) if done else {}
+    out["copied"] = sum(int(answer.get("copied") or 0) for answer in done)
+    out["bytes_copied"] = sum(int(answer.get("bytes_copied") or 0) for answer in done)
+    out["skipped"] = int(done[0].get("skipped") or 0) if done else 0
+    out.pop("files", None)
+    out["integrity"] = {**summary, "restore_run_id": restore_run_id}
+    out["restore_run_id"] = restore_run_id
     return out
 
 

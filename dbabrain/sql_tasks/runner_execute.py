@@ -21,7 +21,8 @@ from dbabrain.lib.sql_task_catalog import (  # noqa: F401 - re-exported for this
     load_default_credential_names, load_input_definition, load_sql_access_by_server,
     load_sql_commands, load_sql_script_definition, load_sql_targets, resolve_sql_folder)
 from dbabrain.lib.sql_text import (DEFAULT_CONNECT_TIMEOUT_SECONDS, NAMED_BIND_DB_TYPES,
-                                 build_parameter_prelude)
+                                 build_parameter_prelude, resolve_password)
+from dbabrain.lib.task_input import SourceRef
 from dbabrain.lib import data_sources
 from dbabrain.lib.data_sources import request_fill
 from dbabrain.transport import common_cli
@@ -105,6 +106,7 @@ def _run_python_source(
     parameter_values: dict[str, Any] | None,
     logger: Any,
     connection: dict[str, Any] | None = None,
+    source_connection: dict[str, Any] | None = None,
 ) -> list[str]:
     """Run the task's ``input_type: "python"`` step and return its rows, batched as JSON.
 
@@ -135,7 +137,7 @@ def _run_python_source(
             source, tool_root=tool_root, parameter_values=parameter_values,
             target={"target_server_id": target.server_id,
                     "target_database": target.database_name},
-            connection=connection)
+            connection=connection, source_connection=source_connection)
     except PythonSourceError as exc:
         metadata["input"] = {"type": command.input_type, "script": source.script_path,
                              "status": "failed", "error": str(exc)}
@@ -149,7 +151,12 @@ def _run_python_source(
         )
         raise errors.OperationFailed(str(exc)) from exc
 
-    payloads = batches(produced.rows, source.batch_rows)
+    try:
+        payloads = batches(produced.rows, source.batch_rows, source.payload_format)
+    except PythonSourceError as exc:
+        metadata["input"] = {"type": command.input_type, "script": source.script_path,
+                             "status": "failed", "error": str(exc)}
+        raise errors.OperationFailed(f"{source.script_path}: {exc}") from exc
     metadata["input"] = {
         "type": command.input_type,
         "script": source.script_path,
@@ -157,6 +164,7 @@ def _run_python_source(
         "batches": len(payloads),
         "batch_rows": source.batch_rows,
         "parameter": source.parameter,
+        "payload_format": source.payload_format,
         **produced.summary(),
         # Kept whether or not the script failed: a fetcher that succeeds and warns is the case
         # nobody looks at, and it is the one where a silently halved pull hides.
@@ -452,19 +460,26 @@ def diagnose_connect_failure(*, target: SqlTarget, error: str,
 
 
 def find_database_inventory(target: SqlTarget, servers: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return find_instance(servers, server_id=target.server_id, db_type=target.db_type,
+                         instance_name=target.instance_name)
+
+
+def find_instance(servers: list[dict[str, Any]], *, server_id: str, db_type: str,
+                  instance_name: str) -> dict[str, Any] | None:
+    """The inventory record a task connects to: its target, or its program's ``source_connection``."""
     for server in servers:
-        if str(server.get("server_id", "")) != target.server_id:
+        if str(server.get("server_id", "")) != server_id:
             continue
         for database in server.get("databases", []) or []:
-            if str(database.get("db_type", "")).lower() != target.db_type.lower():
+            if str(database.get("db_type", "")).lower() != db_type.lower():
                 continue
-            instance_name = str(database.get("instance_name") or database.get("sid") or "")
+            record_instance = str(database.get("instance_name") or database.get("sid") or "")
             # The instance only: server_id + db_type + instance_name, which is what connecting needs.
             # `service_name` is not part of a SQL Server connection. `database_names` used to be a
             # gate here too, compared case-sensitively - and it is a list no code writes, so a
             # database created yesterday was refused and `APPDB_PROD` failed against `APPDB_Prod`
             # (SQL033, 2026-09-24). The server says whether a database exists, after connecting.
-            if not sql_task_target.instance_matches(instance_name, target.instance_name, target.db_type):
+            if not sql_task_target.instance_matches(record_instance, instance_name, db_type):
                 continue
             resolved = dict(database)
             resolved["server_id"] = server.get("server_id")
@@ -472,6 +487,34 @@ def find_database_inventory(target: SqlTarget, servers: list[dict[str, Any]]) ->
             resolved["ip"] = server.get("ip")
             return resolved
     return None
+
+
+def source_connection_for(source: SourceRef, *, inventory: list[dict[str, Any]],
+                          credentials: list[dict[str, Any]],
+                          secrets: dict[str, str]) -> dict[str, Any]:
+    """The connection for a program's ``input.source_connection``, resolved as a target's is.
+
+    Its instance from the inventory, its login by ``credential_name`` from ``users.json``, the
+    password from the store by that login's ``password_ref``. Raises ``NotConfigured`` naming what
+    is missing, before the program starts.
+    """
+    instance = find_instance(inventory, server_id=source.server_id, db_type=source.db_type,
+                             instance_name=source.instance_name)
+    if instance is None:
+        raise errors.NotConfigured(sql_task_target.instance_not_found_message(
+            server_id=source.server_id, db_type=source.db_type, instance_name=source.instance_name,
+            records=[{**record, "server_id": server.get("server_id")}
+                     for server in inventory for record in server.get("databases") or []])
+            + " (input.source_connection)")
+    try:
+        credential = data_sources.find_database_credential(
+            credentials, server_id=source.server_id, credential_name=source.credential_name,
+            db_type=source.db_type, service_name=source.service_name,
+            instance_name=source.instance_name)
+    except data_sources.CredentialNotFound as exc:
+        raise errors.NotConfigured(f"{exc} (input.source_connection)") from exc
+    return request_fill.connection_from(instance, credential, resolve_password(credential, secrets),
+                                        server_id=source.server_id)
 
 
 def find_database_credential(target: SqlTarget, credential_groups: list[dict[str, Any]]) -> dict[str, Any] | None:

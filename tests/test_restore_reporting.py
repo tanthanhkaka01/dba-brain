@@ -56,7 +56,7 @@ def harness(monkeypatch, tmp_path):
 def _config(restore_id="R1", active=True):
     return SimpleNamespace(
         restore_id=restore_id, active=active, source_id="S", target_id="T",
-        notify={"alert_on_error": {"enabled": 1}}, time_window=SimpleNamespace(timeout=7200),
+        notify={"alert_on_error": {"enabled": 1}}, time_window=SimpleNamespace(timeout=7200), action="restore", restore_from="server",
     )
 
 
@@ -226,7 +226,7 @@ def test_script_restores_report_too(monkeypatch, harness):
         db_type="oracle", server_id="SRV", target_container="c", job_code="jc",
         # Mirrors the real ScriptRestore: the event metadata names the target, and a stub without
         # this field would let the scheduler ship a message with no target in it again.
-        target_server_id="DST", notify={}, time_window=SimpleNamespace(timeout=7200),
+        target_server_id="DST", notify={}, time_window=SimpleNamespace(timeout=7200), action="restore", restore_from="server",
     )
     monkeypatch.setattr(workflow, "load_script_restores", lambda _p: [job])
     # The seam moved in 2.69.52: the scheduled restore drives dbabrain.common's primitives through
@@ -375,7 +375,7 @@ def test_a_point_in_time_script_restore_says_so_on_every_message(monkeypatch, ha
     job = SimpleNamespace(
         restore_id="LAB_PG_A_TO_B", label="LAB_PG_A_TO_B (postgresql)", active=True,
         db_type="postgresql", server_id="SRV", target_container="c", job_code="jc",
-        target_server_id="DST", notify={}, time_window=SimpleNamespace(timeout=7200),
+        target_server_id="DST", notify={}, time_window=SimpleNamespace(timeout=7200), action="restore", restore_from="server",
     )
     monkeypatch.setattr(workflow, "load_script_restores", lambda _p: [job])
     seen = {}

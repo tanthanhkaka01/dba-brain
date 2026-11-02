@@ -85,6 +85,8 @@ COMMANDS = _commands_by_cli()
 FRONT_DOORS: dict[str, str] = {
     "create-db-docker": "sre",   # resolves the lab spec from sre's config, registers what was built
     "move-db-docker": "sre",     # resolves both hosts from sre's config, updates the registry
+    # finds the entry's RUNNING rows, rebuilds each run's host and login, closes the row as stopped
+    "backup-stop": "backup_restore",
 }
 
 #: One word, two jobs - each side named, so the next reader does not have to open both to find out.

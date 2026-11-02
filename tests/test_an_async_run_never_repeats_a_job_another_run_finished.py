@@ -120,7 +120,7 @@ def test_a_scheduled_restore_does_not_repeat_a_restore_another_run_finished(monk
     jobs = [SimpleNamespace(restore_id=rid, label=rid, active=True, db_type="postgresql", server_id="S",
                             target_container="c", target_server_id="T", notify={},
                             job_code=schedule.restore_job_code(rid),
-                            time_window=SimpleNamespace(timeout=7200))
+                            time_window=SimpleNamespace(timeout=7200), action="restore", restore_from="server")
             for rid in ("LONG_ORA", "SHORT_PG")]
     restored: list[str] = []
     monkeypatch.setattr(workflow, "DbaBrainStore", _Store)

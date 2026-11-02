@@ -26,6 +26,7 @@ STABLE_PAGES = {
     "inventory": "database-inventory.html",
     "server_metrics": "server-metrics.html",
     "sla": "sla.html",
+    "backup_restore": "backup-restore.html",
 }
 
 #: Pages that exist once per server. The slug is the caller's to fill in - a real server_id in

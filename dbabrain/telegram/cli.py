@@ -33,7 +33,7 @@ from dbabrain.telegram.send_queue import (
 )
 from dbabrain.telegram import bot_info, get_updates, send_message
 from dbabrain.telegram.command_permissions import set_command_level
-from dbabrain.telegram.updates import add_group, set_group_level, set_user_level
+from dbabrain.telegram.updates import add_group, migrate_group_record, set_group_level, set_user_level
 from dbabrain.telegram.updates import fetch_and_save_updates
 from dbabrain.telegram.workflow import run_bot_workflow
 from dbabrain.logging_ops.runtime_stdout import patch_stdout
@@ -108,6 +108,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                                        "Only where there is no token; the entry is marked so the "
                                        "file says it was never confirmed.")
     add_group_parser.set_defaults(telegram_function=add_group, verify=True)
+
+    migrate_parser = subparsers.add_parser(
+        "group-migrate",
+        help="Carry a group's settings to the new id Telegram gave it as a supergroup, and retire "
+             "the old row (active false). The intake does it on its own when it sees the move; this "
+             "is for a move it did not see.")
+    migrate_parser.add_argument("--from-id", required=True, dest="from_id", help="The old group id.")
+    migrate_parser.add_argument("--to-id", required=True, dest="to_id", help="The supergroup's id.")
+    migrate_parser.set_defaults(telegram_function=migrate_group_record)
 
     user_level_parser = subparsers.add_parser(
         "user-level",
@@ -228,7 +237,45 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     workflow_parser.add_argument("--retry-count", type=int, default=3, help="Retry count per send message.")
     workflow_parser.set_defaults(telegram_function=run_bot_workflow)
 
+    # 0.34.0: the AI assistant (data/ai_assist.json). Its own job, beside run-workflow's.
+    ai_parser = subparsers.add_parser(
+        "ai-assist", help="Answer the AI assistant's chats: read new messages, run each question, queue the answers.")
+    ai_parser.set_defaults(telegram_function=None)
+    ai_usage_parser = subparsers.add_parser(
+        "ai-usage", help="The AI assistant's questions, tokens and money, by day, user or model.")
+    ai_usage_parser.add_argument("--days", type=int, default=30, help="How many days back (default 30).")
+    ai_usage_parser.add_argument("--by", choices=("day", "user", "model"), default="day", help="Grouping.")
+    ai_usage_parser.set_defaults(telegram_function=None)
+    ai_show_parser = subparsers.add_parser(
+        "ai-show", help="One AI question in full: its messages, every API call and every tool run.")
+    ai_show_parser.add_argument("--id", type=int, required=True, dest="ai_request_id", help="ai_request_id.")
+    ai_show_parser.set_defaults(telegram_function=None)
+
     return parser.parse_args(argv)
+
+
+def _ai_command(args: argparse.Namespace, config: DbaBrainConfig, config_path: str) -> dict[str, Any]:
+    """``ai-assist`` / ``ai-usage`` / ``ai-show`` - the assistant reads the store, not Telegram,
+    so these run before the token check (ai-assist downloads an attachment with the token)."""
+    if args.command == "ai-assist":
+        from dbabrain.telegram.ai_assist import run_ai_assist
+
+        return run_ai_assist(config=config, config_path=config_path)
+    from datetime import datetime, timedelta, timezone
+
+    from dbabrain.db.ai_assist_store import AiAssistStore
+
+    store = AiAssistStore.from_config(config)
+    if args.command == "ai-show":
+        return store.transcript(args.ai_request_id)
+    until = datetime.now(timezone.utc)
+    since = until - timedelta(days=max(int(args.days), 1))
+    stamp = "%Y-%m-%dT%H:%M:%SZ"
+    rows = store.usage_report(since=since.strftime(stamp), until=(until + timedelta(seconds=1)).strftime(stamp),
+                              group_by=args.by)
+    return {"since": since.strftime(stamp), "until": until.strftime(stamp), "by": args.by, "rows": rows,
+            "total_cost_usd": round(sum(float(row["cost_usd"] or 0) for row in rows), 6),
+            "total_tokens": sum(int(row["tokens"] or 0) for row in rows)}
 
 
 def call_telegram_function(
@@ -381,6 +428,11 @@ def main(argv: list[str]) -> int:
             result = call_telegram_function(telegram_function=args.telegram_function, args=args,
                                             config=config, config_path=config_path)
             print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
+        if args.command in ("ai-assist", "ai-usage", "ai-show"):
+            result = _ai_command(args, config, config_path)
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
             return 0
 
         missing = _missing_bot_token(config)

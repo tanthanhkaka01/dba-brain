@@ -58,6 +58,12 @@ ALL_COMMANDS = [
     "metric-env",
     "inventory-summary", "list-backup-files",
     "pack-backup", "pull-file", "push-file",
+    # 0.34.0 (1.210): hash files where they are - a backup, a restore's copy, the scrub.
+    "file-checksum",
+    # 0.34.0 (1.240): copy named files host to host, removing nothing - the repository copy.
+    "copy-files",
+    # 0.34.0 (1.238): stop a running backup - its process tree on the host first, then its sessions.
+    "backup-stop",
     "restore-full", "restore-diff", "restore-log", "restore-key", "restore-metadata",
     "verify-restore",
     "fetch-file", "send-file", "pack-files", "relay-file",

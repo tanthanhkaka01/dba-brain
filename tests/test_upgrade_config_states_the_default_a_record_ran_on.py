@@ -188,7 +188,7 @@ def test_the_marker_an_entry_states_reaches_the_copy_and_the_prune(monkeypatch, 
         "target_server_id": "ACME-PG-2", "backup_dir": "/var/lib/postgresql/backup",
         "script": "pg_restore_basebackup.sh", "target_backup_dir": "/opt/acme/staging/pg",
         "source_backup_host_dir": "/opt/acme/backup/pg", "target_container": "pg_lab",
-        "cleanup_retention": 7200, "staging_marker": EARLIER_MARKER,
+        "cleanup_retention": 7200, "staging_marker": EARLIER_MARKER, "integrity": {"copy_max_retry": 3},
         "time_window": {"from_hour": 2, "to_hour": 5, "repeat_interval": 72000,
                         "retry_interval": 600, "timeout": 7200}}]}}), encoding="utf-8")
     job = restore_script.load_script_restores(path)[0]
@@ -214,12 +214,14 @@ def test_an_entry_that_names_no_marker_sends_none_and_takes_the_copys_default(mo
 
     from dbabrain.backup_restore import restore_script
     from dbabrain.common import backup_copy
+    from dbabrain.lib.integrity import RestoreIntegrity
     from dbabrain.lib.time_window import TimeWindow
 
     job = restore_script.ScriptRestore(
         restore_id="PG_NEW", db_type="postgresql", server_id="SRC", backup_dir="/backup",
         script="restore.sh", time_window=TimeWindow(), target_server_id="DST",
-        target_backup_dir="/opt/acme/staging/new", source_backup_host_dir="/opt/acme/backup/pg")
+        target_backup_dir="/opt/acme/staging/new", source_backup_host_dir="/opt/acme/backup/pg",
+        integrity=RestoreIntegrity())
     sent: dict[str, dict] = {}
 
     def run(command, request, **_kwargs):

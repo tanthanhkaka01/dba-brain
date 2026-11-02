@@ -43,6 +43,9 @@ def run(command: Literal['backup-chain'], request: t.BackupChainRequest | dict[s
 def run(command: Literal['backup-database'], request: t.BackupDatabaseRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.BackupDatabaseAnswer: ...
 
 @overload
+def run(command: Literal['backup-stop'], request: t.BackupStopRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.BackupStopAnswer: ...
+
+@overload
 def run(command: Literal['build-showcase'], request: t.ShowcaseRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.ShowcaseAnswer: ...
 
 @overload
@@ -65,6 +68,9 @@ def run(command: Literal['check-secret-literals'], request: t.SecretLiteralsRequ
 
 @overload
 def run(command: Literal['copy-backup-dir'], request: t.CopyBackupDirRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.CopyBackupDirAnswer: ...
+
+@overload
+def run(command: Literal['copy-files'], request: t.CopyFilesRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.CopyFilesAnswer: ...
 
 @overload
 def run(command: Literal['copy-schema'], request: t.CopySchemaRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.CopySchemaAnswer: ...
@@ -101,6 +107,9 @@ def run(command: Literal['export-data'], request: t.ExportDataRequest | dict[str
 
 @overload
 def run(command: Literal['fetch-file'], request: t.FileTransferRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.FileCopyAnswer: ...
+
+@overload
+def run(command: Literal['file-checksum'], request: t.FileChecksumRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.FileChecksumAnswer: ...
 
 @overload
 def run(command: Literal['guide'], request: t.GuideRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.GuideAnswer: ...
@@ -304,6 +313,9 @@ def run_allowing_failure(command: Literal['backup-chain'], request: t.BackupChai
 def run_allowing_failure(command: Literal['backup-database'], request: t.BackupDatabaseRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.BackupDatabaseAnswer, str]: ...
 
 @overload
+def run_allowing_failure(command: Literal['backup-stop'], request: t.BackupStopRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.BackupStopAnswer, str]: ...
+
+@overload
 def run_allowing_failure(command: Literal['build-showcase'], request: t.ShowcaseRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.ShowcaseAnswer, str]: ...
 
 @overload
@@ -326,6 +338,9 @@ def run_allowing_failure(command: Literal['check-secret-literals'], request: t.S
 
 @overload
 def run_allowing_failure(command: Literal['copy-backup-dir'], request: t.CopyBackupDirRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.CopyBackupDirAnswer, str]: ...
+
+@overload
+def run_allowing_failure(command: Literal['copy-files'], request: t.CopyFilesRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.CopyFilesAnswer, str]: ...
 
 @overload
 def run_allowing_failure(command: Literal['copy-schema'], request: t.CopySchemaRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.CopySchemaAnswer, str]: ...
@@ -362,6 +377,9 @@ def run_allowing_failure(command: Literal['export-data'], request: t.ExportDataR
 
 @overload
 def run_allowing_failure(command: Literal['fetch-file'], request: t.FileTransferRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.FileCopyAnswer, str]: ...
+
+@overload
+def run_allowing_failure(command: Literal['file-checksum'], request: t.FileChecksumRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.FileChecksumAnswer, str]: ...
 
 @overload
 def run_allowing_failure(command: Literal['guide'], request: t.GuideRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.GuideAnswer, str]: ...

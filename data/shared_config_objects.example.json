@@ -1242,8 +1242,8 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 8,
-            "required_field_count": 5,
+            "field_count": 27,
+            "required_field_count": 24,
             "fields": [
                 {
                     "field": "backup_id",
@@ -1338,6 +1338,298 @@
                     "rule": "BACKUP_ENCRYPTION_PASSWORD belongs here and never in a job's env, which is plain config read back through Telegram"
                 },
                 {
+                    "field": "offload_enabled",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "After every run (FULL, DIFF, LOG/WAL), copy the files it wrote to the repository, proven by sha256 and bytes on both ends as a restore's copy is. false keeps the backup where it was written."
+                },
+                {
+                    "field": "offload_server_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write \"\"",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "The repository - another VM or a shared folder's host - by its server_id in the inventory. Required when offload_enabled is true."
+                },
+                {
+                    "field": "offload_folder",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write \"\"",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "The folder on the repository the copies go to. Required when offload_enabled is true."
+                },
+                {
+                    "field": "offload_copy_max_retry",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 3",
+                    "range_text": "0 to 10",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0,
+                        "max": 10
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "How many times a copy whose checksum or bytes differ from the source is copied again."
+                },
+                {
+                    "field": "offload_scan",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write \"none\"",
+                    "range_text": "none | clamav",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false,
+                        "enum": [
+                            "none",
+                            "clamav"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "The virus/malware scan of each copy on the repository before it counts as verified. infected: quarantined, CRITICAL, the source is never deleted."
+                },
+                {
+                    "field": "offload_delete_source",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "Delete each file on the database server once its copy is proven (checksum + bytes, and clean when scanned) - never on the copy command's word. Refused on Oracle (RMAN owns its pieces) and when offload_enabled is false."
+                },
+                {
+                    "field": "offload_source_share",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write \"\"",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "A Windows source: the UNC share the backup folder is published as - the worker reads it over SMB. Empty for a source reached over SSH."
+                },
+                {
+                    "field": "offload_source_username",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write \"\"",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "The login offload_source_share is read with."
+                },
+                {
+                    "field": "offload_source_password_ref",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write \"\"",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "The secret-store name of that login's password - never the password."
+                },
+                {
+                    "field": "offload_retention_full",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 0 (kept for good)",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "How long the repository keeps a copy of a FULL - SQL Server FULL, PostgreSQL base FULL, RMAN level 0, and the certificate / control file / spfile travelling with it, in seconds; 0 keeps it for good."
+                },
+                {
+                    "field": "offload_retention_diff",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 0 (kept for good)",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "How long the repository keeps a copy of a DIFF - SQL Server DIFF, PostgreSQL incremental, RMAN level 1, in seconds; 0 keeps it for good."
+                },
+                {
+                    "field": "offload_retention_log",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 0 (kept for good)",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "How long the repository keeps a copy of a log - SQL Server LOG, PostgreSQL WAL, Oracle archivelog, in seconds; 0 keeps it for good."
+                },
+                {
+                    "field": "offload_files_per_pass",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 100",
+                    "range_text": "1 to 10000",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1,
+                        "max": 10000
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "How many of the entry's catalogued files one offload pass takes; the next pass takes the next ones."
+                },
+                {
+                    "field": "offload_copy_retry_interval_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 30",
+                    "range_text": "0 to 3600",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0,
+                        "max": 3600
+                    },
+                    "measured_against": "seconds",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "The pause between two copies of one file inside a run, when the first did not arrive equal."
+                },
+                {
+                    "field": "offload_retry_interval_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 3600",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "How long a file whose copy failed waits before a later pass tries it again - so a repository that is down is not hammered once a second."
+                },
+                {
+                    "field": "offload_run_timeout_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 86400",
+                    "range_text": "60 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 60
+                    },
+                    "measured_against": "seconds",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "How long an offload run's RUNNING row may stand before it is reaped as dead (a live process on this host keeps its claim whatever the clock says)."
+                },
+                {
+                    "field": "offload_copy_timeout_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 86400",
+                    "range_text": "60 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 60
+                    },
+                    "measured_against": "seconds",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "How long one copy-files call - a round of copies - may take; a FULL of half a terabyte crosses in hours."
+                },
+                {
+                    "field": "offload_hash_timeout_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 21600",
+                    "range_text": "60 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 60
+                    },
+                    "measured_against": "seconds",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "How long one file-checksum call on the source or the repository may take."
+                },
+                {
+                    "field": "offload_stall_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write 300",
+                    "range_text": "10 to 86400",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 10,
+                        "max": 86400
+                    },
+                    "measured_against": "seconds",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "A read or write of one file that stops moving this long fails that file (copy-files' stall_seconds)."
+                },
+                {
                     "field": "active",
                     "type": "boolean",
                     "required": false,
@@ -1383,8 +1675,8 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 8,
-            "required_field_count": 1,
+            "field_count": 10,
+            "required_field_count": 3,
             "fields": [
                 {
                     "field": "job",
@@ -1413,6 +1705,35 @@
                     "measured_against": "not a time value",
                     "purpose": "The script shipped to the machine and run there.",
                     "rule": "Resolved through the tool root, so it is the same string on every node"
+                },
+                {
+                    "field": "databases",
+                    "type": "array",
+                    "required": true,
+                    "default": "none - stated on every job; upgrade-config moves env.MSSQL_DATABASES here",
+                    "range_text": "a list of database names",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": false,
+                        "item_kind": "string"
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): a job without it is a check-objects violation; upgrade-config moves env.MSSQL_DATABASES into it (rules R50)",
+                    "purpose": "The databases this job backs up, by name. Empty only with all_databases true. A PostgreSQL, Oracle or MySQL backup takes the whole cluster / instance: []. Never also in env."
+                },
+                {
+                    "field": "all_databases",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "none - stated on every job; upgrade-config writes true where no name was given",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): a job without it is a check-objects violation; upgrade-config moves env.MSSQL_DATABASES into it (rules R50)",
+                    "purpose": "true: every user database (databases []); false: the names in databases. One answer, never both."
                 },
                 {
                     "field": "env",
@@ -1521,8 +1842,8 @@
             "legacy_fields": {
                 "databases": "database_mappings"
             },
-            "field_count": 19,
-            "required_field_count": 1,
+            "field_count": 22,
+            "required_field_count": 4,
             "fields": [
                 {
                     "field": "restore_id",
@@ -1803,6 +2124,180 @@
                     "measured_against": "not a time value",
                     "purpose": "Whether the staged copy must fit the target's free space before anything is copied, and with how much to spare.",
                     "rule": "Absent means ON: a check that has to be switched on protects only the entries somebody remembered"
+                },
+                {
+                    "field": "integrity",
+                    "type": "integrity",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and restore-add write {copy_max_retry: 3, ...}",
+                    "range_text": "an integrity object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": false,
+                        "checked_by": "integrity"
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and the copy gate refuses it rather than assume 3 (rules R50)",
+                    "purpose": "How each file this entry stages is proven before it is used - copy_max_retry among it."
+                },
+                {
+                    "field": "action",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and restore-add write restore",
+                    "range_text": "restore | copy_only",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false,
+                        "enum": [
+                            "restore",
+                            "copy_only"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and the scheduler refuses it rather than read it as a restore (rules R50)",
+                    "purpose": "What the entry does. restore: copy from server_id to the target, prove every file by checksum, RESTORE, verify, clean up. copy_only: the same copy and proof, then stop - nothing restored, no metadata replayed, the staged files kept. A copy-only run is recorded as one (restore_runs.action) and never counts as a drill. restore-workflow --copy-only makes one run copy only whatever this says."
+                },
+                {
+                    "field": "restore_from",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - stated on every entry; upgrade-config and backup-add write \"server\"",
+                    "range_text": "server | repository",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false,
+                        "enum": [
+                            "server",
+                            "repository"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
+                    "purpose": "Where the restore reads its backups: server - the source's own backup folder, as before; repository - only the copies an offload proved, each held to the checksum and size its offload proved (the script-driven PostgreSQL and SQL Server restores onto another server; a share-driven SQL Server entry, Oracle and an in-place entry are refused by name)."
+                }
+            ]
+        },
+        {
+            "object": "integrity",
+            "kind": "object",
+            "required": true,
+            "one_line": "How a restore or a copy-only run proves each staged file before it is used: checksum before and after the copy, and how many times a bad copy is copied again.",
+            "parsed_in": "dbabrain/lib/integrity.py",
+            "shared_entry_point": "dbabrain.lib.integrity.parse_restore_integrity",
+            "used_in": [
+                {
+                    "file": "restore_config.json",
+                    "path": "backup_restore.restores[]",
+                    "note": "mandatory on every entry since 0.34.0 (the operator, 2026-10-29); upgrade-config's stated-integrity step writes it where an entry has none"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 1,
+            "fields": [
+                {
+                    "field": "copy_max_retry",
+                    "type": "integer",
+                    "required": true,
+                    "default": "3 - stated in every entry: upgrade-config writes it where an entry has none, restore-add writes it into every new one",
+                    "range_text": "0-10",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0,
+                        "max": 10
+                    },
+                    "measured_against": "copies after the first",
+                    "rule": "0 = one copy and no retry. A copy whose sha256 differs from the source's is copied again, over itself, until it matches or this many retries are spent; then the file is copy_failed_after_retries and no RESTORE is sent. A network error during a copy counts as an attempt the same way. Above 10 a broken link is retried for most of a night - a fault to report, not to keep paying for",
+                    "purpose": "How many times a staged file that arrived different from its source is copied again before the run gives up on it."
+                },
+                {
+                    "field": "copy_retry_interval_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "30",
+                    "range_text": "0-3600, in SECONDS",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "max": 3600
+                    },
+                    "measured_against": "seconds between the end of one copy attempt and the start of the next",
+                    "rule": "not waited after the last attempt",
+                    "purpose": "The pause before a copy is tried again - room for a link that dropped to come back."
+                },
+                {
+                    "field": "verify_source_before_copy",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "true: a source whose sha256 differs from what its backup recorded is not copied - source_mismatch, CRITICAL. That is a backup changed after it was written, which copying again cannot fix",
+                    "purpose": "Hash the source on its own server before the copy and hold it to the catalog."
+                },
+                {
+                    "field": "uncatalogued",
+                    "type": "string",
+                    "required": false,
+                    "default": "compare_copy",
+                    "range_text": "compare_copy | refuse",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "compare_copy",
+                            "refuse"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "compare_copy: a file the catalog has no row for is still hashed before and after the copy, with nothing to hold the source to; refuse: it is not used (uncatalogued_refused)",
+                    "purpose": "What a file no dbabrain backup recorded is - every backup taken before 0.34.0, or by another tool."
+                },
+                {
+                    "field": "engine_verify_before_restore",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "the engine reads the staged copy too - RESTORE VERIFYONLY WITH CHECKSUM, pg_verifybackup, RMAN RESTORE VALIDATE - after every checksum matched and before the restore",
+                    "purpose": "A second, engine-level proof of the staged files; it costs a full read of each."
+                },
+                {
+                    "field": "algorithm",
+                    "type": "string",
+                    "required": false,
+                    "default": "sha256",
+                    "range_text": "sha256",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "sha256"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "rule": "the only one; stated so another is a choice, not a surprise",
+                    "purpose": "The checksum every hash of this entry's files is taken with."
                 }
             ]
         },
@@ -2062,7 +2557,7 @@
                     "type": "object",
                     "required": false,
                     "default": "none",
-                    "range_text": "for input_type python: {script, args, rows_path, parameter, batch_rows, timeout_seconds, accept_exit_codes, target_connection (true only for a program that reaches the database itself; it then reads its target's connection, one login, from stdin)}",
+                    "range_text": "for input_type python: {script, args, rows_path, parameter, batch_rows, timeout_seconds, accept_exit_codes, target_connection (true only for a program that reaches the database itself; it then reads its target's connection, one login, from stdin), source_connection ({server_id, db_type, credential_name[, instance_name, service_name]} - a second server the program reads from, resolved like a target and written to its stdin as source_connection; never a password), payload_format (json, the default, read with OPENJSON | xml, <rows><row col=\"value\" .../></rows> read with nodes()/value(), for a SQL Server older than 2016)}",
                     "constraint": {
                         "kind": "object",
                         "nullable": true,
@@ -2709,7 +3204,7 @@
                     "type": "object",
                     "required": false,
                     "default": "follows active",
-                    "range_text": "{enabled, metric_overrides, disabled_collector_types, collector_env, env_secrets, severity_map, sqlserver_driver}",
+                    "range_text": "{enabled, metric_overrides, disabled_collector_types, collector_env, env_secrets, severity_map, severity_map_note, sqlserver_driver}",
                     "constraint": {
                         "kind": "object",
                         "nullable": true,
@@ -2724,15 +3219,15 @@
                     "type": "object",
                     "required": false,
                     "default": "none",
-                    "range_text": "{enabled, severity_overrides, disabled_metric_codes, disabled_event_codes, disabled_report_events}",
+                    "range_text": "{disabled_metric_codes}",
                     "constraint": {
                         "kind": "object",
                         "nullable": true,
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What the reports say about this machine.",
-                    "rule": "report_policy.disabled_metric_codes is taken from the worker by a --merge deploy"
+                    "purpose": "What the reports leave out for this machine.",
+                    "rule": "report_policy.disabled_metric_codes keeps the metrics it names out of the warning / critical reports for this machine; they are still collected and stored (0.34.0 - until then it also stopped collection; to stop collecting a metric use metrics.metric_overrides.<CODE>.enabled). Taken from the worker by a --merge deploy. enabled, severity_overrides, disabled_event_codes and disabled_report_events were read by nothing and are removed by upgrade-config (unread-report-keys)"
                 },
                 {
                     "field": "reports",
@@ -9668,6 +10163,482 @@
             ]
         },
         {
+            "object": "output_file_checksum",
+            "kind": "output",
+            "required": false,
+            "one_line": "One sha256 per file, taken where the file is, and the files that were not there.",
+            "parsed_in": "dbabrain/common/filechecksum.py",
+            "produced_in": [
+                "dbabrain/common/filechecksum.py"
+            ],
+            "commands": [
+                "file-checksum"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 11,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "algorithm",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The algorithm used: sha256."
+                },
+                {
+                    "field": "host",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The host the files were hashed on, or local."
+                },
+                {
+                    "field": "files",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One per file found, in the order asked: {path, sha256, size_bytes, mtime_utc}."
+                },
+                {
+                    "field": "missing",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "string"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The paths that are not a file there - an answer, not an error."
+                },
+                {
+                    "field": "file_count",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How many files were hashed."
+                },
+                {
+                    "field": "bytes_total",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "bytes",
+                    "purpose": "Their size together."
+                },
+                {
+                    "field": "folder",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The folder asked for."
+                },
+                {
+                    "field": "host_folder",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The same folder as the host sees it; the paths in files are under it."
+                },
+                {
+                    "field": "folder_found",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "False when the folder is not there - an answer, not an error."
+                },
+                {
+                    "field": "listed",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How many files under the folder matched include."
+                },
+                {
+                    "field": "truncated",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "True when more matched than max_files."
+                }
+            ]
+        },
+        {
+            "object": "output_copy_files",
+            "kind": "output",
+            "required": false,
+            "one_line": "One line per file copied or not, with the bytes that arrived.",
+            "parsed_in": "dbabrain/common/filecopy.py",
+            "produced_in": [
+                "dbabrain/common/filecopy.py"
+            ],
+            "commands": [
+                "copy-files"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 5,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "source_kind",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How the source was read: sftp, smbclient or unc."
+                },
+                {
+                    "field": "files",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One per file asked, in order: {source, target, ok, bytes_copied, error, warning?} - a file not copied is its own answer."
+                },
+                {
+                    "field": "copied",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files that arrived whole and were renamed to their name."
+                },
+                {
+                    "field": "failed",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Files that did not."
+                },
+                {
+                    "field": "bytes_copied",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "bytes",
+                    "purpose": "Bytes of the files that arrived."
+                }
+            ]
+        },
+        {
+            "object": "output_backup_stop",
+            "kind": "output",
+            "required": false,
+            "one_line": "What one backup stop ended on the host, and what is left.",
+            "parsed_in": "dbabrain/common/backup/stop.py",
+            "produced_in": [
+                "dbabrain/common/backup/stop.py"
+            ],
+            "commands": [
+                "backup-stop"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "fields": [
+                {
+                    "field": "run_tag",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The tag stopped."
+                },
+                {
+                    "field": "db_type",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The engine."
+                },
+                {
+                    "field": "host",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The host, or this machine."
+                },
+                {
+                    "field": "platform",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "linux or windows - which stop script ran."
+                },
+                {
+                    "field": "pid",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The pid the run's pid file named; absent with no file."
+                },
+                {
+                    "field": "pid_file",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "found or missing (a run started before 0.34.0, or already over)."
+                },
+                {
+                    "field": "process_alive",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "True when the run's process is still there after the stop."
+                },
+                {
+                    "field": "killed",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "integer"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The pids ended, children first."
+                },
+                {
+                    "field": "sessions_killed",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SQL Server: {session_id, database} of each session of the run ended."
+                },
+                {
+                    "field": "sessions_left",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SQL Server: {session_id, database} still open a few seconds later - a KILL rolling back."
+                },
+                {
+                    "field": "stopped",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "True only when the process is gone and no session of the run is left."
+                },
+                {
+                    "field": "exit_code",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The stop script's exit code."
+                },
+                {
+                    "field": "duration_ms",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "milliseconds",
+                    "purpose": "How long the stop took."
+                },
+                {
+                    "field": "error",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Why the stop script did not finish; empty when it did."
+                }
+            ],
+            "field_count": 14,
+            "required_field_count": 0
+        },
+        {
             "object": "output_backup_file_list",
             "kind": "output",
             "required": false,
@@ -12166,7 +13137,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 18,
+            "field_count": 19,
             "required_field_count": 0,
             "fields": [
                 {
@@ -12252,6 +13223,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Why it failed."
+                },
+                {
+                    "field": "files",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One per file the script wrote, from its FILE lines (0.34.0): {path, file_name, file_folder, database_name, file_type, size_bytes, sha256 (taken where the file lies; null when it could not be hashed), engine_verify (passed|failed|not_run), engine_verify_text}."
                 },
                 {
                     "field": "dry_run",
@@ -13331,7 +14316,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 11,
+            "field_count": 13,
             "required_field_count": 4,
             "fields": [
                 {
@@ -13494,6 +14479,33 @@
                     "measured_against": "not a time value",
                     "purpose": "The name of the file that marks target_dir as this tool's staging folder: only a marked folder is mirrored, and an unmarked one that shares no file with the source is refused. A restore entry's own staging_marker, handed on by the app.",
                     "rule": "Absent for a folder this version marks. State the name the folder already carries: an entry that staged before 0.29.0 states .dbops-staging (upgrade-config writes it in), because retention leaves the marker alone in an emptied folder and the copy knows the folder by nothing else."
+                },
+                {
+                    "field": "replace",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list of relative paths",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "string"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Relative paths copied even when the target holds them at the same size and not older - a copy the caller's checksum gate found different, which size and time cannot see (0.34.0)."
+                },
+                {
+                    "field": "plan_only",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "true: answer only the files the request selects, read from the source; the target is not opened and nothing is copied. Default false."
                 }
             ]
         },
@@ -13513,7 +14525,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 8,
+            "field_count": 9,
             "required_field_count": 0,
             "fields": [
                 {
@@ -13631,6 +14643,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "What the space check measured before the first file moved: checked; when true - ok, incoming_bytes, free_bytes, required_bytes, factor, detail; when false - reason (disabled | unknown). Absent when nothing needed copying."
+                },
+                {
+                    "field": "files",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list of objects",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Every file the request selected, copied or not: {path (relative to source_dir), size_bytes}. What the caller's checksum gate hashes on both hosts (0.34.0)."
                 }
             ]
         },
@@ -18237,6 +19263,332 @@
                     "purpose": "How long to wait."
                 }
             ]
+        },
+        {
+            "object": "input_file_checksum",
+            "kind": "input",
+            "required": false,
+            "one_line": "Files hashed on the host that holds them.",
+            "parsed_in": "dbabrain/common/filechecksum.py",
+            "parsers": [
+                "dbabrain/common/filechecksum.py"
+            ],
+            "commands": [
+                "file-checksum"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 8,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "paths",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "string"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The files to hash, full paths as that host sees them - or give folder instead."
+                },
+                {
+                    "field": "algorithm",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "sha256 - the only one; stated so another is a choice, not a surprise."
+                },
+                {
+                    "field": "host",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where the files are: hostcmd's block {runtime, host, port, access, username, password|key_file, container, pod}. Omit it to hash on this machine."
+                },
+                {
+                    "field": "timeout_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "Seconds one batch may take; default 3600 - a large FULL hashes at disk speed."
+                },
+                {
+                    "field": "folder",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Instead of paths: every file under this folder, listed on the host (find, or Get-ChildItem -Recurse) and hashed there - a catalog backfill (0.34.0)."
+                },
+                {
+                    "field": "include",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "string"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "With folder: file name patterns, case-insensitive (\"*.bak\"); default every file."
+                },
+                {
+                    "field": "container",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "With folder: the folder is a path inside this container, translated to the host's through its mounts (docker inspect)."
+                },
+                {
+                    "field": "max_files",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "With folder: at most this many files (default 5000); more is answered as truncated, never cut silently."
+                }
+            ]
+        },
+        {
+            "object": "input_copy_files",
+            "kind": "input",
+            "required": false,
+            "one_line": "Named files copied from one host to another, removing nothing - a repository copy.",
+            "parsed_in": "dbabrain/common/filecopy.py",
+            "parsers": [
+                "dbabrain/common/filecopy.py"
+            ],
+            "commands": [
+                "copy-files"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 6,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "files",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The files, each {source, target}: source as the source host (or the share) names it, target an absolute path on the target host. Required, at least one."
+                },
+                {
+                    "field": "source",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The SSH host the files are on: {host, port, username, password|key_file}. Or give source_share."
+                },
+                {
+                    "field": "source_share",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Instead of source: a Windows share {host, share, username, password, domain?}, read with smbclient (or the UNC path on a Windows node); each file's source is then its path under the share."
+                },
+                {
+                    "field": "target",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The SSH host the files go to: {host, port, username, password|key_file}. Nothing there is ever removed but this copy's own partial file."
+                },
+                {
+                    "field": "timeout_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "Seconds the whole command may take; default 21600. A read or write that stalls for 300 s gives up its file, not the command."
+                },
+                {
+                    "field": "stall_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "10 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 10
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "Seconds one read or write may stop moving before its file is given up; default 300."
+                }
+            ]
+        },
+        {
+            "object": "input_backup_stop",
+            "kind": "input",
+            "required": false,
+            "one_line": "One running backup to stop on its host: its process tree first, then its sessions.",
+            "parsed_in": "dbabrain/common/backup/stop.py",
+            "parsers": [
+                "dbabrain/common/backup/stop.py"
+            ],
+            "commands": [
+                "backup-stop"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "fields": [
+                {
+                    "field": "run_tag",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The run's DBABRAIN_RUN_TAG, <backup_id>_<job_runs id>: its pid file <temp>/dbabrain_runs/<tag>.pid and its sessions' host_name dbabrain:<tag>. A-Z a-z 0-9 _ . -, at most 100."
+                },
+                {
+                    "field": "db_type",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The run's engine; sqlserver also ends every session the run opened."
+                },
+                {
+                    "field": "host",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Where the run is: hostcmd's block {runtime, host, port, access, username, password|key_file}, as backup-database took it. runtime windows runs the PowerShell stop."
+                },
+                {
+                    "field": "env",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Resolved values: DOCKER_CONTAINER, MSSQL_SERVER, MSSQL_USER, MSSQL_PASSWORD - the run's own login. Any other key is not sent."
+                },
+                {
+                    "field": "timeout",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "Seconds the stop may take; default 120."
+                }
+            ],
+            "field_count": 5,
+            "required_field_count": 2
         },
         {
             "object": "input_backup_files",
@@ -23087,7 +24439,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 4,
+            "field_count": 5,
             "required_field_count": 3,
             "fields": [
                 {
@@ -23131,6 +24483,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "on | off."
+                },
+                {
+                    "field": "reason",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "With state off and a METRIC_CODE scope: why the metric is off, written as metric_overrides.<CODE>.disabled_reason. Refused with state on or another scope; switching the metric on clears it."
                 },
                 {
                     "field": "data_dir",
@@ -23192,7 +24558,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The metric. Required in the one-remap form; absent beside items."
+                    "purpose": "The metric. Required in the one-remap form; absent beside items. \"*\" is every metric of the server - metrics.severity_map, under each metric's own map, which still wins; it takes no metric_item."
                 },
                 {
                     "field": "metric_item",
@@ -27192,6 +28558,1121 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The shortest accepted text. Documentation: not enforced."
+                }
+            ]
+        },
+        {
+            "object": "ai_assist_settings",
+            "kind": "field",
+            "required": true,
+            "one_line": "The AI assistant in Telegram (0.34.0): its chats, model, limits, tools and prices.",
+            "parsed_in": "dbabrain/lib/ai_assist.py",
+            "shared_entry_point": "dbabrain.lib.ai_assist.parse_ai_assist",
+            "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
+            "whole_record": true,
+            "whole_record_note": "whole_record: every key on the record is this entry's business. Every field is mandatory (R50): a missing one is refused by name, and `upgrade-config` writes the shipped value.",
+            "used_in": [
+                {
+                    "file": "ai_assist.json",
+                    "path": "",
+                    "note": "the whole file"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 59,
+            "required_field_count": 59,
+            "fields": [
+                {
+                    "field": "enabled",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether the assistant answers at all; off, the job says not configured and skips."
+                },
+                {
+                    "field": "api_key_ref",
+                    "type": "string",
+                    "required": true,
+                    "default": "empty - stated by the node",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The name of the Anthropic API key in the encrypted secret store; empty = not configured."
+                },
+                {
+                    "field": "telegram_chat",
+                    "type": "string",
+                    "required": true,
+                    "default": "\"ai_assist\"",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The notify level whose chat the assistant answers in: the active group in telegram_groups.json with this notify_level (or level_chat_map's entry), as every app's telegram_chat names its chat."
+                },
+                {
+                    "field": "model",
+                    "type": "string",
+                    "required": true,
+                    "default": "\"claude-sonnet-5-5\"",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The model asked. It must have a row in prices, or no limit could be held."
+                },
+                {
+                    "field": "effort",
+                    "type": "string",
+                    "required": true,
+                    "default": "\"medium\"",
+                    "range_text": "low | medium | high | xhigh | max",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false,
+                        "enum": [
+                            "low",
+                            "medium",
+                            "high",
+                            "xhigh",
+                            "max"
+                        ]
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "output_config.effort, set so a model change does not change the spend."
+                },
+                {
+                    "field": "require_mention",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Answer only a message that @mentions the bot (or replies to the assistant, below); the rest of the chat is people talking to each other, and is neither answered nor kept."
+                },
+                {
+                    "field": "reply_to_assistant_is_mention",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A reply to one of the assistant's own messages counts as addressed to it - continuing a conversation needs no @ each time."
+                },
+                {
+                    "field": "tools_mode",
+                    "type": "string",
+                    "required": true,
+                    "default": "\"read_only\"",
+                    "range_text": "off | read_only",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false,
+                        "enum": [
+                            "off",
+                            "read_only"
+                        ]
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the assistant may do with dbabrain's tools: off (answers from what it knows) or read_only."
+                },
+                {
+                    "field": "budget_usd_month",
+                    "type": "number or null",
+                    "required": true,
+                    "default": "10.0",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "USD; a day or a month in config.json's timezone",
+                    "purpose": "The whole system's money per calendar month (config timezone); null = none."
+                },
+                {
+                    "field": "budget_usd_day",
+                    "type": "number or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "USD; a day or a month in config.json's timezone",
+                    "purpose": "The whole system's money per day; null = none."
+                },
+                {
+                    "field": "tokens_month",
+                    "type": "integer or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "count; a day or a month in config.json's timezone",
+                    "purpose": "The whole system's tokens per month; null = none."
+                },
+                {
+                    "field": "tokens_day",
+                    "type": "integer or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "count; a day or a month in config.json's timezone",
+                    "purpose": "The whole system's tokens per day; null = none."
+                },
+                {
+                    "field": "requests_day",
+                    "type": "integer or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "count; a day or a month in config.json's timezone",
+                    "purpose": "The whole system's questions per day; null = none."
+                },
+                {
+                    "field": "cooldown_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "5",
+                    "range_text": ">= 0",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "One user's wait between two questions."
+                },
+                {
+                    "field": "rate_window_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "600",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "The window rate_window_max_requests counts one user's questions in."
+                },
+                {
+                    "field": "rate_window_max_requests",
+                    "type": "integer",
+                    "required": true,
+                    "default": "20",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One user's questions inside rate_window_seconds, at most."
+                },
+                {
+                    "field": "duplicate_window_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "300",
+                    "range_text": ">= 0",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "The same text from the same user inside this many seconds is a duplicate and is not run again."
+                },
+                {
+                    "field": "max_tokens_question",
+                    "type": "integer",
+                    "required": true,
+                    "default": "300000",
+                    "range_text": ">= 4000",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 4000
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "All turns of one question: input, output and cache tokens."
+                },
+                {
+                    "field": "max_cost_usd_question",
+                    "type": "number",
+                    "required": true,
+                    "default": "0.5",
+                    "range_text": ">= 0",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "USD",
+                    "purpose": "One question's money, at most; 0 runs nothing."
+                },
+                {
+                    "field": "max_tool_calls_question",
+                    "type": "integer",
+                    "required": true,
+                    "default": "20",
+                    "range_text": ">= 0",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Tool calls of one question; then the model answers with what it has."
+                },
+                {
+                    "field": "max_turns_question",
+                    "type": "integer",
+                    "required": true,
+                    "default": "25",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Calls to the model for one question."
+                },
+                {
+                    "field": "max_output_tokens_turn",
+                    "type": "integer",
+                    "required": true,
+                    "default": "16000",
+                    "range_text": ">= 1024, <= 128000",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1024,
+                        "max": 128000
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "max_tokens of each call."
+                },
+                {
+                    "field": "min_tokens_turn",
+                    "type": "integer",
+                    "required": true,
+                    "default": "1500",
+                    "range_text": ">= 256",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 256
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A turn with fewer tokens left than this is not started."
+                },
+                {
+                    "field": "conversation_idle_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "3600",
+                    "range_text": ">= 60",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 60
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "A message after this long starts a new conversation."
+                },
+                {
+                    "field": "max_history_questions",
+                    "type": "integer",
+                    "required": true,
+                    "default": "30",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A conversation with this many questions starts over (the cost of resending it)."
+                },
+                {
+                    "field": "api_timeout_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "600",
+                    "range_text": ">= 10",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 10
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "The SDK's timeout for one call."
+                },
+                {
+                    "field": "api_max_retries",
+                    "type": "integer",
+                    "required": true,
+                    "default": "2",
+                    "range_text": ">= 0",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The SDK's retries of a 429, a 5xx or a connection error."
+                },
+                {
+                    "field": "run_budget_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "840",
+                    "range_text": ">= 30",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 30
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "One run of the job; no new question is started after it. Below the app command's timeout."
+                },
+                {
+                    "field": "stale_running_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "1800",
+                    "range_text": ">= 60",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 60
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "A question still running after this long is closed as an error."
+                },
+                {
+                    "field": "max_message_age_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "900",
+                    "range_text": ">= 10",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 10
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "An older message is not answered (a job that was off does not answer yesterday)."
+                },
+                {
+                    "field": "questions_per_run",
+                    "type": "integer",
+                    "required": true,
+                    "default": "5",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Questions one run of the job takes, one at a time."
+                },
+                {
+                    "field": "ack_message",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Queue a short 'working on it' reply when a question starts."
+                },
+                {
+                    "field": "show_cost_footer",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "End each answer with the model, the tokens, the cost and the tools used."
+                },
+                {
+                    "field": "reply_chunk_chars",
+                    "type": "integer",
+                    "required": true,
+                    "default": "3900",
+                    "range_text": ">= 500, <= 4000",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 500,
+                        "max": 4000
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One Telegram message of an answer, at most (Telegram's limit is 4096)."
+                },
+                {
+                    "field": "attachments_enabled",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Read a photo (as an image) or a text document sent with a question."
+                },
+                {
+                    "field": "attachment_max_bytes",
+                    "type": "integer",
+                    "required": true,
+                    "default": "5000000",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One attachment, at most."
+                },
+                {
+                    "field": "http_proxy",
+                    "type": "string",
+                    "required": true,
+                    "default": "empty - stated by the node",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "An egress proxy for the API, if the node needs one; empty = none."
+                },
+                {
+                    "field": "reply_language",
+                    "type": "string",
+                    "required": true,
+                    "default": "\"auto\"",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The language of every answer: auto = the language of the question being answered, whatever earlier turns, the context or a tool result were in; or a language's name (e.g. Vietnamese, English)."
+                },
+                {
+                    "field": "system_prompt_extra",
+                    "type": "string",
+                    "required": true,
+                    "default": "empty - stated by the node",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The operator's own lines, appended to the assistant's rules."
+                },
+                {
+                    "field": "tool_result_max_chars",
+                    "type": "integer",
+                    "required": true,
+                    "default": "30000",
+                    "range_text": ">= 1000",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1000
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One tool result sent to the model, at most; a longer one is cut and says so."
+                },
+                {
+                    "field": "tool_kept_output_chars",
+                    "type": "integer",
+                    "required": true,
+                    "default": "200000",
+                    "range_text": ">= 1000",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1000
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "One tool result kept in the store, at most."
+                },
+                {
+                    "field": "store_query_enabled",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The store_schema and store_query tools."
+                },
+                {
+                    "field": "store_query_max_rows",
+                    "type": "integer",
+                    "required": true,
+                    "default": "200",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Rows store_query returns, at most."
+                },
+                {
+                    "field": "store_query_timeout_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "30",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "store_query's statement timeout."
+                },
+                {
+                    "field": "store_query_blocked_tables",
+                    "type": "array of strings",
+                    "required": true,
+                    "default": "[\"web_users\", \"web_sessions\", \"web_login_attempts\"]",
+                    "range_text": "a list of strings",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Store tables no tool reads."
+                },
+                {
+                    "field": "files_enabled",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The list_files, read_file and grep_files tools."
+                },
+                {
+                    "field": "file_roots",
+                    "type": "array of strings",
+                    "required": true,
+                    "default": "[\"data\", \"assets\", \"logs\", \"runtime/output\", \"dbabrain\", \"config.json\"]",
+                    "range_text": "a list of strings",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The tool root's folders and files the file tools may read, relative to the tool root."
+                },
+                {
+                    "field": "file_denied",
+                    "type": "array of strings",
+                    "required": true,
+                    "default": "[\"*secret_text*.json\", \"**/secrets/**\", \"**/ssh_keys/**\", \"*.pem\", \"*.key\", \"*.pfx\", \"*.p12\", \".env\", \"*.env\", \"*.sqlite\", \"*.lock\", \"*.pyc\"]",
+                    "range_text": "a list of strings",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Patterns no file tool reads, whatever the roots say."
+                },
+                {
+                    "field": "file_max_chars",
+                    "type": "integer",
+                    "required": true,
+                    "default": "30000",
+                    "range_text": ">= 1000",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1000
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "read_file's text, at most."
+                },
+                {
+                    "field": "grep_max_matches",
+                    "type": "integer",
+                    "required": true,
+                    "default": "200",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "grep_files' matches, at most."
+                },
+                {
+                    "field": "grep_max_file_bytes",
+                    "type": "integer",
+                    "required": true,
+                    "default": "20000000",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A file larger than this is not searched by grep_files."
+                },
+                {
+                    "field": "run_sql_enabled",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The run_sql tool: a read-only SELECT on a monitored server."
+                },
+                {
+                    "field": "run_sql_server_ids",
+                    "type": "array of strings",
+                    "required": true,
+                    "default": "[]",
+                    "range_text": "a list of strings",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The server_ids run_sql may reach; empty = every server with a database."
+                },
+                {
+                    "field": "run_sql_credential_name",
+                    "type": "string",
+                    "required": true,
+                    "default": "empty - stated by the node",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A read-only login for run_sql; empty = the instance's own credential."
+                },
+                {
+                    "field": "run_sql_max_rows",
+                    "type": "integer",
+                    "required": true,
+                    "default": "200",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Rows run_sql returns, at most."
+                },
+                {
+                    "field": "run_sql_timeout_seconds",
+                    "type": "integer",
+                    "required": true,
+                    "default": "60",
+                    "range_text": ">= 1",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": false,
+                        "min": 1
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "run_sql's connect and statement timeout."
+                },
+                {
+                    "field": "bot_commands_enabled",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "true",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The bot_commands tool: the Telegram commands the asker may run, so an answer can propose one."
+                },
+                {
+                    "field": "prices",
+                    "type": "array of ai_assist_price",
+                    "required": true,
+                    "default": "the shipped three models",
+                    "range_text": "a list of price rows",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": false
+                    },
+                    "measured_against": "USD per million tokens",
+                    "purpose": "What each model's tokens cost; `model` must have a row."
+                },
+                {
+                    "field": "users",
+                    "type": "array of ai_assist_user",
+                    "required": true,
+                    "default": "[] - nobody",
+                    "range_text": "a list of user entries",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Who may ask, each by telegram_user_id with active true, and each one's limits."
+                }
+            ]
+        },
+        {
+            "object": "ai_assist_price",
+            "kind": "field",
+            "required": true,
+            "one_line": "What one model's tokens cost, so every question is priced and held to its limits.",
+            "parsed_in": "dbabrain/lib/ai_assist.py",
+            "shared_entry_point": "dbabrain.lib.ai_assist.parse_ai_assist",
+            "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
+            "whole_record": true,
+            "whole_record_note": "whole_record: every key on the record is this entry's business. Every field is mandatory (R50): a missing one is refused by name, and `upgrade-config` writes the shipped value.",
+            "used_in": [
+                {
+                    "file": "ai_assist.json",
+                    "path": "prices[]",
+                    "note": "one row per model"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 8,
+            "required_field_count": 8,
+            "fields": [
+                {
+                    "field": "model",
+                    "type": "string",
+                    "required": true,
+                    "default": "empty - stated by the node",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The model this row prices."
+                },
+                {
+                    "field": "input",
+                    "type": "number",
+                    "required": true,
+                    "default": "0.0",
+                    "range_text": ">= 0",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "USD per million tokens",
+                    "purpose": "USD per million input tokens."
+                },
+                {
+                    "field": "output",
+                    "type": "number",
+                    "required": true,
+                    "default": "0.0",
+                    "range_text": ">= 0",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "USD per million tokens",
+                    "purpose": "USD per million output tokens."
+                },
+                {
+                    "field": "cache_write",
+                    "type": "number",
+                    "required": true,
+                    "default": "0.0",
+                    "range_text": ">= 0",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "USD per million tokens",
+                    "purpose": "USD per million tokens written to the prompt cache."
+                },
+                {
+                    "field": "cache_read",
+                    "type": "number",
+                    "required": true,
+                    "default": "0.0",
+                    "range_text": ">= 0",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": false,
+                        "min": 0
+                    },
+                    "measured_against": "USD per million tokens",
+                    "purpose": "USD per million tokens read from the prompt cache."
+                },
+                {
+                    "field": "long_prompt_from",
+                    "type": "integer or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 1; null = no limit",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A prompt longer than this many tokens is priced at long_input / long_output; null = one price."
+                },
+                {
+                    "field": "long_input",
+                    "type": "number or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "USD per million tokens",
+                    "purpose": "USD per million input tokens of a long prompt."
+                },
+                {
+                    "field": "long_output",
+                    "type": "number or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "USD per million tokens",
+                    "purpose": "USD per million output tokens of a long prompt."
+                }
+            ]
+        },
+        {
+            "object": "ai_assist_user",
+            "kind": "field",
+            "required": true,
+            "one_line": "One Telegram user switched on for the assistant, and that user's limits. Off unless listed with active true.",
+            "parsed_in": "dbabrain/lib/ai_assist.py",
+            "shared_entry_point": "dbabrain.lib.ai_assist.parse_ai_assist",
+            "kind_note": "kind is 'field' and not 'record' for the reason app_command gives: check_data_dir treats a 'field' entry as names living directly ON the record, which is what a whole record is.",
+            "whole_record": true,
+            "whole_record_note": "whole_record: every key on the record is this entry's business. Every field is mandatory (R50): a missing one is refused by name, and `upgrade-config` writes the shipped value.",
+            "used_in": [
+                {
+                    "file": "ai_assist.json",
+                    "path": "users[]",
+                    "note": "nobody is on by default"
+                }
+            ],
+            "legacy_fields": {},
+            "field_count": 8,
+            "required_field_count": 8,
+            "fields": [
+                {
+                    "field": "telegram_user_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "empty - stated by the node",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The Telegram user id (telegram_users.json's user_id)."
+                },
+                {
+                    "field": "name",
+                    "type": "string",
+                    "required": true,
+                    "default": "empty - stated by the node",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Who this is, for a reader of the file and of the usage report."
+                },
+                {
+                    "field": "active",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether this user may ask. Off unless stated: a user is switched on in this list, by name, never by default."
+                },
+                {
+                    "field": "budget_usd_month",
+                    "type": "number or null",
+                    "required": true,
+                    "default": "5.0",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "USD; a day or a month in config.json's timezone",
+                    "purpose": "This user's money per calendar month; null = none."
+                },
+                {
+                    "field": "budget_usd_day",
+                    "type": "number or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "USD; a day or a month in config.json's timezone",
+                    "purpose": "This user's money per day; null = none."
+                },
+                {
+                    "field": "tokens_month",
+                    "type": "integer or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "count; a day or a month in config.json's timezone",
+                    "purpose": "This user's tokens per month; null = none."
+                },
+                {
+                    "field": "tokens_day",
+                    "type": "integer or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "count; a day or a month in config.json's timezone",
+                    "purpose": "This user's tokens per day; null = none."
+                },
+                {
+                    "field": "requests_day",
+                    "type": "integer or null",
+                    "required": true,
+                    "default": "null",
+                    "range_text": ">= 0; null = no limit",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "count; a day or a month in config.json's timezone",
+                    "purpose": "This user's questions per day; null = none."
                 }
             ]
         },

@@ -131,7 +131,7 @@ def _nightly(tmp_path, monkeypatch, *, mappings, restore_all=False):
         restore_sql_password_env="TARGET_SA", restore_sql_instance_on_vm="localhost,1433")
     asked: list[dict] = []
     monkeypatch.setattr(cli, "run_target_preflight", lambda config, logger=None, **_: None)
-    monkeypatch.setattr(cli, "run_copy_backup", lambda step_config, logger=None, force=False: CopyBackupResult(
+    monkeypatch.setattr(cli, "run_copy_backup", lambda step_config, logger=None, force=False, catalog=None: CopyBackupResult(
         returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path, files_considered=2,
         copied=2, skipped=0, file_results=()))
     monkeypatch.setattr(cli, "run_restore_all_latest", lambda **_: {

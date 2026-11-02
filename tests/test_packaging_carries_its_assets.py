@@ -34,6 +34,9 @@ MUST_BE_IN_THE_WHEEL: tuple[tuple[str, str], ...] = (
     ("dbabrain/common/backup_scripts/sqlserver/mssql_backup_database.sh", "a backup script"),
     # scaffold reads it at import, so a wheel without it fails at the first command.
     ("dbabrain/common/agents_guide.md", "the AGENTS.md init writes and dbabrain guide prints"),
+    # Every report page inlines its rules; without it the pages are bare HTML.
+    ("dbabrain/lib/vendor/tabler/tabler.min.css", "the UI kit the report pages are drawn with"),
+    ("dbabrain/lib/vendor/tabler/LICENSE", "the kit's MIT license, which must travel with it"),
 )
 
 

@@ -18,8 +18,11 @@
 #
 # Env: DOCKER_CONTAINER (OPTIONAL since 0.21.0 - unset means the cluster is on this host), BACKUP_DIR (required, path inside the container),
 #      RETENTION_DAYS (default 7), PG_USER (default postgres),
-#      PG_OS_USER (OS user inside the container, default postgres).
+#      PG_OS_USER (OS user inside the container, default postgres),
+#      CATALOG_AFTER (0.34.0, from dbabrain: the newest segment its catalog holds), CATALOG_MAX_FILES
+#      (default 200: segments hashed in one run).
 # Exit: 0 on success, non-zero on failure. Prints RESULT=ok only on a completed run.
+# Receipt (0.34.0): one `FILE` line per archived segment after CATALOG_AFTER - its sha256 and size.
 set -u
 
 container="${DOCKER_CONTAINER:-}"
@@ -30,6 +33,15 @@ pg_user="${PG_USER:-postgres}"
 pg_os_user="${PG_OS_USER:-postgres}"
 
 die() { printf 'RESULT=error reason=%s\n' "$1" >&2; exit 1; }
+
+# Where a stop finds this run (0.34.0, 1.238): this shell's pid, under the run's tag, removed on exit.
+# backup-stop ends the tree under it - killing the engine session alone left the script to start the
+# next database a second later (a production SQL Server, 2026-10-29).
+if [ -n "${DBABRAIN_RUN_TAG:-}" ]; then
+    run_file="${TMPDIR:-/tmp}/dbabrain_runs/${DBABRAIN_RUN_TAG}.pid"
+    mkdir -p "${run_file%/*}" 2>/dev/null && printf '%s\n' "$$" > "$run_file" 2>/dev/null \
+        && trap 'rm -f "$run_file"' EXIT
+fi
 
 [ -n "$backup_dir" ] || die "BACKUP_DIR is not set."
 case "$retention_days" in
@@ -165,6 +177,71 @@ if [ -n "$failed" ] && { [ -z "$archived" ] || [ "$failed" \> "$archived" ]; }; 
     printf 'archive_command=%s\n' "${command_text:-<unset>}"
     printf 'archiver_stats_since=%s\n' "${since:-unknown}"
     die "WAL archiving is failing: last_failed_wal=${failed} newer than last_archived_wal=${archived:-none} at ${err}. ${why}"
+fi
+
+# The file's path on this server, not inside the container (0.34.0): through the container's
+# mount that holds it, the longest one first. Empty for a file in no mount - it then lives only in
+# the container's own layer, gone with the container, which is worth the catalog saying.
+_dbabrain_mounts=""
+if [ -n "$container" ]; then
+    _dbabrain_mounts="$($DOCKER inspect -f '{{range .Mounts}}{{.Destination}}|{{.Source}}{{"\n"}}{{end}}' "$container" 2>/dev/null)"
+fi
+host_path_of() {
+    if [ -z "$container" ]; then printf '%s' "$1"; return 0; fi
+    _best_dst=""; _best_src=""
+    while IFS='|' read -r _dst _src; do
+        [ -n "$_dst" ] || continue
+        case "$1" in
+            "$_dst"|"$_dst"/*)
+                if [ "${#_dst}" -gt "${#_best_dst}" ]; then _best_dst="$_dst"; _best_src="$_src"; fi ;;
+        esac
+    done <<HOSTPATHS
+$_dbabrain_mounts
+HOSTPATHS
+    if [ -n "$_best_dst" ]; then printf '%s%s' "$_best_src" "${1#"$_best_dst"}"; fi
+    return 0
+}
+
+# --- 2b. The receipt (0.34.0): one FILE line per archived segment not yet catalogued ------------
+# PostgreSQL's archive_command writes the segments, not this job, so the job is told where the
+# catalog left off - CATALOG_AFTER, the newest segment dbabrain already holds for this entry - and
+# lists every full segment after it, in name order (a segment's name sorts by time within a
+# timeline), at most CATALOG_MAX_FILES a run so a long backlog is caught up over a few runs rather
+# than hashed in one. Before the cleanup below, so nothing is removed before it is recorded.
+catalog_after="${CATALOG_AFTER:-}"
+catalog_max="${CATALOG_MAX_FILES:-200}"
+case "$catalog_max" in
+    ''|*[!0-9]*) die "CATALOG_MAX_FILES must be a whole number: '${catalog_max}'." ;;
+esac
+case "$catalog_after" in
+    ''|[0-9A-F]*) ;;
+    *) die "CATALOG_AFTER must be a WAL segment name: '${catalog_after}'." ;;
+esac
+# Compared as STRINGS ("" forces it): awk compares two numeric-looking values as numbers, and a
+# segment name is one - 000000010000008400000067 reads as 1.00000084e16, ...81000000E3 as
+# 1.00000081e17 (E3 an exponent), and double precision cannot tell ...67 from ...68. On the worker
+# (2026-10-29, 10:52Z) the catalog's newest name turned all-digit, and every WAL run listed old
+# segments again (a duplicate key) and missed the new one.
+wal_names="$(run_db "ls -1 '${wal_dir}' 2>/dev/null" | tr -d '\r' \
+    | grep -E '^[0-9A-F]{24}$' | sort | awk -v after="$catalog_after" '($0 "") > (after "")' \
+    | head -n "$catalog_max" | tr '\n' ' ')"
+if [ -n "$wal_names" ]; then
+    # One call for the whole batch: a docker exec per segment would cost more than the hashing.
+    # The names are 24 hex characters, checked above, so they need no quoting.
+    # The lines are printed inside the container; each gets its path on this server out here,
+    # where the container's mounts can be read.
+    tab="$(printf '\t')"
+    run_db "cd '${wal_dir}' && for f in ${wal_names}; do s=\$(stat -c %s \"\$f\" 2>/dev/null); h=\$(sha256sum \"\$f\" 2>/dev/null | cut -d' ' -f1); printf 'FILE\tdb=cluster\ttype=WAL\tsize=%s\tsha256=%s\tverify=not_run\tencrypted=no\tnote=checked when it is replayed\tpath=%s/%s\n' \"\$s\" \"\$h\" '${wal_dir}' \"\$f\"; done" \
+        | while IFS= read -r line; do
+            case "$line" in
+                "FILE${tab}"*)
+                    p="${line##*${tab}path=}"
+                    printf '%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
+                        "${line%${tab}path=*}" "$(host_path_of "$p")" "$container" "$p" ;;
+                *) printf '%s\n' "$line" ;;
+            esac
+        done \
+        || printf 'warning: hashing the archived WAL reported an error\n' >&2
 fi
 
 # --- 3. Remove WAL no retained base backup needs ------------------------------------------------

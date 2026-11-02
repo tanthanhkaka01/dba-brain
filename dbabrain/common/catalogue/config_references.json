@@ -182,6 +182,33 @@
                 }
             ],
             "why": "A level with no chat does not send - which is the documented way to MUTE a stream, so this is reported rather than guessed at. It is here because the other reading is just as common: a level renamed in telegram_groups.json and not in the targets, which silently stops the failure alert nobody notices is missing until they need it. THREE homes, because a level is wired in either file: 'private' lives in telegram_config.json's level_chat_map, and the first run of this rule reported it as dangling - a checker whose first finding is a false positive does not get a second reading."
+        },
+        {
+            "name": "ai assistant chat -> a routing level that exists",
+            "from": {
+                "file": "ai_assist.json",
+                "path": "",
+                "field": "telegram_chat",
+                "active_field": "enabled"
+            },
+            "to": [
+                {
+                    "file": "telegram_groups.json",
+                    "path": "telegram_groups[]",
+                    "field": "notify_level"
+                },
+                {
+                    "file": "telegram_groups.json",
+                    "path": "telegram_groups[]",
+                    "field": "source_notify_level"
+                },
+                {
+                    "file": "telegram_config.json",
+                    "path": "level_chat_map",
+                    "field": "[key]"
+                }
+            ],
+            "why": "0.34.0: the assistant answers in the chat its level resolves to, as every app names its chat (the operator, 2026-10-31). A level no group carries means the assistant reads no chat at all - the run says so, and this says it before anybody waits for an answer."
         }
     ]
 }

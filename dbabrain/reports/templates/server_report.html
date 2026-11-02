@@ -14,49 +14,44 @@
      page costs one small JSON, not the whole fleet's history.
      Charts are hand-drawn SVG: the worker has no internet, so no chart
      library can be fetched.
+     Everything else is Tabler (lib.page_kit, inlined before this block): its cards, tables,
+     badges, buttons, alerts and colour tokens. lib.page_kit.ALIASES says which Tabler class each
+     of this page's names is; what is left here is layout Tabler has no class for, and the state
+     edges (a red border, a red row) drawn in Tabler's colours.
      ============================================================ */
   :root{
-    --bg:#f5f6f8; --surface:#ffffff; --surface-2:#fafbfc;
-    --ink:#1b2430; --muted:#64748b; --faint:#94a3b8; --line:#e5e9ef;
-    --brand:#0f2540; --brand-2:#1d3b5e;
-    --crit:#dc2626; --crit-bg:#fef2f2; --crit-line:#fecaca;
-    --warn:#c2700a; --warn-bg:#fff8ed; --warn-line:#fde3bf;
-    --ok:#15803d;   --ok-bg:#f0fdf4;   --ok-line:#bbf7d0;
-    --unk:#64748b;  --unk-bg:#f3f4f6;  --unk-line:#d9dde3;
-    --info:#2563eb; --info-bg:#eff6ff; --info-line:#c7dbfd;
-    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
-    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --bg:var(--tblr-bg-surface-secondary); --surface:var(--tblr-bg-surface); --surface-2:var(--tblr-bg-surface-tertiary);
+    --ink:var(--tblr-body-color); --muted:var(--tblr-secondary); --faint:var(--tblr-gray-400); --line:var(--tblr-border-color);
+    --brand:var(--tblr-primary); --brand-2:var(--tblr-primary-darken);
+    --crit:var(--tblr-red); --crit-bg:var(--tblr-red-lt); --crit-line:color-mix(in oklab,var(--tblr-red) 30%,transparent);
+    --warn:var(--tblr-orange); --warn-bg:var(--tblr-orange-lt); --warn-line:color-mix(in oklab,var(--tblr-orange) 30%,transparent);
+    --ok:var(--tblr-green); --ok-bg:var(--tblr-green-lt); --ok-line:color-mix(in oklab,var(--tblr-green) 30%,transparent);
+    --unk:var(--tblr-secondary); --unk-bg:var(--tblr-secondary-lt); --unk-line:var(--tblr-border-color);
+    --info:var(--tblr-azure); --info-bg:var(--tblr-azure-lt); --info-line:color-mix(in oklab,var(--tblr-azure) 30%,transparent);
+    --mono:var(--tblr-font-monospace);
+    --sans:var(--tblr-font-sans-serif);
   }
-  *{box-sizing:border-box}
-  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.5;}
   /* The whole window, not a centred 1180px column - see the same note in inventory_report.html. */
-  .wrap{max-width:none; margin:0; padding:0 22px 64px;}
-  header.masthead{background:linear-gradient(135deg,var(--brand),var(--brand-2)); color:#fff; padding:24px 0 20px; margin-bottom:20px;}
+  .wrap{max-width:none; margin:0; padding:0 24px 64px;}
+  header.masthead{padding:20px 0 4px; margin-bottom:8px}
   header .wrap{padding-bottom:0}
-  .eyebrow{font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:#9db8d6; font-weight:600; margin:0 0 6px}
-  h1.title{font-size:24px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em}
-  .subtitle{color:#c7d6e8; font-size:13px; margin:0}
-  .back{display:inline-block; margin-top:12px; color:#c7d6e8; font-size:12.5px; text-decoration:none; border-bottom:1px dotted #6f89a8}
-  .back:hover{color:#fff}
+  .eyebrow{margin:0 0 6px}
+  h1.title{margin:0 0 2px}
+  .subtitle{color:var(--muted); margin:0}
+  .back{display:inline-block; margin-top:10px; text-decoration:none; border-bottom:1px dotted var(--line)}
 
   /* One row per engine (SQL Server, Oracle, PostgreSQL, Host only): the label column on the left,
      that engine's servers to its right. */
   .picker{display:grid; grid-template-columns:max-content 1fr; gap:8px 12px; align-items:start;
-    margin:14px 0 18px; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:10px}
-  .picker .plabel{font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
-    color:var(--brand); padding-top:6px; white-space:nowrap}
-  .picker .plabel b{display:inline-block; margin-left:6px; font-weight:600; color:var(--muted);
-    border:1px solid var(--line); border-radius:999px; padding:0 6px; letter-spacing:0}
+    margin:14px 0 18px; padding:12px 14px}
+  .picker .plabel{padding-top:6px; white-space:nowrap}
+  .picker .plabel b{margin-left:6px}
   .picker .prow{display:flex; flex-wrap:wrap; gap:6px}
-  .picker button{background:var(--surface); border:1px solid var(--line); border-radius:999px; cursor:pointer;
-    padding:5px 12px; font-family:var(--sans); font-size:12px; color:var(--muted);}
-  .picker button:hover{border-color:var(--info); color:var(--info)}
-  .picker button.on{background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600}
   .picker .dot{display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:6px; vertical-align:middle}
 
   /* ---------- Verdict ---------- */
   .verdict{display:grid; grid-template-columns:minmax(230px,1fr) 2fr; gap:14px; margin-bottom:18px}
-  .vcard{border-radius:11px; padding:16px 18px; border:1px solid var(--line); background:var(--surface)}
+  .vcard{padding:16px 18px}
   .vcard.crit{background:var(--crit-bg); border-color:var(--crit-line)}
   .vcard.warn{background:var(--warn-bg); border-color:var(--warn-line)}
   .vcard.ok{background:var(--ok-bg); border-color:var(--ok-line)}
@@ -66,7 +61,7 @@
   .vstatus.ok{color:var(--ok)} .vstatus.unk{color:var(--unk)}
   .vsub{color:var(--muted); font-size:12.5px; margin-top:4px}
   .score{margin-top:12px}
-  .score .bar{height:7px; border-radius:99px; background:#e6e9ee; overflow:hidden}
+  .score .bar{height:7px; border-radius:99px; background:var(--surface-2); overflow:hidden}
   .score .bar i{display:block; height:100%; border-radius:99px}
   .score .num{font-family:var(--mono); font-size:12px; color:var(--muted); margin-top:4px}
   .facts{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px}
@@ -81,7 +76,7 @@
 
   /* ---------- Health areas ---------- */
   .areas{display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px}
-  .area{background:var(--surface); border:1px solid var(--line); border-left-width:4px; border-radius:9px; padding:10px 12px}
+  .area{border-left-width:4px; padding:10px 12px}
   .area.crit{border-left-color:var(--crit)} .area.warn{border-left-color:var(--warn)}
   .area.ok{border-left-color:var(--ok)} .area.unk{border-left-color:var(--unk)}
   .area .top{display:flex; justify-content:space-between; align-items:baseline; gap:8px}
@@ -111,18 +106,18 @@
      puts one finding per line with its columns aligned, so the page is scanned, not read. */
   /* A table never widens the page: see the same note in inventory_report.html. max-width caps
      the box at the layout's width, overflow-x is the last resort inside it. */
-  .tbl-wrap{overflow-x:auto; max-width:100%; border:1px solid var(--line); border-radius:9px; background:var(--surface)}
-  table.rpt{width:100%; max-width:100%; border-collapse:collapse; font-size:12.5px}
-  table.rpt th{text-align:left; font-size:10.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
-    color:var(--muted); padding:7px 10px; border-bottom:1px solid var(--line); white-space:nowrap; background:var(--surface-2,transparent)}
-  table.rpt td{padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top}
-  table.rpt tr:last-child td{border-bottom:none}
+  .tbl-wrap{max-width:100%}
+  table.rpt{margin:0; font-size:13px}
+  table.rpt th{white-space:nowrap}
+  table.rpt td{vertical-align:top}
   table.rpt tr.crit td{background:var(--crit-bg)}
   table.rpt tr.warn td{background:var(--warn-bg)}
   table.rpt .metric{font-weight:650; white-space:nowrap}
   table.rpt .code{display:block; font-size:10px; color:var(--faint); font-family:var(--mono); font-weight:400}
   table.rpt .metric .wl-src{white-space:normal; max-width:340px}
   table.rpt .mono{font-family:var(--mono)}
+  /* A label / value table: the label column as wide as its longest label, the value the rest. */
+  table.rpt.kv td.metric{width:1%}
   table.rpt .nowrap{white-space:nowrap}
   /* A long server-role list used to sit in a nowrap cell, so the Access table grew past the
      page and the reader had to scroll sideways to see the flags. The table is the page's
@@ -147,7 +142,7 @@
   /* Fill bar for the Volumes table. Inline with the percentage rather than a column of its own:
      the pair is one fact, and splitting them puts a bar on one side of the eye and its number on
      the other. */
-  .vbar{display:inline-block; width:64px; height:6px; border-radius:99px; background:#e6e9ee;
+  .vbar{display:inline-block; width:64px; height:6px; border-radius:99px; background:var(--surface-2);
         overflow:hidden; vertical-align:middle; margin-right:7px}
   .vbar i{display:block; height:100%; border-radius:99px}
   table.rpt .detail{font-family:var(--mono); font-size:11px; color:var(--muted); word-break:break-word}
@@ -155,22 +150,25 @@
   table.rpt details ul{margin:5px 0 0 0; padding-left:16px}
   table.rpt details li{font-size:11.5px; margin-bottom:2px}
   .sec-tools{float:right; font-size:11.5px; color:var(--muted); font-weight:400}
+  .ffilters{margin:4px 0 8px}
+  .ffilter{font-size:12px; color:var(--muted); margin-right:12px; display:inline-block}
+  .ffilter select{display:inline-block; width:auto; margin-left:4px}
+  td.num{text-align:right}
 
   /* ---------- Problems ---------- */
-  .prob{display:flex; gap:11px; background:var(--surface); border:1px solid var(--line); border-radius:9px; padding:11px 13px; margin-bottom:7px}
+  .prob{display:flex; flex-direction:row; gap:11px; padding:11px 13px; margin-bottom:7px}
   .prob.crit{background:var(--crit-bg); border-color:var(--crit-line)}
   .prob.warn{background:var(--warn-bg); border-color:var(--warn-line)}
-  .sev{flex:0 0 auto; font-size:10px; font-weight:800; letter-spacing:.06em; padding:3px 7px; border-radius:5px; height:fit-content}
-  .sev.crit{background:var(--crit); color:#fff} .sev.warn{background:var(--warn); color:#fff}
-  /* The linked-server table badges a verdict on every row, including the healthy ones — a
-     KEEP has to look like a decision that was made, not like a missing badge. */
-  .sev.ok{background:var(--ok); color:#fff} .sev.unk{background:var(--unk); color:#fff}
+  /* A severity tag is Tabler's solid badge in the state's colour. The linked-server table badges a
+     verdict on every row, including the healthy ones — a KEEP has to look like a decision that was
+     made, not like a missing badge. */
+  .sev{flex:0 0 auto; height:fit-content}
   .prob .body{flex:1; min-width:0}
   .prob .h{font-weight:650; font-size:13px}
   .prob .h .val{font-family:var(--mono); color:var(--ink)}
   .prob .code{font-size:10.5px; color:var(--faint); font-family:var(--mono)}
   .prob .act{font-size:12.5px; color:var(--muted); margin-top:3px}
-  .all-ok{background:var(--ok-bg); border:1px solid var(--ok-line); color:#166534; border-radius:9px; padding:12px 14px; font-size:13px}
+  .all-ok{margin:0}
 
   /* ---------- Timeline ---------- */
   .tl{border-left:2px solid var(--line); margin-left:6px; padding-left:14px}
@@ -184,14 +182,14 @@
   /* ---------- Status cards (categorical, never charted) ---------- */
   .cards{display:flex; flex-wrap:wrap; gap:6px}
   .chip{background:var(--surface); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:12px}
-  .chip.crit{background:var(--crit-bg); border-color:var(--crit-line); color:#991b1b}
-  .chip.warn{background:var(--warn-bg); border-color:var(--warn-line); color:#92400e}
+  .chip.crit{background:var(--crit-bg); border-color:var(--crit-line); color:var(--crit)}
+  .chip.warn{background:var(--warn-bg); border-color:var(--warn-line); color:var(--warn)}
   .chip b{font-weight:650}
   .chip .c{color:var(--faint); font-family:var(--mono); font-size:10.5px}
 
   /* ---------- Charts ---------- */
   .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:12px}
-  .card{background:var(--surface); border:1px solid var(--line); border-radius:9px; padding:11px 12px 6px}
+  .card{padding:11px 12px 6px}
   .card h3{font-size:12.5px; margin:0; font-weight:650; word-break:break-word}
   .card .meta{color:var(--muted); font-size:11px; font-family:var(--mono); margin:2px 0 6px}
   .card .code{color:var(--faint); font-size:10px; font-family:var(--mono)}
@@ -202,7 +200,7 @@
   svg{display:block; width:100%; height:92px; overflow:visible}
   .axis{fill:var(--faint); font-size:9px; font-family:var(--mono)}
   .empty{color:var(--faint); font-size:12px; padding:18px 0; text-align:center}
-  details.fold{background:var(--surface); border:1px solid var(--line); border-radius:9px; margin-top:10px; padding:0}
+  details.fold{margin-top:10px; padding:0}
   details.fold > summary{cursor:pointer; padding:10px 13px; font-size:13px; font-weight:600; list-style:none}
   details.fold > summary::-webkit-details-marker{display:none}
   details.fold > summary::before{content:"▶ "; color:var(--faint); font-size:10px}
@@ -224,6 +222,10 @@ __BANNER_CSS__
          a server is chosen: a link to a page that has not been published yet is a 404, and a 404
          is worse than no link because it looks like it should work. -->
     <a class="back" id="indexUsageLink" href="#" style="display:none">index usage report →</a>
+    <!-- The server's backup and restore files (1.217), found from the header (the operator,
+         2026-10-30: the section was on the page and nothing at the top said so). Shown only when
+         the server's file holds files; it opens the folded section and goes to it. -->
+    <a class="back" id="backupFilesLink" href="#backupFiles" style="display:none">backup &amp; restore files ↓</a>
   </div>
 </header>
 
@@ -541,11 +543,12 @@ const wlSpan = s => s == null ? "—"
   : s >= 5400   ? (s/3600).toFixed(1) + "h"
   : Math.round(s/60) + " min";
 
-/* "· 48 of 60 CPUs online" where the engine may use fewer CPUs than the host has, "· 60 CPUs"
-   where it may use them all. The bare "· 60 CPU" this replaced was the host's count on an instance
-   licensed for 48 of them, read by everyone as the engine's. */
+/* "· 48 of 60 CPUs online" wherever the engine said how many it may use - "· 32 of 32" too, as the
+   CPU tile prints it (0.30.0's 1.185): a bare "· 32 CPUs" could not say whether the engine had been
+   asked at all. The bare "· 60 CPU" before that was the host's count on an instance licensed for 48
+   of them, read by everyone as the engine's. */
 const wlCpuHead = c => !c || !c.total ? ""
-  : c.online && c.online < c.total ? ` · ${c.online} of ${c.total} CPUs online` : ` · ${c.total} CPUs`;
+  : c.online ? ` · ${c.online} of ${c.total} CPUs online` : ` · ${c.total} CPUs`;
 function wlCpuFacts(w){
   const c = w.cpu || {};
   const parts = [];
@@ -1592,10 +1595,52 @@ function oracleTopSqlBlock(o){
 
    Same rows as the fleet page's Server Detail, from the same builder
    (inventory_health.build_database_rows), so the two cannot disagree about one database. */
+/* Everything the inventory says about this one server - and every field of a block where the
+   inventory prints only a few (server_sections.build_server_detail). The operator, 2026-10-23: the
+   page of one instance carries more than the inventory, never less. Until then it had no version,
+   no configuration, no security counts and no host facts; the inventory had them all. */
+function serverDetailBlock(s){
+  if (!s || !s.facts) return "";
+  const kv = rows => `<div class="tbl-wrap"><table class="rpt kv"><tbody>${rows.map(r=>`<tr>
+      <td class="metric">${esc(r[0])}${r[2]==="static"?`<span class="code">static - from the inventory file, not a metric</span>`:""}</td>
+      <td class="wrapcell">${esc(r[1])}</td></tr>`).join("")}</tbody></table></div>`;
+  const chips = (label, items) => !items.length ? "" : `<p class="sec-note" style="margin:10px 0 6px"><b>${esc(label)}</b></p>
+      <div class="cards">${items.join("")}</div>`;
+  const ram = mb => mb==null ? "" : mb >= 1024 ? (mb/1024).toFixed(1)+" GB" : Math.round(mb)+" MB";
+  const proc = p => `<span class="chip"><b>${esc(p.process)}</b>${p.cpu_percent!=null?" · CPU "+esc(p.cpu_percent)+"%":""}${
+      p.memory_mb!=null?" · RAM "+esc(ram(p.memory_mb)):""}${p.process_count?` <span class="c">×${esc(p.process_count)}</span>`:""}</span>`;
+  const services = (s.services||[]).map(x=>{
+    const bad = String(x.status||"").toUpperCase()!=="OK";
+    return `<span class="chip${bad?" crit":""}"><b>${esc(x.name)}</b> ${esc(x.state)}</span>`;
+  });
+  const network = (s.network||[]).map(n=>`<span class="chip"><b>${esc(n.interface)}</b> ${esc(n.ip_address||"")}${
+      n.speed_mbps?` · ${esc(n.speed_mbps)} Mb/s`:""}${n.send_mbps!=null?` · send ${esc(n.send_mbps)} Mb/s`:""}${
+      n.receive_mbps!=null?` · receive ${esc(n.receive_mbps)} Mb/s`:""}${n.errors?` · <span class="crit">${esc(n.errors)} errors</span>`:""}${
+      n.dropped?` · ${esc(n.dropped)} dropped`:""}</span>`);
+  const events = (s.events||[]).map(e=>`<span class="chip warn"><b>${esc(e.log)}</b> ${esc(e.count)} error events${
+      e.detail?` <span class="c">${esc(e.detail)}</span>`:""}</span>`);
+  const hostBlock = (s.host||[]).length || services.length || (s.topCpu||[]).length || network.length || events.length
+    ? `<h3 class="sub">Host</h3>${(s.host||[]).length ? kv(s.host) : ""}
+       ${chips("Services", services)}${chips("Top processes by CPU", (s.topCpu||[]).map(proc))}
+       ${chips("Top processes by memory", (s.topMemory||[]).map(proc))}${chips("Network interfaces", network)}
+       ${chips("Event log", events)}` : "";
+  const configBlock = !(s.config||[]).length ? "" : `<h3 class="sub">Configuration</h3>${kv(s.config)}${
+      (s.configAdvice||[]).length ? `<ul class="sec-note" style="margin-top:8px">${
+        s.configAdvice.map(a=>`<li>${esc(a)}</li>`).join("")}</ul>` : ""}`;
+  const securityBlock = !(s.security||[]).length ? "" : `<h3 class="sub">Security</h3>${kv(s.security)}`;
+  const findingsBlock = !(s.findings||[]).length ? "" : `<h3 class="sub">Findings</h3>
+      <ul class="sec-note">${s.findings.map(f=>`<li>${esc(f)}</li>`).join("")}</ul>`;
+  return `<h2 class="sec">Server detail<span class="sec-tools">${s.asOf ? "instance as of " + when(s.asOf) : ""}</span></h2>
+    <p class="sec-note"${s.stale?' style="color:var(--warn)"':""}>${esc(s.freshness||"")}</p>
+    ${kv(s.facts)}${configBlock}${hostBlock}${securityBlock}${findingsBlock}`;
+}
+
 function databasesBlock(d){
   if (!d || !d.databases || !d.databases.length) return "";
   const s = d.summary;
   const gb = v => v == null ? "—" : (v >= 100 ? Math.round(v) : v.toFixed(2)) + " GB";
+  /* How many files a size is spread over, where the collector counted them. */
+  const files = n => n == null ? "" : ` <span class="muted">· ${n} file${n === 1 ? "" : "s"}</span>`;
   const SYSTEM = ["master","model","msdb","tempdb"];
   /* Allocated size next to how much of it is in use. The pair is the point: a log at 99% used
      with an unchanged data file is a broken log-backup chain, and either number alone hides it. */
@@ -1604,13 +1649,15 @@ function databasesBlock(d){
     const pct = r.logUsedPct;
     const cls = pct == null ? "" : pct >= 90 ? "crit" : pct >= 75 ? "warn" : "";
     return `${gb(r.logGB)}${pct == null ? "" :
-      ` <span class="${cls}">${pct.toFixed(1)}%</span>`}`
+      ` <span class="${cls}">${pct.toFixed(1)}%</span>`}${files(r.logFiles)}`
       + (r.logReuseWait && r.logReuseWait !== "NOTHING"
          ? `<span class="code" title="why the log cannot truncate">${esc(r.logReuseWait)}</span>` : "");
   };
   /* "never" is not a date and must not read as one. It means no successful CHECKDB has ever been
      recorded for this database, so corruption would first be found by a query or a restore. */
   const checkdbCell = r => {
+    /* null: this engine has no CHECKDB (the catalogue says which metrics fit it). Not "never". */
+    if (r.checkdb === null) return `<span class="muted">n/a</span>`;
     if (!r.checkdb || r.checkdb === "never")
       return `<span class="sev crit">never</span>`;
     return `<span class="mono">${when(r.checkdb)}</span>`;
@@ -1634,7 +1681,7 @@ function databasesBlock(d){
        Oracle database on the page red while it was open and serving. Mirrors
        dbabrain.lib.inventory_render.ONLINE_DATABASE_STATES. */
     const down = r.state && ONLINE_STATES.indexOf(r.state.toUpperCase()) < 0;
-    const bad = (!r.checkdb || r.checkdb === "never") || down
+    const bad = (r.checkdb !== null && (!r.checkdb || r.checkdb === "never")) || down
              || (r.logUsedPct != null && r.logUsedPct >= 90);
     return `<tr class="${down ? "crit" : bad ? "warn" : ""}">
       <td class="metric">${esc(r.name)}${system ? `<span class="code">system</span>` : ""}</td>
@@ -1642,7 +1689,7 @@ function databasesBlock(d){
             : down ? `<span class="sev crit">${esc(r.state)}</span>`
                    : `<span class="sev ok">${esc(r.state.toUpperCase())}</span>`}</td>
       <td class="nowrap mono">${esc(r.recovery || "—")}</td>
-      <td class="nowrap mono">${gb(r.dataGB)}${r.staticSize ? `<span class="code">static</span>` : ""}</td>
+      <td class="nowrap mono">${gb(r.dataGB)}${files(r.dataFiles)}${r.staticSize ? `<span class="code">static</span>` : ""}</td>
       <td class="nowrap mono">${logCell(r)}</td>
       <td class="nowrap mono">${r.compat == null ? "—" : esc(String(r.compat))}</td>
       <td class="nowrap mono">${esc(r.pageVerify || "—")}</td>
@@ -1654,8 +1701,14 @@ function databasesBlock(d){
       <td class="nowrap">${ageCell(r.logAgeHours, 4, 24)}</td>
     </tr>`;
   }).join("");
+  /* PostgreSQL's log is one WAL for the cluster, not a file per database: its own line. */
+  const wal = s.wal ? ` · WAL ${s.wal.sizeMB == null ? "—" : s.wal.sizeMB >= 1024
+      ? (s.wal.sizeMB / 1024).toFixed(2) + " GB" : Math.round(s.wal.sizeMB) + " MB"}`
+      + (s.wal.files == null ? "" : ` in ${s.wal.files} files`)
+      + (s.wal.maxWalSizeMB == null ? "" : ` (max_wal_size ${s.wal.maxWalSizeMB >= 1024
+          ? (s.wal.maxWalSizeMB / 1024).toFixed(0) + " GB" : s.wal.maxWalSizeMB + " MB"})`) : "";
   const head = `${s.count} database${s.count === 1 ? "" : "s"} · ${s.online} online`
-    + (s.neverCheckdb ? ` · ${s.neverCheckdb} never CHECKDB'd` : "")
+    + (s.neverCheckdb ? ` · ${s.neverCheckdb} never CHECKDB'd` : "") + wal
     + (s.backupGraded ? ` · ${s.backupOk}/${s.backupGraded} within backup policy` : "");
   /* Open when something on it needs doing — the same rule the sections around it use. */
   return `<details class="fold"${(s.neverCheckdb || s.online < s.count) ? " open" : ""}>
@@ -1848,6 +1901,8 @@ function accessBlock(a){
       <tbody>${userRows}</tbody></table></div>
     </div></details>`;
 }
+
+__BACKUP_FILES_JS__
 
 function linkedServerBlock(rows){
   if (!rows || !rows.length) return "";
@@ -2141,6 +2196,15 @@ async function select(slug){
     return;
   }
 
+  /* The build and the edition join the host line once the server's file says them: the version
+     is the first thing looked up about a server, and it was on no line of this page. */
+  if (d.serverDetail && d.serverDetail.summary){
+    document.getElementById("hostMeta").textContent =
+      [server.role && server.role !== server.name ? server.role : "",
+       server.ip, d.serverDetail.summary, server.platform, `last ${WINDOW_DAYS} days`,
+       SNAPSHOT_DATE ? `snapshot ${SNAPSHOT_DATE}` : ""].filter(Boolean).join(" · ");
+  }
+
   /* The severity a chart is coloured by is the one the analysis decided (which is the
      collector's, except for the two metrics the collector logs without judging). */
   for (const s of d.series) s.severity = seriesSeverity(s, d);
@@ -2171,7 +2235,10 @@ async function select(slug){
        for the workload above, and they are a different kind of number — a reading of the moment,
        summarised as a range, not a counter differenced into a rate. */
     + memoryBlock(d.workload && d.workload.memory)
-    /* First of the inventory sections: it is the "what is on this server" overview that every
+    /* The server before what is on it: its build, configuration and host are the facts every
+       section below is read against. */
+    + serverDetailBlock(d.serverDetail)
+    /* First of the inventory sections after it: the "what is on this server" overview that every
        section below details one aspect of. */
     + databasesBlock(d.databases)
     /* Directly under the database list: on Oracle the tablespace is the storage unit the
@@ -2182,6 +2249,9 @@ async function select(slug){
        the backup ages say. */
     + oracleRedoBlock(d.oracleRedo)
     + backupBlock(d.backup)
+    /* The backup verdict says whether the policy is met; this says, file by file, what was
+       written, whether it can still be trusted, and which restores used it. */
+    + backupFilesBlock(d.backupFiles)
     /* What the storage is, then when it runs out: the forecast's "12 days" is unreadable
        without the size and free space it was projected from. */
     + volumesBlock(d.volumes)
@@ -2209,6 +2279,25 @@ async function select(slug){
     + `<details class="fold"><summary>Performance diagnostics (${diag.length})</summary><div class="in">${chartGrid(diag)}</div></details>`
     + `<details class="fold"><summary>Detailed / raw metrics (${detail.length})</summary><div class="in">${chartGrid(detail)}</div></details>`
     + omittedFoot(d.omitted);
+  bindFileFilters();
+  showBackupFilesLink(d.backupFiles);
+}
+
+/* The header link to the backup & restore files: the count, or no link when there are none. */
+function showBackupFilesLink(b){
+  const link = document.getElementById("backupFilesLink");
+  if (!link) return;
+  const files = (b && b.files) || [];
+  link.style.display = files.length ? "" : "none";
+  if (!files.length) return;
+  link.textContent = `backup & restore files (${files.length}${b.notOk ? `, ${b.notOk} not ok` : ""}) ↓`;
+  link.onclick = ev => {
+    const section = document.getElementById("backupFiles");
+    if (!section) return;
+    ev.preventDefault();
+    section.open = true;
+    section.scrollIntoView({behavior: "smooth", block: "start"});
+  };
 }
 
 /* Mirrors the Python: the collector's status, except for the two metrics whose SQL returns OK

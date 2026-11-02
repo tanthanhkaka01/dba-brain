@@ -276,6 +276,14 @@ Every capability except message delivery works with no route off the machines yo
 - **The test suite is offline** — no database, no network, no delivery. That is what lets it run
   anywhere, and it is checked rather than promised.
 
+- **The AI assistant** (0.34.0, `data/ai_assist.json`) is off until a node switches it on. On, it
+  reaches `api.anthropic.com` **outward only**: tools run on the node and their results go up in the
+  next request, so nothing on the internet ever connects in. What leaves is the question, its
+  context, the conversation so far and what the read-only tools returned - **redacted of every value
+  in the encrypted secret store** and of password/token shapes; files on `file_denied` and tables on
+  `store_query_blocked_tables` are never read. Rows a `run_sql` or `store_query` returns do leave:
+  that is the tool's purpose, and each tool has its own switch.
+
 An air-gapped install is therefore the default shape, not a special mode.
 
 ---

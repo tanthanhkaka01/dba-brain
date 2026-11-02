@@ -184,17 +184,6 @@ def _apply_severity_policy(status: str, context: dict[str, Any], policy: dict[st
     return _apply_severity_action(status, action)
 
 
-def _apply_instance_policy(status: str, context: dict[str, Any], policy: dict[str, Any]) -> str:
-    overrides = policy.get("severity_overrides") or {}
-    if isinstance(overrides, dict):
-        event_code = str(context.get("event_code") or "")
-        metric_code = str(context.get("metric_code") or "")
-        action = overrides.get(event_code) or overrides.get(metric_code)
-        if action:
-            return _apply_severity_action(status, str(action).upper())
-    return status
-
-
 def _apply_severity_action(status: str, action: str) -> str:
     if action in {"", "KEEP"}:
         return status

@@ -15,6 +15,12 @@ Read back wrongly, a total is worse than none. On 2026-10-20 a 32-CPU host read
 the tile printed it as cores per socket. Every test here had one socket, where the two agree.
 The same morning ``32 CPUs`` stood beside another server's ``48 / 60``, and could not say whether
 the engine had been asked at all.
+
+The fix for that chose between two forms - ``1 socket × 30 cores`` where the total divided by the
+sockets, ``3 sockets, 17 cores`` where it did not - and on 2026-10-26 two tiles side by side read
+differently for it (asked by the operator: *don't hard-code, show what is real, don't guess*). The
+``×`` claimed every socket alike, and the guest behind ``3 sockets, 17 cores`` has 8 + 6 + 3. One
+form now, from what the collector wrote socket by socket.
 """
 
 from __future__ import annotations
@@ -57,7 +63,7 @@ def _areas(series, workload=None):
 def test_the_cpu_tile_states_the_cpus_the_engine_may_use_of_the_hosts():
     cpu = _areas([CPU], WORKLOAD)["cpu"]
 
-    assert cpu["capacity"] == "48 / 60 CPUs online / total · 1 socket × 30 cores"
+    assert cpu["capacity"] == "48 / 60 logical CPUs online / total · 1 socket, 30 cores, 2 threads per core"
     # The consequence, in the tile's own terms.
     assert cpu["capacityNote"] == ("SQL Server Standard uses at most the lesser of 4 sockets or "
                                    "24 cores, so SQL Server saturated reads about 80% on this tile.")
@@ -66,12 +72,12 @@ def test_the_cpu_tile_states_the_cpus_the_engine_may_use_of_the_hosts():
 def test_an_engine_that_may_use_every_cpu_states_the_pair_and_no_consequence():
     cpu = _areas([CPU], {"cpu": {"total": 60, "online": 60}})["cpu"]
 
-    assert cpu["capacity"] == "60 / 60 CPUs online / total · 1 socket × 30 cores"
+    assert cpu["capacity"] == "60 / 60 logical CPUs online / total · 1 socket, 30 cores, 2 threads per core"
     assert cpu["capacityNote"] == ""
 
 
 def test_a_host_whose_engine_was_not_asked_says_only_how_many_cpus_it_has():
-    assert _areas([CPU])["cpu"]["capacity"] == "60 CPUs · 1 socket × 30 cores"
+    assert _areas([CPU])["cpu"]["capacity"] == "60 logical CPUs · 1 socket, 30 cores, 2 threads per core"
 
 
 def test_the_schedulers_are_read_from_the_engine_row_when_the_workload_has_none():
@@ -82,14 +88,30 @@ def test_the_schedulers_are_read_from_the_engine_row_when_the_workload_has_none(
                    message="Average CPU usage is 22.76 percent. model=Intel(R) Xeon(R) Gold, "
                            "sockets=3, cores=17, logical_cpus=32")
 
-    assert _areas([host, engine])["cpu"]["capacity"] == "32 / 32 CPUs online / total · 3 sockets, 17 cores"
+    assert _areas([host, engine])["cpu"]["capacity"] == "32 / 32 logical CPUs online / total · 3 sockets, 17 cores"
 
 
-def test_cores_that_divide_by_the_sockets_are_stated_per_socket():
+def test_sockets_of_different_sizes_are_stated_as_the_collector_counted_them():
+    host = _series("OS_CPU_USAGE", "cpu_usage", 8.0,
+                   message="Average CPU usage is 8 percent. model=x, sockets=3, cores=17, "
+                           "cores_per_socket=8+6+3, logical_per_socket=14+12+6, logical_cpus=32")
+
+    assert _areas([host])["cpu"]["capacity"] == "32 logical CPUs · 3 sockets, 17 cores (8 + 6 + 3)"
+
+
+def test_one_form_for_every_host_whether_or_not_the_cores_divide():
+    """``2 sockets × 16 cores`` was an inference: nothing in the row said the sockets were alike."""
     host = _series("OS_CPU_USAGE", "cpu_usage", 10.0,
                    message="Average CPU usage is 10 percent. model=x, sockets=2, cores=32, logical_cpus=64")
 
-    assert _areas([host])["cpu"]["capacity"] == "64 CPUs · 2 sockets × 16 cores"
+    assert _areas([host])["cpu"]["capacity"] == "64 logical CPUs · 2 sockets, 32 cores, 2 threads per core"
+
+
+def test_a_host_with_no_socket_count_gets_none_invented():
+    host = _series("OS_CPU_USAGE", "cpu_usage", 10.0,
+                   message="Average CPU usage is 10 percent. model=x, logical_cpus=8")
+
+    assert _areas([host])["cpu"]["capacity"] == "8 logical CPUs"
 
 
 def test_the_memory_tile_states_used_of_total_and_what_the_engine_holds():
@@ -118,3 +140,18 @@ def test_a_tile_whose_collector_wrote_no_totals_says_nothing_rather_than_guessin
     bare = _series("OS_CPU_USAGE", "cpu_usage", 12.0, message="Average CPU usage is 12 percent.")
 
     assert _areas([bare])["cpu"]["capacity"] == ""
+
+
+def test_the_workload_sections_print_the_pair_wherever_the_engine_said_it():
+    """The tile prints `32 / 32` since 0.30.0's 1.185; the Workload sections of both pages still
+    printed the pair only when the counts differed, so the same server read `32 / 32` on its tile
+    and `32 CPUs` two sections below (0.31.0)."""
+    from dbabrain.reports.inventory_report import TEMPLATE_HTML as INVENTORY
+    from dbabrain.reports.server_report import TEMPLATE_HTML as SERVER
+
+    server = SERVER.read_text(encoding="utf-8")
+    inventory = INVENTORY.read_text(encoding="utf-8")
+    assert "c.online ? ` · ${c.online} of ${c.total} CPUs online`" in server
+    assert "c.online ? `, ${c.online} of ${total} CPUs online`" in inventory
+    assert "c.online < c.total ?" not in server and "c.online < total ?" not in inventory
+

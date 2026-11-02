@@ -8,78 +8,59 @@
   /* ============================================================
      DATABASE INVENTORY REPORT — TEMPLATE
      Design goals: scannable, severity-first, print-to-PDF clean.
-     Theme via CSS variables. No external dependencies.
+     Drawn with Tabler (lib.page_kit, inlined before this block): its cards, tables, badges,
+     buttons, alerts and colour tokens. lib.page_kit.ALIASES says which Tabler class each of this
+     page's names is; what is left here is layout Tabler has no class for. No external dependencies.
      ============================================================ */
   :root{
-    --bg:#f5f6f8; --surface:#ffffff; --surface-2:#fafbfc;
-    --ink:#1b2430; --muted:#64748b; --faint:#94a3b8; --line:#e5e9ef;
-    --brand:#0f2540; --brand-2:#1d3b5e;
-    --crit:#dc2626; --crit-bg:#fef2f2; --crit-line:#fecaca;
-    --warn:#c2700a; --warn-bg:#fff8ed; --warn-line:#fde3bf;
-    --ok:#15803d;   --ok-bg:#f0fdf4;   --ok-line:#bbf7d0;
-    --info:#2563eb; --info-bg:#eff6ff; --info-line:#c7dbfd;
-    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
-    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --bg:var(--tblr-bg-surface-secondary); --surface:var(--tblr-bg-surface); --surface-2:var(--tblr-bg-surface-tertiary);
+    --ink:var(--tblr-body-color); --muted:var(--tblr-secondary); --faint:var(--tblr-gray-400); --line:var(--tblr-border-color);
+    --brand:var(--tblr-primary); --brand-2:var(--tblr-primary-darken);
+    --crit:var(--tblr-red); --crit-bg:var(--tblr-red-lt); --crit-line:color-mix(in oklab,var(--tblr-red) 30%,transparent);
+    --warn:var(--tblr-orange); --warn-bg:var(--tblr-orange-lt); --warn-line:color-mix(in oklab,var(--tblr-orange) 30%,transparent);
+    --ok:var(--tblr-green); --ok-bg:var(--tblr-green-lt); --ok-line:color-mix(in oklab,var(--tblr-green) 30%,transparent);
+    --info:var(--tblr-azure); --info-bg:var(--tblr-azure-lt); --info-line:color-mix(in oklab,var(--tblr-azure) 30%,transparent);
+    --mono:var(--tblr-font-monospace);
+    --sans:var(--tblr-font-sans-serif);
   }
-  *{box-sizing:border-box}
   html{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  body{
-    margin:0; background:var(--bg); color:var(--ink);
-    font-family:var(--sans); font-size:14px; line-height:1.5;
-    -webkit-font-smoothing:antialiased;
-  }
   /* The whole window, not a centred 1180px column: on a desktop screen a third of the width was
      margin while the tables scrolled sideways (the operator, 2026-10-03). lib/page_style.py says
      the same for the pages built on it. */
-  .wrap{max-width:none; margin:0; padding:0 22px 64px;}
+  .wrap{max-width:none; margin:0; padding:0 24px 64px;}
 
   /* ---------- Header ---------- */
-  header.masthead{
-    background:linear-gradient(135deg,var(--brand),var(--brand-2));
-    color:#fff; padding:30px 0 26px; margin-bottom:26px;
-  }
+  header.masthead{padding:20px 0 4px; margin-bottom:8px}
   .masthead .wrap{padding-bottom:0}
-  .eyebrow{font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:#9db8d6; font-weight:600; margin:0 0 6px}
-  h1.title{font-size:27px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em}
-  .subtitle{color:#c7d6e8; font-size:13px; margin:0}
-  .subtitle code{background:rgba(255,255,255,.12); padding:1px 6px; border-radius:4px; font-family:var(--mono); font-size:12px}
+  h1.title{margin:0 0 2px}
+  .subtitle{color:var(--muted); margin:0}
 
   /* ---------- Scope KPI strip ---------- */
-  .kpi-strip{display:grid; grid-template-columns:repeat(7,1fr); gap:12px; margin-top:22px}
-  .kpi{background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:12px 14px}
-  .kpi .num{font-size:24px; font-weight:700; line-height:1; letter-spacing:-.02em}
-  .kpi .lbl{font-size:11px; color:#a9c0db; margin-top:5px; letter-spacing:.02em}
-  .kpi.alert .num{color:#ffb4ad}
-  .kpi.warnum .num{color:#ffd79b}
-  .kpi.good .num{color:#9be8b5}
+  .kpi-strip{display:grid; grid-template-columns:repeat(7,1fr); gap:12px; margin-top:16px}
+  .kpi{padding:12px 16px}
+  .kpi .num{margin:4px 0 0}
 
   /* ---------- Section ---------- */
-  section{margin-top:34px}
-  .sec-head{display:flex; align-items:baseline; gap:12px; margin-bottom:14px; padding-bottom:9px; border-bottom:2px solid var(--line)}
-  .sec-head h2{font-size:18px; font-weight:700; margin:0; letter-spacing:-.01em}
-  .sec-head .hint{font-size:12.5px; color:var(--muted)}
+  section{margin-top:30px}
+  .sec-head{display:flex; align-items:baseline; gap:12px; margin-bottom:12px}
+  .sec-head h2{margin:0}
+  .sec-head .hint{color:var(--muted)}
 
   /* ---------- Triage cards ---------- */
   .triage{display:flex; flex-direction:column; gap:10px}
-  .tcard{
-    display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:start;
-    background:var(--surface); border:1px solid var(--line); border-left-width:4px;
-    border-radius:9px; padding:13px 16px;
-  }
-  .tcard.crit{border-left-color:var(--crit); background:var(--crit-bg)}
-  .tcard.warn{border-left-color:var(--warn); background:var(--warn-bg)}
-  .tcard.info{border-left-color:var(--info); background:var(--info-bg)}
-  .tcard .tnum{font-family:var(--mono); font-size:12px; font-weight:700; color:var(--faint); padding-top:2px}
-  .tcard .tbody h3{margin:0 0 3px; font-size:14.5px; font-weight:650}
-  .tcard .tbody p{margin:0; font-size:13px; color:#3a4757}
-  .tcard .tbody .action{margin-top:6px; font-size:12.5px; color:#475569}
-  .tcard .tbody .action b{color:#1b2430; font-weight:650}
+  .tcard{display:grid; grid-template-columns:auto 1fr auto; gap:14px; align-items:start;
+    border-left-width:4px; padding:13px 16px}
+  .tcard.crit{border-left-color:var(--crit)}
+  .tcard.warn{border-left-color:var(--warn)}
+  .tcard.info{border-left-color:var(--info)}
+  .tcard .tnum{font-family:var(--mono); font-weight:700; color:var(--faint); padding-top:2px}
+  .tcard .tbody h3{margin:0 0 3px}
+  .tcard .tbody p{margin:0}
+  .tcard .tbody .action{margin-top:6px; color:var(--muted)}
+  .tcard .tbody .action b{color:var(--ink)}
   .tcard .tbody .tags{margin-top:7px; display:flex; flex-wrap:wrap; gap:5px}
-  .pill{display:inline-block; font-family:var(--mono); font-size:11px; padding:2px 7px; border-radius:5px; background:#fff; border:1px solid var(--line); color:#475569}
-  .sev{align-self:start; font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 9px; border-radius:999px; white-space:nowrap}
-  .sev.crit{background:var(--crit); color:#fff}
-  .sev.warn{background:var(--warn); color:#fff}
-  .sev.info{background:var(--info); color:#fff}
+  .pill{font-family:var(--mono)}
+  .sev{align-self:start; text-transform:uppercase}
 
   /* ---------- Tables ---------- */
   /* A table never widens the page. max-width caps the container at whatever the layout gives it
@@ -87,87 +68,63 @@
      whole container past the viewport), and overflow-x is then the last resort for a table that
      genuinely cannot fit — 13 columns on a phone — so it scrolls inside its own box instead of
      dragging the page sideways. */
-  .tbl-scroll{overflow-x:auto; max-width:100%; border:1px solid var(--line); border-radius:10px; background:var(--surface)}
-  table{border-collapse:collapse; width:100%; max-width:100%; font-size:12.5px}
-  thead th{
-    background:var(--surface-2); text-align:left; font-weight:650; color:#475569;
-    padding:9px 12px; border-bottom:1px solid var(--line); white-space:nowrap; font-size:11.5px;
-    letter-spacing:.02em;
-  }
-  tbody td{padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:middle}
-  tbody tr:last-child td{border-bottom:none}
-  tbody tr:hover{background:var(--surface-2)}
-  td.srv{font-family:var(--mono); font-size:11.5px; white-space:nowrap}
-  td.srv .role{display:block; font-family:var(--sans); font-size:12.5px; font-weight:650; color:var(--ink)}
-  td.srv .ip{color:var(--faint); font-size:11px}
+  .tbl-scroll{max-width:100%}
+  .tbl-scroll>table{margin:0}
+  td.srv{font-family:var(--mono); white-space:nowrap}
+  td.srv .role{display:block; font-family:var(--sans); font-weight:600; color:var(--ink)}
+  td.srv .ip{color:var(--muted)}
   td.srv a.srv-link{text-decoration:none}
-  td.srv a.srv-link:hover .role{color:var(--info)}
-  td.srv a.srv-link:hover .ip{color:var(--info)}
-  a.charts{color:var(--info); font-size:11.5px; text-decoration:none; border-bottom:1px dotted var(--info-line)}
-  a.charts:hover{border-bottom-style:solid}
+  td.srv a.srv-link:hover .role, td.srv a.srv-link:hover .ip{color:var(--info)}
+  a.charts{text-decoration:none}
   .num-cell{font-family:var(--mono); text-align:right; white-space:nowrap}
   /* Prose columns ("What to do", assessments) wrap: one long sentence must not set the width
      of the whole table. */
   td.prose{white-space:normal; overflow-wrap:anywhere; min-width:220px}
   .center{text-align:center}
 
-  /* status dot + badges */
+  /* status dot */
   .dot{display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; margin-right:6px}
   .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.crit{background:var(--crit)} .dot.idle{background:var(--faint)}
-  .badge{display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; white-space:nowrap; border:1px solid transparent}
-  .b-ok{background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line)}
-  .b-warn{background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line)}
-  .b-crit{background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line)}
-  .b-idle{background:#f1f5f9; color:var(--muted); border-color:var(--line)}
-  .b-info{background:var(--info-bg); color:var(--info); border-color:var(--info-line)}
 
   /* mini bar for fill % */
-  .bar{position:relative; width:54px; height:7px; border-radius:4px; background:#eceff3; display:inline-block; vertical-align:middle; margin-right:7px; overflow:hidden}
+  .bar{position:relative; width:54px; height:7px; border-radius:4px; background:var(--surface-2); display:inline-block; vertical-align:middle; margin-right:7px; overflow:hidden}
   .bar > i{position:absolute; left:0; top:0; bottom:0; border-radius:4px}
   /* The mount and its free space wrap: a long mount point in the fleet matrix's Lowest disk
      column set the width of the whole table, which then scrolled sideways on a laptop. */
   .fill-cell{white-space:normal; overflow-wrap:anywhere}
 
   /* ---------- Server detail (collapsible) ---------- */
-  details.srv-detail{background:var(--surface); border:1px solid var(--line); border-radius:9px; margin-bottom:8px; overflow:hidden}
+  details.srv-detail{margin-bottom:8px; overflow:hidden}
   details.srv-detail > summary{
     list-style:none; cursor:pointer; padding:12px 16px; display:grid;
     grid-template-columns:auto 1fr auto auto; gap:12px; align-items:center;
   }
   details.srv-detail > summary::-webkit-details-marker{display:none}
-  summary .chev{color:var(--faint); font-size:12px; transition:transform .15s}
+  summary .chev{color:var(--faint); transition:transform .15s}
   details[open] summary .chev{transform:rotate(90deg)}
-  summary .s-name{font-weight:650}
-  summary .s-name small{display:block; font-family:var(--mono); font-size:11px; color:var(--faint); font-weight:400}
+  summary .s-name{font-weight:600}
+  summary .s-name small{display:block; font-family:var(--mono); color:var(--muted); font-weight:400}
   .d-body{padding:4px 16px 16px; border-top:1px solid var(--line)}
   .d-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px 18px; margin:14px 0}
-  .d-grid .f{font-size:12.5px}
-  .d-grid .f .k{color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em}
   .d-grid .f .v{font-weight:600; margin-top:1px}
-  .d-grid .f .v.mono{font-family:var(--mono); font-weight:500; font-size:12px}
+  .d-grid .f .v.mono{font-family:var(--mono); font-weight:500}
   .dblist{display:flex; flex-wrap:wrap; gap:5px; margin-top:4px}
-  .dbchip{font-family:var(--mono); font-size:10.5px; background:var(--surface-2); border:1px solid var(--line); border-radius:5px; padding:2px 7px; color:#475569}
+  .dbchip{font-family:var(--mono)}
   /* per-database table + the tag that says where a value came from */
-  table.db-tbl{width:100%; border-collapse:collapse; font-size:11.5px}
-  table.db-tbl th{text-align:left; font-weight:600; color:var(--muted); font-size:10.5px; text-transform:uppercase;
-    letter-spacing:.02em; padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap}
-  table.db-tbl td{padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap}
+  table.db-tbl td{white-space:nowrap}
   /* The two columns that carry free text: a database name and a CHECKDB timestamp are what
      pushed this table past the page once it grew a Query Store column. Numbers, badges and
      ages stay nowrap — wrapping those would be harder to read, not easier. */
   table.db-tbl td.dbname{white-space:normal; overflow-wrap:anywhere; min-width:120px}
   table.db-tbl td.wrapcell{white-space:normal; overflow-wrap:anywhere}
-  table.db-tbl tr:last-child td{border-bottom:none}
-  .src-tag{display:inline-block; margin-left:5px; font-family:var(--mono); font-size:9.5px; font-weight:500;
-    color:var(--faint); background:var(--surface-2); border:1px solid var(--line); border-radius:4px; padding:0 4px}
+  .src-tag{margin-left:5px; font-family:var(--mono)}
   .warns{margin:12px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:5px}
-  .warns li{font-size:12px; padding:6px 10px; border-radius:6px; background:var(--warn-bg); border:1px solid var(--warn-line); color:#7c4a09}
-  .warns li.cfg{background:var(--info-bg); border-color:var(--info-line); color:#1e40af}
+  .warns li{margin:0; padding:6px 10px}
 
-  .legend{display:flex; flex-wrap:wrap; gap:16px; font-size:12px; color:var(--muted); margin-top:10px}
+  .legend{display:flex; flex-wrap:wrap; gap:16px; color:var(--muted); margin-top:10px}
   .legend span{display:inline-flex; align-items:center}
 
-  footer{margin-top:40px; padding-top:16px; border-top:1px solid var(--line); font-size:11.5px; color:var(--faint); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px}
+  footer{margin-top:40px; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px}
 
   /* ---------- Print ---------- */
   @media print{
@@ -187,8 +144,6 @@
     .sev{grid-column:2; justify-self:start; margin-top:4px}
   }
   .toolbar{display:flex; gap:8px; justify-content:flex-end; margin-bottom:-8px}
-  .btn{font-size:12px; font-family:var(--sans); border:1px solid var(--line); background:var(--surface); color:var(--muted); padding:6px 12px; border-radius:7px; cursor:pointer}
-  .btn:hover{color:var(--ink); border-color:var(--faint)}
 __BANNER_CSS__
 </style>
 </head>
@@ -697,12 +652,13 @@ const WL_CHIPS = [
   ["log_mb_flushed",      "Log generated",  v => v>=1024 ? (v/1024).toFixed(2)+" GB" : v>=10 ? v.toFixed(0)+" MB" : v.toFixed(2)+" MB"],
 ];
 
-/* The server page's wording: "48 of 60 CPUs online" where the engine may use fewer than the host has. */
+/* The server page's wording: "48 of 60 CPUs online" wherever the engine said how many it may use,
+   "32 of 32" included - a bare "32 CPUs" could not say whether it had been asked. */
 const wlCpuText = w => {
   const c = w.cpu || {};
   const total = c.total || w.cpuCount;
   if (!total) return "";
-  return c.online && c.online < total ? `, ${c.online} of ${total} CPUs online` : `, ${total} CPUs`;
+  return c.online ? `, ${c.online} of ${total} CPUs online` : `, ${total} CPUs`;
 };
 
 const workloadBlock = s => {

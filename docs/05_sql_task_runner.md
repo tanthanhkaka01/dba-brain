@@ -111,6 +111,42 @@ inherit it). The program hands it to `sql_run.resolve_stated_connection` and con
 which had neither, such a program failed every run with *No decryption key provided*. Only `true`
 counts; anything but a boolean is refused, by `sql-command-add` and by the runner.
 
+**A program that reads a second database names it: `input.source_connection`** (2026-10-27). The
+attendance tasks read an open API (SQL029) and a clock-in device (SQL036) and needed no login; an
+asset system on MariaDB feeding a SQL Server table does, and the program had no way to hold one but
+a password in a file. So the command names the source the way a target is named, and never with a
+password:
+
+```json
+"input": {"script": "assets/tasks/python/get_assets.py", "parameter": "payload",
+          "source_connection": {"server_id": "ACME-192-0-2-57", "db_type": "mysql",
+                                "credential_name": "mysql_assets_reader"}}
+```
+
+The runner resolves it like a target - `find_instance` in the inventory, the login by
+`credential_name` from `users.json` under the **source's** engine, the password by `password_ref`
+from the store - and writes it to the program's stdin as `{"source_connection": {...}}`, beside
+`connection` when `target_connection` is also asked for. The program runs its SQL there and prints
+the rows like any fetcher. Switching the login is one edit in `users.json`; the command and the
+program do not change. An instance or login the runner cannot find fails the task with the reason
+before the program starts. `sql-command-add` refuses a `source_connection` missing `server_id`,
+`db_type` or `credential_name`, one carrying any other key (a `password` above all), and one whose
+instance is not in `db_instances.json`.
+
+**`input.payload_format: "xml"` for a SQL Server older than 2016** (2026-10-27). `OPENJSON` arrived
+in 2016, and the first source-fed task writes to a SQL Server 2008 R2. With `xml` each batch is
+`<rows><row McSerialNumber="COMP0001" Factory="F1" .../></rows>` - one element per row, one
+attribute per key, a `None` left out so `value()` reads NULL - and the SQL reads it on any version:
+
+```sql
+DECLARE @x xml = @payload;
+SELECT r.value('@McSerialNumber', 'nvarchar(255)') FROM @x.nodes('/rows/row') AS t(r);
+```
+
+An empty pull is `<rows />`. A key that cannot be an attribute name, or a character XML 1.0 cannot
+carry, fails the task naming the row: changing either to fit would load a value that is not the
+source's. `json` stays the default and is not written into the command.
+
 **Batching is not optional.** Each batch of `batch_rows` rows is one execution of the SQL, with the
 JSON array bound to the parameter named in `input.parameter` — which must also appear in
 `parameters` (type `nvarchar(max)`), because that entry is what writes the `DECLARE` the script

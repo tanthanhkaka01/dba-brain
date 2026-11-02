@@ -108,12 +108,14 @@ from dbabrain.sql_tasks.runner_execute import (  # noqa: F401 - re-exported: eve
     execute_sql,
     find_database_credential,
     find_database_inventory,
+    find_instance,
     format_script_file_order,
     log_deprecated_time_window_warnings,
     resolve_sql_file,
     resolve_sql_files,
     run_deadline_seconds,
     scrub_credential,
+    source_connection_for,
     sql_run_time,
     target_location,
     task_connection,
@@ -502,6 +504,7 @@ def run_scheduler_scan(
                 target=target,
                 inventory=inventory,
                 credentials=credentials.get(target.db_type.lower(), []),
+            source_credentials=source_credentials(command, credentials),
                 secrets=secrets,
                 logger=logger,
             )
@@ -589,6 +592,7 @@ def run_sql_id_tasks(
             target=target,
             inventory=inventory,
             credentials=credentials.get(target.db_type.lower(), []),
+            source_credentials=source_credentials(command, credentials),
             secrets=secrets,
             logger=logger,
             output_chat_id=output_chat_id,
@@ -822,6 +826,19 @@ def is_time_window_open(time_window: TimeWindow | None, local_now: datetime) -> 
     return common_time_window_open(time_window, local_now)
 
 
+def source_credentials(command: SqlCommand,
+                       credentials: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]] | None:
+    """The credential groups of the engine a task's program reads from, or ``None``.
+
+    The target's groups are its own engine's only, and a source is often another engine - a
+    MariaDB feeding SQL Server - so its login would not be among them.
+    """
+    source = command.python_source.source_connection if command.python_source else None
+    if source is None:
+        return None
+    return credentials.get(source.db_type, [])
+
+
 def run_one_sql_task(
     *,
     store: DbaBrainStore,
@@ -835,6 +852,7 @@ def run_one_sql_task(
     logger: Any,
     output_chat_id: str = "",
     parameter_values: dict[str, str] | None = None,
+    source_credentials: list[dict[str, Any]] | None = None,
 ) -> bool:
     started = datetime.now(timezone.utc)
     started_text = started.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -946,12 +964,18 @@ def run_one_sql_task(
             # length of the fetch.
             # The one login this run already holds, for a script that reaches the database itself
             # (input.target_connection); built only when asked, so no other script's run carries it.
+            # The second server the program reads from (input.source_connection), resolved here
+            # like the target: an unknown instance or login fails the task before the program runs.
+            source = command.python_source.source_connection
             payloads = _run_python_source(
                 command=command, target=target, data_dir=data_dir, metadata=metadata,
                 parameter_values=parameter_values, logger=logger,
                 connection=(task_connection(target=target, database=database,
                                             credential=credential, password=password)
                             if command.python_source.target_connection else None),
+                source_connection=(source_connection_for(
+                    source, inventory=inventory, credentials=source_credentials or [],
+                    secrets=secrets) if source is not None else None),
             )
         steps = build_execution_plan(
             sql_paths=sql_paths,

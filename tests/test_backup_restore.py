@@ -77,6 +77,7 @@ from dbabrain.backup_restore.restore_database import (
 )
 from dbabrain.backup_restore.sanitize import sanitize_text, sanitize_value
 from dbabrain.lib.config import DbaBrainConfig, TelegramConfig
+from dbabrain.lib.integrity import RestoreIntegrity
 from dbabrain.db import DbaBrainStore
 
 
@@ -110,6 +111,9 @@ def make_config(tmp_path: Path) -> BackupRestoreConfig:
         # engine read `copy_recent_hours` they got one for free from the copy setting. They now
         # say so, which is the same thing every real entry has to do.
         cleanup_retention=24 * 3600,
+        # Stated like every entry since 0.34.0 (upgrade-config writes it): restore, not copy only.
+        action="restore",
+        restore_from="server",
     )
 
 
@@ -1675,7 +1679,7 @@ def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeyp
     )
     calls = []
 
-    def fake_copy(step_config, logger=None, force=False):
+    def fake_copy(step_config, logger=None, force=False, catalog=None):
         calls.append(("copy-backup", step_config.copy_recent_hours))
         return CopyBackupResult(
             returncode=0,
@@ -1723,7 +1727,7 @@ def _copy_hours_seen(tmp_path, monkeypatch, *, entry_hours, **workflow_kwargs):
                              sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite")
     seen = {}
 
-    def fake_copy(step_config, logger=None, force=False):
+    def fake_copy(step_config, logger=None, force=False, catalog=None):
         seen["hours"] = step_config.copy_recent_hours
         seen["window_start"] = step_config.copy_window_start_utc
         return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path,
@@ -2109,6 +2113,7 @@ def test_run_copy_backup_uses_powershell_for_unc_sources(monkeypatch):
         vm_username="",
         vm_password_env="",
         restore_sql_instance_on_vm="localhost",
+        integrity=RestoreIntegrity(),
     )
     calls = []
     fake_source = Path(r"\\192.0.2.250\SQLBK\db\FULL\x.bak")
@@ -2123,9 +2128,10 @@ def test_run_copy_backup_uses_powershell_for_unc_sources(monkeypatch):
         "dbabrain.backup_restore.copy_backup.list_recent_backup_files_on_share",
         lambda restore_config: calls.append(restore_config.source_id) or [fake_source],
     )
+    # Every engine goes through the checksum gate since 0.34.0 (1.213b); this test is about the scan.
     monkeypatch.setattr(
-        "dbabrain.backup_restore.copy_backup.copy_backup_file_with_logging",
-        lambda *args, **kwargs: fake_result,
+        "dbabrain.backup_restore.copy_backup._copy_gated_locally",
+        lambda _config, files, **_kwargs: (fake_result,) * len(files),
     )
     monkeypatch.setattr("dbabrain.backup_restore.copy_backup._write_copy_log", lambda *args: None)
 
@@ -2225,6 +2231,7 @@ def test_run_copy_backup_logs_scan_and_final_summary(monkeypatch, capsys):
         vm_password_env="",
         restore_sql_instance_on_vm="localhost",
         source_id="SRC",
+        integrity=RestoreIntegrity(),
     )
     selected = [Path(r"\\prod\SQLBK\db\FULL\a.bak"), Path(r"\\prod\SQLBK\db\FULL\b.bak")]
     results = [
@@ -2233,7 +2240,7 @@ def test_run_copy_backup_logs_scan_and_final_summary(monkeypatch, capsys):
     ]
 
     monkeypatch.setattr("dbabrain.backup_restore.copy_backup.list_recent_backup_files_on_share", lambda *_args, **_kwargs: selected)
-    monkeypatch.setattr("dbabrain.backup_restore.copy_backup.copy_backup_file_with_logging", lambda source_file, **_kwargs: results[selected.index(source_file)])
+    monkeypatch.setattr("dbabrain.backup_restore.copy_backup._copy_gated_locally", lambda _config, files, **_kwargs: tuple(results[selected.index(f)] for f in files))
     monkeypatch.setattr("dbabrain.backup_restore.copy_backup._write_copy_log", lambda *args: None)
 
     result = run_copy_backup(config)
@@ -2559,7 +2566,7 @@ def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
 
     seen: dict[str, object] = {}
 
-    def fake_copy(step_config, logger=None, force=False):
+    def fake_copy(step_config, logger=None, force=False, catalog=None):
         seen["copy"] = "ran"
         return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path,
                                 files_considered=1, copied=1, skipped=0, file_results=())
@@ -3162,7 +3169,7 @@ def test_restore_workflow_pitr_passes_point_in_time_to_restore(tmp_path, monkeyp
     )
     captured = {}
 
-    def fake_copy(step_config, logger=None, force=False):
+    def fake_copy(step_config, logger=None, force=False, catalog=None):
         captured["copy_window_start_utc"] = step_config.copy_window_start_utc
         captured["copy_window_end_utc"] = step_config.copy_window_end_utc
         return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path, files_considered=1, copied=1, skipped=0, file_results=())
@@ -3199,7 +3206,7 @@ def test_restore_workflow_pitr_no_matching_copy_files_fails_fast(tmp_path, monke
         sqlite_path=tmp_path / "runtime" / "dbabrain.sqlite",
     )
 
-    def fake_copy(step_config, logger=None, force=False):
+    def fake_copy(step_config, logger=None, force=False, catalog=None):
         return CopyBackupResult(returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path, files_considered=0, copied=0, skipped=0, file_results=())
 
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
@@ -3230,7 +3237,7 @@ def test_restore_workflow_emits_phase_progress_logs(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "run_copy_backup",
-        lambda config, logger=None, force=False: CopyBackupResult(
+        lambda config, logger=None, force=False, catalog=None: CopyBackupResult(
             returncode=0,
             source_backup_dir=config.prod_backup_share,
             local_import_dir=config.vm_import_unc,
@@ -3588,7 +3595,7 @@ def _make_two_target_configs(tmp_path: Path):
 
 
 def _fake_workflow_ops(monkeypatch, called_targets):
-    def fake_copy(step_config, logger=None, force=False):
+    def fake_copy(step_config, logger=None, force=False, catalog=None):
         called_targets.append(("copy", step_config.target_id))
         return CopyBackupResult(returncode=0, source_backup_dir=step_config.prod_backup_share, local_import_dir=step_config.vm_import_unc, files_considered=1, copied=1, skipped=0, file_results=())
 
@@ -3676,7 +3683,7 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
     patch_restore(monkeypatch, "log_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "dbabrain.backup_restore.cli.run_copy_backup",
-        lambda config, logger=None, force=False: CopyBackupResult(
+        lambda config, logger=None, force=False, catalog=None: CopyBackupResult(
             returncode=0,
             source_backup_dir=config.prod_backup_share,
             local_import_dir=config.vm_import_unc,

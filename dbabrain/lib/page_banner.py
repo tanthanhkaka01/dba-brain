@@ -36,27 +36,71 @@ SIBLING_PAGES: tuple[tuple[str, str], ...] = (
     ("Fleet inventory", "database-inventory.html"),
     ("Server metrics", "server-metrics.html"),
     ("SLA", "sla.html"),
+    # The fleet's backup files and restores (0.34.0) - offered, like every sibling, only once it is
+    # published: a report root whose catalog has never been opened has no such page.
+    ("Backup & restore", "backup-restore.html"),
 )
 
+#: The mark beside the product name - dbabrain.dev's own (its favicon), so a report and the
+#: product's site read as one thing. Inline: a page opened from disk or mailed on still shows it.
+MARK_SVG = (
+    # No xmlns: an SVG inline in HTML needs none, and the banner carries no absolute URL at all.
+    '<svg viewBox="0 0 64 64" aria-hidden="true"><defs>'
+    '<linearGradient id="dbo-mark-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2453d6"/>'
+    '<stop offset="1" stop-color="#0d9488"/></linearGradient></defs>'
+    '<rect width="64" height="64" rx="14" fill="url(#dbo-mark-g)"/>'
+    '<g fill="none" stroke="#fff" stroke-width="4"><ellipse cx="32" cy="18" rx="14" ry="5"/>'
+    '<path d="M18 18v28c0 2.8 6.3 5 14 5s14-2.2 14-5V18M18 32c0 2.8 6.3 5 14 5s14-2.2 14-5"/></g></svg>')
+
+#: The light / dark switch's two faces: Tabler Icons' ``moon`` and ``sun`` (MIT), the icon set
+#: Tabler's own pages use - not drawn here.
+_ICON = ('<svg width="20" height="20" viewBox="0 0 24 24" fill="none" '
+         'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+         'aria-hidden="true" class="dbo-icon-{name}">{paths}</svg>')
+MOON_SVG = _ICON.format(name="moon", paths='<path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 '
+                        '12.446a9 9 0 1 1 -8.313 -12.454z"/>')
+SUN_SVG = _ICON.format(name="sun", paths='<path d="M12 12m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"/>'
+                       '<path d="M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7'
+                       'm-12.1 -.7l-.7 .7"/>')
+
+#: Light or dark, as on dbabrain.dev (2026-10-30): the reader's own choice if they made one, kept in
+#: this browser only, else the system's. It sets Tabler's ``data-bs-theme`` on the page, and every
+#: colour on these pages is one of Tabler's variables, so the whole page follows. Run where the
+#: banner is, at the top of the body - before the tables are drawn. Nothing is sent anywhere.
+THEME_SCRIPT = """<script>(function(){var r=document.documentElement,k="dbabrain-theme",t=null;
+try{t=localStorage.getItem(k)}catch(e){}
+if(t!=="light"&&t!=="dark")t=window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
+r.setAttribute("data-bs-theme",t);
+var b=document.querySelector(".dbo-banner .dbo-theme");if(!b)return;
+function show(){var d=r.getAttribute("data-bs-theme")==="dark";
+b.setAttribute("aria-label",d?"Switch to light mode":"Switch to dark mode");b.title=b.getAttribute("aria-label")}
+b.addEventListener("click",function(){var n=r.getAttribute("data-bs-theme")==="dark"?"light":"dark";
+r.setAttribute("data-bs-theme",n);try{localStorage.setItem(k,n)}catch(e){}show()});show()})();</script>"""
+
+#: The banner's own rules: only its layout. Its look is Tabler's navbar - light or dark with the
+#: page - its links the navbar's ghost buttons, the page on show the primary one
+#: (``lib.page_kit.ALIASES``) - every page that carries a banner carries the kit.
 CSS = """
-.dbo-banner{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;
-  margin:0 0 18px;padding:14px 16px;border-radius:6px;
-  background:#0f2540;color:#e8eef7;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
-.dbo-banner .dbo-product{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
-  color:#7fa6d9;font-weight:700}
-.dbo-banner .dbo-title{font-size:17px;font-weight:700;color:#fff}
-.dbo-banner .dbo-scope{font-size:13px;color:#b9cbe4;font-family:ui-monospace,SFMono-Regular,
-  "Cascadia Mono",Consolas,monospace}
-.dbo-banner .dbo-stamp{font-size:12px;color:#8fb0d8;margin-left:auto;white-space:nowrap}
-.dbo-banner .dbo-links{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
-.dbo-banner .dbo-links a{font-size:12px;color:#cfe0f5;text-decoration:none;
-  border:1px solid #2c4a70;border-radius:999px;padding:3px 11px;cursor:pointer}
-.dbo-banner .dbo-links a:hover{border-color:#7fa6d9;color:#fff}
-.dbo-banner .dbo-links a.dbo-here{background:#e8eef7;color:#0f2540;font-weight:600;
-  border-color:#e8eef7}
-@media print{.dbo-banner{background:#fff;color:#000;border:1px solid #000}
+.dbo-banner{flex-wrap:wrap;align-items:center;justify-content:flex-start;gap:6px 14px;
+  margin:0 0 18px;padding:10px 16px;border-radius:var(--tblr-border-radius-lg);
+  border:var(--tblr-border-width) solid var(--tblr-border-color)}
+.dbo-banner .dbo-brand{display:inline-flex;align-items:center;gap:.55rem;padding:0;margin:0;font-weight:700}
+.dbo-banner .dbo-mark{display:inline-block;width:2.1rem;height:2.1rem;flex:none}
+.dbo-banner .dbo-mark svg{display:block;width:100%;height:100%}
+.dbo-banner .dbo-links{display:flex;flex-wrap:wrap;gap:2px;margin-left:auto}
+.dbo-banner .dbo-theme{flex:none}
+.dbo-banner .dbo-theme svg{width:20px;height:20px}
+.dbo-banner .dbo-icon-sun{display:none}
+[data-bs-theme=dark] .dbo-banner .dbo-icon-sun{display:inline}
+[data-bs-theme=dark] .dbo-banner .dbo-icon-moon{display:none}
+.dbo-banner .dbo-meta{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;
+  padding-top:6px;border-top:var(--tblr-border-width) solid var(--tblr-border-color)}
+.dbo-banner .dbo-title{font-weight:600}
+.dbo-banner .dbo-scope{font-family:var(--tblr-font-monospace);color:var(--tblr-secondary)}
+.dbo-banner .dbo-stamp{margin-left:auto;white-space:nowrap;color:var(--tblr-secondary);font-size:12px}
+@media print{.dbo-banner{background:#fff!important;color:#000;border:1px solid #000}
   .dbo-banner .dbo-title,.dbo-banner .dbo-product,.dbo-banner .dbo-scope,
-  .dbo-banner .dbo-stamp{color:#000}.dbo-banner .dbo-links{display:none}}
+  .dbo-banner .dbo-stamp{color:#000}.dbo-banner .dbo-links,.dbo-banner .dbo-theme{display:none}}
 """
 
 
@@ -124,12 +168,10 @@ def render(*, title: str, snapshot_at: str = "", scope: str = "",
     ``here`` is the file name of the page being rendered, so its own entry among the siblings is
     marked and not offered as a link to itself.
     """
-    parts = [f'<span class="dbo-product">{_escape(PRODUCT)}</span>',
-             f'<span class="dbo-title">{_escape(title)}</span>']
-    if scope:
-        parts.append(f'<span class="dbo-scope">{_escape(scope)}</span>')
-    if snapshot_at:
-        parts.append(f'<span class="dbo-stamp">snapshot {_escape(snapshot_at)}</span>')
+    # dbabrain.dev's head (2026-10-30): the mark and the product name, the pages on the right, the
+    # light / dark switch last; under them what this page is, about what, and when.
+    parts = [f'<span class="dbo-brand"><span class="dbo-mark">{MARK_SVG}</span>'
+             f'<span class="dbo-product">{_escape(PRODUCT)}</span></span>']
 
     entries = SIBLING_PAGES if links is None else tuple(links)
     if entries:
@@ -140,7 +182,15 @@ def render(*, title: str, snapshot_at: str = "", scope: str = "",
             else:
                 chips.append(f'<a href="{_escape(href)}">{_escape(label)}</a>')
         parts.append('<span class="dbo-links">' + "".join(chips) + "</span>")
-    return '<div class="dbo-banner">' + "".join(parts) + "</div>"
+    parts.append(f'<button type="button" class="dbo-theme" aria-label="Switch theme">{MOON_SVG}{SUN_SVG}</button>')
+
+    meta = [f'<span class="dbo-title">{_escape(title)}</span>']
+    if scope:
+        meta.append(f'<span class="dbo-scope">{_escape(scope)}</span>')
+    if snapshot_at:
+        meta.append(f'<span class="dbo-stamp">snapshot {_escape(snapshot_at)}</span>')
+    parts.append('<span class="dbo-meta">' + "".join(meta) + "</span>")
+    return '<div class="dbo-banner">' + "".join(parts) + "</div>" + THEME_SCRIPT
 
 
 #: What :func:`render` writes for the moment, read back. A pattern rather than an HTML parser

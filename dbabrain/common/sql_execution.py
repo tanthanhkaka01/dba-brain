@@ -33,6 +33,11 @@ from dbabrain.lib.sql_text import (  # noqa: F401 - re-exported for compatibilit
 # which is how every Query Store / sys.dm_* view with a datetimeoffset column used to blow up.
 SQL_SS_TIMESTAMPOFFSET = -155
 
+# The SQL Server ODBC driver's "change the password at login" attribute: set before connecting,
+# it carries the old password and PWD the new one. The only way to change a password the server
+# has expired - 18487 refuses the login, so no session exists to run ALTER LOGIN from.
+SQL_COPT_SS_OLDPWD = 1226
+
 
 def connect_sqlserver(
     pyodbc_module: Any,
@@ -92,8 +97,12 @@ def open_sqlserver_odbc(
     timeout: int,
     driver: str = "",
     tls_verify: bool = False,
+    old_password: str = "",
 ) -> OdbcConnection:
     """The candidate walk, with the result of every attempt kept.
+
+    ``old_password`` makes the login a password change: ``password`` is the new one, and the
+    driver sends both (``SQL_COPT_SS_OLDPWD``). The first candidate that logs in has changed it.
 
     ``tls_verify`` (an instance's ``sqlserver_tls_verify``) narrows the walk to drivers that can
     verify a certificate, at ``Encrypt=yes;TrustServerCertificate=no``, and never steps down to
@@ -128,8 +137,9 @@ def open_sqlserver_odbc(
             password=password,
             trust_server_certificate=not tls_verify,
         )
+        change = {"attrs_before": {SQL_COPT_SS_OLDPWD: old_password}} if old_password else {}
         try:
-            conn = pyodbc_module.connect(conn_str, timeout=timeout)
+            conn = pyodbc_module.connect(conn_str, timeout=timeout, **change)
             register_output_converters(conn)
             attempts.append(OdbcAttempt(candidate_driver, encryption_mode, True))
             return OdbcConnection(conn=conn, driver=candidate_driver,
@@ -297,8 +307,12 @@ def connect_sqlserver_with_fallback(
     command_timeout: int | None = None,
     autocommit: bool = False,
     tls_verify: bool = False,
+    old_password: str = "",
 ) -> SqlServerConnection:
     """Open a SQL Server connection over ODBC, falling back to pymssql.
+
+    ``old_password`` logs in *changing* the password to ``password`` (see
+    :func:`open_sqlserver_odbc`). ODBC only: pymssql has no such login, so there is no fallback.
 
     ``tls_verify`` keeps both fallbacks shut - to plaintext ODBC and to pymssql, which verifies
     nothing - so an instance that asks for a verified connection gets one or an error.
@@ -319,6 +333,9 @@ def connect_sqlserver_with_fallback(
     if tls_verify and driver.lower() == "pymssql":
         raise error_kinds.InvalidConfig("sqlserver_tls_verify is set, and sqlserver_driver=pymssql cannot verify "
                            "a certificate; name an ODBC driver (17 or 18) or turn verification off.")
+    if old_password and driver.lower() == "pymssql":
+        raise error_kinds.InvalidConfig("a password change at login needs an ODBC driver, and "
+                                        "sqlserver_driver=pymssql has none; name ODBC 17 or 18.")
     if driver.lower() == "pymssql":
         return _connect_pymssql(
             host=host, port=port, database=database, username=username, password=password,
@@ -344,9 +361,10 @@ def connect_sqlserver_with_fallback(
             timeout=connect_timeout,
             driver=driver,
             tls_verify=tls_verify,
+            old_password=old_password,
         )
     except Exception as odbc_exc:  # noqa: BLE001 - pymssql reaches servers ODBC cannot TLS with.
-        if driver or tls_verify:
+        if driver or tls_verify or old_password:
             raise
         return _connect_pymssql(
             host=host, port=port, database=database, username=username, password=password,

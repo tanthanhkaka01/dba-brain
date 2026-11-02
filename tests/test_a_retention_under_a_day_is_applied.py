@@ -34,6 +34,7 @@ from types import SimpleNamespace
 import pytest
 
 from dbabrain.backup_restore import prune, spec_builder
+from dbabrain.lib.backup_scope import BackupScope
 from dbabrain.backup_restore.backup import BackupJob
 from dbabrain.common import cli_backup_files
 from dbabrain.common.backupfiles import age_seconds, list_backup_files
@@ -51,7 +52,8 @@ def _job(seconds, db_type="sqlserver"):
                      script="assets/backup/sqlserver/mssql_backup_database.sh",
                      backup_dir="/opt/db_ops/backup/LAB", cleanup_retention=seconds,
                      time_window=parse_time_window_config({}, context="test").time_window,
-                     env_secrets={"MSSQL_PASSWORD": "LAB_SA"})
+                     env_secrets={"MSSQL_PASSWORD": "LAB_SA"},
+                     scope=BackupScope(databases=(), all_databases=True))
 
 
 def _row(kind, finished, *, age=None, path=None, database=None):

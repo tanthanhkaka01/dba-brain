@@ -54,6 +54,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from dbabrain.common import filechecksum
 from dbabrain.common import host_ops
 from dbabrain.common.remote_exec import RemoteExecError
 from dbabrain.common.ssh_relay import PARTIAL_SUFFIX, RelayError, relay
@@ -281,16 +282,13 @@ def send_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[s
 # but not a corrupted one.
 
 #: Hashing runs on the host that holds the file. Streaming it here to hash it would move exactly
-#: the bytes that packing exists to avoid moving.
-_SHA256_COMMAND = {
-    "bash": "sha256sum {path}",
-    "powershell": "(Get-FileHash -Algorithm SHA256 -LiteralPath {path}).Hash.ToLower()",
-}
+#: the bytes that packing exists to avoid moving. The command is `file-checksum`'s (R43, 1.210).
+_SHELLS = ("bash", "powershell")
 
 
 def _shell_of(target) -> str:
     shell = str((target.access or {}).get("shell") or "").strip().lower()
-    if shell in _SHA256_COMMAND:
+    if shell in _SHELLS:
         return shell
     return "powershell" if str(getattr(target, "platform", "")).lower() == "windows" else "bash"
 
@@ -306,13 +304,9 @@ def _run_checked(session, command: str, *, what: str, target) -> str:
 
 
 def _local_sha256(path: Path) -> str:
-    import hashlib
+    from dbabrain.lib.integrity import sha256_of_file
 
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_of_file(path)
 
 
 def pack_files(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[str, Any]:
@@ -424,7 +418,7 @@ def _pack_remote(request, *, archive_path, fmt, files, folder, include, overwrit
         if not size:
             raise FileTransferError(f"{target.describe()}: {archive_path} is empty or absent after packing.")
         sha = _run_checked(
-            session, _SHA256_COMMAND[shell].format(path=shlex.quote(archive_path)),
+            session, filechecksum.hash_command(shell, archive_path),
             what="hashing the archive", target=target,
         ).split()[0]
 
@@ -432,7 +426,7 @@ def _pack_remote(request, *, archive_path, fmt, files, folder, include, overwrit
         if checksum_files and files:
             for path in files:
                 line = _run_checked(
-                    session, _SHA256_COMMAND[shell].format(path=shlex.quote(path)),
+                    session, filechecksum.hash_command(shell, path),
                     what=f"hashing {path}", target=target,
                 )
                 members.append({"path": path, "size_bytes": _remote_size(session, path),

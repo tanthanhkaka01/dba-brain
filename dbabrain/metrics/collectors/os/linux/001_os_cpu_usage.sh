@@ -30,11 +30,26 @@ usage=$(awk -v total="$delta_total" -v idle="$delta_idle" 'BEGIN { printf "%.2f"
 status=$(awk -v v="$usage" 'BEGIN { if (v>=90) print "CRITICAL"; else if (v>=80) print "WARN"; else print "OK" }')
 
 logical=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 0)
-sockets=$(awk -F': ' '/^physical id/ {print $2}' /proc/cpuinfo 2>/dev/null | sort -u | wc -l)
-[ "$sockets" -ge 1 ] 2>/dev/null || sockets=1
-cores_per_socket=$(awk -F': ' '/^cpu cores/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)
-[ -n "$cores_per_socket" ] || cores_per_socket=$logical
-cores=$((sockets * cores_per_socket))
+# Counted socket by socket, never multiplied out. This used to take the first socket's "cpu cores"
+# times the number of sockets, and the logical count when that line was missing: a virtual machine
+# can present sockets of different sizes (a Windows guest on the estate has 8 + 6 + 3 cores,
+# 2026-10-26), and the first socket says nothing about the others. A host whose /proc/cpuinfo has
+# no "physical id" at all reports no sockets and no cores rather than one invented socket.
+topology=$(awk -F': *' '
+  /^physical id/ { p = $2; if (!(p in logical_of)) order[++n] = p; logical_of[p]++ }
+  /^core id/     { if (!((p SUBSEP $2) in seen)) { seen[p SUBSEP $2] = 1; cores_of[p]++ } }
+  END {
+    if (n == 0) exit
+    total = 0; per_cores = ""; per_logical = ""
+    for (i = 1; i <= n; i++) {
+      k = order[i]; total += cores_of[k]
+      per_cores = per_cores (i > 1 ? "+" : "") (cores_of[k] + 0)
+      per_logical = per_logical (i > 1 ? "+" : "") logical_of[k]
+    }
+    printf "sockets=%d, ", n
+    if (total > 0) printf "cores=%d, cores_per_socket=%s, ", total, per_cores
+    printf "logical_per_socket=%s, ", per_logical
+  }' /proc/cpuinfo 2>/dev/null)
 model=$(awk -F': ' '/^model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)
 [ -n "$model" ] || model="unknown"
 
@@ -43,6 +58,6 @@ load_status=$(awk -v l="$load1" -v c="$logical" 'BEGIN { if (c>0 && l >= 2*c) pr
 
 printf '['
 first=1
-emit "cpu_usage" "$usage" "percent" "$status" "Average CPU usage is $usage percent. model=$model, sockets=$sockets, cores=$cores, logical_cpus=$logical"
+emit "cpu_usage" "$usage" "percent" "$status" "Average CPU usage is $usage percent. model=$model, ${topology}logical_cpus=$logical"
 emit "load_average" "$load1" "processes" "$load_status" "load_1m=$load1, load_5m=$load5, load_15m=$load15, logical_cpus=$logical"
 printf ']\n'

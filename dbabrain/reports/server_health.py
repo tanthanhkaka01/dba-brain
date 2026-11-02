@@ -9,8 +9,10 @@ from __future__ import annotations
 import datetime
 import re
 from dbabrain.lib import health_model, interval_rates
-from dbabrain.lib.coerce import as_float
+from dbabrain.lib.coerce import as_epoch, as_float
 from dbabrain.reports.server_series import (
+    OS_DISK_ACTIVITY_ITEMS,
+    OS_DISK_NOT_A_VOLUME_ITEMS,
     SEVERITY_RANK,
     _is_percent_unit,
     metric_catalog,
@@ -57,42 +59,59 @@ AREAS: list[dict] = [
     {"key": "cpu", "label": "CPU",
      # Only the two items that are CPU. OS_CPU_USAGE also carries processor queue length and load
      # average; SYSTEM_CPU_MEMORY also carries two memory percentages.
+     # A container's share of the CPUs it may use before its raw `docker stats` figure, which is
+     # in CPUs (319% = 3.19 busy) and kept only for rows from before the share was collected.
      "selectors": [{"code": "OS_CPU_USAGE", "items": ("cpu_usage",)},
                    {"code": "SYSTEM_CPU_MEMORY", "items": ("cpu",)},
+                   {"code": "DOCKER_CONTAINER_STATS", "item_suffix": (":cpu_share",), "units": "percent"},
                    {"code": "DOCKER_CONTAINER_STATS", "item_suffix": (":cpu",), "units": "percent"}],
-     "threshold": "WARN ≥ 80% · CRITICAL ≥ 90%",
-     "note": "Sustained high CPU makes every query slower; check the top process and the heaviest queries."},
+     "threshold": "WARN ≥ 80% · CRITICAL ≥ 90% — the collector's severity, held for half of "
+                  "the last hour; the value is the hour's average",
+     "note": "Sustained high CPU makes every query slower; check the top process and the heaviest "
+             "queries. One sample at 95% is a moment, so the tile reads the hour (2026-10-26)."},
     {"key": "memory", "label": "Memory",
      "selectors": [{"code": "OS_MEMORY_USAGE", "items": ("memory_usage",)},
                    {"code": "SYSTEM_CPU_MEMORY", "items": ("system_memory", "sql_memory")},
                    {"code": "OS_MEMORY_USAGE", "items": ("swap_usage", "pagefile_usage")},
                    {"code": "PAGE_LIFE_EXPECTANCY"},
                    {"code": "DOCKER_CONTAINER_STATS", "item_suffix": (":memory",), "units": "percent"}],
-     "threshold": "WARN ≥ 85% · CRITICAL ≥ 95% used · PLE < 2000 s = pressure (report rule)",
+     "threshold": "WARN ≥ 85% · CRITICAL ≥ 95% used · PLE < 2000 s = pressure "
+                  "(report rule, on the last hour's average)",
      "report_judged": True,
      "note": "Low page life expectancy means the buffer pool is churning: pages are read from disk again and again."},
     {"key": "disk_space", "label": "Disk space",
      # Mount points and file-fullness only. The throughput and queue-length rows of OS_DISK_USAGE
      # are storage *activity*; they have their own area below.
      "selectors": [{"code": "OS_DISK_USAGE",
-                    "exclude": ("disk_read_kbps", "disk_write_kbps", "disk_iops", "disk_queue_length")},
+                    "exclude": OS_DISK_NOT_A_VOLUME_ITEMS},
                    {"code": "STORAGE_DISK_FREE_SPACE"},
-                   {"code": "STORAGE_DATA_FILE_SPACE"},
-                   {"code": "LOG_FILE_SPACE"}],
+                   # A database in a container: the volume its data is on, as `df` inside the
+                   # container reads it. Before this the tile fell to the database's own size in
+                   # bytes, which says how big it is and nothing about how full the disk is.
+                   {"code": "DOCKER_CONTAINER_STATS", "item_contains": ":disk:", "units": "percent"},
+                   # How full each data file is - a percentage. SQL Server's rows are; Oracle 8i's
+                   # are a file's size in MB and PostgreSQL's a database's size in bytes, and the
+                   # tile printed "20000 MB" and "48803043007 bytes" as if they were fullness.
+                   {"code": "STORAGE_DATA_FILE_SPACE", "units": "percent"},
+                   {"code": "LOG_FILE_SPACE", "units": "percent"}],
      "threshold": "WARN ≥ 85% used · CRITICAL ≥ 95% used",
      "note": "A full data or log volume stops writes: the database goes read-only or the instance stalls."},
     {"key": "disk_latency", "label": "Disk latency",
      "selectors": [{"code": "PERFORMANCE_IO_LATENCY"}],
      "threshold": "WARN ≥ 20 ms · CRITICAL ≥ 50 ms — report rule, the collector logs only. "
-                  "Cumulative since engine start, not interval latency",
+                  "Over the last hour, from the stored counters",
      "report_judged": True,
-     "note": "Latency above ~20 ms per read means storage, not SQL, is the bottleneck. This value "
-             "is an average since SQL Server started, so it describes the history of this "
-             "instance's storage, not necessarily its state right now."},
+     # Until 2026-10-26 this was graded on the newest row: the average since the engine started,
+     # which kept a stall eight days old CRITICAL. The window is dbabrain.lib.report_windows.
+     "note": "Latency above ~20 ms per I/O means storage, not SQL, is the bottleneck. Graded on "
+             "the last hour, from the file counters the store keeps; the latest interval and the "
+             "last 24 hours are printed beside it, and the average since the engine started is "
+             "printed and not graded."},
     {"key": "storage_activity", "label": "Storage activity",
      "selectors": [{"code": "OS_DISK_USAGE",
-                    "items": ("disk_queue_length", "disk_iops", "disk_read_kbps", "disk_write_kbps")}],
-     "threshold": "WARN queue length ≥ 2 per spindle — throughput and IOPS are logged, not judged",
+                    "items": OS_DISK_ACTIVITY_ITEMS}],
+     "threshold": "WARN queue length ≥ 2 per spindle, held for half of the last hour — "
+                  "throughput and IOPS are logged, not judged",
      "note": "How hard the storage is being worked. A high queue with low throughput is a storage "
              "limit; high throughput on its own is just a busy server.",
      "report_judged": True},
@@ -313,12 +332,23 @@ def series_downgraded(entry: dict) -> str:
     return health_model.downgraded_from(str(entry.get("message") or ""))
 
 
+def _bytes_text(value: float) -> str:
+    for unit, size in (("TB", 1024 ** 4), ("GB", 1024 ** 3), ("MB", 1024 ** 2)):
+        if abs(value) >= size:
+            return f"{value / size:,.2f} {unit}"
+    return f"{value:,.0f} bytes"
+
+
 def _value_text(entry: dict) -> str:
     if entry.get("numeric") and entry.get("last") is not None:
         value = entry["last"]
-        number = f"{value:.0f}" if abs(value) >= 100 else f"{value:g}"
         unit = str(entry.get("unit") or "")
-        suffix = "%" if unit.lower().startswith("percent") else (f" {unit}" if unit else "")
+        # PostgreSQL's database size is stored in bytes: "48803043007 bytes" was the tile.
+        if unit.lower() == "bytes":
+            return _bytes_text(value)
+        number = f"{value:.0f}" if abs(value) >= 100 else f"{value:g}"
+        suffix = ("%" if unit.lower().startswith(("percent", "pct"))
+                  else (f" {unit}" if unit else ""))
         return f"{number}{suffix}"
     # A collector-failure row has no value at all — that is what it is saying. "—" on the tile
     # reads as "nothing to report", which is the opposite of the truth.
@@ -336,6 +366,9 @@ def _selector_matches(selector: dict, entry: dict) -> bool:
         return False
     suffixes = selector.get("item_suffix")
     if suffixes is not None and not item.endswith(tuple(suffixes)):
+        return False
+    contains = selector.get("item_contains")
+    if contains is not None and contains not in item:
         return False
     if item in (selector.get("exclude") or ()):
         return False
@@ -408,6 +441,13 @@ def build_areas(series: list[dict], *, backup: dict | None = None,
                     "sourceCode": ran[0], "sourceItem": "", "collectedAt": None,
                     "stale": False, "downgradedFrom": ""})
                 continue
+        if not members and spec["key"] == "cpu":
+            # No host and no engine CPU metric (Oracle without host access): the engine's own CPU
+            # counters, from the Workload block, or why there is no reading.
+            engine_tile = _engine_cpu_tile(series, workload)
+            if engine_tile:
+                areas.append({**base, **engine_tile})
+                continue
         if not members and spec.get("only_when_collected"):
             # An engine's own area on a server that is not that engine: no tile at all. "Not
             # collected" would be a gap on the page for a metric the server does not have.
@@ -450,10 +490,16 @@ def build_areas(series: list[dict], *, backup: dict | None = None,
             status = "UNKNOWN"
             detail = f"{', '.join(stale)} is late or failing — this area is not current"
         capacity, capacity_note = (
-            _cpu_capacity(series, workload) if spec["key"] == "cpu"
+            _cpu_capacity(series, workload, worst) if spec["key"] == "cpu"
             else (_memory_capacity(series), "") if spec["key"] == "memory"
             else (_disk_capacity(worst, members), "") if spec["key"] == "disk_space"
+            # The graded hour beside the latest interval and the day, so a spike that is over
+            # and a slow day that is not both show on the tile.
+            else (worst.get("windowLine") or "", "") if spec["key"] == "disk_latency"
             else ("", ""))
+        if worst.get("windowLine") and spec["key"] != "disk_latency":
+            # Every other tile judged on the hour says so on its source line.
+            detail = f"{detail} · {worst['windowLine']}"
         areas.append({
             **base, "status": status, "value": _value_text(worst), "detail": detail,
             # What the percentage is of, in figures; and, where it changes how to read the tile, why.
@@ -507,22 +553,46 @@ def _size(gb: float) -> str:
     return f"{gb:,.0f} GB" if gb >= 100 else f"{gb:.1f} GB"
 
 
-def _cpu_topology(sockets: int, cores: int) -> str:
-    """``2 sockets × 16 cores``, or ``3 sockets, 17 cores`` where the cores do not divide.
+def _cpu_topology(fields: dict) -> str:
+    """The host's processors as its OS counted them: ``3 sockets, 17 cores (8 + 6 + 3)``.
 
-    Both OS collectors write ``cores`` as the host's total, summed over its sockets. Printed after
-    a ``×`` it read as cores per socket: a 32-CPU host showed ``3 sockets × 17 cores``, 51 cores
-    (2026-10-20). Only a one-socket host had looked right, where the two are one number.
+    One form for every host, and nothing in it the collector did not write. The tile used to choose
+    between ``2 sockets × 16 cores`` and ``3 sockets, 17 cores`` by whether the total divided by the
+    sockets - so two servers' tiles read differently (asked 2026-10-26), and the ``×`` claimed every
+    socket alike, which a virtual machine need not be: the guest behind ``3 sockets, 17 cores``
+    has 8 + 6 + 3. The collectors write each socket's cores from 2026-10-26 (``cores_per_socket``);
+    a row from before has the totals only, and the tile prints the totals only.
     """
-    if sockets <= 1:
-        return f"1 socket × {cores} cores"
-    if cores % sockets == 0:
-        return f"{sockets} sockets × {cores // sockets} cores"
-    return f"{sockets} sockets, {cores} cores"
+    sockets = as_float(fields.get("sockets"))
+    cores = as_float(fields.get("cores"))
+    per_socket = [part for part in str(fields.get("cores_per_socket") or "").split("+") if part]
+    parts = []
+    if sockets:
+        parts.append(f"{int(sockets)} socket{'' if int(sockets) == 1 else 's'}")
+    if cores:
+        text = f"{int(cores)} cores"
+        if sockets and int(sockets) > 1 and len(per_socket) == int(sockets):
+            text += f" ({' + '.join(per_socket)})"
+        parts.append(text)
+        # Why 32 logical CPUs sit beside 16 cores (asked 2026-10-30, .245): the OS counts each core's
+        # threads. Said only from the two counts the collector read, and only when they divide.
+        logical = as_float(fields.get("logical_cpus"))
+        if logical and int(logical) > int(cores) and int(logical) % int(cores) == 0:
+            parts.append(f"{int(logical) // int(cores)} threads per core")
+    return ", ".join(parts)
 
 
-def _cpu_capacity(series: list[dict], workload: dict | None) -> tuple[str, str]:
-    """``48 / 60 CPUs online / total``, and - when those differ - what that does to the tile."""
+def _cpu_capacity(series: list[dict], workload: dict | None,
+                  shown: dict | None = None) -> tuple[str, str]:
+    """``48 / 60 CPUs online / total``, and - when those differ - what that does to the tile.
+
+    ``shown`` is the entry the tile prints. When it is the engine's row on SQL Server on Linux
+    (``cpu_basis=sql_process``) the percentage is SQL Server's own share: the host's idle time is
+    not reported there (0.31.0 sheet 1.190), and the note says so rather than let it read as the
+    host's.
+    """
+    if (shown or {}).get("code") == "DOCKER_CONTAINER_STATS":
+        return _container_cpu_capacity(shown)
     host = _message_fields(_series_entry(series, "OS_CPU_USAGE", "cpu_usage"))
     engine = _message_fields(_series_entry(series, "SYSTEM_CPU_MEMORY", "cpu"))
     facts = (workload or {}).get("cpu") or {}
@@ -534,11 +604,13 @@ def _cpu_capacity(series: list[dict], workload: dict | None) -> tuple[str, str]:
     total = int(total)
     # The pair whenever the engine's count is known, equal or not: "32 CPUs" alone did not say
     # whether the engine had been asked how many it may use, beside a "48 / 60" on the next server.
-    text = f"{int(online)} / {total} CPUs online / total" if online else f"{total} CPUs"
+    # Logical CPUs, said so: the cores beside them are physical, and "32 CPUs · 16 cores" read as a
+    # contradiction (asked 2026-10-30).
+    text = f"{int(online)} / {total} logical CPUs online / total" if online else f"{total} logical CPUs"
     online = int(online) if online else total
-    sockets, cores = as_float(host.get("sockets")), as_float(host.get("cores"))
-    if sockets and cores:
-        text += f" · {_cpu_topology(int(sockets), int(cores))}"
+    topology = _cpu_topology(host)
+    if topology:
+        text += f" · {topology}"
     note = ""
     if online < total:
         who = facts.get("engine") or "the database"
@@ -547,15 +619,92 @@ def _cpu_capacity(series: list[dict], workload: dict | None) -> tuple[str, str]:
         # load is this share of the tile - well under the CRITICAL line drawn above it.
         note = (f"{reason[0].upper()}{reason[1:]}, so {who} saturated reads about "
                 f"{round(online * 100 / total)}% on this tile.")
+    if (shown or {}).get("code") == "SYSTEM_CPU_MEMORY" and engine.get("cpu_basis") == "sql_process":
+        basis = ("SQL Server on Linux does not report the host's idle time: this is SQL Server's "
+                 "own share of the CPU, not the host's.")
+        note = f"{note} {basis}".strip()
     return text, note
 
 
+def _container_cpu_capacity(entry: dict) -> tuple[str, str]:
+    """``1.35 of 8 CPUs busy``, and what the 8 is: the container's limit, or the host's count.
+
+    `docker stats` counts in CPUs, so the tile used to print ``319%`` with nothing to divide it by
+    (2026-10-26). The collector reads the denominator - ``--cpus``, a CPU quota, a cpuset, else the
+    daemon's count of the host's CPUs - and names which; a row from before it has none, and the
+    tile says so instead of choosing one.
+    """
+    fields = _message_fields(entry)
+    cpus = as_float(fields.get("cpus"))
+    busy = as_float(fields.get("cpus_busy"))
+    if busy is None:
+        raw = as_float(str(fields.get("cpu") or "").rstrip("%"))
+        busy = raw / 100 if raw is not None else None
+    if not cpus:
+        return ("", "docker stats counts in CPUs (100% is one CPU busy); this row does not say how "
+                    "many CPUs the container may use.")
+    text = f"{busy:.2f} of {cpus:g} CPUs busy" if busy is not None else f"{cpus:g} CPUs"
+    basis = str(fields.get("cpus_basis") or "")
+    if basis == "host_no_limit":
+        note = f"No CPU limit is set on the container: its share is of the host's {cpus:g} CPUs."
+    elif basis == "limit_cpus":
+        note = f"The container is limited to {cpus:g} CPUs (--cpus)."
+    elif basis == "limit_cpu_quota":
+        note = f"The container is limited to {cpus:g} CPUs by its CPU quota."
+    elif basis.startswith("cpuset_"):
+        note = f"The container is pinned to CPUs {basis[len('cpuset_'):].replace(';', ',')}."
+    else:
+        note = ""
+    return text, note
+
+
+def _engine_cpu_tile(series: list[dict], workload: dict | None) -> dict | None:
+    """The CPU tile from the engine's own CPU counters, where nothing else measures the CPU.
+
+    An Oracle reached without host access has no OS metric and no engine CPU row; its Workload
+    section differences ``v$sysstat`` / ``v$sys_time_model`` into a percentage of the CPUs it may
+    use, and the tile read *not collected* beside it. With ``timed_statistics`` off the instance
+    times nothing - the collector reads the parameter, and the tile says that rather than 0%.
+    """
+    facts = (workload or {}).get("cpu") or {}
+    capacity, _note = _cpu_capacity(series, workload)
+    common = {"capacity": capacity, "capacityNote": "", "sourceCode": "PERFORMANCE_WORKLOAD_COUNTERS",
+              "sourceItem": "cpu_usage_ms", "collectedAt": as_epoch((workload or {}).get("asOf")),
+              "stale": False, "downgradedFrom": "", "unit": "percent", "reportJudged": True}
+    if str(facts.get("timedStatistics") or "").upper() == "FALSE":
+        return {**common, "status": "UNKNOWN", "value": "not timed",
+                "detail": ("timed_statistics=FALSE on this instance: the database records no CPU "
+                           "time, so its CPU use cannot be read from it")}
+    row = next((row for group in (workload or {}).get("groups") or []
+                for row in group.get("rows") or [] if row.get("key") == "cpu_pct"), None)
+    if not row:
+        return None
+    values = row.get("values") or {}
+    reading = {key: (values.get(key) or {}).get("total") for key in ("now", "hour", "day")}
+    graded = reading["hour"] if reading["hour"] is not None else reading["now"]
+    if graded is None:
+        return None
+    status = "CRITICAL" if graded >= 90 else "WARNING" if graded >= 80 else "OK"
+    shown = " · ".join(f"{label} {reading[key]:g}%" for key, label in
+                       (("hour", "1 h"), ("now", "latest"), ("day", "24 h"))
+                       if reading[key] is not None)
+    return {**common, "status": status, "value": f"{graded:g}%",
+            "detail": f"the database's own CPU, from its counters: {shown} · {row.get('source') or ''}".rstrip(" ·")}
+
+
 def _memory_capacity(series: list[dict]) -> str:
-    """``254 / 400 GB used / total`` from the OS, the engine's view, or the container's limit."""
+    """``254 / 400 GB used / total`` from the OS, the engine's view, or the container's limit.
+
+    On SQL Server on Linux the engine's view is of its own limit (``memory_scope=sql_server_limit``,
+    mssql-conf ``memory.memorylimitmb``), and a server page printed it as the host's RAM - 24 GB
+    on a host of about 64 (2026-10-23, 0.31.0 sheet 1.191). The OS's total still comes first; the
+    engine's is labelled for what it is.
+    """
     os_mem = _message_fields(_series_entry(series, "OS_MEMORY_USAGE", "memory_usage"))
     sys_mem = _message_fields(_series_entry(series, "SYSTEM_CPU_MEMORY", "system_memory"))
     sql_mem = _message_fields(_series_entry(series, "SYSTEM_CPU_MEMORY", "sql_memory"))
     text = ""
+    of_what = "total"
     total, used = as_float(os_mem.get("total_gb")), as_float(os_mem.get("used_gb"))
     available = as_float(os_mem.get("available_gb"))
     if not total:
@@ -564,8 +713,10 @@ def _memory_capacity(series: list[dict]) -> str:
         if total_mb and available_mb is not None:
             total, available = total_mb / 1024, available_mb / 1024
             used = total - available
+            if sys_mem.get("memory_scope") == "sql_server_limit":
+                of_what = "SQL Server's limit"
     if total and used is not None:
-        text = f"{_size_pair(used, total)} used / total"
+        text = f"{_size_pair(used, total)} used / {of_what}"
         if available is not None:
             text += f" · {_size(available)} available"
     else:
@@ -575,7 +726,11 @@ def _memory_capacity(series: list[dict]) -> str:
         usage = _CONTAINER_MEMORY.search(str((container or {}).get("message") or ""))
         if usage:
             text = f"{usage.group(1)} / {usage.group(2)} used / container limit"
-    held_mb = as_float(sql_mem.get("sql_physical_memory_in_use_mb"))
+    # `sql_memory_held_mb` is the collector's own choice of figure (committed on Linux, where the
+    # process figure read 4.1 GB beside a Total Server Memory of 21.2); rows from before 0.34.0
+    # carry only the process figure.
+    held_mb = (as_float(sql_mem.get("sql_memory_held_mb"))
+               or as_float(sql_mem.get("sql_physical_memory_in_use_mb")))
     if text and held_mb:
         text += f" · SQL Server holds {_size(held_mb / 1024)}"
     return text
@@ -606,14 +761,16 @@ def _disk_capacity(worst: dict, members: list[tuple[int, dict]]) -> str:
     """The worst volume as ``used / total`` and its free space, then every volume together."""
     volumes: dict[str, tuple[str, tuple[float, float, float]]] = {}
     # OS_DISK_USAGE first: where both collectors saw a volume, the host's reading is the one kept.
-    for code in ("OS_DISK_USAGE", "STORAGE_DISK_FREE_SPACE"):
+    # A container's volume is named by its mount, not by the item that carries the container's name.
+    for code in ("OS_DISK_USAGE", "STORAGE_DISK_FREE_SPACE", "DOCKER_CONTAINER_STATS"):
         for _priority, entry in members:
             if entry.get("code") != code:
                 continue
             sizes = _volume_sizes(entry)
             key = _volume_key(entry.get("item"))
+            name = _message_fields(entry).get("mount") or str(entry.get("item") or "")
             if sizes and key and key not in volumes:
-                volumes[key] = (str(entry.get("item") or ""), sizes)
+                volumes[key] = (name, sizes)
     if not volumes:
         return ""
     worst_key = _volume_key(worst.get("item"))
@@ -680,7 +837,10 @@ def build_problems(series: list[dict], *, now: int | None = None) -> list[dict]:
             "item": entry["item"],
             "value": _value_text(entry),
             "severity": series_severity(entry),
-            "message": entry.get("message", ""),
+            # A windowed metric says first which window decided and what the others read: the
+            # collector's own message under it is the since-boot figure (report_windows).
+            "message": (f"{entry['windowSummary']} | {entry.get('message', '')}"
+                        if entry.get("windowSummary") else entry.get("message", "")),
             "lastText": entry.get("lastText", ""),
             "action": metric_action(entry["code"]),
             "collectedAt": entry.get("lastAt"),

@@ -118,6 +118,51 @@ FilePullPushAnswer = TypedDict('FilePullPushAnswer', {
 }, total=False)
 
 
+#: One sha256 per file, taken where the file is, and the files that were not there. (file-checksum)
+FileChecksumAnswer = TypedDict('FileChecksumAnswer', {
+    'algorithm': str | None,
+    'host': str | None,
+    'files': list[dict[str, Any]] | None,
+    'missing': list[str] | None,
+    'file_count': int | None,
+    'bytes_total': int | None,
+    'folder': str | None,
+    'host_folder': str | None,
+    'folder_found': bool | None,
+    'listed': int | None,
+    'truncated': bool | None,
+}, total=False)
+
+
+#: One line per file copied or not, with the bytes that arrived. (copy-files)
+CopyFilesAnswer = TypedDict('CopyFilesAnswer', {
+    'source_kind': str | None,
+    'files': list[dict[str, Any]] | None,
+    'copied': int | None,
+    'failed': int | None,
+    'bytes_copied': int | None,
+}, total=False)
+
+
+#: What one backup stop ended on the host, and what is left. (backup-stop)
+BackupStopAnswer = TypedDict('BackupStopAnswer', {
+    'run_tag': str | None,
+    'db_type': str | None,
+    'host': str | None,
+    'platform': str | None,
+    'pid': int | None,
+    'pid_file': str | None,
+    'process_alive': bool | None,
+    'killed': list[int] | None,
+    'sessions_killed': list[dict[str, Any]] | None,
+    'sessions_left': list[dict[str, Any]] | None,
+    'stopped': bool | None,
+    'exit_code': int | None,
+    'duration_ms': int | None,
+    'error': str | None,
+}, total=False)
+
+
 #: The backup files a directory holds, one row each. (list-backup-files)
 BackupFileListAnswer = TypedDict('BackupFileListAnswer', {
     'files': list[Any] | None,
@@ -367,6 +412,7 @@ BackupDatabaseAnswer = TypedDict('BackupDatabaseAnswer', {
     'stderr': str | None,
     'receipt': dict[str, Any] | None,
     'error': str | None,
+    'files': list[dict[str, Any]] | None,
     'dry_run': bool | None,
     'duration_ms': int | None,
     'db_type': str | None,
@@ -488,6 +534,8 @@ CopyBackupDirRequest = TypedDict('CopyBackupDirRequest', {
     'copy_mode': str | None,
     'space_check': dict[str, Any] | None,
     'staging_marker': str | None,
+    'replace': list[str] | None,
+    'plan_only': bool | None,
 }, total=False)
 
 
@@ -501,6 +549,7 @@ CopyBackupDirAnswer = TypedDict('CopyBackupDirAnswer', {
     'copy_mode': str | None,
     'copy_fell_back': bool | None,
     'space_check': dict[str, Any] | None,
+    'files': list[dict[str, Any]] | None,
 }, total=False)
 
 
@@ -925,6 +974,40 @@ BackupPackRequest = TypedDict('BackupPackRequest', {
     'local_path': str | None,
     'sha256': str | None,
     'timeout_seconds': int | None,
+}, total=False)
+
+
+#: Files hashed on the host that holds them. (file-checksum)
+FileChecksumRequest = TypedDict('FileChecksumRequest', {
+    'paths': list[str] | None,
+    'algorithm': str | None,
+    'host': dict[str, Any] | None,
+    'timeout_seconds': int | None,
+    'folder': str | None,
+    'include': list[str] | None,
+    'container': str | None,
+    'max_files': int | None,
+}, total=False)
+
+
+#: Named files copied from one host to another, removing nothing - a repository copy. (copy-files)
+CopyFilesRequest = TypedDict('CopyFilesRequest', {
+    'files': list[dict[str, Any]] | None,
+    'source': dict[str, Any] | None,
+    'source_share': dict[str, Any] | None,
+    'target': dict[str, Any] | None,
+    'timeout_seconds': int | None,
+    'stall_seconds': int | None,
+}, total=False)
+
+
+#: One running backup to stop on its host: its process tree first, then its sessions. (backup-stop)
+BackupStopRequest = TypedDict('BackupStopRequest', {
+    'run_tag': Required[str | None],
+    'db_type': Required[str | None],
+    'host': dict[str, Any] | None,
+    'env': dict[str, Any] | None,
+    'timeout': int | None,
 }, total=False)
 
 
@@ -1375,6 +1458,7 @@ MetricToggleRequest = TypedDict('MetricToggleRequest', {
     'server_id': Required[str | None],
     'scope': Required[str | None],
     'state': Required[str | None],
+    'reason': str | None,
     'data_dir': str | None,
 }, total=False)
 
@@ -1744,6 +1828,9 @@ __all__ = [
     'FileRelayAnswer',
     'BackupPackAnswer',
     'FilePullPushAnswer',
+    'FileChecksumAnswer',
+    'CopyFilesAnswer',
+    'BackupStopAnswer',
     'BackupFileListAnswer',
     'BackupFileAnswer',
     'BackupPruneAnswer',
@@ -1798,6 +1885,9 @@ __all__ = [
     'SqlserverInstanceRequest',
     'FileTransferRequest',
     'BackupPackRequest',
+    'FileChecksumRequest',
+    'CopyFilesRequest',
+    'BackupStopRequest',
     'BackupFilesRequest',
     'FileDeleteRequest',
     'CatalogRequest',

@@ -148,7 +148,9 @@ def test_the_windows_script_creates_directories_through_the_engine(scripts):
     code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
 
     assert "xp_create_subdir" in text
-    assert not [line for line in code if "New-Item" in line]
+    # The one New-Item left is the run's pid file folder in this session's own temp (1.238), which the
+    # engine never writes to: every directory BACKUP TO DISK uses still goes through the engine.
+    assert not [line for line in code if "New-Item" in line and "$runDir" not in line]
 
 
 def test_the_windows_script_does_not_shadow_the_automatic_args_variable(scripts):
