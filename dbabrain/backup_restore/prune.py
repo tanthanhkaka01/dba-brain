@@ -117,8 +117,12 @@ def prune_job_request(job: Any, *, target: Any, secrets: dict[str, str] | None =
         "path": job.backup_dir,
         # Seconds, under the one name both halves of the app read - see
         # dbabrain.lib.cleanup_retention. The planner takes them as seconds (review 0.25.0, B4.4).
-        "cleanup_retention": int(retention_seconds if retention_seconds is not None
-                                 else job.cleanup_retention),
+        # A job whose retention names types sends the object (1.231), unless the caller gave a
+        # window of its own for this run.
+        "cleanup_retention": (int(retention_seconds) if retention_seconds is not None
+                              else job.retention.as_config()
+                              if getattr(job, "retention", None) is not None and not job.retention.uniform
+                              else int(job.cleanup_retention)),
         "mode": mode,
         "delete": bool(delete),
         "dry_run": bool(dry_run),
@@ -150,6 +154,7 @@ def run_prune(
     key: str | None = None,
     key_base64: str | None = None,
     apply: bool = False,
+    allow_mass_delete: bool = False,
 ) -> dict[str, Any]:
     """Prune the obsolete files of every selected backup entry.
 
@@ -157,6 +162,11 @@ def run_prune(
     opposite default from ``backup``, because reporting a backup that did not happen is a wasted
     run and reporting a deletion that did not happen is not.
     """
+    if apply:
+        # No prune while a lockdown is on (1.220): deleting is exactly what an attacker wants next.
+        from dbabrain.db.lockdown_store import refuse_if_locked
+
+        refuse_if_locked(app_config, "prune-backups --apply")
     jobs = [item for item in load_backup_jobs(config_path) if item.active]
     if backup_id:
         jobs = [item for item in jobs if item.backup_id == backup_id]
@@ -199,6 +209,7 @@ def run_prune(
                                         retention_seconds=retention_seconds, mode=mode,
                                         delete=bool(apply) and not report_only, dry_run=False,
                                         data_dir=data_dir)
+            request["allow_mass_delete"] = bool(allow_mass_delete)
             result = _prune_one(request, secrets=secrets)
         except Exception as exc:  # noqa: BLE001 - one entry must not stop the rest.
             summary["failed"] += 1
@@ -207,6 +218,12 @@ def run_prune(
                     app_config=app_config, logger=logger, level="error")
             continue
 
+        if result.get("refused"):
+            summary["failed"] += 1
+            summary["jobs"].append({"job": item.label, "status": "refused", "reason": result["refused"]})
+            _record(store, item, status="ERROR", started_at=started_at, message=f"{item.label}: {result['refused']}",
+                    app_config=app_config, logger=logger, level="error")
+            continue
         obsolete = result["counts"]["obsolete"]
         deleted = int(((result.get("deleted") or {}).get("counts") or {}).get("deleted", 0))
         summary["pruned"] += 1
@@ -245,16 +262,28 @@ def _prune_one(request: dict[str, Any], *, secrets: dict[str, str]) -> dict[str,
     """
     from dbabrain.lib.backupfiles_retention import plan_retention
 
+    from dbabrain.lib import cleanup_retention
+
     listed = common_cli.run("list-backup-files", request)
+    per_type = cleanup_retention.parse_per_type(request, context="prune", engine=request.get("db_type"))
     plan = plan_retention(
         listed["files"],
         # The configured seconds as they are (review 0.25.0, B4.4): converting to whole days made
         # anything under a day 0, and 0 became DEFAULT_RETENTION_DAYS - 14 days, silently.
         retention_days=DEFAULT_RETENTION_DAYS,
-        retention_seconds=int(request["cleanup_retention"] or 0),
-        mode=request["mode"])
+        retention_seconds=int(cleanup_retention.parse(request, context="prune") or 0),
+        mode=request["mode"],
+        windows=cleanup_retention.windows_by_level(per_type, engine=str(request.get("db_type") or "")))
     if not request.get("delete") or not plan["obsolete_paths"]:
         return {**plan, "deleted": None}
+    from dbabrain.lib.backupfiles_retention import mass_delete_refusal
+
+    refusal = "" if request.get("allow_mass_delete") else mass_delete_refusal(
+        plan["counts"]["obsolete"], plan["counts"]["total"])
+    if refusal:
+        # Nothing at all, not "half of it": a cap that deleted the first half of a mass delete would
+        # have done half the damage before anyone looked (1.221).
+        return {**plan, "deleted": None, "refused": refusal}
     deleted = common_cli.run("delete-files", {
         "paths": plan["obsolete_paths"],
         "host": request["host"],

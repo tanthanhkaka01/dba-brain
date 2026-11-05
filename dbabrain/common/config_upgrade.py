@@ -35,6 +35,7 @@ from dbabrain.lib import config_references, earlier_defaults, package_rename, sh
 from dbabrain.lib import integrity as restore_integrity
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib import backup_scope
+from dbabrain.lib import cleanup_retention
 from dbabrain.lib import ai_assist as ai_assist_rules
 from dbabrain.lib.json_io import atomic_write_text, indent_of
 from dbabrain.lib.moved_commands import MOVED_COMMANDS
@@ -109,6 +110,12 @@ Steps, in order (each one idempotent - a file already moved plans nothing):
                       (telegram_chat, "ai_assist") on each listed group that has no level yet; a
                       group with another level is a conflict, named. What is stated is left as it
                       is (dbabrain/lib/ai_assist.py)
+  retention-per-type  0.35.0: each backup entry states cleanup_retention once, for the folder its
+                      jobs write - the jobs' values moved onto the entry. Jobs that agree become
+                      the integer (nothing changes); jobs that differ become the per-type object,
+                      each job's value on the types it writes, and the change says so: until then
+                      the shortest job's window cut every type. An entry it cannot fold is a
+                      conflict, named (dbabrain/lib/cleanup_retention.py)
 
 A record whose two spellings DISAGREE is a conflict: its file is not written, and the answer names
 the record. After a write, check-objects and check-references are run and their counts reported -
@@ -122,7 +129,7 @@ Exit code 1 when a conflict left a file unwritten.
 
 STEPS = ("reference-files", "package-rename", "field-names", "restore-machine-ids", "earlier-defaults",
          "telegram-active", "inventory-into-reports", "moved-commands", "console-apps",
-         "unread-report-keys", "stated-integrity", "stated-ai-assist")
+         "unread-report-keys", "stated-integrity", "stated-ai-assist", "retention-per-type")
 
 
 #: The app command that was a report (0.22.0), and the report it becomes.
@@ -678,6 +685,27 @@ def _stated_integrity(root: Path, *, dry_run: bool, before_write: Any) -> dict[s
     return {"files": files}
 
 
+def _retention_per_type(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Each backup entry states ``cleanup_retention`` once, for the folder its jobs write (0.35.0,
+    1.232): the jobs' values folded onto the entry - lib.cleanup_retention.fold_entry says how, and
+    names every entry whose behaviour that changes. A dry run first is the way to read that list."""
+    files: list[dict[str, Any]] = []
+    for name in ("restore_config.json", "restore_config.example.json"):
+        path = root / name
+        if not path.is_file():
+            continue
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        changes, conflicts = cleanup_retention.fold_into_entries(document)
+        written = bool(changes) and not dry_run
+        if written:
+            before_write(path)
+            atomic_write_text(path, json.dumps(document, ensure_ascii=False,
+                                               indent=indent_of(path)) + "\n")
+        files.append({"file": name, "records_changed": len(changes), "changes": changes,
+                      "conflicts": conflicts, "written": written})
+    return {"files": files}
+
+
 def _stated_ai_assist(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
     """Every field of ``ai_assist.json`` stated (0.34.0, R50): the shipped file where a node has
     none, the missing fields of its own file where it has one."""
@@ -704,7 +732,9 @@ def _stated_ai_assist(root: Path, *, dry_run: bool, before_write: Any) -> dict[s
         # its own row: each listed group with no level takes the assistant's, then the list goes.
         chat_ids = document.get(ai_assist_rules.RETIRED_CHAT_IDS)
         if chat_ids is not None and name == ai_assist_rules.FILE_NAME:
-            level = str(document.get("telegram_chat") or ai_assist_rules.AI_ASSIST_LEVEL)
+            # telegram_chat may be a list of levels since 2026-11-04; the retired ids were one chat.
+            level = (ai_assist_rules.chat_levels(document.get("telegram_chat"))
+                     or (ai_assist_rules.AI_ASSIST_LEVEL,))[0]
             if groups_path.is_file():
                 groups_document = json.loads(groups_path.read_bytes().decode("utf-8-sig"))
                 rows = groups_document.get("telegram_groups") or []
@@ -797,6 +827,8 @@ def upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             files = _unread_report_keys(root, dry_run=dry_run, before_write=before_write)["files"]
         elif step == "stated-integrity":
             files = _stated_integrity(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "retention-per-type":
+            files = _retention_per_type(root, dry_run=dry_run, before_write=before_write)["files"]
         elif step == "stated-ai-assist":
             files = _stated_ai_assist(root, dry_run=dry_run, before_write=before_write)["files"]
         else:

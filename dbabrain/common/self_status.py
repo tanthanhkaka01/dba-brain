@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from dbabrain.lib import node_role as node_role_rule
+from dbabrain.lib.node_environment import operating_system, runtime  # noqa: F401 - re-exported
 from dbabrain.lib import run_mode as run_mode_lib
 from dbabrain.lib import timezone as display_timezone
 from dbabrain.lib.time_window import TimeWindow, weekdays_text, window_of
@@ -275,42 +276,6 @@ def distribution() -> dict[str, Any]:
     return {"name": "dbabrain", "installed_version": found.version,
             "product": "DBA Brain (published)" if published else "dbabrain (private build)",
             "source": "pip-installed"}
-
-
-def runtime() -> str:
-    """Docker, Kubernetes, or straight on the operating system."""
-    if Path("/.dockerenv").exists():
-        return "docker"
-    if os.environ.get("KUBERNETES_SERVICE_HOST"):
-        return "kubernetes"
-    try:
-        cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8")
-    except OSError:
-        return "host"
-    for marker, label in (("docker", "docker"), ("containerd", "containerd"),
-                          ("kubepods", "kubernetes"), ("lxc", "lxc")):
-        if marker in cgroup:
-            return label
-    return "host"
-
-
-def operating_system() -> str:
-    """The distribution a person would name, not the kernel version.
-
-    ``platform.platform()`` answers "Linux-6.8.0-generic" for both Ubuntu and RHEL, which does not
-    help anybody deciding whether a package name applies.
-    """
-    if os.name == "nt":
-        release, version, _sp, _kind = platform.win32_ver()
-        return f"Windows {release} ({version})".strip()
-    try:
-        release = platform.freedesktop_os_release()
-        pretty = release.get("PRETTY_NAME") or release.get("NAME")
-        if pretty:
-            return f"{pretty} ({platform.release()})"
-    except (AttributeError, OSError):
-        pass
-    return f"{platform.system()} {platform.release()}"
 
 
 def dbabrain_uptime(runtime_dir: str | Path | None) -> dict[str, Any]:

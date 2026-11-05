@@ -269,10 +269,13 @@ class WebApp:
     """The console. Holds the stores it reads and nothing per-request."""
 
     def __init__(self, *, auth_store, config_store, ops_store=None, request_store=None,
-                 data_dir: str | Path | None = None, log_dir: str | Path | None = None,
+                 ai_store=None, data_dir: str | Path | None = None, log_dir: str | Path | None = None,
                  settings: WebSettings | None = None, now: Any = None) -> None:
         self.auth = auth_store
         self.config = config_store
+        # The AI assistant's five tables (`AiAssistStore`). Optional: without it the AI page says the
+        # assistant is not set up here, which is a state, not a failure.
+        self.ai = ai_store
         # The DbaBrainStore that job_runs lives in. Optional so a test can build a console without
         # one; the dashboard then shows the schedule without the run history rather than failing.
         self.ops_store = ops_store
@@ -393,6 +396,8 @@ class WebApp:
             return self._get_overview(request, session)
         if head == "users":
             return self._route_users(segments[1:], request, session)
+        if head == "ai":
+            return self._route_ai(segments[1:], request, session)
         if head == "app":
             return self._get_app(segments[1:], request, session)
         if head == "config":
@@ -811,6 +816,47 @@ class WebApp:
             raise
         return Response.html(pages.error_page("Not found", f"No user action /users/{'/'.join(rest)}.",
                                               prefix=self.prefix), status=404)
+
+    #: How many requests one page of the AI list shows.
+    AI_PAGE_ROWS = 50
+
+    def _route_ai(self, rest: list[str], request: Request, session: dict[str, Any]) -> Response:
+        """The AI assistant: what it cost, and every question it was asked (0.35.0, 1.266).
+
+        petweb's admin page is the model (0.34.0 D-AI8): usage by day, user and model, then each
+        question with its whole transcript - every message, API call and tool run. An admin's page,
+        like *Users*: the transcripts are what people asked, in their words, and what the tools read.
+        Read-only; nothing here changes the assistant.
+        """
+        self._require_level(session, self.settings.min_level_admin, "Reading the AI assistant's record")
+        if request.method != "GET":
+            raise Refused(405, "The AI assistant's page is read-only.")
+        common = dict(prefix=self.prefix, session=session, blocks=self.app_blocks(),
+                      report_links=self.report_links)
+        if self.ai is None:
+            return Response.html(pages.ai_page(**common, usage=None, requests=[], days=0, by="day",
+                                               page=1, has_more=False))
+        if rest:
+            if len(rest) != 1 or not rest[0].isdigit():
+                return Response.html(pages.error_page("Not found", f"No AI page /ai/{'/'.join(rest)}.",
+                                                      prefix=self.prefix), status=404)
+            from dbabrain.db.ai_assist_store import AiAssistStoreError
+
+            try:
+                transcript = self.ai.transcript(int(rest[0]))
+            except AiAssistStoreError as exc:
+                return Response.html(pages.error_page("Not found", str(exc), prefix=self.prefix,
+                                                      back=f"{self.prefix}/ai"), status=404)
+            return Response.html(pages.ai_request_page(**common, transcript=transcript))
+        query = request.first
+        days = _bounded_int(query.get("days"), default=30, low=1, high=366)
+        by = query.get("by") if query.get("by") in ("day", "user", "model") else "day"
+        page = _bounded_int(query.get("page"), default=1, low=1, high=100000)
+        rows = self.ai.recent_requests(limit=self.AI_PAGE_ROWS + 1, offset=(page - 1) * self.AI_PAGE_ROWS)
+        return Response.html(pages.ai_page(
+            **common, usage=self.ai.usage_since(days=days, group_by=by, now=self._now()),
+            requests=rows[:self.AI_PAGE_ROWS], days=days, by=by, page=page,
+            has_more=len(rows) > self.AI_PAGE_ROWS))
 
     def _users_page(self, request: Request, session: dict[str, Any], *, error: str = "",
                     status: int = 200) -> Response:
@@ -1258,6 +1304,15 @@ class WebApp:
         from dbabrain.lib.paths import TOOL_ROOT
 
         return Path(TOOL_ROOT) / "logs"
+
+
+def _bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
+    """A query-string number, held to a range; anything unreadable is the default, never an error page."""
+    try:
+        number = int(str(value))
+    except (TypeError, ValueError):
+        return default
+    return min(max(number, low), high)
 
 
 def _dashboard_notice(query: dict[str, str]) -> str:

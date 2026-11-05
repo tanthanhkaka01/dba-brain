@@ -927,6 +927,18 @@ list of group ids is hard-coding*). Making a group the assistant's:
 `python -m dbabrain.telegram.cli group-level --group "System - AI assists" --level ai_assist`.
 `check-references` reports an `ai_assist.json` level no group carries.
 
+**One level or several; and private chats** (2026-11-04, the operator: *one group only - let it take
+one or many, and private chats for the users switched on*). `telegram_chat` is a level or a list of
+levels; each resolves on its own, a level with no group is named in the run's answer
+(`levels_without_chat`) and the others still answer, and every answer goes back to the chat its
+question came from. `private_chat_enabled` (mandatory, shipped `false`) adds the private chat of each
+user in `users[]` with `"active": true` - Telegram gives a user's private chat with the bot the
+user's own id, so those ids are the only private chats read; anyone else writing to the bot privately
+is left to the bot, neither answered nor refused nor kept. In a private chat every message is
+addressed to the assistant (`require_mention` does not apply; nobody else is there). `telegram_chat:
+[]` with private chats on is a configuration; no level and private chats off is *not configured*.
+`check-references` follows each level of a list.
+
 **Its own job.** `APP-TELEGRAM-AI` runs `python -m dbabrain.telegram.cli --config config.json
 ai-assist` every 3 s, one at a time, timeout 900 (above `run_budget_seconds`). `run-workflow` keeps
 receiving and sending as before - it saves the chat's messages into `telegram_messages` and sends
@@ -940,6 +952,11 @@ file, no key or no chat is *not configured*: said in the run's answer and skippe
 
 - a `/spbot_*` command, a bot's message, or a message with no text, photo or document: kept as
   `stopped` and left to the bot;
+- the user's answer to a bot command that is asking them something (a `waiting` conversation state
+  for that user in that chat - what the bot reads answers through; a workflow step's own `active`
+  does not count, an abandoned command keeps it for ever - or the message a state or step already took):
+  kept as `stopped` **without its text** and never sent to the model - it is often a password, and in
+  a private chat every message would otherwise be a question;
 - a message **not addressed to the assistant**, with `require_mention` on (shipped): kept as
   `stopped` **without its text** - people talking to each other are neither answered nor recorded
   (the operator, 2026-10-31). Addressed is an `@<telegram_bot_username>` in the text (taken out of
@@ -1009,6 +1026,21 @@ tools used and the user's month so far. `ack_message` queues *Working on it* fir
 Shipped: `claude-sonnet-5-5`, effort `medium`, $10 a month for the system, $5 for a user, $0.50 a
 question. The SDK is the `anthropic` package (`requirements.txt`, extra `ai`); a node without it
 skips with *not installed*.
+
+**Commands written for the node it runs on** (0.35.0, 1.267). The system prompt carries how the node
+runs - its OS, the shell (`powershell-5.1`, `powershell-7`, `bash`), whether it is a container, a pip
+install or a source tree, and the tool root (`lib.node_environment`) - and the guide
+(`telegram/catalogue/ai_assist_guide.md`) has it name every command it proposes by kind and place: a
+CLI line for that shell and install, a `/spbot_` command and its chat, a console page, a file edit
+only where no command writes it, and what *another* machine needs apart from this node. Where the
+environment is not known, it asks. On a new install (nothing in the inventory) it guides the setup
+step by step in `agents_guide.md`'s order - passphrase, clock, store, the first database, the
+schedule, Telegram, backups, the assistant itself - and `dbabrain init`'s next steps say once that
+the assistant exists and what it needs.
+
+**Reading what it did**: `telegram.cli ai-usage --days 30 --by day|user|model` and
+`telegram.cli ai-show --id <ai_request_id>`, or the console's *AI assistant* page (0.35.0, admins;
+`docs/12_webhost_app.md`), which reads the same `AiAssistStore.usage_since` and `transcript`.
 
 ## A group that becomes a supergroup (0.34.0)
 

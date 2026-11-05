@@ -434,7 +434,8 @@ def release_sources(entry: _Entry, *, catalog: BackupCatalogStore, hosts: _Hosts
                 continue
             if line.get("status") in ("deleted", "not_found"):
                 catalog.set_backup_file(int(row["file_id"]), state="pruned", on_disk=0,
-                                        source_deleted_at=utc_now_text())
+                                        source_deleted_at=utc_now_text(),
+                                        pruned_by="offload: released after its copy was verified")
                 deleted += 1
             else:
                 refused.append(f"{row['file_name']}: delete {line.get('status')} - {line.get('reason') or ''}")
@@ -655,12 +656,16 @@ def run_offloads(
         store=store, app_config=app_config, logger=logger,
         timeouts={schedule.offload_job_code(e.backup_id): e.timeout_seconds for e in entries},
         notify={schedule.offload_job_code(e.backup_id): e.first.notify for e in entries})
+    from dbabrain.db.lockdown_store import lockdown_on
+
+    locked = lockdown_on(app_config)
     for entry in entries:
         retry_before = (datetime.now(timezone.utc) - timedelta(seconds=entry.retry_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
         per_pass = int(limit or entry.offload.files_per_pass)
         rows = catalog.files_to_offload(backup_id=entry.backup_id, limit=per_pass, retry_before=retry_before)
+        # The delete at the source waits out a lockdown (1.220); the copy off the host goes on.
         releasable = (catalog.files_to_release(backup_id=entry.backup_id, limit=per_pass)
-                      if entry.offload.delete_source else [])
+                      if entry.offload.delete_source and not locked else [])
         expirable = _expirable(entry, catalog)
         if not rows and not releasable and not expirable:
             continue

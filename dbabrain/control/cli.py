@@ -294,6 +294,20 @@ def parse_args(argv):
     types.add_argument("--write", action="store_true",
                        help="Rewrite the two generated files from the reference.")
 
+    lock = sub.add_parser(
+        "lockdown",
+        help="Stop every destructive step - prune, delete, restore over a database, SQL that writes - "
+             "while an attack is looked at (1.220). Backups, the scrub and alerts keep running.")
+    lock.add_argument("action", choices=["on", "off", "status"])
+    lock.add_argument("--reason", default="", help="on: why. Required.")
+    lock.add_argument("--note", default="", help="off: why it is safe to. Required.")
+    lock.add_argument("--by", default="", help="Who; default this login.")
+    lock.add_argument("--config", default=None, help="config.json of the node whose store holds it.")
+    lock.add_argument("--key-base64", dest="key_base64", default=None,
+                      help="Base64 secret passphrase, for a store whose password is in the secret store.")
+    lock.add_argument("--key", default=None, help="Secret passphrase (plaintext alternative).")
+    lock.add_argument("--confirm", default="", help="on / off: 'yes', when not at a terminal.")
+
     build = sub.add_parser("build-image", help="Build the image + deploy bundle locally.")
     build.add_argument("--platform", default="linux/amd64")
     build.add_argument("--no-cache", action="store_true")
@@ -679,6 +693,43 @@ def main(argv=None) -> int:
         return 3
 
 
+def _lockdown_command(args) -> int:
+    """``lockdown on|off|status`` (1.220): the state is in the runtime store, so every node sees it.
+    Turning it on or off asks one typed yes at a terminal, or takes ``--confirm yes``."""
+    import getpass
+    import json as _json
+
+    from dbabrain.db.lockdown_store import LockdownStore
+    from dbabrain.lib.config import load_config
+    from dbabrain.lib.secret_text import resolve_cli_key
+
+    key = resolve_cli_key(getattr(args, "key", None), getattr(args, "key_base64", None)) or _secret_key_from_env()
+    store = LockdownStore.from_config(load_config(args.config), key=key)
+    if args.action == "status":
+        print(_json.dumps({"lockdown": store.active()}, indent=1, default=str))
+        return 0
+    by = args.by or getpass.getuser()
+    if args.action == "on" and not args.reason.strip():
+        print("ERROR: lockdown on needs --reason.", file=sys.stderr)
+        return 2
+    if args.action == "off" and not args.note.strip():
+        print("ERROR: lockdown off needs --note: why it is safe to delete again.", file=sys.stderr)
+        return 2
+    answer = args.confirm.strip().lower()
+    if not answer and sys.stdin.isatty():
+        answer = input(f"Type yes to turn the lockdown {args.action}: ").strip().lower()
+    if answer != "yes":
+        print("Not confirmed; nothing changed.", file=sys.stderr)
+        return 1
+    if args.action == "on":
+        result = store.engage(reason=args.reason, by=by)
+        print(_json.dumps({"lockdown": result}, indent=1, default=str))
+        return 0
+    ended = store.release(by=by, note=args.note)
+    print(_json.dumps({"released": ended}, indent=1, default=str))
+    return 0
+
+
 def _run(args) -> int:
 
     if args.command == "export-public":
@@ -692,6 +743,8 @@ def _run(args) -> int:
         return 0
     if args.command == "request-types":
         return _request_types_command(args)
+    if args.command == "lockdown":
+        return _lockdown_command(args)
     if args.command == "build-image":
         # Before the bundle is staged, not after: the bundle is a copy of data/, so a check that
         # ran later would be checking something already committed to.

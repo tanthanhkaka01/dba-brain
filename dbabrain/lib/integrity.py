@@ -19,6 +19,7 @@ Imports nothing from ``dbabrain`` but ``lib`` (rules R04's mirror for ``lib``).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -103,6 +104,45 @@ MAX_COPY_MAX_RETRY = 10
 DEFAULT_COPY_RETRY_INTERVAL_SECONDS = 30
 UNCATALOGUED_CHOICES = ("compare_copy", "refuse")
 
+#: How many of an entry's older files each backup run re-hashes (0.35.0, 1.218 - the plan of
+#: 2026-10-29, B.4). Ransomware encrypts last week's backups, not tonight's: within days every
+#: file on disk has been re-read. A backup entry's `scrub_files_per_run` changes it; 0 is off.
+SCRUB_FILES_PER_RUN = 20
+
+
+#: What ransomware leaves in a folder it encrypted (0.35.0, 1.219 - the plans of 2026-10-29 A3.4 and
+#: 2026-10-30): the C3RB3R wave's `read-me3.txt` and `*.L0CK3D`, and the generic notes and
+#: extensions. No engine writes any of these, so one in a backup folder is an attack, not a backup.
+RANSOM_MARKERS = ("read-me*.txt", "*.L0CK3D", "*README*", "*DECRYPT*", "*RESTORE_FILES*",
+                  "*HOW_TO_RECOVER*", "*.locked", "*.encrypted", "*.crypt", "*.crypted")
+
+#: A new file this many times bigger or smaller than its own history's median is reported (1.219,
+#: BACKUP_SIZE_ANOMALY): encrypted data does not compress, so a FULL that suddenly triples is a sign,
+#: and one that shrinks to a third is a backup that lost most of what it should hold.
+SIZE_ANOMALY_FACTOR = 3.0
+#: Fewer earlier files than this is no history to judge by.
+SIZE_HISTORY_MIN = 5
+
+
+def size_anomaly(size: int | None, history: list[int]) -> str:
+    """Why ``size`` is far from ``history`` (the same database and type, newest first); empty when not."""
+    sizes = sorted(int(s) for s in history if s)
+    if size is None or len(sizes) < SIZE_HISTORY_MIN:
+        return ""
+    median = sizes[len(sizes) // 2]
+    if median and (size > SIZE_ANOMALY_FACTOR * median or size * SIZE_ANOMALY_FACTOR < median):
+        return f"{size:,} bytes against a median of {median:,} over its last {len(sizes)} backups"
+    return ""
+
+
+def scrub_files_per_run(entry: dict[str, Any] | None, *, label: str = "backup") -> int:
+    """The entry's `scrub_files_per_run`, 0 to 1000; absent is :data:`SCRUB_FILES_PER_RUN`."""
+    value = (entry or {}).get("scrub_files_per_run", SCRUB_FILES_PER_RUN)
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1000:
+        raise IntegrityConfigError(f"{label}: scrub_files_per_run must be a whole number 0 to 1000, "
+                                   f"got {value!r} (0 switches the scrub off).")
+    return value
+
 INTEGRITY_FIELDS = ("algorithm", "copy_max_retry", "copy_retry_interval_seconds",
                     "verify_source_before_copy", "uncatalogued", "engine_verify_before_restore")
 
@@ -132,8 +172,18 @@ class RestoreIntegrity:
 
 
 def stated_restore_integrity() -> dict[str, Any]:
-    """The block written into an entry that states none - by ``upgrade-config`` and ``restore-add``."""
+    """The block ``upgrade-config`` writes into an existing entry that states none: what the entry has
+    always done, ``uncatalogued: compare_copy`` included - an upgrade states behaviour, never changes it."""
     return RestoreIntegrity().as_record()
+
+
+def new_restore_integrity() -> dict[str, Any]:
+    """The block ``restore-add`` writes into a NEW entry (0.35.0, 1.249 - gap G9 *never drill an
+    unverified file*): ``uncatalogued: refuse``. Every backup a new entry restores was written by a
+    dbabrain job that catalogued it, or by an older one ``catalog-backfill`` can catalogue; a file
+    neither recorded is not one to drill. The operator, 2026-11-02: new entries only - the entries
+    already running keep ``compare_copy`` until their backups are backfilled and each is switched."""
+    return RestoreIntegrity(uncatalogued="refuse").as_record()
 
 
 def _bool(raw: dict[str, Any], name: str, default: bool, label: str) -> bool:
@@ -271,7 +321,11 @@ def state_restore_integrity(document: dict[str, Any]) -> list[dict[str, str]]:
 #: unknown, never "no".
 #: ``path`` is where the engine wrote it (inside ``container`` when there is one); ``host_path`` the
 #: same file on the server itself, through the container's mount - empty for a file in no mount.
+#: ``start`` (0.35.0, 1.254) is when that file's backup began, UTC ``YYYY-MM-DDTHH:MM:SSZ``: the run's
+#: start is the first database's, and a run of twenty databases put hours between the two. Absent
+#: (an older script, a WAL segment the server archived itself) is unknown.
 FILE_LINE_PREFIX = "FILE\t"
+_UTC_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 #: What level a file's type belongs to - a run's level is its files'.
 LEVEL_OF_FILE_TYPE = {
@@ -302,6 +356,7 @@ def parse_file_lines(text: str) -> list[dict[str, Any]]:
         size = str(fields.get("size") or "").strip()
         verify = str(fields.get("verify") or "not_run").strip().lower()
         encrypted = str(fields.get("encrypted") or "").strip().lower()
+        started = str(fields.get("start") or "").strip()
         files.append({
             "path": path,
             "file_name": path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1],
@@ -316,6 +371,8 @@ def parse_file_lines(text: str) -> list[dict[str, Any]]:
             "engine_verify": verify if verify in ENGINE_VERIFY_RESULTS else "not_run",
             "engine_verify_text": str(fields.get("note") or ""),
             "encrypted": {"yes": 1, "no": 0}.get(encrypted),
+            # Anything but a UTC stamp is unknown, never a guess: the catalog falls back to the run's.
+            "backup_started_at": started if _UTC_STAMP.match(started) else None,
         })
     return files
 
@@ -347,6 +404,156 @@ def sqlserver_file_type(relative_path: str) -> str:
     if "DIFF" in parts[:-1]:
         return "DIFF"
     return "FULL"
+
+
+def script_file_type(db_type: str, relative: str) -> str:
+    """A backup file's ``file_type`` from its place in the layout the engine scripts write: ``base/`` and
+    ``wal/`` for PostgreSQL, RMAN's piece names for Oracle, SQL Server's ``<DB>/FULL|DIFF|LOG``.
+
+    A best reading where the receipt is not there - a staged copy, a backup taken before the catalog
+    (``catalog-backfill``). The catalog's own type wins whenever the backup recorded the file. One
+    Oracle case it cannot see: the level 0/1 run's controlfile piece is written under the level's
+    FORMAT, so its name reads as that level.
+    """
+    path = str(relative or "").replace("\\", "/")
+    name = path.rstrip("/").rsplit("/", 1)[-1].upper()
+    engine = str(db_type or "").lower()
+    if engine == "postgresql":
+        if path.startswith("wal/") or "/wal/" in path:
+            return "WAL"
+        if name == "BACKUP_MANIFEST":
+            return "MANIFEST"
+        return "INCR_BASE" if "_INCR" in path.upper() else "FULL_BASE"
+    if engine == "oracle":
+        if name.startswith("C-") or name.startswith("AUTOBACKUP_"):
+            return "CONTROLFILE"      # RMAN's autobackup: c-<dbid>-<yyyymmdd>-<nn>, autobackup_%F
+        for marker, kind in (("CONTROLFILE", "CONTROLFILE"), ("CTL_", "CONTROLFILE"), ("SPFILE", "SPFILE"),
+                             ("ARCH", "ARCHIVELOG"), ("L1", "RMAN_L1"), ("INCR", "RMAN_L1")):
+            if marker in name:
+                return kind
+        return "RMAN_L0"
+    return sqlserver_file_type(path)
+
+
+#: The inventory's `environment` values that mean a production instance (1.223).
+PRODUCTION_ENVIRONMENTS = ("prod", "production")
+
+
+def production_target_refusal(environment: str | None, *, allowed: bool, restore_id: str, target: str) -> str:
+    """Why a restore into ``target`` is refused, or ``""`` (0.35.0, 1.223 - the plan of 2026-10-29, A3.3).
+
+    A restore REPLACEs what it lands on, and an entry mis-edited to name a production instance as its
+    target would overwrite it at the next scheduled drill. R47's spirit: the target is named *and*
+    allowed - a production target needs the entry's own ``allow_production_target: true``. An
+    instance the inventory does not mark (no ``environment``) is not judged here.
+    """
+    if allowed or str(environment or "").strip().lower() not in PRODUCTION_ENVIRONMENTS:
+        return ""
+    return (f"{restore_id}: the target {target} is a production instance (environment "
+            f"{environment!r} in db_instances.json). Refused: a restore overwrites what it lands on. "
+            "If this target is meant, the entry says \"allow_production_target\": true.")
+
+
+def sqlserver_chain_break(full: dict[str, Any], diff: dict[str, Any] | None,
+                          logs: list[dict[str, Any]]) -> str:
+    """The first break in a SQL Server restore chain, in words naming the piece; ``""`` when it holds
+    (0.35.0, 1.250 - gap G10, *chain completeness*).
+
+    Read from ``RESTORE HEADERONLY``'s LSNs, which the listing already takes:
+
+    * a DIFF belongs to the FULL whose ``CheckpointLSN`` is its ``DifferentialBaseLSN`` - a DIFF taken
+      after another FULL restores onto nothing;
+    * the first log that ends after the FULL / DIFF must start at or before where it ends;
+    * each log starts exactly where the one before it ended - a missing ``.trn`` is a gap.
+
+    A log that ends before the FULL / DIFF is not a break (SQL Server would only call it too early).
+    An LSN the header did not give (0) is not judged: a check that guesses is worse than none.
+    """
+    def lsn(item: dict[str, Any] | None, key: str) -> int:
+        try:
+            return int((item or {}).get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def name(item: dict[str, Any]) -> str:
+        return str(item.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+
+    if diff:
+        base, checkpoint = lsn(diff, "differential_base_lsn"), lsn(full, "checkpoint_lsn")
+        if base and checkpoint and base != checkpoint:
+            return (f"the DIFF {name(diff)} is based on another FULL (its base LSN {base}, the FULL "
+                    f"{name(full)} has checkpoint LSN {checkpoint})")
+    anchor = diff or full
+    previous_end = lsn(anchor, "last_lsn")
+    started = False
+    for item in logs:
+        first, last = lsn(item, "first_lsn"), lsn(item, "last_lsn")
+        if not first or not last or not previous_end:
+            return ""
+        if not started:
+            if last <= previous_end:
+                continue
+            if first > previous_end:
+                return (f"the logs start at LSN {first} ({name(item)}) after the "
+                        f"{'DIFF' if diff else 'FULL'} {name(anchor)} ends at LSN {previous_end} - a log "
+                        "backup between them is missing")
+            started = True
+        elif first != previous_end:
+            return (f"a log backup is missing before {name(item)}: it starts at LSN {first}, the one "
+                    f"before it ended at LSN {previous_end}")
+        previous_end = last
+    return ""
+
+
+def postgresql_wal_break(start_wal: str, segments: list[str], *, to_latest: bool = True) -> str:
+    """The first hole in the WAL a PostgreSQL restore replays from its base backup's start segment;
+    ``""`` when it holds or cannot be judged (0.35.0, 1.250 - gap G10).
+
+    A recovery to *latest* replays segment after segment and stops at the first one missing - and then
+    opens, as if that were the end: the drill reports done and has restored an older state. So:
+
+    * the start segment (``backup_label``'s START WAL) must be archived;
+    * with ``to_latest``, every segment from it to the newest archived one, without a hole. A
+      point-in-time restore is only held to the start: a hole after its target does not matter, and
+      which segment holds the target cannot be read from a name.
+
+    Not judged (``""``): no start or no segments given, another timeline after the start (a
+    promotion - its history decides), or a segment number past 0xFF (a segment size other than
+    16 MB, where the numbering differs).
+    """
+    start = str(start_wal or "").strip().upper()
+    names = sorted({str(name).strip().upper() for name in segments or [] if WAL_SEGMENT_NAME.match(str(name).strip().upper())})
+    if not WAL_SEGMENT_NAME.match(start) or not names:
+        return ""
+    timeline = start[:8]
+    after = [name for name in names if name >= start]
+    if any(name[:8] != timeline for name in after):
+        return ""
+    if start not in after:
+        return f"the WAL segment the base backup starts from, {start}, is not archived"
+    if not to_latest:
+        return ""
+
+    def number(name: str) -> int | None:
+        log, seg = int(name[8:16], 16), int(name[16:24], 16)
+        return None if seg > 0xFF else log * 0x100 + seg
+
+    previous = number(start)
+    for name in after[1:]:
+        current = number(name)
+        if previous is None or current is None:
+            return ""
+        if current != previous + 1:
+            missing = previous + 1
+            return (f"WAL segment {timeline}{missing // 0x100:08X}{missing % 0x100:08X} is missing - "
+                    f"recovery would stop before {name} and open on an older state")
+        previous = current
+    return ""
+
+
+#: A PostgreSQL WAL segment's name: 24 hex digits (timeline, log, segment). ``.partial`` and
+#: ``.history`` files are not segments a restore replays.
+WAL_SEGMENT_NAME = re.compile(r"^[0-9A-F]{24}$")
 
 
 def file_verdict(item: dict[str, Any]) -> str:

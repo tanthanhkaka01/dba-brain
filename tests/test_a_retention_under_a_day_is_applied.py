@@ -109,7 +109,8 @@ def test_sqlserver_counts_the_files_own_age_in_minutes_and_stops_at_the_newest_f
     text = _script("sqlserver/mssql_backup_database.sh")
     assert 'retention_seconds="${RETENTION_SECONDS:-}"' in text
     assert 'age_test="-mmin +$(( retention_seconds / 60 ))"' in text
-    assert "${age_test} ! -newer '${newest_full}' -delete" in text
+    # `! -path` too (0.35.0): `! -newer` alone matches the newest full itself.
+    assert "${age_test} ! -newer '${newest_full}' ! -path '${newest_full}' -delete" in text
     # the day rule is the default it always was
     assert 'age_test="-mtime +${retention_days}"' in text
 
@@ -127,7 +128,7 @@ def test_sqlserver_says_what_its_window_removed_on_both_platforms():
     1.91). A file is counted once it is gone: `-delete -print`, and on Windows a file still there
     after Remove-Item is not counted."""
     linux = _script("sqlserver/mssql_backup_database.sh")
-    assert "! -newer '${newest_full}' -delete -print 2>/dev/null | wc -l" in linux
+    assert "! -newer '${newest_full}' ! -path '${newest_full}' -delete -print 2>/dev/null | wc -l" in linux
     assert "retention: %s removed %s file(s) past the window (%s), below its newest full %s" in linux
     windows = _script("sqlserver/mssql_backup_database.ps1")
     assert "if (-not (Test-Path -LiteralPath $file.FullName)) { $removed++ }" in windows

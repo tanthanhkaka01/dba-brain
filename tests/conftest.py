@@ -1069,3 +1069,17 @@ def patch_sql_runner(monkeypatch, name: str, value) -> None:
             monkeypatch.setattr(module, name, value)
             hit = True
     assert hit, f"no SQL-task runner module binds {name!r}"
+
+
+@pytest.fixture(autouse=True)
+def _no_lockdown_unless_the_test_is_about_it(request, monkeypatch):
+    """A lockdown (1.220) is read from the runtime store, and an unreadable store counts as ON - the
+    safe answer in production, where an unknown state must never allow a delete. A test has no store
+    to read, so every destructive path would be refused; this answers "off" instead. A test about the
+    lockdown itself is marked ``real_lockdown`` and sees the real function."""
+    if request.node.get_closest_marker("real_lockdown"):
+        return
+    from dbabrain.db import lockdown_store
+
+    monkeypatch.setattr(lockdown_store, "lockdown_on", lambda app_config=None: False)
+    monkeypatch.setattr(lockdown_store, "refuse_if_locked", lambda app_config, action: None)

@@ -39,6 +39,10 @@ def _utc(modified: str) -> str | None:
         return None
 
 
+#: Marks a WAL segment name line in the listing's output (1.250).
+WAL_SEGMENT = "__wal_segment__"
+
+
 def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
     host = parse_host(request.get("host"))
     directory = str(request.get("path") or "").strip()
@@ -67,18 +71,30 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
         f"[ \"$d\" = {root}/wal ] || [ -n \"$(find \"$d\" -type f -print -quit 2>/dev/null)\" ] "
         f"|| continue; "
         f"if [ -f \"$d/backup_manifest\" ]; then m=\"$d/backup_manifest\"; else m=\"$d\"; fi; "
-        f"printf '%s|%s|%s\\n' \"$d\" \"$(stat -c %s \"$d\")\" \"$(stat -c %y \"$m\")\"; "
+        # The WAL segment the base backup starts from (1.250): `START WAL LOCATION: 0/2000028 (file
+        # 000000010000000000000002)` in its backup_label - empty for wal/ and an older layout.
+        f"s=$(sed -n 's/^START WAL LOCATION: .*(file \\([0-9A-F]*\\)).*/\\1/p' \"$d/backup_label\" 2>/dev/null | head -1); "
+        f"printf '%s|%s|%s|%s\\n' \"$d\" \"$(stat -c %s \"$d\")\" \"$(stat -c %y \"$m\")\" \"$s\"; "
         f"done 2>/dev/null; printf '{HOST_NOW}|%s\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\""
     )
+    if request.get("wal_segments"):
+        # Every segment name under wal/, one per line, marked: what a chain's continuity is read
+        # from. Asked for, not always sent - a cluster archives thousands.
+        command += (f"; for f in {root}/wal/*; do n=${{f##*/}}; case \"$n\" in "
+                    f"????????????????????????) printf '{WAL_SEGMENT}|%s\\n' \"$n\";; esac; done 2>/dev/null")
     result = run(host, command, timeout=int(request.get("timeout_seconds") or 300))
 
     lines = [line.strip() for line in result["stdout"].splitlines()]
     host_now = next((line.split("|", 1)[1] for line in lines if line.startswith(HOST_NOW + "|")), "")
     rows: list[dict[str, Any]] = []
+    segments: list[str] = []
     for line in lines:
         if not line or "|" not in line or line.startswith(HOST_NOW + "|"):
             continue
-        path, size, modified = (line.split("|", 2) + ["", ""])[:3]
+        if line.startswith(WAL_SEGMENT + "|"):
+            segments.append(line.split("|", 1)[1].strip().upper())
+            continue
+        path, size, modified, start_wal = (line.split("|", 3) + ["", "", ""])[:4]
         name = path.rsplit("/", 1)[-1]
         if name == "wal":
             kind = LOG
@@ -88,9 +104,16 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
             kind = DIFF
         else:
             continue
+        extra: dict[str, Any] = {}
+        if kind != LOG and start_wal.strip():
+            extra["start_wal"] = start_wal.strip().upper()
         rows.append(row(path=path, kind=kind, database=None,
                         size=int(size) if size.isdigit() else None,
                         finished_at=modified.strip() or None,
                         finished_at_utc=_utc(modified),
-                        age=age_seconds(modified, host_now)))
+                        age=age_seconds(modified, host_now), **extra))
+    if request.get("wal_segments"):
+        for item in rows:
+            if item["kind"] == LOG:
+                item["wal_segments"] = sorted(segments)
     return rows

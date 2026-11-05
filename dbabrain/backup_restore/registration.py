@@ -40,6 +40,7 @@ from dbabrain.lib import field_names
 from dbabrain.lib import integrity as restore_integrity
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib import backup_scope
+from dbabrain.lib import cleanup_retention
 from dbabrain.lib import data_sources
 from dbabrain.lib import secret_text
 from dbabrain.lib.json_io import atomic_write_text
@@ -404,6 +405,21 @@ def add_backup(request: dict[str, Any] | None = None, *,
                 backup_scope.parse_backup_databases(job, label=name, db_type=db_type), label=name)
         except backup_scope.BackupScopeError as exc:
             raise RegistrationError(str(exc)) from None
+        # A dependent type kept past its base is refused when it is written (1.227, decision D-R3):
+        # `LOG: 14 days, FULL: 7 days` reads as 14 days of point-in-time and gives 7.
+        if isinstance(job, dict) and isinstance(job.get("cleanup_retention"), dict):
+            why = cleanup_retention.registrar_refusal(job, context=name, engine=db_type)
+            if why:
+                raise RegistrationError(why)
+        # Stated twice for one folder is refused when it is written (1.232).
+        if isinstance(job, dict):
+            disagreement = cleanup_retention.job_entry_disagreement(job, entry)
+            if disagreement:
+                raise RegistrationError(f"{name}: {disagreement}")
+    if isinstance(entry.get("cleanup_retention"), dict):
+        why = cleanup_retention.registrar_refusal(entry, context=backup_id, engine=db_type)
+        if why:
+            raise RegistrationError(why)
 
     written: list[str] = []
     for name, value in values.items():
@@ -498,6 +514,12 @@ def add_restore(request: dict[str, Any] | None = None, *,
             f"{restore_id} needs cleanup_retention, in SECONDS - how long the target keeps what "
             "this entry staged for restoring. It is mandatory because an absent value reads "
             "exactly like a considered one; 86400 (a day) covers the next drill.")
+    if isinstance(payload.get("cleanup_retention"), dict):
+        why = cleanup_retention.registrar_refusal(
+            payload, context=restore_id,
+            engine=str(payload.get("db_type") or ("sqlserver" if not is_script_restore(payload) else "")))
+        if why:
+            raise RegistrationError(why)
     # Required for the same reason, and for one measured on 2026-09-14: an entry registered
     # without a window restored a 183 GB database back to back for half an hour at a time,
     # because "no window" means due on every pass of APP-BACKUP-RESTORE and that runs every 300
@@ -532,7 +554,8 @@ def add_restore(request: dict[str, Any] | None = None, *,
     if given is not None and not isinstance(given, dict):
         raise RegistrationError(f"{restore_id}: integrity must be an object, e.g. "
                                 f'{{"copy_max_retry": {restore_integrity.DEFAULT_COPY_MAX_RETRY}}}.')
-    payload["integrity"] = {**restore_integrity.stated_restore_integrity(), **(given or {})}
+    # A new entry refuses a file no backup catalogued unless it says otherwise (1.249).
+    payload["integrity"] = {**restore_integrity.new_restore_integrity(), **(given or {})}
     # What the entry does (1.216): as given - `copy_only` copies from server_id to the target and
     # restores nothing - else stated as `restore`, what an entry without the field always did.
     payload["action"] = payload.get("action") if payload.get("action") is not None else restore_integrity.STATED_ACTION

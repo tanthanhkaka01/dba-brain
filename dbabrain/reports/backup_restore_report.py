@@ -17,6 +17,7 @@ rebuilt for a past day is not written from today's rows.
 
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 
 from dbabrain.lib import page_banner, page_kit
@@ -39,7 +40,8 @@ def report_css() -> str:
     return text[start:text.index("__BANNER_CSS__", start)].strip("\n")
 
 
-def render_page(*, files: dict, snapshot_date: str, report_dir: str | Path | None = None) -> str:
+def render_page(*, files: dict, snapshot_date: str, report_dir: str | Path | None = None,
+                recoverability: str = "") -> str:
     """The page, its rows baked in (one JSON; the fleet's tables are small next to a server's series)."""
     html = TEMPLATE_HTML.read_text(encoding="utf-8")
     replacements = {
@@ -54,12 +56,64 @@ def render_page(*, files: dict, snapshot_date: str, report_dir: str | Path | Non
         "__SNAPSHOT_DATE__": snapshot_date,
         "__UTC_OFFSET_MINUTES__": str(offset_minutes()),
         "__UTC_OFFSET_LABEL__": format_offset(offset_minutes()),
+        "__RECOVERABILITY__": recoverability,
         "__FILES__": json_for_html(files, separators=(",", ":")),
         "__BACKUP_FILES_JS__": BACKUP_FILES_JS.read_text(encoding="utf-8"),
     }
     for key, value in replacements.items():
         html = html.replace(key, value)
     return page_kit.inline(html)
+
+
+def _utc(value) -> str:
+    text = str(value or "").strip()
+    return escape(text[:16].replace("T", " ") + " UTC") if text else "-"
+
+
+def render_recoverability(catalog, *, now=None) -> str:
+    """The *Recoverability* section (0.35.0, 1.248 / 1.252 / 1.253): each restore drill by its tier -
+    last success, the 7- and 30-day success rates, OK / OVERDUE / NEVER against the tier's deadline -
+    and each server and database's coverage, with what is missing named. From the catalog alone."""
+    from datetime import datetime, timedelta, timezone
+
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    drills = backup_catalog_sections.build_drills(catalog.drill_runs(since=since), now=now)
+    coverage = backup_catalog_sections.build_coverage(catalog.coverage())
+    retention = backup_catalog_sections.build_retention(catalog.retention_by_entry())
+    drill_rows = "".join(
+        f"<tr><td>{escape(d['restore_id'])}</td><td>{escape(d['tier'] or '-')}</td>"
+        f"<td class='st-{escape(d['state'])}'>{escape(d['state'])}</td><td>{_utc(d['last_success'])}</td>"
+        f"<td>{_utc(d['last_run'])} ({escape(d['last_phase'] or '')})</td>"
+        f"<td>{d['ok_7']} / {d['runs_7']}</td><td>{d['ok_30']} / {d['runs_30']}</td>"
+        f"<td>{escape(d['source'] or '')} &rarr; {escape(d['target'] or '')}</td></tr>"
+        for d in drills) or "<tr><td colspan='8'>No restore drill in the last 30 days.</td></tr>"
+    cover_rows = "".join(
+        f"<tr><td>{escape(c['server_id'])}</td><td>{escape(c['database_name'] or '-')}</td>"
+        f"<td class='st-{escape(c['status'])}'>{escape(c['status'])}</td><td>{escape(', '.join(c['levels']) or '-')}</td>"
+        f"<td>{c['offloaded']} of {c['files']}</td><td>{_utc(c['last_restored'])}</td>"
+        f"<td>{escape('; '.join(c['missing']) or '-')}</td></tr>"
+        for c in coverage) or "<tr><td colspan='7'>The catalog holds no backup yet.</td></tr>"
+    reach_rows = "".join(
+        f"<tr><td>{escape(str(r['backupId']))}</td><td>{escape(str(r['server']))}</td><td>{escape(str(r['engine']))}</td>"
+        f"<td>{escape(r['windows'])}</td><td>{escape(r['reach'])}</td><td>{_utc(r['since'])}</td></tr>"
+        for r in retention) or "<tr><td colspan='6'>No backup run has recorded its retention yet.</td></tr>"
+    return (
+        "<section class='recover'><h2>Recoverability</h2>"
+        "<p class='subtitle'>Each drill against its tier's deadline (daily 26 h, weekly 7.5 days, monthly 32 "
+        "days); each database against what a restore needs: a full, log or WAL backups, a copy off the host, "
+        "a drill.</p>"
+        "<table><thead><tr><th>Drill</th><th>Tier</th><th>State</th><th>Last success</th><th>Last run</th>"
+        "<th>OK, 7 days</th><th>OK, 30 days</th><th>From &rarr; onto</th></tr></thead>"
+        f"<tbody>{drill_rows}</tbody></table>"
+        "<table><thead><tr><th>Server</th><th>Database</th><th>Coverage</th><th>Levels</th>"
+        "<th>Copied off host</th><th>Last restored</th><th>Missing</th></tr></thead>"
+        f"<tbody>{cover_rows}</tbody></table>"
+        "<p class='subtitle'>Each backup entry's retention, per file type, and how far back point-in-time "
+        "recovery reaches - the shorter of the base and the log window - as its newest run recorded them.</p>"
+        "<table><thead><tr><th>Backup entry</th><th>Server</th><th>Engine</th><th>Retention</th>"
+        "<th>Point-in-time reach</th><th>As of</th></tr></thead>"
+        f"<tbody>{reach_rows}</tbody></table></section>")
 
 
 def build_page(*, sqlite_path, output_dir: str | Path, stamp: str, snapshot_date: str) -> str:
@@ -75,11 +129,12 @@ def build_page(*, sqlite_path, output_dir: str | Path, stamp: str, snapshot_date
             server_id: (catalog.server_backup_files(server_id, limit=backup_catalog_sections.ROW_LIMIT),
                         catalog.server_restore_files(server_id, limit=backup_catalog_sections.ROW_LIMIT))
             for server_id in catalog.catalogued_servers()}
+        recoverability = render_recoverability(catalog)
     except Exception:  # noqa: BLE001 - the other pages are still built; this one is not offered
         return ""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     html = render_page(files=backup_catalog_sections.build_fleet(per_server), snapshot_date=snapshot_date,
-                       report_dir=out_dir)
+                       report_dir=out_dir, recoverability=recoverability)
     _write(out_dir, PAGE_NAME, html, stamp=stamp, archive_only=False)
     return str(out_dir / PAGE_NAME)

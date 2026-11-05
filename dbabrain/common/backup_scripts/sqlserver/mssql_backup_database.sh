@@ -34,6 +34,8 @@
 #      BACKUP_ENCRYPTION_PASSWORD (optional, from env_secrets; absent = unencrypted),
 #      BACKUP_CERT_NAME (default dbabrain_backup_cert), RETENTION_DAYS (default 14),
 #      RETENTION_SECONDS (optional; a window under a day, which wins over RETENTION_DAYS).
+#      RETENTION_FULL_SECONDS, RETENTION_DIFF_SECONDS, RETENTION_LOG_SECONDS (optional, all three or
+#      none; seconds or keep): each folder by its own window, instead of the one above (0.35.0).
 # Exit: 0 on success, non-zero on failure. Prints RESULT=ok only on a completed run.
 # Receipt: one `FILE` line per backup file written (0.34.0) - its sha256 taken where it lies, its
 # size, and RESTORE VERIFYONLY's verdict - which dbabrain records in its backup catalog:
@@ -87,6 +89,24 @@ if [ -n "$retention_seconds" ]; then
         || die "RETENTION_SECONDS must be at least 60: '${retention_seconds}'."
     age_test="-mmin +$(( retention_seconds / 60 ))"
     retention_window="${retention_seconds}s"
+fi
+# Per file type (0.35.0, 1.228): FULL, DIFF and LOG each by its own window. One window over the
+# three meant the LOG job - every few minutes, often the shortest - pruned the FULLs and DIFFs its
+# sibling jobs meant to keep. All three or none: a folder with no window of its own is not guessed.
+per_type=""
+for kind in FULL DIFF LOG; do
+    eval "window=\${RETENTION_${kind}_SECONDS:-}"
+    [ -n "$window" ] && per_type=1
+done
+if [ -n "$per_type" ]; then
+    for kind in FULL DIFF LOG; do
+        eval "window=\${RETENTION_${kind}_SECONDS:-}"
+        case "$window" in
+            keep) ;;
+            ''|*[!0-9]*) die "RETENTION_${kind}_SECONDS must be seconds (at least 60) or keep: '${window}'." ;;
+            *) [ "$window" -ge 60 ] || die "RETENTION_${kind}_SECONDS must be at least 60, or keep: '${window}'." ;;
+        esac
+    done
 fi
 
 # $DOCKER_CONTAINER is optional since 0.21.0: set it for an instance inside a container, leave it
@@ -279,8 +299,8 @@ emit_file() {
     # Encrypted exactly when this script wrote it WITH ENCRYPTION - when a passphrase was given.
     f_encrypted=no
     [ -n "$encrypt_clause" ] && f_encrypted=yes
-    printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
-        "$1" "$2" "${f_size:-}" "$f_sha" "$4" "$f_encrypted" "$(host_path_of "$3")" "$container" "$3"
+    printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=%s\tstart=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
+        "$1" "$2" "${f_size:-}" "$f_sha" "$4" "$f_encrypted" "${5:-}" "$(host_path_of "$3")" "$container" "$3"
 }
 
 # --------------------------------------------------------------------------- #
@@ -308,6 +328,8 @@ for db in $databases; do
     fi
 
     printf -- '-- %s %s -> %s\n' "$db" "$level" "$target_file"
+    # When this file's backup began (1.254), UTC: the run's start is the first database's, not this one's.
+    started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if run_sql "$statement"; then
         # CHECKSUM on the way in is only half of it: VERIFYONLY re-reads what landed on disk,
         # which is the difference between "the command returned" and "the file is restorable".
@@ -318,7 +340,7 @@ for db in $databases; do
             failed=1
             verify=failed
         fi
-        emit_file "$db" "$sub" "$target_file" "$verify"
+        emit_file "$db" "$sub" "$target_file" "$verify" "$started"
     else
         printf 'ERROR backup failed: %s (%s)\n' "$db" "$level" >&2
         failed=1
@@ -339,11 +361,35 @@ for db in $databases; do
     if [ -z "$newest_full" ]; then
         continue   # nothing to anchor retention to; keep everything
     fi
+    # >>> retention per type (1.228; tests/test_sqlserver_folders_are_pruned_by_their_own_window.py runs this block)
+    if [ -n "$per_type" ]; then
+        for kind in FULL DIFF LOG; do
+            eval "window=\${RETENTION_${kind}_SECONDS}"
+            if [ "$window" = keep ]; then
+                printf 'retention: %s %s kept (keep), below its newest full %s\n' "$db" "$kind" "${newest_full##*/}"
+                continue
+            fi
+            pattern='*.bak'
+            [ "$kind" = LOG ] && pattern='*.trn'
+            # The newest full itself is never the cut's, whatever its age. `! -newer` does not hold it - a
+            # file is not newer than itself - so `! -path` does.
+            removed="$(exec_here sh -c "
+                find '${db_dir}/${kind}' -type f -name '${pattern}' -mmin +$(( window / 60 )) \
+                     ! -newer '${newest_full}' ! -path '${newest_full}' -delete -print 2>/dev/null | wc -l
+            " || true)"
+            printf 'retention: %s %s removed %s file(s) past its window (%ss), below its newest full %s\n' \
+                "$db" "$kind" "$(printf '%s' "${removed:-0}" | tr -d '[:space:]')" "$window" "${newest_full##*/}"
+        done
+        continue
+    fi
+    # <<< retention per type
+    # `! -path` (0.35.0): `! -newer` matches the newest full itself, so a database whose backups
+    # stopped for longer than the window lost its last FULL - the one thing this rule keeps.
     # -delete before -print: find names a file only once it is gone, so the run says what the
     # window removed - PostgreSQL and Oracle always did, and this said nothing (0.27.0 item 1.91).
     removed="$(exec_here sh -c "
         find '${db_dir}' -type f \\( -name '*.bak' -o -name '*.trn' \\) \
-             ${age_test} ! -newer '${newest_full}' -delete -print 2>/dev/null | wc -l
+             ${age_test} ! -newer '${newest_full}' ! -path '${newest_full}' -delete -print 2>/dev/null | wc -l
     " || true)"
     printf 'retention: %s removed %s file(s) past the window (%s), below its newest full %s\n' \
         "$db" "$(printf '%s' "${removed:-0}" | tr -d '[:space:]')" "$retention_window" \

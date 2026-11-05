@@ -381,7 +381,7 @@ def test_a_pair_the_caller_worked_out_is_recorded_as_given():
 
 def test_a_shorthand_never_rewrites_the_middle_of_a_longer_address():
     # Measured 2026-09-12: `168.1` chewed through `192.168.1.120`, an address no term named, and
-    # the page came out carrying `192.100.108.120` - a string belonging to nobody, invented by the
+    # the page came out carrying `192.77.31.120` - a string belonging to nobody, invented by the
     # scrub and then reported by the certifier as a leak. A fragment is a machine only alone.
     mapping = pseudonym.Mapping({})
     mapping.add_pair("168.1", "0.113", bounded=True)
@@ -718,3 +718,53 @@ def test_a_client_address_in_a_collector_message_is_harvested_as_an_address():
 
     assert terms.get("198.51.100.77") == "address"
     assert terms.get("APPSRV01") == "host"
+
+
+# --------------------------------------------------------------------------- #
+# 0.35.0, 1.271 - a measurement is not a machine, and a fake must not be a real shorthand
+# --------------------------------------------------------------------------- #
+def test_a_burn_rate_is_not_rewritten_as_a_machine(tmp_path, monkeypatch):
+    """2026-11-02: the SLA page's `3d 0.2x` came out as `3d 77.31x`. `0.2` was the shorthand of an
+    address with a third octet of 0, and its replacement was a fake's shorthand that is also a real
+    machine's - the export then refused the page as naming that machine."""
+    from dbabrain.common import identifier_scan, showcase
+
+    monkeypatch.setattr(identifier_scan, "collect_identifiers",
+                        lambda _=None: {"10.20.0.2": "address", "10.20.77.31": "address"})
+    mapping = showcase.build_mapping(data_dir=tmp_path)
+
+    assert mapping.apply("3d 0.2x") == "3d 0.2x"
+    real = {short for term in ("10.20.0.2", "10.20.77.31") for short in identifier_scan.address_shorthands(term)}
+    rewritten = mapping.apply("cred_77.31_x and sqlserver_77-31_MSSQL")
+    assert not any(f"_{short}_" in rewritten for short in real), rewritten
+
+
+def test_a_shorthand_with_a_unit_after_it_is_a_number_and_with_a_name_after_it_a_machine():
+    """The scan and the scrub agree: touching only on the right, a short unit is a measurement."""
+    from dbabrain.common import identifier_scan
+
+    mapping = pseudonym.Mapping({})
+    mapping.add_pair("0.2", "0.113", bounded=True)
+    for measurement in ("3d 0.2x", "took 0.2s", "0.2ms", "0.2GB"):
+        assert mapping.apply(measurement) == measurement
+    assert mapping.apply("0.2_MSSQLSERVER") == "0.113_MSSQLSERVER"
+    assert mapping.apply("sqlserver_0.2_x") == "sqlserver_0.113_x"
+    pattern = identifier_scan._patterns({"0.2": ("10.20.0.2", "address", identifier_scan.LIKELY)})
+    assert not any(p.search("3d 0.2x") for p, _fold in pattern)
+    assert any(p.search("0.2_MSSQLSERVER") for p, _fold in pattern)
+
+
+def test_an_instance_joined_to_its_database_in_a_backup_name_is_found_and_rewritten(tmp_path, monkeypatch):
+    """1.268: `SALES-SRV$SALESDW_SALES_LOG_...` - the instance is no whole word there, so neither the
+    scrub nor the checker saw it, and the 0.30.0 showcase shipped it."""
+    from dbabrain.common import identifier_scan, showcase
+
+    monkeypatch.setattr(identifier_scan, "collect_identifiers",
+                        lambda _=None: {"SALESDW": "inventory", "10.1.2.3": "address"})
+    mapping = showcase.build_mapping(data_dir=tmp_path)
+    name = r"D:\SQLBK\X$SALESDW\FORECAST\LOG\X$SALESDW_SALES_LOG_20261101.trn"
+    assert "SALESDW" not in mapping.apply(name)
+
+    searchable = identifier_scan._search_terms({"SALESDW": "inventory"})
+    assert any(p.search("X$SALESDW_SALES_LOG") for p, _fold in identifier_scan._patterns(searchable))
+    assert not any(p.search("SALESDW2_FORECAST") for p, _fold in identifier_scan._patterns(searchable))

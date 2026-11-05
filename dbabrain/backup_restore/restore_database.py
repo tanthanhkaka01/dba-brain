@@ -13,6 +13,7 @@ from dbabrain.backup_restore.config import (
     BackupRestoreConfig,
     DatabaseRestoreMapping,
     load_restore_config,
+    assert_target_is_allowed,
     validate_restore_target_is_not_source,
 )
 from dbabrain.backup_restore.copy_backup import open_ssh_connection, resolve_password_ref, share_login_request, store_share_logins
@@ -174,7 +175,10 @@ def _restore_step(level: str, candidate: RestoreCandidate, config: BackupRestore
     }
     if level == "full":
         # The entry's word, never assumed: without it a database ONLINE on the target is refused.
-        fields["overwrite_existing"] = bool(config.overwrite_existing)
+        # ... and never while a lockdown is on (1.220).
+        from dbabrain.db.lockdown_store import lockdown_on
+
+        fields["overwrite_existing"] = bool(config.overwrite_existing) and not lockdown_on()
         # The logical names are read on the server (RESTORE FILELISTONLY), as they always were;
         # only where the two files go is this app's to say.
         fields["move_files"] = {
@@ -201,6 +205,10 @@ def run_restore_database(
     restore_config = config or load_restore_config()
     app_config = dbabrain_config or load_config()
     validate_restore_target_is_not_source(restore_config)
+    # Never into a production instance the entry does not allow (1.223).
+    assert_target_is_allowed(restore_id=getattr(restore_config, "restore_id", ""),
+                             target_server_id=getattr(restore_config, "target_id", ""),
+                             allowed=bool(getattr(restore_config, "allow_production_target", False)))
     start_monotonic = time.monotonic()
     if ensure_credential:
         ensure_vm_share_credential(restore_config)
@@ -924,6 +932,10 @@ def run_restore_server(
     restore_config = config or load_restore_config()
     app_config = dbabrain_config or load_config()
     validate_restore_target_is_not_source(restore_config)
+    # Never into a production instance the entry does not allow (1.223).
+    assert_target_is_allowed(restore_id=getattr(restore_config, "restore_id", ""),
+                             target_server_id=getattr(restore_config, "target_id", ""),
+                             allowed=bool(getattr(restore_config, "allow_production_target", False)))
     start_monotonic = time.monotonic()
     _emit_restore_log(
         logger,

@@ -339,8 +339,10 @@ def collect_metrics(
         # A trial is of one version's files. With no version stated, an unknown version matches
         # every variant and the last one listed answers - for Oracle that is often the 8i file -
         # so the run would report on SQL the target will never be given.
+        # A host has no engine and no version: its OS scripts are not chosen by one (0.35.0 - a test
+        # run of a machine's disk was refused for a major_version nothing could state).
         unversioned = [target.target_id for target in targets
-                       if target.db_type and _target_major_version(target) is None]
+                       if target.db_type and target.db_type != "host" and _target_major_version(target) is None]
         if unversioned:
             raise errors.NotConfigured(
                 f"a test run needs the target's major_version in db_instances.json: "

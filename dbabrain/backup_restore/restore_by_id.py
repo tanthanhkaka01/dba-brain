@@ -39,6 +39,7 @@ from typing import Any
 
 from dbabrain.backup_restore.events import announce
 from dbabrain.transport import common_cli
+from dbabrain.lib import integrity as restore_integrity
 from dbabrain.lib import instance_bundle
 from dbabrain.lib import response
 from dbabrain.lib import sqlserver_certificate
@@ -325,6 +326,13 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
         logs = _list_backup_files({**scoped, "kinds": ["log"], "after": anchor})
         if point_in_time:
             logs = {**logs, "files": _logs_through(logs["files"], point_in_time)}
+        # The chain is held to its LSNs before anything is restored (1.250, gap G10): a missing log
+        # found at RESTORE LOG leaves the target half-restored, and found here it is named instead.
+        broken = restore_integrity.sqlserver_chain_break(
+            full["files"][0], diff["files"][0] if diff["files"] else None, logs["files"])
+        if broken:
+            raise RestoreByIdError(f"{job.restore_id}: {database}: the backup chain is broken - {broken}. "
+                                   "Nothing was restored.")
 
         # NORECOVERY on everything but the last step: a database recovered early cannot take the
         # rest of its chain, and the only fix is to start the whole restore again.
@@ -333,7 +341,8 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
             "db_type": "sqlserver", "database_name": database, "target": target,
             "backup_path": full["files"][0]["path"], "with_recovery": tail == "full",
             # The entry's word: a database ONLINE on the target is refused without it (G2.10).
-            "overwrite_existing": bool(job.overwrite_existing)}})
+            # Never over an ONLINE database while a lockdown is on (1.220): the step then refuses it.
+            "overwrite_existing": bool(job.overwrite_existing) and not _locked()}})
         if diff["files"]:
             steps.append({"op": "restore-diff", "request": {
                 "db_type": "sqlserver", "database_name": database, "target": target,
@@ -344,14 +353,22 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
                 "backup_paths": [f["path"] for f in logs["files"]], "with_recovery": True,
                 **({"stopat": point_in_time} if point_in_time else {})}})
 
+    # The consistency check too (1.251) unless the entry says `checkdb: false`.
     steps.append({"op": "verify-restore", "request": {
-        "db_type": "sqlserver", "database_names": databases, "target": target}})
+        "db_type": "sqlserver", "database_names": databases, "target": target,
+        "consistency": getattr(job, "checkdb", True)}})
     if _UNREADABLE:
         steps.append({"op": "warning", "warning": (
             f"{len(_UNREADABLE)} file(s) named like backups could not be read as backups and were "
             f"passed over - the restore used the newest chain it could read: "
             f"{', '.join(sorted(_UNREADABLE)[:5])}")})
     return steps
+
+
+def _locked() -> bool:
+    from dbabrain.db.lockdown_store import lockdown_on
+
+    return lockdown_on()
 
 
 def _plan_oracle(job: Any, secrets: dict[str, str], *, point_in_time: str,
@@ -376,7 +393,8 @@ def _plan_oracle(job: Any, secrets: dict[str, str], *, point_in_time: str,
             # one instance and wrong for a host holding two - and a check that answers for the
             # wrong instance under the right name is worse than no check.
             {"op": "verify-restore", "request": {"db_type": "oracle", "host": host,
-                                                 "oracle_sid": request["oracle_sid"]}}]
+                                                 "oracle_sid": request["oracle_sid"],
+                                                 "consistency": getattr(job, "checkdb", True)}}]
 
 
 def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
@@ -399,10 +417,20 @@ def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
     incr = _list_backup_files({**base, "kinds": ["diff"],
                               **({"before": point_in_time} if point_in_time else {})})
     full_name = posixpath.basename(full["files"][0]["path"].rstrip("/"))
-    chain = [full["files"][0]["path"]] + sorted(
-        (f["path"] for f in incr["files"]
-         if posixpath.basename(f["path"].rstrip("/")) > full_name),
-        key=lambda p: posixpath.basename(p.rstrip("/")))
+    members = [full["files"][0]] + sorted(
+        (f for f in incr["files"] if posixpath.basename(f["path"].rstrip("/")) > full_name),
+        key=lambda f: posixpath.basename(f["path"].rstrip("/")))
+    chain = [f["path"] for f in members]
+
+    # The WAL from the newest member's start, held to its names before anything is restored (1.250,
+    # gap G10): recovery to latest stops at the first missing segment and opens on an older state,
+    # and the drill would have reported done.
+    wal = _list_backup_files({**base, "kinds": ["log"], "wal_segments": True})
+    segments = [name for item in wal["files"] for name in item.get("wal_segments") or []]
+    broken = restore_integrity.postgresql_wal_break(
+        str(members[-1].get("start_wal") or ""), segments, to_latest=not point_in_time)
+    if broken:
+        raise RestoreByIdError(f"{job.restore_id}: the WAL chain is broken - {broken}. Nothing was restored.")
 
     data_directory = job.env.get("PGDATA", "/var/lib/postgresql/18/docker")
     staging = job.env.get("PG_STAGING", "/var/lib/postgresql/dbabrain_staging")
@@ -428,7 +456,7 @@ def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
         # PGPORT when the job states one: psql with no -p takes the default cluster, which is right
         # inside a container and wrong on a host running two.
         {"op": "verify-restore", "request": {
-            "db_type": "postgresql", "host": host,
+            "db_type": "postgresql", "host": host, "consistency": getattr(job, "checkdb", True),
             **({"port": job.env["PGPORT"]} if job.env.get("PGPORT") else {})}},
     ]
 
@@ -582,7 +610,8 @@ def _start_unstaged_run(catalog: Any, job: Any, *, point_in_time: str,
             point_in_time=point_in_time or "LATEST",
             # Nothing is copied here, so no copy is retried; the entry's own number is recorded as stated.
             copy_max_retry=integrity.copy_max_retry if integrity is not None else 0,
-            phase="restoring", node_host=socket.gethostname(), app_version=__version__)
+            phase="restoring", tier=getattr(job, "tier", None),
+            node_host=socket.gethostname(), app_version=__version__)
     except Exception:  # noqa: BLE001 - the record is not the restore (copy_gate.close_restore_runs)
         return None
 
@@ -644,6 +673,10 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
     host = _host_block(job, data_dir=data_dir, load_secrets=lambda: secrets or _load_secrets(
         data_dir=data_dir, key=key, key_base64=key_base64))
     assert_target_is_not_source(job, host, data_dir=data_dir)
+    from dbabrain.backup_restore.config import assert_target_is_allowed
+
+    assert_target_is_allowed(restore_id=job.restore_id, target_server_id=getattr(job, "target_server_id", ""),
+                             allowed=bool(getattr(job, "allow_production_target", False)), data_dir=data_dir)
 
     # Staging stays with the machinery that has been doing it nightly for months. Re-deriving it
     # here would repeat the mistake this module was written after: a primitive that turned out to

@@ -171,11 +171,15 @@ def _prune(request: dict) -> int:
         # command is also driven by hand against a directory nobody has configured - and unlike a
         # scheduled entry, "I did not say" cannot be answered by reading the config.
         retention = cleanup_retention.parse(request, context=operation, required=False)
+        # Per file type when the request's cleanup_retention names types (1.231).
+        per_type = cleanup_retention.parse_per_type(request, context=operation, required=False,
+                                                    engine=request.get("db_type"))
         plan = plan_retention(
             listed["files"],
             retention_days=DEFAULT_RETENTION_DAYS,
             retention_seconds=int(retention or 0),
             mode=request.get("mode") or "age",
+            windows=cleanup_retention.windows_by_level(per_type, engine=str(request.get("db_type") or "")),
         )
     except Exception as exc:  # noqa: BLE001
         return response.emit(response.fail(operation, str(exc)))

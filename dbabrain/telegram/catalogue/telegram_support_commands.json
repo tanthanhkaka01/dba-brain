@@ -1723,6 +1723,127 @@
         },
         {
             "node_role": "worker",
+            "command_id": 34,
+            "sort_order": 26.5,
+            "command_text": "spbot_lockdown",
+            "reply_default": 0,
+            "reply_text": "",
+            "reply_parse_mode": "",
+            "reply_with_name": 0,
+            "command_type": 50,
+            "is_group": 0,
+            "is_private": 1,
+            "need_file": 0,
+            "action_type": "cli_execute",
+            "_note": "The lockdown (0.35.0, 1.220): while it is on, no prune, no backup delete, no restore over an existing database and no free SQL write; backups and checks keep running. It engages by itself when the scrub finds three or more stored backup files changed or gone, or ransomware's marks in a backup folder. status reads it; on needs a reason and off a note - both are kept with who typed them - and both a typed yes. Private-only and clearance 50, like the other commands that change a live system: turning it off is what lets the cleanup delete again, so it is not something a group member should be able to do by accident.",
+            "action_config": {
+                "working_dir": "tools/dbabrain",
+                "command_argv": [
+                    "{python}",
+                    "-m",
+                    "dbabrain.control.cli",
+                    "lockdown",
+                    "{action}",
+                    "--config",
+                    "{config_path}",
+                    "--by",
+                    "telegram:{user_id}"
+                ],
+                "conditional_args": [
+                    {
+                        "parameter": "action",
+                        "equals": "on",
+                        "argv": [
+                            "--reason",
+                            "{text}",
+                            "--confirm",
+                            "{confirm}"
+                        ]
+                    },
+                    {
+                        "parameter": "action",
+                        "equals": "off",
+                        "argv": [
+                            "--note",
+                            "{text}",
+                            "--confirm",
+                            "{confirm}"
+                        ]
+                    }
+                ],
+                "requires_secret_key": true,
+                "timeout_seconds": 60,
+                "start_text": "Lockdown {action}...",
+                "success_text": "{stdout}",
+                "failure_text": "Lockdown {action} failed.\nExit code: {exit_code}\nError: {error_summary}",
+                "timeout_text": "Lockdown {action} timed out after {timeout_seconds}s.",
+                "parameters": [
+                    {
+                        "name": "action",
+                        "source": "arg",
+                        "position": 1,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "status|on|off",
+                        "validation_error": "action must be status, on or off",
+                        "prompt_text": "status / on / off?",
+                        "input_type": "choice",
+                        "allow_text_input": false,
+                        "options": [
+                            {
+                                "label": "status",
+                                "value": "status"
+                            },
+                            {
+                                "label": "on",
+                                "value": "on"
+                            },
+                            {
+                                "label": "off",
+                                "value": "off"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "text",
+                        "source": "arg",
+                        "position": 2,
+                        "required": true,
+                        "consume_rest": false,
+                        "validator": "regex",
+                        "pattern": "[^\"\\\\]{3,200}",
+                        "validation_error": "Say why in a few words (3 to 200 characters, no quotes or backslashes)",
+                        "prompt_text": "Why? Turning it on: what was seen. Turning it off: what was checked and found clean. Kept with your name.",
+                        "ask_when": {
+                            "parameter": "action",
+                            "in": [
+                                "on",
+                                "off"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "confirm",
+                        "source": "arg",
+                        "position": 3,
+                        "required": true,
+                        "validator": "regex",
+                        "pattern": "yes",
+                        "validation_error": "Type exactly: yes",
+                        "prompt_text": "On: no prune, delete, overwrite or free SQL write until it is turned off. Off: the cleanup may delete again. Type exactly: yes",
+                        "ask_when": {
+                            "parameter": "action",
+                            "in": [
+                                "on",
+                                "off"
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "node_role": "worker",
             "command_id": 27,
             "sort_order": 27.0,
             "command_text": "spbot_trace_session",

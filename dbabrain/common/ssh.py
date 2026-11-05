@@ -19,6 +19,7 @@ pattern-matching the message.
 
 from __future__ import annotations
 
+import os
 import socket
 from pathlib import Path
 
@@ -29,8 +30,15 @@ from dbabrain.lib.ssh_errors import (  # noqa: F401 - one definition, see that m
     SshAuthError,
     SshConnectError,
     SshError,
+    SshHostKeyChanged,
     SshTimeoutError,
 )
+
+#: The file SSH host keys are pinned in (0.35.0, 1.223 - the plan of 2026-10-29, A3.3; security.md
+#: 5a's "SSH host keys are not verified"). Unset, every key is accepted as before: a switch per hop,
+#: like `sqlserver_tls_verify`, so turning it on is the deployment's decision and not a surprise.
+#: Set, a host's key is written there the first time it is seen, and a different key refuses.
+KNOWN_HOSTS_ENV = "DBABRAIN_SSH_KNOWN_HOSTS"
 
 
 def open_ssh_client(
@@ -63,6 +71,14 @@ def open_ssh_client(
             "paramiko is required for SSH. Install it with: " + install_hint("ssh")
         ) from exc
     client = paramiko.SSHClient()
+    known_hosts = os.environ.get(KNOWN_HOSTS_ENV, "").strip()
+    if known_hosts:
+        pinned = Path(known_hosts)
+        pinned.parent.mkdir(parents=True, exist_ok=True)
+        pinned.touch(exist_ok=True)
+        # Loading the file also makes it the one AutoAddPolicy saves a first-seen key into; a key
+        # that differs from a loaded one is BadHostKeyException at connect, before any auth.
+        client.load_host_keys(str(pinned))
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     if announce:
         print(f"Connecting to {user}@{host}:{port} ...", flush=True)
@@ -113,6 +129,12 @@ def _connect_error(
     on 2026-08-23 against a container whose password was correct the whole time.
     """
     where = f"{user}@{host}:{port}"
+    bad_key = getattr(paramiko, "BadHostKeyException", None)
+    if bad_key is not None and isinstance(exc, bad_key):
+        return SshHostKeyChanged(
+            f"SSH host key for {where} is not the one pinned in ${KNOWN_HOSTS_ENV}: another machine "
+            f"answers at that address, or it was rebuilt. Nothing was sent. If the change is known, remove "
+            f"the host's line from that file and connect again. Detail: {exc}")
     auth_exception = getattr(paramiko, "AuthenticationException", None)
     if auth_exception is not None and isinstance(exc, auth_exception):
         if not offered_password and not offered_key:

@@ -262,7 +262,7 @@ def test_restore_add_writes_the_block_with_the_operators_values_and_the_rest_sta
     registration.add_restore(_restore(integrity={"copy_max_retry": 5}), data_dir=tmp_path, key=KEY)
     entry = json.loads((tmp_path / "restore_config.json").read_text(encoding="utf-8"))[
         "backup_restore"]["restores"][0]
-    assert entry["integrity"] == {**I.stated_restore_integrity(), "copy_max_retry": 5}
+    assert entry["integrity"] == {**I.new_restore_integrity(), "copy_max_retry": 5}
 
 
 def test_restore_add_without_a_block_still_writes_one(tmp_path):
@@ -271,6 +271,20 @@ def test_restore_add_without_a_block_still_writes_one(tmp_path):
         "backup_restore"]["restores"][0]
     assert entry["integrity"]["copy_max_retry"] == 3
     assert entry["action"] == "restore", "the action is stated too (1.216) - what an entry always did"
+
+
+def test_a_new_entry_refuses_a_file_no_backup_catalogued_and_an_upgraded_one_keeps_what_it_did(tmp_path):
+    """1.249, gap G9 *never drill an unverified file* - the operator, 2026-11-02: new entries only."""
+    registration.add_restore(_restore(), data_dir=tmp_path, key=KEY)
+    entry = json.loads((tmp_path / "restore_config.json").read_text(encoding="utf-8"))[
+        "backup_restore"]["restores"][0]
+    assert entry["integrity"]["uncatalogued"] == "refuse"
+    assert I.stated_restore_integrity()["uncatalogued"] == "compare_copy", \
+        "upgrade-config states what an existing entry always did, never changes it"
+    registration.add_restore(_restore(restore_id="SAYS_SO", integrity={"uncatalogued": "compare_copy"}),
+                             data_dir=tmp_path, key=KEY)
+    entries = json.loads((tmp_path / "restore_config.json").read_text(encoding="utf-8"))["backup_restore"]["restores"]
+    assert {e["restore_id"]: e["integrity"]["uncatalogued"] for e in entries}["SAYS_SO"] == "compare_copy"
 
 
 def test_restore_add_refuses_a_block_the_parser_refuses(tmp_path):

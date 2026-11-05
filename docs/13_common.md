@@ -443,6 +443,13 @@ exactly when a passphrase was given, PostgreSQL always `no`), and the answer's
 folder, database, `file_type` (the catalog's words), size, `sha256` (null when the script could not
 hash it - kept, never dropped), `engine_verify` (`passed` / `failed` / `not_run`) and its text,
 and `encrypted` (1 / 0, null when the line does not say - an older script is unknown, not "no").
+**`start=`** (0.35.0, 1.254) is when that file's backup began, UTC `YYYY-MM-DDTHH:MM:SSZ`, read
+into `backup_started_at` and kept in the catalog's `backup_files.backup_started_at`: the run's start
+is the first database's, and a run of twenty databases puts hours between the two. SQL Server stamps
+each `BACKUP` statement, PostgreSQL the `pg_basebackup` (again for a FULL taken after a refused
+incremental), Oracle the RMAN run that writes every piece; a WAL segment the server archived itself
+has none. Anything but a UTC stamp, and a line without one, is null - never the run's start, which
+for a WAL segment would be later than the truth.
 The hash is taken by the script on the host, inside the container when there is one, right after
 the engine verified the file:
 
@@ -2223,6 +2230,18 @@ This project writes an address three ways, and each hid from a different earlier
 All three are one machine. A scan that knows only the dotted form reports the tree clean while two
 thirds of it are still there. That is not a hypothetical: it is how `ORACLE_..._SYS` survived the
 first scrub, and how a `server_id` kept its address after its organisation half was replaced.
+
+Two more places a name hides, and the scan and the showcase scrub (`build-showcase`) read both the
+same way (0.35.0):
+
+- **The two-octet shorthand** (`2.248`) counts when a name touches it - a letter or `_` on the left,
+  or on the right `_` or a word of three letters or more. A shorter neighbour on the right is a unit:
+  `3d 0.2x`, `17.1s`, `4.5ms` are measurements (1.271 - a burn rate came out of the scrub as a
+  machine's shorthand). And a fake's shorthand can be a real machine's - fakes live in
+  `198.51.100.0/24`, which reads `100.N` - so where it would be, the scrub writes the whole fake.
+- **An instance joined to its database by `_`** in a backup file's name -
+  `<server>$<INSTANCE>_<DB>_LOG_...` - counts after `$` and before `_` (1.268: a showcase shipped
+  `$SALESDW_SALES`, a whole word nowhere).
 
 ### Three tiers, because the inventory contains ordinary English
 

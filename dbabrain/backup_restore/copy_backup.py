@@ -81,7 +81,7 @@ class _Gate:
                 action=restore_integrity.ACTION_COPY_ONLY if config.action == restore_integrity.ACTION_COPY_ONLY
                 else restore_integrity.ACTION_RESTORE, restore_id=config.restore_id, source_server_id=config.source_id,
                 target_server_id=config.target_id, target_folder=str(config.vm_import_unc),
-                copy_max_retry=self.integrity.copy_max_retry, phase="copying",
+                copy_max_retry=self.integrity.copy_max_retry, phase="copying", tier=getattr(config, "tier", None),
                 node_host=socket.gethostname(), app_version=__version__)
 
     def _item(self, *, relative: str, target_posix: str, source_display: str, stored: dict) -> "object":

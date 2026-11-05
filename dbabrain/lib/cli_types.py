@@ -181,6 +181,12 @@ BackupFileAnswer = TypedDict('BackupFileAnswer', {
     'finished_at': str | None,
     'finished_at_utc': str | None,
     'age_seconds': int | None,
+    'first_lsn': int | None,
+    'last_lsn': int | None,
+    'checkpoint_lsn': int | None,
+    'differential_base_lsn': int | None,
+    'start_wal': str | None,
+    'wal_segments': list[Any] | None,
 }, total=False)
 
 
@@ -1027,6 +1033,7 @@ BackupFilesRequest = TypedDict('BackupFilesRequest', {
     'delete': bool | None,
     'dry_run': bool | None,
     'timeout_seconds': int | None,
+    'wal_segments': bool | None,
 }, total=False)
 
 
@@ -1189,6 +1196,7 @@ VerifyRestoreRequest = TypedDict('VerifyRestoreRequest', {
     'database_name': str | None,
     'oracle_sid': str | None,
     'timeout_seconds': int | None,
+    'consistency': bool | None,
 }, total=False)
 
 

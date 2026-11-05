@@ -920,7 +920,8 @@
                 {
                     "file": "restore_config.json",
                     "path": "backup_restore.backups[].jobs[]",
-                    "note": "on the JOB, not on the entry: one backup id can have a full and a log job with different schedules and retentions"
+                    "note": "on the JOB until 0.35.0; since 1.232 the entry may state it once for the folder all its jobs write (backup_restore.backups[].cleanup_retention), a job's own still wins, and a job and its entry that disagree are a violation. upgrade-config retention-per-type folds them",
+                    "inherited_from": "backup_restore.backups[]"
                 },
                 {
                     "file": "restore_config.json",
@@ -936,24 +937,29 @@
             "fields": [
                 {
                     "field": "cleanup_retention",
-                    "type": "integer",
+                    "type": "integer | object",
                     "required": true,
                     "default": "none - stating it IS the point. 691200 (8 days) is the recommended value",
-                    "range_text": "0 and up, in SECONDS",
+                    "range_text": "0 and up, in SECONDS; or an object of windows per file type (0.35.0): {\"FULL\": 1209600, \"LOG\": 604800, \"CERT\": \"keep\", \"default\": 1209600}",
                     "constraint": {
                         "kind": "integer",
                         "nullable": false,
                         "min": 0,
                         "special_values": {
-                            "0": "no age gate"
+                            "0": "no age gate",
+                            "keep": "never removed by age (object form only)"
                         },
                         "satisfied_by": [
                             "target_retention_seconds",
                             "retention_days"
-                        ]
+                        ],
+                        "also_accepts": [
+                            "object"
+                        ],
+                        "object_checked_by": "dbabrain.lib.cleanup_retention.problems"
                     },
                     "measured_against": "each backup file's own age",
-                    "rule": "0 = no age gate, which is NOT 'keep everything': every file becomes a candidate and the chain rule alone decides (never the newest full, nor anything at or after it). Believing the opposite let a staging directory reach 16.7 GB",
+                    "rule": "0 = no age gate, which is NOT 'keep everything': every file becomes a candidate and the chain rule alone decides (never the newest full, nor anything at or after it). Believing the opposite let a staging directory reach 16.7 GB. The object form (1.227): keys are the engine's file types (lib.integrity.FILE_TYPES: FULL, DIFF, LOG, CERT / FULL_BASE, INCR_BASE, MANIFEST, WAL / RMAN_L0, RMAN_L1, ARCHIVELOG, CONTROLFILE, SPFILE) plus default; a type the engine never writes is refused; each value is seconds or \"keep\"; a CERT it does not name is kept; a DIFF/LOG/INCR/WAL/ARCHIVELOG kept longer than its base is refused by the registrars (it restores nothing once the base is gone). Until each engine prunes per type, a reader that applies one number gets the longest window stated",
                     "purpose": "How long a directory of backups keeps them. A backup job prunes its own output; a restore entry prunes the copies it staged. On a backup job the window is applied by the job's script the way its engine does it - file age below the newest full (SQL Server), whole chains and pg_archivecleanup (PostgreSQL), RMAN (Oracle) - and a window under a day reaches the script exactly, as RETENTION_SECONDS: RMAN's own recovery window is whole days, so Oracle then keeps a one-day policy and removes what is older than the window after each successful level 0."
                 },
                 {
@@ -1242,7 +1248,7 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 27,
+            "field_count": 28,
             "required_field_count": 24,
             "fields": [
                 {
@@ -1656,6 +1662,21 @@
                     "measured_against": "not a time value",
                     "purpose": "Why this record is as it is.",
                     "rule": "English, like every other note field: these are read back through Telegram"
+                },
+                {
+                    "field": "scrub_files_per_run",
+                    "type": "integer",
+                    "required": false,
+                    "default": "20",
+                    "range_text": "0 to 1000",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0,
+                        "max": 1000
+                    },
+                    "measured_against": "files",
+                    "purpose": "How many of the entry's older files each backup run re-hashes where they lie, checked longest ago first (0.35.0, 1.218): ransomware encrypts last week's backups, not tonight's. A file changed or gone makes the run's alert CRITICAL and names it; the backup itself stands. 0 is off."
                 }
             ]
         },
@@ -1842,7 +1863,7 @@
             "legacy_fields": {
                 "databases": "database_mappings"
             },
-            "field_count": 22,
+            "field_count": 24,
             "required_field_count": 4,
             "fields": [
                 {
@@ -2019,6 +2040,26 @@
                     "rule": "Off only where the check cannot run or is not wanted - e.g. a target that cannot create the check's snapshot (Msg 1823 / 7928)"
                 },
                 {
+                    "field": "tier",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent: the drill has no tier",
+                    "range_text": "daily | weekly | monthly",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "daily",
+                            "weekly",
+                            "monthly"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How often this drill must succeed (0.35.0, 1.248). Recorded on each run; the reports call the drill OVERDUE past its tier's deadline - 26 hours, 7.5 days, 32 days. The schedule is the time_window's: monthly is from_day 1 to_day 1, the first Sunday from_day 1 to_day 7 with weekdays [7]."
+                },
+                {
                     "field": "overwrite_existing",
                     "type": "boolean",
                     "required": false,
@@ -2031,6 +2072,20 @@
                     "measured_against": "not a time value",
                     "purpose": "SQL Server: allow a full restore over a database that is ONLINE on the target. Without it such a restore is refused before anything runs - REPLACE overwrites the database, users and all (0.26.0, owner decision G2.10). A drill that runs again over its own last restore states true.",
                     "rule": "Only ONLINE is refused; a database RESTORING from an earlier run, or absent, is restored as before"
+                },
+                {
+                    "field": "allow_production_target",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether this entry may restore into an instance db_instances.json calls production (environment prod / production). Without it such a target is refused before anything is copied or restored (1.223).",
+                    "rule": "Only on an entry whose purpose is to restore onto production - a real recovery, never a drill"
                 },
                 {
                     "field": "restore_all_databases",
@@ -2263,7 +2318,7 @@
                         "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "rule": "compare_copy: a file the catalog has no row for is still hashed before and after the copy, with nothing to hold the source to; refuse: it is not used (uncatalogued_refused)",
+                    "rule": "compare_copy: a file the catalog has no row for is still hashed before and after the copy, with nothing to hold the source to; refuse: it is not used (uncatalogued_refused); restore-add writes refuse for a new entry (0.35.0), upgrade-config keeps compare_copy for an existing one",
                     "purpose": "What a file no dbabrain backup recorded is - every backup taken before 0.34.0, or by another tool."
                 },
                 {
@@ -10725,7 +10780,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 7,
+            "field_count": 13,
             "required_field_count": 0,
             "fields": [
                 {
@@ -10828,6 +10883,93 @@
                     "measured_against": "the clock of the machine that stamped finished_at",
                     "purpose": "How old the backup was when it was listed, in seconds, with both instants read off one clock: the listing asks the same machine what time it is there (GETDATE() for SQL Server, the shell RMAN ran in for Oracle, the host's date for PostgreSQL). Retention uses it, so the zone this node shows never enters the judgement.",
                     "rule": "null when either instant could not be read: an unknown age is not an old one. Added in 0.26.0 - before it the cutoff was this node's wall clock, eight hours off a UTC host from a node at +08"
+                },
+                {
+                    "field": "first_lsn",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "a SQL Server log sequence number",
+                    "purpose": "The piece's FirstLSN: where it begins in the log sequence.",
+                    "rule": "SQL Server only, from RESTORE HEADERONLY; 0 when the header did not give it - not judged"
+                },
+                {
+                    "field": "last_lsn",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "a SQL Server log sequence number",
+                    "purpose": "The piece's LastLSN: where it ends - the next log must begin exactly here.",
+                    "rule": "SQL Server only, from RESTORE HEADERONLY; 0 when the header did not give it - not judged"
+                },
+                {
+                    "field": "checkpoint_lsn",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "a SQL Server log sequence number",
+                    "purpose": "The piece's CheckpointLSN (0.35.0): a DIFF names its FULL by it.",
+                    "rule": "SQL Server only, from RESTORE HEADERONLY; 0 when the header did not give it - not judged"
+                },
+                {
+                    "field": "differential_base_lsn",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "a SQL Server log sequence number",
+                    "purpose": "A DIFF's DifferentialBaseLSN (0.35.0): the CheckpointLSN of the FULL it restores onto; a restore's chain is held to it before anything is restored (1.250).",
+                    "rule": "SQL Server only, from RESTORE HEADERONLY; 0 when the header did not give it - not judged"
+                },
+                {
+                    "field": "start_wal",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "24 hex digits",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "PostgreSQL base backup (0.35.0): the WAL segment it starts from - backup_label's START WAL LOCATION. A restore's WAL is held from here (1.250)."
+                },
+                {
+                    "field": "wal_segments",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "segment names",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "PostgreSQL wal/ row, asked with wal_segments (0.35.0): every 24-hex-digit segment name archived there, sorted; .partial and .history files are not segments."
                 }
             ]
         },
@@ -19612,7 +19754,7 @@
             "legacy_fields": {
                 "database": "database_name"
             },
-            "field_count": 14,
+            "field_count": 15,
             "required_field_count": 2,
             "fields": [
                 {
@@ -19806,6 +19948,19 @@
                     },
                     "measured_against": "seconds",
                     "purpose": "How long to wait."
+                },
+                {
+                    "field": "wal_segments",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "PostgreSQL (0.35.0, 1.250): answer every segment name under wal/ on the log row - what a restore's WAL continuity is read from. Off by default: a cluster archives thousands."
                 }
             ]
         },
@@ -21357,7 +21512,7 @@
                 "databases": "database_names",
                 "database": "database_name"
             },
-            "field_count": 9,
+            "field_count": 10,
             "required_field_count": 1,
             "fields": [
                 {
@@ -21484,6 +21639,19 @@
                     },
                     "measured_against": "seconds",
                     "purpose": "How long to wait."
+                },
+                {
+                    "field": "consistency",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Also run the engine's own consistency check (0.35.0, 1.251): DBCC CHECKDB on each SQL Server database, pg_amcheck --all on PostgreSQL, RMAN VALIDATE CHECK LOGICAL and v$database_block_corruption on Oracle. restore-by-id sets it from the entry's checkdb (default true)."
                 }
             ]
         },
@@ -28132,7 +28300,7 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 4,
+            "field_count": 5,
             "required_field_count": 2,
             "fields": [
                 {
@@ -28177,6 +28345,19 @@
                     "purpose": "What the site is, when the path does not say it."
                 },
                 {
+                    "field": "inherited_from",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent",
+                    "range_text": "a dotted path in the same file, e.g. backup_restore.backups[]",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The parent records that may state this field for their children (0.35.0, 1.232): a child at this site without it is not missing it when its parent states it - a backup entry's cleanup_retention, read by every job of the entry that states none."
+                },
+                {
                     "field": "packaged",
                     "type": "string",
                     "required": false,
@@ -28208,7 +28389,7 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 25,
+            "field_count": 26,
             "required_field_count": 1,
             "fields": [
                 {
@@ -28465,6 +28646,19 @@
                     "purpose": "Why also_accepts exists."
                 },
                 {
+                    "field": "object_checked_by",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent",
+                    "range_text": "a dotted name: dbabrain.lib.<module>.<function>",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "With also_accepts [\"object\"] on an integer field: the lib function that judges the object form's content and answers a list of problems (cleanup_retention per file type, 1.227)."
+                },
+                {
                     "field": "forbidden_in_config",
                     "type": "boolean",
                     "required": false,
@@ -28579,8 +28773,8 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 59,
-            "required_field_count": 59,
+            "field_count": 60,
+            "required_field_count": 60,
             "fields": [
                 {
                     "field": "enabled",
@@ -28611,17 +28805,33 @@
                 },
                 {
                     "field": "telegram_chat",
-                    "type": "string",
+                    "type": "string or array of strings",
                     "required": true,
                     "default": "\"ai_assist\"",
-                    "range_text": "text",
+                    "range_text": "a level, or a list of levels",
                     "constraint": {
                         "kind": "string",
                         "nullable": false,
-                        "allow_empty": true
+                        "allow_empty": true,
+                        "also_accepts": [
+                            "array"
+                        ]
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The notify level whose chat the assistant answers in: the active group in telegram_groups.json with this notify_level (or level_chat_map's entry), as every app's telegram_chat names its chat."
+                    "purpose": "The notify level - or a list of them - whose chats the assistant answers in: each the active group in telegram_groups.json with that notify_level (or level_chat_map's entry), as every app's telegram_chat names its chat. An empty list answers in no group (private chats only)."
+                },
+                {
+                    "field": "private_chat_enabled",
+                    "type": "boolean",
+                    "required": true,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Also answer the active users of users[] in their own private chat with the bot. There every message is addressed to the assistant (no @mention); anyone else's private chat is never read."
                 },
                 {
                     "field": "model",

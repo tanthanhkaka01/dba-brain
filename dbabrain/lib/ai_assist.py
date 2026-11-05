@@ -53,7 +53,7 @@ class AiAssistConfigError(errors.InvalidConfig):
 @dataclass(frozen=True)
 class FieldSpec:
     name: str
-    kind: str  # bool | str | str_list | int | int_or_null | number | number_or_null | enum
+    kind: str  # bool | str | str_list | level_or_levels | int | int_or_null | number | number_or_null | enum
     shipped: Any
     minimum: float | None = None
     maximum: float | None = None
@@ -69,9 +69,13 @@ def _f(name: str, kind: str, shipped: Any, purpose: str, *, minimum: float | Non
 SETTINGS_FIELDS: tuple[FieldSpec, ...] = (
     _f("enabled", "bool", False, "Whether the assistant answers at all; off, the job says not configured and skips."),
     _f("api_key_ref", "str", "", "The name of the Anthropic API key in the encrypted secret store; empty = not configured."),
-    _f("telegram_chat", "str", AI_ASSIST_LEVEL,
-       "The notify level whose chat the assistant answers in: the active group in telegram_groups.json "
-       "with this notify_level (or level_chat_map's entry), as every app's telegram_chat names its chat."),
+    _f("telegram_chat", "level_or_levels", AI_ASSIST_LEVEL,
+       "The notify level - or a list of them - whose chats the assistant answers in: each the active group "
+       "in telegram_groups.json with that notify_level (or level_chat_map's entry), as every app's "
+       "telegram_chat names its chat. An empty list answers in no group (private chats only)."),
+    _f("private_chat_enabled", "bool", False,
+       "Also answer the active users of users[] in their own private chat with the bot. There every message "
+       "is addressed to the assistant (no @mention); anyone else's private chat is never read."),
     _f("model", "str", "claude-sonnet-5-5", "The model asked. It must have a row in prices, or no limit could be held."),
     _f("effort", "enum", "medium", "output_config.effort, set so a model change does not change the spend.",
        choices=EFFORTS),
@@ -283,6 +287,30 @@ class AiAssistSettings:
                 return user
         return None
 
+    @property
+    def chat_levels(self) -> tuple[str, ...]:
+        """``telegram_chat`` as a list of levels, lower case, each once, in the order written."""
+        return chat_levels(self.values.get("telegram_chat"))
+
+    @property
+    def private_user_ids(self) -> tuple[str, ...]:
+        """The private chats the assistant reads: an active user's chat with the bot has the user's
+        id (Telegram's rule), so these are the only ones - nobody else's private chat is read."""
+        if not self.values.get("private_chat_enabled"):
+            return ()
+        return tuple(user.telegram_user_id for user in self.users if user.active)
+
+
+def chat_levels(value: Any) -> tuple[str, ...]:
+    """A ``telegram_chat`` value - one level or a list - as its levels, lower case, each once."""
+    items = [value] if isinstance(value, str) else list(value) if isinstance(value, list) else []
+    levels: list[str] = []
+    for item in items:
+        level = str(item or "").strip().lower()
+        if level and level not in levels:
+            levels.append(level)
+    return tuple(levels)
+
 
 def _check(spec: FieldSpec, value: Any, where: str) -> Any:
     kind = spec.kind
@@ -304,6 +332,14 @@ def _check(spec: FieldSpec, value: Any, where: str) -> Any:
     if kind == "str_list":
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise AiAssistConfigError(f"{where}{spec.name} must be a list of strings; got {value!r}.")
+        return [item.strip() for item in value if item.strip()]
+    if kind == "level_or_levels":
+        # One level, as every app's telegram_chat is, or several - the operator, 2026-11-04: the
+        # assistant answers in more than one group. Kept in the form it was written.
+        if isinstance(value, str):
+            return value.strip()
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise AiAssistConfigError(f"{where}{spec.name} must be a level or a list of levels; got {value!r}.")
         return [item.strip() for item in value if item.strip()]
     integer = kind.startswith("int")
     if isinstance(value, bool) or not isinstance(value, (int, float)) or (integer and not float(value).is_integer()):

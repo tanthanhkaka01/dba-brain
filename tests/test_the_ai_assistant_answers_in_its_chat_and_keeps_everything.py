@@ -409,7 +409,7 @@ def test_the_assistant_answers_in_the_chat_its_level_resolves_to_and_nowhere_els
                      "raw_json) VALUES (5, ?, '-999', 'supergroup', ?, 'in the sql chat', ?)",
                      (int(NOW.timestamp()), OPERATOR, json.dumps(raw)))
     answer = _run(root)
-    assert answer["chat_id"] == CHAT
+    assert answer["chat_ids"] == [CHAT]
     assert [row["chat_id"] for row in _rows(root, "SELECT chat_id FROM ai_requests")] == [CHAT]
 
 
@@ -441,3 +441,161 @@ def test_the_language_is_also_said_next_to_the_question(tmp_path):
     _run(root, model)
     question = model.calls[0]["messages"][-1]["content"][-1]["text"]
     assert "answer_language: the language of the question above" in question
+
+
+
+# --------------------------------------------------------------------------- #
+# One level or several, and the users' private chats (the operator, 2026-11-04: *telegram_chat sets
+# only one group - let it take one or many, and support private chat for the users switched on*)
+# --------------------------------------------------------------------------- #
+def _in_chat(root: Path, chat_id: str, message_id: int, user_id: str, text: str, *, chat_type: str) -> None:
+    raw = {"message_id": message_id, "date": int(NOW.timestamp()), "chat": {"id": int(chat_id), "type": chat_type},
+           "from": {"id": int(user_id), "first_name": "U" + user_id, "is_bot": False}, "text": text}
+    with sqlite3.connect(root / "store.sqlite") as conn:
+        conn.execute("INSERT INTO telegram_messages (message_id, message_date, chat_id, chat_type, user_id, text, "
+                     "raw_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (message_id, int(NOW.timestamp()), chat_id, chat_type, user_id, text, json.dumps(raw)))
+
+
+def test_the_assistant_answers_in_every_group_its_levels_resolve_to(tmp_path):
+    root = _root(tmp_path, telegram_chat=["ai_assist", "SQL", "ai_assist"])
+    _message(root, 1, OPERATOR, "in the assistant's chat?")
+    _in_chat(root, "-999", 5, OPERATOR, "in the sql chat?", chat_type="supergroup")
+    answer = _run(root)
+    assert answer["chat_ids"] == [CHAT, "-999"], "each level once, lower case, in the order written"
+    done = _rows(root, "SELECT chat_id FROM ai_requests WHERE status = 'done'")
+    assert sorted(row["chat_id"] for row in done) == ["-500", "-999"]
+    replies = _rows(root, "SELECT tlgchat_id FROM telegram_send_messages")
+    assert {row["tlgchat_id"] for row in replies} == {"-500", "-999"}, "each answer goes back to its own chat"
+
+
+def test_a_level_without_a_chat_is_named_and_the_others_still_answer(tmp_path):
+    root = _root(tmp_path, telegram_chat=["nobody_has_this", "ai_assist"])
+    _message(root, 1, OPERATOR, "still answered?")
+    answer = _run(root)
+    assert answer["levels_without_chat"] == ["nobody_has_this"]
+    assert answer["answered"] == 1
+
+
+def test_an_active_users_private_chat_is_answered_without_a_mention(tmp_path):
+    root = _root(tmp_path, require_mention=True, private_chat_enabled=True)
+    _in_chat(root, OPERATOR, 1, OPERATOR, "backup hôm nay ổn không?", chat_type="private")
+    _in_chat(root, OPERATOR, 2, OPERATOR, "/help", chat_type="private")
+    answer = _run(root)
+    assert answer["private_chats"] == 1 and answer["answered"] == 1
+    rows = _rows(root, "SELECT chat_id, status FROM ai_requests ORDER BY message_id")
+    assert [(row["chat_id"], row["status"]) for row in rows] == [(OPERATOR, "done"), (OPERATOR, "done")]
+    texts = [row["message_text"] for row in _rows(root, "SELECT message_text FROM telegram_send_messages")]
+    assert any("write a question here" in text for text in texts), "the help is the private chat's"
+
+
+def test_a_private_chat_is_not_read_while_private_chat_is_off(tmp_path):
+    root = _root(tmp_path)
+    _in_chat(root, OPERATOR, 1, OPERATOR, "hello?", chat_type="private")
+    model = Model()
+    answer = _run(root, model)
+    assert answer["read"] == 0 and answer["private_chats"] == 0 and model.calls == []
+
+
+def test_nobody_elses_private_chat_is_read(tmp_path):
+    """A user who is off, or a stranger, writing to the bot privately is the bot's business - the
+    assistant neither answers nor refuses nor keeps it."""
+    root = _root(tmp_path, private_chat_enabled=True)
+    _in_chat(root, "300", 1, "300", "hello?", chat_type="private")
+    _in_chat(root, "999", 2, "999", "hello?", chat_type="private")
+    model = Model()
+    answer = _run(root, model)
+    assert answer["read"] == 0 and model.calls == []
+    assert _rows(root, "SELECT * FROM ai_requests") == []
+    assert _rows(root, "SELECT * FROM telegram_send_messages") == []
+
+
+@pytest.mark.parametrize("held", ["waiting", "consumed", "step"])
+def test_an_answer_to_a_bot_command_never_reaches_the_model(tmp_path, held):
+    """A bot command asking for a value - a password, often - takes the user's next message. In a
+    private chat every message is the assistant's, so that one must be recognised and left alone."""
+    root = _root(tmp_path, private_chat_enabled=True)
+    _in_chat(root, OPERATOR, 10, OPERATOR, "S3cr3t!pass", chat_type="private")
+    telegram_message_id = _rows(root, "SELECT telegram_message_id FROM telegram_messages")[0]["telegram_message_id"]
+    with sqlite3.connect(root / "store.sqlite") as conn:
+        if held == "step":
+            conn.execute("INSERT INTO telegram_workflow_steps (run_key, chat_id, user_id, command_id, command_text, "
+                         "step_no, parameter_name, parameter_position, status, answer_telegram_message_id) "
+                         "VALUES ('r1', ?, ?, 1, '/spbot_x', 1, 'password', 1, 'answered', ?)",
+                         (OPERATOR, OPERATOR, telegram_message_id))
+        else:
+            conn.execute("INSERT INTO telegram_conversation_states (chat_id, user_id, command_id, command_text, "
+                         "state_key, status, wait_after_message_id, consumed_telegram_message_id) "
+                         "VALUES (?, ?, 1, '/spbot_x', 'password', ?, 9, ?)",
+                         (OPERATOR, OPERATOR, "waiting" if held == "waiting" else "done",
+                          None if held == "waiting" else telegram_message_id))
+    model = Model()
+    _run(root, model)
+    assert model.calls == []
+    row = _rows(root, "SELECT status, question, reason FROM ai_requests")[0]
+    assert row["status"] == "stopped" and row["question"] == "", "the answer's text is not kept"
+    assert "bot command that is asking" in row["reason"]
+    assert _rows(root, "SELECT * FROM telegram_send_messages") == []
+
+
+def test_private_chats_alone_are_a_configuration_and_nothing_at_all_is_not(tmp_path):
+    root = _root(tmp_path, telegram_chat=[], private_chat_enabled=True)
+    _in_chat(root, OPERATOR, 1, OPERATOR, "x?", chat_type="private")
+    assert _run(root)["answered"] == 1
+    data = tmp_path / "off"
+    data.mkdir()
+    document = {**A.shipped_document(), "enabled": True, "api_key_ref": "K", "telegram_chat": []}
+    (data / "ai_assist.json").write_text(json.dumps(document), encoding="utf-8")
+    settings, missing = job.load_settings(data)
+    assert settings is None and "private_chat_enabled is false" in missing
+
+
+def test_telegram_chat_takes_a_level_or_a_list_of_levels_and_nothing_else():
+    def parsed(value):
+        return A.parse_ai_assist({**A.shipped_document(), "users": [], "telegram_chat": value})
+
+    assert parsed("ai_assist").chat_levels == ("ai_assist",)
+    assert parsed([" AI_Assist ", "sql", "ai_assist", ""]).chat_levels == ("ai_assist", "sql")
+    for wrong in (5, ["ai_assist", 5], {"level": "ai_assist"}):
+        with pytest.raises(A.AiAssistConfigError, match="a level or a list of levels"):
+            parsed(wrong)
+
+
+def test_check_references_follows_every_level_of_a_list(tmp_path):
+    from dbabrain.lib import config_references
+
+    data = tmp_path / "data"
+    data.mkdir()
+    document = {**A.shipped_document(), "enabled": True, "telegram_chat": ["ai_assist", "nobody_has_this"]}
+    (data / "ai_assist.json").write_text(json.dumps(document), encoding="utf-8")
+    (data / "telegram_groups.json").write_text(json.dumps({"telegram_groups": [
+        {"group_id": "-500", "notify_level": "ai_assist", "active": True}]}), encoding="utf-8")
+    (data / "telegram_config.json").write_text(json.dumps({"level_chat_map": {}}), encoding="utf-8")
+    found = [item for item in config_references.check(data)["dangling"] if item["where"].startswith("ai_assist.json")]
+    assert [item["value"] for item in found] == ["nobody_has_this"]
+
+
+def test_the_reference_takes_a_list_of_levels_and_holds_each_to_a_string():
+    from dbabrain.lib.shared_objects import check_value
+
+    constraint = {"kind": "string", "nullable": False, "allow_empty": True, "also_accepts": ["array"]}
+    assert check_value(constraint, ["ai_assist", "sql"], where="ai_assist.json", field="telegram_chat") == []
+    assert check_value(constraint, "ai_assist", where="ai_assist.json", field="telegram_chat") == []
+    problems = check_value(constraint, ["ai_assist", {"x": 1}], where="ai_assist.json", field="telegram_chat")
+    assert [item["field"] for item in problems] == ["telegram_chat[1]"]
+
+
+def test_a_step_a_command_left_half_answered_does_not_hold_the_chat_for_ever(tmp_path):
+    """2026-11-04, the first private question on the worker: two workflow steps abandoned in
+    October were still 'active', no conversation state was waiting, and every message in that
+    chat was taken for an answer to them - the question was never asked."""
+    root = _root(tmp_path, private_chat_enabled=True)
+    _in_chat(root, OPERATOR, 10, OPERATOR, "server 100.250 ổn không?", chat_type="private")
+    with sqlite3.connect(root / "store.sqlite") as conn:
+        conn.execute("INSERT INTO telegram_workflow_steps (run_key, chat_id, user_id, command_id, command_text, "
+                     "step_no, parameter_name, parameter_position, status) "
+                     "VALUES ('r1', ?, ?, 1, '/spbot_x', 3, 'confirm', 3, 'active')", (OPERATOR, OPERATOR))
+        conn.execute("INSERT INTO telegram_conversation_states (chat_id, user_id, command_id, command_text, "
+                     "state_key, status, wait_after_message_id) VALUES (?, ?, 1, '/spbot_x', 'confirm', 'done', 9)",
+                     (OPERATOR, OPERATOR))
+    assert _run(root)["answered"] == 1

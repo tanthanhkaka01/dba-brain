@@ -413,6 +413,7 @@ The path form is deliberate: ~20 call sites in `dbabrain/` and the whole test su
 | `backup_files` | Backup Restore App | One row per file a backup wrote: server, database, name, `file_type`, path, size, `checksum_after_backup`, its place in the chain, the virus scan. Never deleted - a pruned file's row stays (0.34.0). |
 | `backup_file_checks` | Backup Restore App | Every later hash or virus scan of a stored file: the scrub, a restore's source check, the vault (0.34.0). |
 | `restore_runs` | Backup Restore App | One row per restore or copy-only run, both `server_id`s, its `copy_max_retry` (0.34.0). |
+| `lockdowns` | Control App, the backup scrub | One row per lockdown (0.35.0, 1.220): `started_at`, `started_by`, `reason`; `ended_at`, `ended_by`, `end_note` once turned off. PK `lockdown_id`; UNIQUE `(started_at, started_by)`; a partial unique index allows one open row. Never deleted. `dbabrain/db/lockdown_store.py` |
 | `restore_run_files` | Backup Restore App | One row per file a run copied: both `server_id`s, file name and type, the checksums before and after the copy, the verdict, the virus scan of the copy (0.34.0). |
 | `copy_attempts` | Backup Restore App | One row per copy attempt of one file, with the hash it produced (0.34.0). |
 | `sla_runs` | SLA/SLO App | One row per SLA validation run (per-status counts and window end). |
@@ -716,6 +717,19 @@ What the shape guarantees:
   `location` and `backup_files.offload_state` are named ones (`ck_<table>_<column>`), dropped and
   added again with today's lists, and so is every added rule - the size rule `NOT VALID`. SQLite
   cannot alter a constraint, so it gets the columns only.
+- **Schema version 4** (0.35.0, 1.248): `restore_runs.tier` (`daily` / `weekly` / `monthly` / NULL),
+  the drill's tier recorded per run, added in place (`RUN_COLUMNS`). The reports judge a drill by it
+  without reading the backup app's configuration (`lib.drill_tiers`).
+- **Schema version 5** (0.35.0, 1.224): `backup_files.row_hash`, a hash chain per entry. Each row's
+  hash is sha256 over the entry's previous `row_hash` and the row's own fields that never change
+  (`CHAIN_FIELDS`: names, path, size, checksum, times, baseline), taken over the row as stored. The
+  state, the checks and the offload move later and are not in it. `catalog-verify-chain` walks it;
+  rows written before version 5 carry NULL and are counted, not judged.
+- **Schema version 6** (0.35.0, 1.233): `backup_files.pruned_by`, what removed a pruned file. It
+  holds the retention window of its type, found by the scrub, or the offload's release.
+- **Schema version 7** (0.35.0, 1.233): `backup_runs.retention_json` and `pitr_reach_seconds`, the
+  retention each run's job stated and its point-in-time reach. NULL with a retention stated means
+  kept, no limit by age. The pages read them here (`retention_by_entry`).
 - **No foreign key to `job_runs`.** `job_run_id` is a plain column: `job_runs` ages out, and a real
   key into it blocked the archive sweep before (the run requests above).
 - **The virus-scan columns are NULL until a scan runs** - NULL is "never scanned", not "clean".

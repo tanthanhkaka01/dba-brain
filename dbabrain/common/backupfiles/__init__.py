@@ -201,6 +201,14 @@ def _latest_only(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(newest.values(), key=lambda r: (r.get("finished_at") or "", r["path"]))
 
 
+#: The fields only some engines answer with, beside the shape every one returns - named here, so a
+#: new one is added on purpose and the reference has a module that names it: SQL Server's header LSNs
+#: (a chain checked before a restore, 0.35.0 1.250), PostgreSQL's UTC finish, base backup start
+#: segment and archived WAL segments.
+ENGINE_FIELDS = ("first_lsn", "last_lsn", "checkpoint_lsn", "differential_base_lsn",
+                 "finished_at_utc", "start_wal", "wal_segments")
+
+
 def row(*, path: str, kind: str, database: str | None = None,
         size: int | None = None, finished_at: str | None = None,
         age: int | None = None, **extra: Any) -> dict[str, Any]:
@@ -212,6 +220,10 @@ def row(*, path: str, kind: str, database: str | None = None,
     ``age`` is :func:`age_seconds` - how old the backup was on the clock that stamped
     ``finished_at`` - and ``None`` where the listing could not say.
     """
+    unknown = sorted(set(extra) - set(ENGINE_FIELDS))
+    if unknown:
+        raise BackupListError(f"row() was given field(s) no engine declares: {', '.join(unknown)} "
+                              "- add them to ENGINE_FIELDS and to the reference.")
     return {"path": path, "kind": kind, "database_name": database,
             "size_bytes": size, "finished_at": _stamp(finished_at), "age_seconds": age, **extra}
 

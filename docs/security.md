@@ -325,9 +325,48 @@ The session cookie of the console crosses the network in clear while the listene
 put TLS in front of the console and set `cookie_secure: true` in `webhost_config.json` (`docs/12`).
 
 **Not yet defended - know these before production** (review notes B5.1, F10.2):
-- SSH host keys are not verified (every hop accepts whatever key answers).
+- SSH host keys are verified only when `DBABRAIN_SSH_KNOWN_HOSTS` names a file (0.35.0): pinned at
+  first use, a changed key refuses (`SshHostKeyChanged`). Unset, every hop accepts whatever key
+  answers. Two shell-out hops in the SRE app (`ssh -o StrictHostKeyChecking=no`) are outside it.
 - Backup directories are made world-readable (`chmod -R a+rX`) so the copy can read them as the SSH
   user. Restrict the hosts' local accounts accordingly until this changes.
+
+## 5b. Rebuilding after the worker is lost or untrusted (0.35.0)
+
+The runbook for an attack that took the worker, or left it in doubt (1.226, the plan of
+2026-10-29, A3.8). The old node is never repaired in place: a new node is built from what was kept
+off it, and the old one is read only as evidence.
+
+**What has to exist before the day it is needed.** The rebuild uses these three things and nothing
+else:
+
+| What | How it is made | Where it is kept |
+| --- | --- | --- |
+| The configuration | `dbabrain export-data '{"bundle": "<name>-bundle.json"}'`, after every deliberate change | off the estate. The bundle is a credential: it names hosts and accounts and carries the secret store as ciphertext |
+| The runtime store (catalog, lockdowns, run history) | a backup entry of its own: the store is a PostgreSQL database like any other | off the host the store runs on |
+| The passphrase | written once, by a person | **offline, and never beside the bundle**. Without it, the bundle's secrets cannot be read. With it, whoever holds the bundle has every password |
+
+**The rebuild, in order:**
+
+1. **Turn the lockdown on** on whatever node still answers (`/spbot_lockdown on`, or
+   `control.cli lockdown on`), so that no node prunes, deletes or overwrites while you work.
+2. **A new host**, installed from the published package or image, never copied from the old one.
+3. `dbabrain import-data '{"bundle": "...", "plan_only": true}'`: every entry's checksum is checked
+   before anything is written, so an edited bundle changes nothing. Then run it again without
+   `plan_only`, and set `DBABRAIN_SECRET_KEY` from the offline copy.
+4. **Restore the store** from its backup into a new database, and point `data/store_config.json`
+   at it. Run `dbabrain.db.cli check`.
+5. `backup_restore catalog-verify-chain`: a broken chain means the store copy was edited, so take
+   an older copy. Then run `restore-candidates --backup-id <entry>` for each database to be
+   recovered, and restore from a chain that is both `verified` and `before_first_signal`.
+6. **Rotate every credential the old node held** (`common.cli rotate-password`), then re-encrypt the secret
+   store. The bundle carried them, and so did the old node.
+7. Turn the lockdown off only when the hosts are clean: `off` asks for a note saying how you know.
+
+**Not yet:** a vault no node can delete from (V-1, decision D2). Until it exists, "off the estate"
+is wherever the operator keeps it by hand. The daily copy of each catalog chain's head into the
+vault, which makes step 5 hold even against an attacker who rewrote the whole store, waits on the
+vault too.
 
 ## 6. Reporting a vulnerability
 

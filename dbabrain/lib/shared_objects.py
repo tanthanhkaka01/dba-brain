@@ -195,6 +195,17 @@ def check_value(constraint: dict[str, Any], value: Any, *, where: str, field: st
         return findings
 
     if kind == "integer":
+        if isinstance(value, dict) and "object" in (constraint.get("also_accepts") or []):
+            # An integer field with an object form (cleanup_retention per file type, 1.227): the
+            # object's content is the parser's to judge, named here so it is judged one way.
+            checker = str(constraint.get("object_checked_by") or "")
+            if checker:
+                import importlib
+
+                module, _, name = checker.rpartition(".")
+                for problem in getattr(importlib.import_module(module), name)(value):
+                    findings.append(_finding("value", where, field, problem))
+            return findings
         number = _as_int(value)
         if number is None:
             findings.append(_finding("value", where, field,
@@ -217,6 +228,14 @@ def check_value(constraint: dict[str, Any], value: Any, *, where: str, field: st
         return findings
 
     if kind == "string":
+        if isinstance(value, list) and "array" in (constraint.get("also_accepts") or []):
+            # A field that takes one value or a list of them (ai_assist.json telegram_chat): each
+            # item is held to the string's own rules.
+            single = {key: item for key, item in constraint.items() if key != "also_accepts"}
+            for index, item in enumerate(value):
+                findings += check_value(single, item, where=where, field=f"{field}[{index}]", record=record,
+                                        in_config=in_config, reference=reference)
+            return findings
         if isinstance(value, (dict, list)):
             findings.append(_finding("value", where, field, f"must be text; got {type(value).__name__}"))
             return findings
@@ -424,6 +443,32 @@ def site_file(root: Path, site: dict[str, Any]) -> Path | None:
     return next((home for home in homes if home.is_file()), None)
 
 
+def retention_disagreements(root: Path) -> list[dict[str, str]]:
+    """A backup job and its entry stating two different ``cleanup_retention`` values for one folder
+    (0.35.0, 1.232): the job's applies, and a reader cannot tell which was meant."""
+    from dbabrain.lib import cleanup_retention
+
+    path = root / "restore_config.json"
+    if not path.is_file():
+        return []
+    try:
+        document = load_json_file(path)
+    except Exception:  # noqa: BLE001 - a broken file is reported by the walk itself
+        return []
+    found = []
+    for entry in ((document.get("backup_restore") or {}).get("backups") or []) if isinstance(document, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        for job in entry.get("jobs") or []:
+            if not isinstance(job, dict):
+                continue
+            why = cleanup_retention.job_entry_disagreement(job, entry)
+            if why:
+                found.append(_finding("value", f"restore_config.json:backups[{entry.get('backup_id')}]"
+                                               f".jobs[{job.get('job')}]", cleanup_retention.FIELD, why))
+    return found
+
+
 def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
     """Every use of every shared object in ``data_dir``, checked against the reference.
 
@@ -456,10 +501,15 @@ def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001 - a broken file is a finding, not a crash
                 findings.append(_finding("value", file_name, "", f"cannot be read: {exc}"))
                 continue
+            # A field the parent record may state for all its children (1.232: a backup entry's
+            # cleanup_retention, read by every job that states none): a child without it is not
+            # missing it when its parent has it.
+            parents = dict(walk_records(payload, str(site.get("inherited_from") or "")))                 if site.get("inherited_from") else {}
             for label, record in walk_records(payload, path):
                 if not isinstance(record, dict):
                     continue
                 checked_records += 1
+                parent = parents.get(label.rsplit(".", 1)[0]) if parents else None
                 where = f"{file_name}:{label}"
                 if is_field:
                     # A shared FIELD lives on the record itself, so the record IS the occurrence.
@@ -477,6 +527,9 @@ def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
                                              reference=reference):
                         # Only this field's own names matter here; the record's other keys belong
                         # to its own file's schema, not to the shared field.
+                        if item["kind"] == "missing" and isinstance(parent, dict) and any(
+                                parent.get(name) is not None for name in own):
+                            continue
                         if whole or item["field"] in own:
                             (notices if item["kind"] in NOTICE_KINDS else findings).append(item)
                     continue
@@ -490,6 +543,7 @@ def check_data_dir(data_dir: str | Path | None = None) -> dict[str, Any]:
 
     # A violation since 0.27.0 (rules R50): the record is refused where it is used.
     findings.extend(fallbacks(root))
+    findings.extend(retention_disagreements(root))
     return {
         "data_dir": str(root),
         "records_walked": checked_records,

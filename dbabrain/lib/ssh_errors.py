@@ -24,6 +24,11 @@ class SshError(errors.OperationFailed):
     """SSH-level failure: bad auth inputs, missing key, or connect failure."""
 
 
+class SshHostKeyChanged(SshError, errors.Refused):
+    """The host answered with a key other than the one pinned for it (0.35.0, 1.223): another machine
+    at that address, or the same one rebuilt. Refused - nothing is sent to it."""
+
+
 class SshAuthError(SshError):
     """The host answered and rejected the credentials."""
 

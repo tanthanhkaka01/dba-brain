@@ -110,6 +110,19 @@ def test_a_test_run_refuses_a_target_that_states_no_version(wired):
     assert wired["batches"] == 0
 
 
+def test_a_host_is_tried_without_a_version_it_cannot_have(wired, monkeypatch):
+    """A machine with no database has no engine version, and its OS scripts are not chosen by one:
+    the trial of the worker's own disk was refused for a major_version nothing could state (0.35.0)."""
+    import dataclasses
+
+    wired["target"] = dataclasses.replace(_target(version=None), db_type="host")
+    monkeypatch.setattr(collector, "load_metric_definitions",
+                        lambda *_, **__: [dataclasses.replace(_definition(), db_type="host")])
+
+    collect_metrics(config=wired["config"], target_id=TARGET_ID, test_run=True)
+    assert wired["batches"] == 1
+
+
 def test_the_cli_carries_the_flag():
     from dbabrain.metrics.cli import parse_args
 

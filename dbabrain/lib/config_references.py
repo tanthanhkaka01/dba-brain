@@ -188,20 +188,23 @@ def check(data_dir: str | Path | None = None) -> dict[str, Any]:
         for label, record in walk_records(source_payload, str(source.get("path") or "")):
             if not isinstance(record, dict):
                 continue
-            value = _dotted(record, source_field)
-            if value in (None, ""):
-                continue  # an absent pointer is the object's own required-field question
-            checked += 1
-            if str(value) in allowed:
-                continue
-            finding = {
-                "rule": name,
-                "where": f"{source.get('file')}:{label}.{source_field}",
-                "value": str(value),
-                "detail": f"{value!r} is in none of: {'; '.join(target_labels)}",
-                "why": str(rule.get("why") or ""),
-            }
-            (dangling if _is_active(record, active_field) else inactive).append(finding)
+            raw_value = _dotted(record, source_field)
+            # A pointer field may hold a list of pointers (ai_assist.json telegram_chat, 2026-11-04):
+            # each is followed, rather than the list's text compared with nothing it could equal.
+            for value in (raw_value if isinstance(raw_value, list) else [raw_value]):
+                if value in (None, ""):
+                    continue  # an absent pointer is the object's own required-field question
+                checked += 1
+                if str(value) in allowed:
+                    continue
+                finding = {
+                    "rule": name,
+                    "where": f"{source.get('file')}:{label}.{source_field}",
+                    "value": str(value),
+                    "detail": f"{value!r} is in none of: {'; '.join(target_labels)}",
+                    "why": str(rule.get("why") or ""),
+                }
+                (dangling if _is_active(record, active_field) else inactive).append(finding)
 
     return {
         "data_dir": str(root),

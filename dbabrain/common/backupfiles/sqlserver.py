@@ -100,6 +100,10 @@ def list_files(request: dict[str, Any], skipped: list[str] | None = None) -> lis
                     finished_at=finished.isoformat() if hasattr(finished, "isoformat") else None,
                     first_lsn=int(float(head.get("FirstLSN") or 0)),
                     last_lsn=int(float(head.get("LastLSN") or 0)),
+                    # What a chain is checked by before anything is restored (0.35.0, 1.250): a
+                    # DIFF belongs to the FULL whose checkpoint it names.
+                    checkpoint_lsn=int(float(head.get("CheckpointLSN") or 0)),
+                    differential_base_lsn=int(float(head.get("DifferentialBaseLSN") or 0)),
                     age=age_seconds(finished, server_now),
                 ))
         return rows

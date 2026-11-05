@@ -23,6 +23,48 @@ class SpecBuildError(errors.ConfigError):
     """The entry cannot be turned into a complete request: a secret or a script it names is missing."""
 
 
+#: The SQL Server folders a backup writes, each pruned by its own window (1.228).
+SQLSERVER_RETENTION_TYPES = ("FULL", "DIFF", "LOG")
+#: PostgreSQL's two (1.229): the base chains (an INCR_BASE goes with its chain, so FULL_BASE's window
+#: is the chain's) and the WAL archive.
+POSTGRESQL_RETENTION_TYPES = ("FULL_BASE", "WAL")
+#: Oracle's (1.230): the level 0 sets RMAN's recovery window (a level 1 goes with its chain), the
+#: archived logs on disk, and the controlfile and spfile backups.
+ORACLE_RETENTION_TYPES = ("RMAN_L0", "ARCHIVELOG", "CONTROLFILE", "SPFILE")
+RETENTION_TYPES_BY_ENGINE = {"sqlserver": SQLSERVER_RETENTION_TYPES, "mssql": SQLSERVER_RETENTION_TYPES,
+                             "postgresql": POSTGRESQL_RETENTION_TYPES, "postgres": POSTGRESQL_RETENTION_TYPES,
+                             "oracle": ORACLE_RETENTION_TYPES}
+#: Types whose ``keep`` the engine cannot carry out: RMAN's policy is a window, and archived logs
+#: kept for ever fill the archive destination until the database stops.
+NO_KEEP = {"RMAN_L0", "ARCHIVELOG"}
+
+
+def _retention_per_type_env(job: Any) -> dict[str, str]:
+    """``RETENTION_<TYPE>_SECONDS`` for a job whose retention names types (0.35.0): each type cut
+    by its own window - seconds, or ``keep``. SQL Server's FULL / DIFF / LOG folders (1.228) instead
+    of one window over all three, where the job with the shortest decided for its siblings' files
+    too; PostgreSQL's base chains and WAL archive (1.229). The one-window form sends nothing new;
+    ``RETENTION_DAYS`` stays the longest, so a script from before reads what it always did and
+    removes nothing early."""
+    retention = getattr(job, "retention", None)
+    kinds = RETENTION_TYPES_BY_ENGINE.get(str(getattr(job, "db_type", "")).lower())
+    if retention is None or getattr(retention, "uniform", True) or not kinds:
+        return {}
+    env = {}
+    for kind in kinds:
+        window = retention.window_for(kind)
+        if window == 0:
+            # 0 is "no age gate" in the one-window form. Per folder it would cut every file below
+            # the newest full at once; a window says how long, or the folder is kept.
+            raise ValueError(f"{job.label}: cleanup_retention.{kind} is 0 - per file type, a window "
+                             "takes seconds (at least 60) or \"keep\".")
+        if window is None and kind in NO_KEEP:
+            raise ValueError(f"{job.label}: cleanup_retention.{kind} is keep - RMAN's recovery window and the "
+                             "archived logs on disk need a window in seconds.")
+        env[f"RETENTION_{kind}_SECONDS"] = "keep" if window is None else str(int(window))
+    return env
+
+
 def _secret(ref: str, secrets: dict[str, str], *, where: str) -> str:
     """Resolve one secret ref, or say which field wanted it. An empty password reaches the target
     as a failed login, which is a much worse place to discover a missing ref."""
@@ -67,6 +109,7 @@ def backup_request_from_job(
     # at least), SQL Server and PostgreSQL read these seconds. See BackupJob.retention_seconds.
     if getattr(job, "retention_seconds", None) is not None:
         env["RETENTION_SECONDS"] = str(job.retention_seconds)
+    env.update(_retention_per_type_env(job))
     # The databases, from the job's own list (0.34.0) - stated on every job, never left to a code
     # default (R50): a job with none stated is refused here, before anything is shipped.
     env.update(backup_scope.script_env(backup_scope.require_backup_databases(

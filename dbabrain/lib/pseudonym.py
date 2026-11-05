@@ -29,6 +29,8 @@ from __future__ import annotations
 import hashlib
 import re
 
+from dbabrain.lib import trie_regex
+
 #: RFC 5737. Reserved for documentation, so a fake address can never route to a real machine, and
 #: `identifier_scan` already allows all three in every spelling.
 DOC_NETWORKS: tuple[str, ...] = ("192.0.2", "198.51.100", "203.0.113")
@@ -414,8 +416,12 @@ class Mapping:
 #: digit guard, `168.1` rewrote the middle of `192.168.1.120`, inventing an address that belongs to
 #: nobody. Without the letter requirement, `0.2` - the shorthand of a real `172.19.0.2` - rewrote
 #: every `"sharePct": 0.2` in the file, and 53 measurements came out as `100.108`.
+#:
+#: Touching only on the right, the neighbour must be an underscore or a word of three letters or
+#: more: a unit is shorter - `0.2x`, `17.1s`, `4.5ms`, `3.2GB` - and `3d 0.2x`, a burn rate, came out
+#: as a machine's shorthand on 2026-11-02 (1.271).
 _BOUNDED = (r"(?:(?<=[A-Za-z_])(?:{core})(?!\d)(?![.\-_]\d)"
-            r"|(?<![\d.])(?<!\d[-_])(?:{core})(?=[A-Za-z_]))")
+            r"|(?<![\d.])(?<!\d[-_])(?:{core})(?=_|[A-Za-z]{{3}}))")
 
 
 #: An address in any of the three spellings this project writes - dotted in configuration,
@@ -445,8 +451,9 @@ def _compile_pass(table: dict[str, str], *, bounded: bool):
     """
     if not table:
         return None
-    core = "|".join(re.escape(spelling) for spelling in
-                    sorted(table, key=lambda spelling: (-len(spelling), spelling)))
+    # As a trie (1.269): a plain alternation of every spelling made the scrub try each one at every
+    # position of 46 MB of pages. The trie keeps longest-first - a word that continues is tried on.
+    core = trie_regex.alternation(table)
     pattern = _BOUNDED.format(core=core) if bounded else core
     return re.compile(pattern, re.IGNORECASE), table
 

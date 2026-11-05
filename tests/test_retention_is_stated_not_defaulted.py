@@ -95,8 +95,10 @@ def test_every_backup_job_in_this_estate_states_its_retention():
     entries = _estate_entries("backups")
     missing = [f"{entry.get('backup_id')}.{job.get('job')}"
                for entry in entries for job in (entry.get("jobs") or [])
-               if job.get("cleanup_retention") in (None, "")]
-    assert not missing, f"backup jobs with no cleanup_retention: {missing}"
+               # 0.35.0 (1.232): an entry states cleanup_retention once for the jobs that state none.
+               if job.get("cleanup_retention") in (None, "")
+               and entry.get("cleanup_retention") in (None, "")]
+    assert not missing, f"backup jobs with no cleanup_retention, on the job or its entry: {missing}"
 
 
 def test_a_backup_job_without_retention_is_refused(tmp_path):

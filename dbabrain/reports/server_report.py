@@ -238,6 +238,7 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
                   diagnostics_rows: list[dict] | None = None,
                   server_detail: dict | None = None,
                   backup_file_rows: list[dict] | None = None,
+                  retention_rows: list[dict] | None = None,
                   restore_file_rows: list[dict] | None = None) -> dict:
     """Everything the page renders for one server.
 
@@ -282,8 +283,10 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
         # The backup catalog, file by file, in ONE section (0.34.0; the operator: backup and restore
         # need not be two reports): what each backup wrote and every restore or copy that used it -
         # newest first, filterable on the page by file type and by whether it was used for a restore.
-        "backupFiles": backup_catalog_sections.build_files(backup_file_rows or [], restore_file_rows or [],
-                                                           server_id=server_id),
+        # With each entry's retention and point-in-time reach (1.233), read from the catalog.
+        "backupFiles": {**backup_catalog_sections.build_files(backup_file_rows or [], restore_file_rows or [],
+                                                              server_id=server_id),
+                        "retention": backup_catalog_sections.build_retention(retention_rows or [])},
         "databases": _per_engine(build_databases(database_code_map or {}, backup),
                                  database_code_map or {}, freshness),
         "tablespaces": build_tablespaces(tablespace_rows or []),
@@ -557,6 +560,8 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
                                 # The model's facts are the inventory's, read now: a page rebuilt
                                 # for a past day (as_of) gets none rather than today's values.
                                 server_detail=None if as_of else build_server_detail(model),
+                                retention_rows=(catalog.retention_by_entry(server_id=server_id)
+                                                if catalog is not None else []),
                                 backup_file_rows=(catalog.server_backup_files(
                                     server_id, limit=backup_catalog_sections.ROW_LIMIT) if catalog else []),
                                 restore_file_rows=(catalog.server_restore_files(

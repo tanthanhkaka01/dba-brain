@@ -205,6 +205,31 @@ python -m dbabrain.control.cli worker-create-db-docker `
 
 ---
 
+## Lockdown - when an attack shows, stop deleting (0.35.0)
+
+```bash
+python -m dbabrain.control.cli lockdown status
+python -m dbabrain.control.cli lockdown on  --reason "canary changed on 100.250" --confirm yes
+python -m dbabrain.control.cli lockdown off --note "files checked against the repository" --confirm yes
+```
+
+1.220 (the plan of 2026-10-29, A3.5). While a lockdown is on: `prune-backups --apply` and
+`delete-backup` are refused, the offload copies but deletes nothing at the source, a SQL Server
+restore loses `overwrite_existing` (so it refuses a database that is ONLINE), and `run-sql-adhoc`
+refuses SQL that writes. Backups, the scrub, metrics and alerts keep running - the evidence keeps
+accumulating.
+
+- **On** by hand, or by a backup run: its scrub finding three or more stored files changed or gone
+  (decision D6), or ransomware's marks in its backup folder (1.219), engages it and says
+  `LOCKDOWN ON` in its CRITICAL alert.
+- **Off** by hand only, with a note saying why it is safe - nothing that was attacked decides the
+  attack is over. Both ask one typed yes at a terminal, or take `--confirm yes`.
+- The state is the `lockdowns` table of the runtime store, so every node sees it. A store that
+  cannot be read counts as **on**: an unknown state never allows a delete.
+- **From Telegram**: `/spbot_lockdown` (private, clearance 50) runs the same three actions; `on`
+  and `off` ask why and one `yes`, and record the person as `telegram:<user id>`.
+- Not yet: a canary file's hit as a further automatic trigger (1.219).
+
 ## Shipping the code only
 
 A worker that is a soak node (from 0.28.0) or that holds configuration the bot created runs a new

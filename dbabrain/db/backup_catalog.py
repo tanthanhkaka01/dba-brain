@@ -40,6 +40,8 @@ a convention a writer could forget. Every list a column may hold is ``lib.integr
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -56,7 +58,7 @@ from dbabrain.db.store import utc_now_text
 #: and a proven copy's size held to its source's (1.245). 3 (0.34.0): the repository's retention -
 #: ``expired``, ``offload_expired_at``, and offload_state's list CHECK by a name of ours. See
 #: :func:`_migrate`.
-CATALOG_SCHEMA_VERSION = 3
+CATALOG_SCHEMA_VERSION = 7
 
 TABLES = ("backup_runs", "backup_files", "backup_file_checks", "restore_runs", "restore_run_files",
           "copy_attempts")
@@ -171,6 +173,10 @@ CREATE TABLE IF NOT EXISTS backup_runs
     engine_verify TEXT NULL CHECK (engine_verify IS NULL OR {I.check_list('engine_verify', I.ENGINE_VERIFY_RESULTS)}),
     engine_verify_text TEXT NOT NULL DEFAULT '',
     error_text TEXT NOT NULL DEFAULT '',
+    -- The retention the run's job states (1.233), as configured, and its point-in-time reach in
+    -- seconds (NULL with a retention stated: kept, no limit by age) - so a page reads it here.
+    retention_json TEXT NULL,
+    pitr_reach_seconds INTEGER NULL,
     created_at TEXT NOT NULL DEFAULT {_NOW},
     CONSTRAINT uq_backup_runs UNIQUE (backup_id, started_at)
 );
@@ -224,6 +230,10 @@ CREATE TABLE IF NOT EXISTS backup_files
     -- run to its end; NULL = never used. Every use, not only the last, is a restore_run_files row.
     -- No FK: restore_runs is created after this table; the store writes the id from that table.
     last_restore_run_id INTEGER NULL,
+    -- sha256 of this row's own fields and the entry's previous row_hash (1.224): a hash chain.
+    row_hash TEXT NULL,
+    -- What removed a pruned file (1.233): the retention window of its type, or the offload's release.
+    pruned_by TEXT NULL,
     last_restore_at TEXT NULL,
     last_restore_action TEXT NULL CHECK (last_restore_action IS NULL OR {I.check_list('last_restore_action', I.RESTORE_ACTIONS)}),
     last_restore_target_server_id TEXT NULL,
@@ -287,6 +297,7 @@ CREATE TABLE IF NOT EXISTS restore_runs
     target_server_id TEXT NOT NULL,
     target_folder TEXT NOT NULL DEFAULT '',
     point_in_time TEXT NOT NULL DEFAULT 'LATEST',
+    tier TEXT NULL,
     node_host TEXT NOT NULL DEFAULT '',
     app_version TEXT NOT NULL DEFAULT '',
     started_at TEXT NOT NULL,
@@ -474,6 +485,18 @@ def _install_first_checksum_guard(conn: Any, backend: str) -> None:
         conn.execute(statement)
 
 
+#: Columns a later version adds to a run table (version 4, 1.248): the drill's tier, so the reports
+#: judge a drill by its own deadline without reading the backup app's configuration.
+RUN_COLUMNS = (("restore_runs", "tier", "TEXT NULL"),
+               # Version 5 (1.224): the hash chain of backup_files, per entry.
+               ("backup_files", "row_hash", "TEXT NULL"),
+               # Version 6 (1.233): what removed a pruned file.
+               ("backup_files", "pruned_by", "TEXT NULL"),
+               # Version 7 (1.233): each run's retention and point-in-time reach.
+               ("backup_runs", "retention_json", "TEXT NULL"),
+               ("backup_runs", "pitr_reach_seconds", "INTEGER NULL"))
+
+
 def _migrate(conn: Any, backend: str) -> None:
     """Bring a catalog made by an earlier CATALOG_SCHEMA_VERSION up to this one, additively.
 
@@ -490,6 +513,8 @@ def _migrate(conn: Any, backend: str) -> None:
     if backend == backend_mod.POSTGRESQL_BACKEND:
         for name, sql in OFFLOAD_COLUMNS:
             conn.execute(f"ALTER TABLE backup_files ADD COLUMN IF NOT EXISTS {name} {sql}")
+        for table, name, sql in RUN_COLUMNS:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {sql}")
         for table, column, allowed in WIDENED_CHECKS:
             # The backend's own name for the column CHECK of version 1, then ours with today's list.
             conn.execute(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_{column}_check")
@@ -506,7 +531,39 @@ def _migrate(conn: Any, backend: str) -> None:
         for name, sql in OFFLOAD_COLUMNS:
             if name not in present:
                 conn.execute(f"ALTER TABLE backup_files ADD COLUMN {name} {sql}")
+        for table, name, sql in RUN_COLUMNS:
+            columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if columns and name not in columns:      # no columns: the table is not there to widen
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql}")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_backup_files_offload ON backup_files (offload_state, backup_id)")
+
+
+#: The fields of a backup file row that never change after it is written - what its row_hash covers
+#: (1.224, the plan of 2026-10-29, A3.7). The state, the checks and the offload move afterwards and
+#: are not in it: they are the record of what happened later, not of what the backup wrote.
+CHAIN_FIELDS = ("backup_id", "server_id", "database_name", "engine", "file_name", "file_type", "file_path",
+                "size_bytes", "checksum_after_backup", "backup_started_at", "backup_ended_at", "baseline")
+
+
+def row_hash(values: dict[str, Any], previous: str | None) -> str:
+    """sha256 over the entry's previous row_hash and this row's :data:`CHAIN_FIELDS`, each as text - so
+    a value written as 1024 and read back as "1024" hashes the same."""
+    fields = {name: (None if values.get(name) is None else str(values.get(name))) for name in CHAIN_FIELDS}
+    return hashlib.sha256(json.dumps([previous or "", fields], sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _insert_chained(conn: Any, values: dict[str, Any]) -> int:
+    """Insert a backup file row and chain it: its row_hash is taken over the row AS STORED - read back,
+    the store's own defaults included - and the newest hashed row of the same entry before it."""
+    file_id = _insert(conn, "backup_files", values)
+    stored = conn.execute(f"SELECT backup_id, {', '.join(CHAIN_FIELDS)} FROM backup_files WHERE file_id = ?",
+                          (int(file_id),)).fetchone()
+    previous = conn.execute(
+        "SELECT row_hash FROM backup_files WHERE backup_id = ? AND row_hash IS NOT NULL AND file_id < ? "
+        "ORDER BY file_id DESC LIMIT 1", (stored["backup_id"], int(file_id))).fetchone()
+    conn.execute("UPDATE backup_files SET row_hash = ? WHERE file_id = ?",
+                 (row_hash(dict(stored), previous["row_hash"] if previous is not None else None), int(file_id)))
+    return file_id
 
 
 class BackupCatalogError(errors.OperationFailed):
@@ -607,7 +664,8 @@ def _mark_used(conn: Any, *, restore_run_id: int | None = None, run_file_id: int
 _COLUMNS = {
     "backup_runs": ("backup_id", "job_run_id", "server_id", "engine", "level", "node_host",
                     "app_version", "started_at", "ended_at", "status", "files_count", "bytes_total",
-                    "engine_verify", "engine_verify_text", "error_text"),
+                    "engine_verify", "engine_verify_text", "error_text", "retention_json",
+                    "pitr_reach_seconds"),
     "backup_files": ("backup_run_id", "backup_id", "job_run_id", "server_id", "database_name", "engine",
                      "file_name", "file_type", "file_path", "file_folder", "host_path", "container_name",
                      "backup_started_at",
@@ -616,14 +674,14 @@ _COLUMNS = {
                      "chain_parent_file_id", "chain_position", "engine_meta_json", "encrypted",
                      "cert_thumbprint", "verdict", "state", "on_disk", "checksum_matches",
                      "checksum_last_check", "last_checked_at",
-                     "last_check_result", "baseline", *I.AV_SCAN_COLUMNS,
+                     "last_check_result", "baseline", "pruned_by", *I.AV_SCAN_COLUMNS,
                      *(name for name, _sql in OFFLOAD_COLUMNS)),
     "backup_file_checks": ("file_id", "server_id", "database_name", "file_name", "file_type", "file_path",
                            "checked_at", "checked_by", "by_run_id", "location", "checksum_algo",
                            "checksum_after_backup", "checksum_now", "size_now", "result",
                            *I.AV_SCAN_COLUMNS),
     "restore_runs": ("action", "restore_id", "job_run_id", "source_server_id", "target_server_id",
-                     "target_folder", "point_in_time", "node_host", "app_version", "started_at",
+                     "target_folder", "point_in_time", "tier", "node_host", "app_version", "started_at",
                      "ended_at", "phase", "chain_files", "files_matched", "files_recopied",
                      "copy_max_retry", "refused_reason", "databases_ok", "databases_failed", "error_text"),
     "restore_run_files": ("restore_run_id", "file_id", "source_server_id", "target_server_id",
@@ -746,8 +804,111 @@ class BackupCatalogStore:
                         (item["server_id"], item.get("database_name") or "", *full_types)).fetchone()
                     if parent is not None:
                         item["chain_parent_file_id"] = int(parent["file_id"])
-                _insert(conn, "backup_files", item)
+                _insert_chained(conn, item)
             return backup_run_id
+
+    def verify_row_chain(self, *, backup_id: str = "") -> dict[str, Any]:
+        """Walk each entry's rows in order and recompute their row_hash (1.224). A row edited after it
+        was written breaks its own hash and every one after it; the first broken row is named. Rows
+        from before the chain (no row_hash, older than the first hashed row) are counted, not judged;
+        an unhashed row after a hashed one is a row written past the chain, and is a break."""
+        self.initialize()
+        clause, params = ("WHERE backup_id = ?", (backup_id,)) if backup_id else ("", ())
+        with self.connect() as conn:
+            rows = [dict(r) for r in conn.execute(
+                f"SELECT file_id, row_hash, {', '.join(CHAIN_FIELDS)} FROM backup_files {clause} "
+                "ORDER BY backup_id, file_id", params).fetchall()]
+        entries: dict[str, dict[str, Any]] = {}
+        previous: dict[str, str | None] = {}
+        for row in rows:
+            entry = str(row["backup_id"] or "")
+            state = entries.setdefault(entry, {"backup_id": entry, "rows": 0, "chained": 0, "before_chain": 0,
+                                               "broken_at": None})
+            state["rows"] += 1
+            if state["broken_at"] is not None:
+                continue
+            if not row["row_hash"]:
+                if entry in previous:
+                    state["broken_at"] = {"file_id": row["file_id"], "file_name": row["file_name"],
+                                          "why": "no row_hash after the chain began"}
+                else:
+                    state["before_chain"] += 1
+                continue
+            expected = row_hash(row, previous.get(entry))
+            if expected != row["row_hash"]:
+                state["broken_at"] = {"file_id": row["file_id"], "file_name": row["file_name"],
+                                      "why": "the row is not what was written, or a row before it was removed"}
+                continue
+            previous[entry] = row["row_hash"]
+            state["chained"] += 1
+        broken = [e for e in entries.values() if e["broken_at"] is not None]
+        return {"entries": sorted(entries.values(), key=lambda e: e["backup_id"]), "broken": len(broken)}
+
+    def chain_files(self, *, backup_id: str) -> list[dict[str, Any]]:
+        """Every file of an entry, whatever its state, with what makes a chain of it - the full it belongs
+        to (``chain_parent_file_id``, NULL on the full itself) - and its verification (1.244). Not only
+        the files still ``present``: a file the scrub found changed would drop out of its chain, and the
+        chain would read as verified."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT file_id, database_name, file_type, file_name, chain_parent_file_id, "
+                "COALESCE(backup_ended_at, created_at) AS ended_at, verdict, state, on_disk, checksum_matches, "
+                "last_checked_at, last_check_result, offload_state, last_restore_at, last_restore_result "
+                "FROM backup_files WHERE backup_id = ? ORDER BY file_id", (backup_id,)).fetchall()]
+
+    def first_signal(self, *, backup_id: str) -> str | None:
+        """The earliest moment a stored file of the entry was found changed or gone (1.244) - the first
+        sign of an attack the catalog holds. A chain that ended before it is a clean candidate."""
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT MIN(c.checked_at) AS at FROM backup_file_checks c JOIN backup_files f ON f.file_id = c.file_id "
+                "WHERE f.backup_id = ? AND c.result IN ('mismatch', 'missing')", (backup_id,)).fetchone()
+        return str(row["at"]) if row is not None and row["at"] else None
+
+    def oldest_kept_base(self, *, server_id: str) -> str | None:
+        """When the oldest full base backup the catalog still holds as present on a server began - the
+        line ``pg_archivecleanup`` cuts the WAL archive at (its START WAL)."""
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT MIN(COALESCE(backup_started_at, backup_ended_at, created_at)) AS at FROM backup_files "
+                "WHERE server_id = ? AND file_type = 'FULL_BASE' AND state = 'present'", (server_id,)).fetchone()
+        return str(row["at"]) if row is not None and row["at"] else None
+
+    def retention_by_entry(self, *, server_id: str = "") -> list[dict[str, Any]]:
+        """Each backup entry's retention as its newest run recorded it (1.233) - what the pages show,
+        read from the store: the reports never read the backup app's configuration."""
+        self.initialize()
+        clause, params = ("AND r.server_id = ? ", (server_id,)) if server_id else ("", ())
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT r.backup_id, r.server_id, r.engine, r.retention_json, r.pitr_reach_seconds, r.started_at "
+                "FROM backup_runs r WHERE r.retention_json IS NOT NULL " + clause +
+                "AND r.backup_run_id = (SELECT MAX(r2.backup_run_id) FROM backup_runs r2 "
+                "WHERE r2.backup_id = r.backup_id AND r2.retention_json IS NOT NULL) "
+                "ORDER BY r.server_id, r.backup_id", params).fetchall()]
+
+    def backup_run_files(self, backup_run_id: int) -> list[dict[str, Any]]:
+        """The files one backup run wrote."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT file_id, file_name, database_name, file_type, size_bytes FROM backup_files "
+                "WHERE backup_run_id = ? ORDER BY file_id", (int(backup_run_id),)).fetchall()]
+
+    def earlier_sizes(self, *, backup_id: str, database_name: str, file_type: str, before_run: int | None,
+                      limit: int = 20) -> list[int]:
+        """The sizes of the same entry's, database's and type's files before this run, newest first -
+        the history a new file's size is held to (1.219)."""
+        self.initialize()
+        with self.connect() as conn:
+            return [int(row["size_bytes"]) for row in conn.execute(
+                "SELECT size_bytes FROM backup_files WHERE backup_id = ? AND database_name = ? AND file_type = ? "
+                "AND size_bytes IS NOT NULL AND (? IS NULL OR backup_run_id IS NULL OR backup_run_id < ?) "
+                "ORDER BY file_id DESC LIMIT ?",
+                (backup_id, database_name, file_type, before_run, before_run, int(limit))).fetchall()]
 
     def stored_files(self, *, server_id: str, file_names: list[str]) -> dict[str, dict[str, Any]]:
         """The catalog's row for each named file of a server, newest first - what a restore's copy
@@ -786,7 +947,7 @@ class BackupCatalogStore:
         _one_of(values, "av_scan_status", I.AV_SCAN_STATUSES)
         self.initialize()
         with self.connect() as conn:
-            return _insert(conn, "backup_files", values)
+            return _insert_chained(conn, values)
 
     def set_backup_file(self, file_id: int, **values: Any) -> None:
         """Change a file's state, its latest check or its virus scan - never its recorded checksum."""
@@ -1126,6 +1287,30 @@ class BackupCatalogStore:
             for r in conn.execute("SELECT DISTINCT source_server_id, target_server_id FROM restore_run_files"):
                 found.update({str(r["source_server_id"]), str(r["target_server_id"])})
         return sorted(server for server in found if server)
+
+    def drill_runs(self, *, since: str) -> list[dict[str, Any]]:
+        """Every restore drill since ``since`` (a copy-only or an offload is no drill), newest first:
+        what the Recoverability section counts per entry and per tier (1.253)."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT restore_run_id, restore_id, source_server_id, target_server_id, tier, phase, "
+                "databases_ok, databases_failed, started_at, ended_at, error_text, refused_reason "
+                "FROM restore_runs WHERE action = ? AND started_at >= ? ORDER BY started_at DESC",
+                (I.ACTION_RESTORE, since)).fetchall()]
+
+    def coverage(self) -> list[dict[str, Any]]:
+        """Per server and database, what its present backups cover (1.252): the newest file of each
+        level, how many are copied off the host, and when one of them was last used by a restore."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT server_id, database_name, engine, file_type, COUNT(*) AS files, "
+                "MAX(COALESCE(backup_ended_at, created_at)) AS newest, "
+                "SUM(CASE WHEN offload_state = 'verified' THEN 1 ELSE 0 END) AS offloaded, "
+                "MAX(last_restore_at) AS last_restored "
+                "FROM backup_files WHERE state = 'present' "
+                "GROUP BY server_id, database_name, engine, file_type ORDER BY server_id, database_name").fetchall()]
 
     def server_backup_files(self, server_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
         """A server's backup files, newest first - the server page's *Backup & restore files* (1.217).

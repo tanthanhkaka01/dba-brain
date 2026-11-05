@@ -94,6 +94,8 @@ def _sqlserver(request: dict[str, Any]) -> dict[str, Any]:
                     answered = True
                 except Exception as exc:  # noqa: BLE001 - a refusal is the finding.
                     detail = str(exc)[:200]
+                if answered and request.get("consistency"):
+                    answered, detail = _sqlserver_checkdb(cursor, name, detail)
             else:
                 detail = f"state is {state}"
             rows.append({"database_name": name, "state": state, "recovery_model": recovery,
@@ -108,6 +110,18 @@ def _sqlserver(request: dict[str, Any]) -> dict[str, Any]:
         rows.append({"database_name": name, "state": "ABSENT", "ok": False,
                      "detail": "not present on the instance"})
     return _verdict(rows)
+
+
+def _sqlserver_checkdb(cursor: Any, name: str, detail: str) -> tuple[bool, str]:
+    """``DBCC CHECKDB`` on a restored database (1.251, gap G11): open and answering is not the same as
+    consistent. The share-driven restore has run it since 0.26.0; a container target had nothing."""
+    from dbabrain.common import sql_run
+
+    try:
+        sql_run.query_rows(cursor, f"DBCC CHECKDB([{name.replace(']', ']]')}]) WITH NO_INFOMSGS")
+    except Exception as exc:  # noqa: BLE001 - an error from CHECKDB is the finding.
+        return False, f"{detail}; DBCC CHECKDB failed: {str(exc)[:200]}"
+    return True, f"{detail}; DBCC CHECKDB clean"
 
 
 _ORACLE_SQL = ("set heading off feedback off pagesize 0\n"
@@ -134,9 +148,33 @@ def _oracle(request: dict[str, Any]) -> dict[str, Any]:
             break
     # Mounted is exactly the trap: RMAN finished, the instance is up, and the database is not open.
     answered = open_mode in {"READ WRITE", "READ ONLY"} and "ORA-" not in text
+    detail = _detail(result, text)
+    if answered and request.get("consistency"):
+        answered, detail = _oracle_validate(host, prefix, detail, timeout=int(request.get("timeout_seconds") or 3600))
     return _verdict([{"database_name": str(request.get("database_name") or request.get("database") or sid or "instance"),
-                      "state": open_mode, "ok": answered,
-                      "detail": _detail(result, text)}])
+                      "state": open_mode, "ok": answered, "detail": detail}])
+
+
+_ORACLE_VALIDATE = "VALIDATE CHECK LOGICAL DATABASE;" + chr(10) + "exit" + chr(10)
+_ORACLE_CORRUPT_SQL = ("set heading off feedback off pagesize 0" + chr(10)
+                       + "select 'CORRUPT_BLOCKS=' || count(*) from v$database_block_corruption;" + chr(10)
+                       + "exit" + chr(10))
+
+
+def _oracle_validate(host: Any, prefix: str, detail: str, *, timeout: int) -> tuple[bool, str]:
+    """RMAN ``VALIDATE CHECK LOGICAL DATABASE`` reads every block, physical and logical, and records
+    what it finds in ``v$database_block_corruption`` (1.251, gap G11). Consistent is: RMAN exited 0
+    and the view holds no row."""
+    validate = run(host, "printf %s " + shlex.quote(_ORACLE_VALIDATE) + f" | {prefix}rman target / 2>&1",
+                   timeout=timeout)
+    if validate["exit_code"] != 0:
+        return False, f"{detail}; RMAN VALIDATE failed: {_detail(validate, ' '.join(validate['stdout'].split())[-300:])}"
+    counted = run(host, "printf %s " + shlex.quote(_ORACLE_CORRUPT_SQL) + f" | {prefix}sqlplus -s -L / as sysdba",
+                  timeout=300)
+    text = " ".join(counted["stdout"].split())
+    if "CORRUPT_BLOCKS=0" in text.replace(" ", ""):
+        return True, f"{detail}; RMAN VALIDATE clean, no corrupt block"
+    return False, f"{detail}; RMAN VALIDATE found corruption: {_detail(counted, text)}"
 
 
 def _postgresql(request: dict[str, Any]) -> dict[str, Any]:
@@ -173,5 +211,25 @@ def _postgresql(request: dict[str, Any]) -> dict[str, Any]:
         state = "IN RECOVERY"
     else:
         state = "ACCEPTING"
+    detail = _detail(result, text)
+    if answered and request.get("consistency"):
+        answered, detail = _postgresql_amcheck(host, user, port_option, detail,
+                                               timeout=int(request.get("timeout_seconds") or 3600))
     return _verdict([{"database_name": str(request.get("database_name") or request.get("database") or "cluster"),
-                      "state": state, "ok": answered, "detail": _detail(result, text)}])
+                      "state": state, "ok": answered, "detail": detail}])
+
+
+def _postgresql_amcheck(host: Any, user: str, port_option: str, detail: str, *, timeout: int) -> tuple[bool, str]:
+    """``pg_amcheck --all`` (PostgreSQL 14+): every table's heap and every B-tree index checked
+    (1.251, gap G11). ``--install-missing`` creates the ``amcheck`` extension where a database lacks
+    it - this runs on a drill's target, a copy, never on the source. A cluster without the program
+    is *not checked*, which fails the check rather than calling it clean."""
+    command = ("command -v pg_amcheck >/dev/null 2>&1 || { echo PG_AMCHECK_MISSING; exit 3; }; "
+               f"pg_amcheck -U {shlex.quote(user)} {port_option}--all --install-missing --heapallindexed 2>&1")
+    result = run(host, command, timeout=timeout)
+    text = " ".join(result["stdout"].split())
+    if "PG_AMCHECK_MISSING" in text:
+        return False, f"{detail}; pg_amcheck is not installed where the cluster runs - not checked"
+    if result["exit_code"] == 0:
+        return True, f"{detail}; pg_amcheck clean"
+    return False, f"{detail}; pg_amcheck found a problem: {_detail(result, text[-300:])}"

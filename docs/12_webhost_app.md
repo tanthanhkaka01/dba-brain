@@ -392,6 +392,26 @@ python -m dbabrain.webhost.cli sessions --username thanh --revoke
 the process table — the same reason the store declaration travels on stdin. A password passed that
 way on a shared host should be treated as disclosed.
 
+### The AI assistant's page (0.35.0)
+
+`/dbabrain/ai`, under **Administration** beside *Users*: what the Telegram AI assistant was asked,
+what it answered and what it cost, from its five store tables (`docs/07_telegram_app.md`). petweb's
+admin page is the model (0.34.0, D-AI8):
+
+- **Usage** over the last N days (default 30), by day, user or model - questions, refusals, errors,
+  tokens, cache reads, tool calls, cost. It is `AiAssistStore.usage_since`, the same call
+  `telegram.cli ai-usage` makes, so the page and the CLI cannot add the rows up differently.
+- **Requests, newest first**, fifty a page: questions, group words (`/usage`, `/new`) and refusals
+  with their reason - a refusal is the row an operator most often comes looking for.
+- **One request** at `/dbabrain/ai/<ai_request_id>`: the row, the question and the answer sent, the
+  messages exactly as the model took them (thinking folded away), every API call with Anthropic's
+  request id, every tool run with its input and its redacted output. `telegram.cli ai-show` prints
+  the same record; the page cuts a block at 20,000 characters.
+
+**An admin's page**, like *Users*: the transcripts are what people asked, in their words, and what
+the tools read on the estate's servers. It is read-only - nothing here changes the assistant. A
+console started without the store it lives in says so instead of failing.
+
 ### Routes
 
 | Route | Method | Needs a session | What it does |
@@ -415,6 +435,8 @@ way on a shared host should be treated as disclosed.
 | `/dbabrain/users/<name>/password` | POST | yes, admin + password | Reset its password (ends its sessions; *must change* by default). |
 | `/dbabrain/users/<name>/signout` | POST | yes, admin + password | End every session it holds. |
 | `/dbabrain/users/<name>/disable` | POST | yes, admin + password | Disable it (ends its sessions; the name can be issued again). |
+| `/dbabrain/ai` | GET | yes, admin | The AI assistant: usage by day / user / model (`?days=`, `?by=`), requests newest first (`?page=`). |
+| `/dbabrain/ai/<ai_request_id>` | GET | yes, admin | One request in full: messages, API calls, tool runs. |
 
 Anything else under the prefix is a 404. An unauthenticated page request redirects to the login
 form; an unauthenticated **`/api/`** request answers `401` with JSON, so a `fetch()` gets an error

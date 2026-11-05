@@ -610,6 +610,8 @@ def build_disk_health(code_map):
             if row["message"]:
                 backup_paths.add(row["message"])
             continue
+        if item.startswith("PLACEMENT |"):
+            continue        # the graded row (1.239): a verdict, not a file's drive
         db, _, ftype = item.partition(" | ")
         if db == "tempdb":
             tempdb_drives.add(drive)

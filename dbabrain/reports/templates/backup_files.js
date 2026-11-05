@@ -71,6 +71,13 @@ function dbOptions(files, server){
 
 /* `opts.fleet`: the fleet page (backup-restore.html) - a Server column and filter, and the table
    always open; the server page folds it under its Backup section. */
+/* Each backup entry's retention and point-in-time reach (0.35.0, 1.233), as its newest run recorded them. */
+function retentionLine(rows){
+  if (!rows || !rows.length) return "";
+  return `<p class="sec-note">Retention: ${rows.map(r =>
+    `<b>${esc(r.backupId)}</b> ${esc(r.windows)} · point-in-time reach <b>${esc(r.reach)}</b>`).join("; ")}</p>`;
+}
+
 function backupFilesBlock(b, opts = {}){
   if (!b || !b.files || !b.files.length) return "";
   const fleet = !!opts.fleet;
@@ -125,6 +132,7 @@ function backupFilesBlock(b, opts = {}){
       means the file's last check hashed to that same value. Each restore marks the files it used -
       when, onto which target, its result - and "RESTORE OK" means a restore copied this exact file
       intact, restored it and verified the databases.</p>
+    ${retentionLine(b.retention)}
     <div class="ffilters">
       ${fleet ? `<label class="ffilter">Server <select class="ffsel" data-key="server">
         <option value="">All</option>${serverOpts}</select></label>` : ""}

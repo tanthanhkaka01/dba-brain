@@ -42,6 +42,8 @@ from typing import Any
 # Re-exported: the vocabulary itself lives in dbabrain/lib/backup_kinds.py, once.
 from dbabrain.lib import timezone as timezone_lib
 from dbabrain.lib.backup_kinds import FULL  # noqa: F401
+# A file the window keeps carries the retention's own word for it - one definition.
+from dbabrain.lib.cleanup_retention import KEEP
 
 
 #: The estate's default for database backups, and what ``restore_config.json`` already says for
@@ -55,7 +57,24 @@ AGE = "age"
 RECOVERY_WINDOW = "recovery_window"
 MODES = (AGE, RECOVERY_WINDOW)
 
-KEEP = "keep"
+#: A prune that would remove more than this share of an entry's files is refused (0.35.0, 1.221).
+#: A retention window removes the oldest few each run; half the folder at once is a window cut by
+#: mistake, a clock gone wrong - or ransomware, which renames every file and makes the listing look
+#: like a folder of strangers. The operator says so explicitly to go past it.
+MASS_DELETE_FRACTION = 0.5
+#: Below this many files the share means nothing: two of three is a normal week for a small entry.
+MASS_DELETE_MIN_FILES = 10
+
+
+def mass_delete_refusal(obsolete: int, total: int) -> str:
+    """Why a prune of ``obsolete`` files out of ``total`` must not run; empty when it may."""
+    if total >= MASS_DELETE_MIN_FILES and obsolete > MASS_DELETE_FRACTION * total:
+        return (f"{obsolete} of {total} files would be deleted in one run - more than "
+                f"{int(MASS_DELETE_FRACTION * 100)} %. Refused: a window cut by mistake or a folder "
+                "rewritten by ransomware looks exactly like this. Check the files, then run again with "
+                "--allow-mass-delete if it is meant.")
+    return ""
+
 OBSOLETE = "obsolete"
 
 
@@ -65,8 +84,15 @@ class RetentionError(errors.ConfigError):
 
 def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT_RETENTION_DAYS,
                    mode: str = AGE, now: datetime | None = None,
-                   retention_seconds: int | None = None) -> dict[str, Any]:
+                   retention_seconds: int | None = None,
+                   windows: dict[str, int | None] | None = None) -> dict[str, Any]:
     """Split ``files`` into what is kept and what is obsolete, with a reason for each.
+
+    ``windows`` (0.35.0, 1.231) is a window per level - ``full`` / ``diff`` / ``log``, in seconds,
+    ``None`` = keep - from a ``cleanup_retention`` that names file types
+    (``lib.cleanup_retention.windows_by_level``). Under **age** each file is judged by its own
+    level's; under **recovery_window** the anchor is the full's window, as a chain is. The floor
+    over both is unchanged: each database's newest full and everything after it.
 
     ``files`` are rows as :func:`dbabrain.common.backupfiles.list_backup_files` returns them.
 
@@ -91,8 +117,17 @@ def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT
     moment = now or timezone_lib.display_now()
     cutoff = _source_cutoff(files, span) or _stamp(moment - span)
 
-    rows = _by_age(files, cutoff=cutoff, days=window) if rule == AGE \
-        else _by_recovery_window(files, cutoff=cutoff, days=window)
+    level_cutoffs: dict[str, str | None] = {}
+    for level, seconds_of in (windows or {}).items():
+        level_cutoffs[level] = None if seconds_of is None else (
+            _source_cutoff(files, timedelta(seconds=int(seconds_of)))
+            or _stamp(moment - timedelta(seconds=int(seconds_of))))
+    if windows and rule != AGE and FULL in level_cutoffs:
+        # A chain is anchored on its full: the full's window is the window. Keep on the full keeps
+        # every chain - no full is older than the start of time.
+        cutoff = level_cutoffs[FULL] or "0000-00-00 00:00:00"
+    rows = _by_age(files, cutoff=cutoff, days=window, level_cutoffs=level_cutoffs if windows else None) \
+        if rule == AGE else _by_recovery_window(files, cutoff=cutoff, days=window)
     rows = _keep_newest_chain(rows)
 
     obsolete = [row for row in rows if row["verdict"] == OBSOLETE]
@@ -105,6 +140,8 @@ def plan_retention(files: list[dict[str, Any]], *, retention_days: int = DEFAULT
         # The window as words, in the unit it was given: "14-day", "7200-second".
         "window": window,
         "cutoff": cutoff,
+        # Per level, when the retention names types (1.231): each level's cutoff, None = keep.
+        **({"windows": dict(windows), "level_cutoffs": level_cutoffs} if windows else {}),
         "obsolete": obsolete,
         "keep": keep,
         # The paths on their own, because that is exactly what delete-files takes as `paths`.
@@ -148,18 +185,29 @@ def _source_cutoff(files: list[dict[str, Any]], span: timedelta) -> str:
     return _stamp(there_now - span) if there_now is not None else ""
 
 
-def _by_age(files: list[dict[str, Any]], *, cutoff: str, days: str) -> list[dict[str, Any]]:
-    """Older than the cutoff. :func:`_keep_newest_chain` then spares each database's newest chain."""
+def _by_age(files: list[dict[str, Any]], *, cutoff: str, days: str,
+            level_cutoffs: dict[str, str | None] | None = None) -> list[dict[str, Any]]:
+    """Older than the cutoff - its own level's, when the retention names types (1.231).
+    :func:`_keep_newest_chain` then spares each database's newest chain."""
     rows = []
     for row in files:
         finished = _normalise(row.get("finished_at"))
+        level = str(row.get("kind") or "")
+        own = cutoff
+        label = days
+        if level_cutoffs is not None and level in level_cutoffs:
+            own = level_cutoffs[level]
+            label = f"{level} window's"
+            if own is None:
+                rows.append(_verdict(row, KEEP, f"its level ({level}) is kept: keep"))
+                continue
         if not finished:
             rows.append(_verdict(row, KEEP, "no finished_at: age unknown, so not judged"))
-        elif finished < cutoff:
-            rows.append(_verdict(row, OBSOLETE, f"finished {finished}, older than the {days} "
-                                                f"cutoff ({cutoff})"))
+        elif finished < own:
+            rows.append(_verdict(row, OBSOLETE, f"finished {finished}, older than the {label} "
+                                                f"cutoff ({own})"))
         else:
-            rows.append(_verdict(row, KEEP, f"finished {finished}, inside the {days} window"))
+            rows.append(_verdict(row, KEEP, f"finished {finished}, inside the {label} window"))
     return rows
 
 

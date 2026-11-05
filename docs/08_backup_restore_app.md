@@ -570,6 +570,19 @@ that has none (24 on the master on 2026-10-29, at the next deploy on the worker)
 it into every new entry (what was given, the rest from the defaults), `check-objects` names an entry
 without it, and the gate refuses one (rules R50).
 
+**A drill states its tier** (0.35.0, 1.248 - gap G8): `"tier": "daily" | "weekly" | "monthly"` on
+a restore entry, absent meaning untiered. Each run records it (`restore_runs.tier`), and the
+backup & restore page calls the drill OVERDUE past its tier's deadline (`lib.drill_tiers`). The
+schedule stays the entry's `time_window`, which already says it: monthly on the 1st is
+`from_day: 1, to_day: 1`; the first Sunday is `from_day: 1, to_day: 7, weekdays: [7]`.
+
+**A new entry refuses a file no backup catalogued** (0.35.0, 1.249 - gap G9, *never drill an
+unverified file*): `restore-add` writes `uncatalogued: refuse` unless the request says otherwise.
+`upgrade-config` keeps writing `compare_copy` into an existing entry - what it always did; an upgrade
+states behaviour and never changes it. To move an existing entry, run `catalog-backfill --apply` for
+the backups it restores (below), then set its `uncatalogued` to `refuse` (the console's record editor,
+or the file).
+
 `backup_restore/copy_gate.py::copy_verified` is the rule for one file, in this order:
 
 | Step | Result | Copied? |
@@ -643,6 +656,40 @@ piece names). A copy not proven raises `CopyNotProvenError` - no restore runs - 
 and closes the row `done` / `error` with the restore, through `copy_gate.close_restore_runs`, which
 the share-driven workflow uses too. `run_script_restore` gates without a catalog: it decides, and
 records nothing.
+
+**A SQL Server chain is held to its LSNs before anything is restored** (0.35.0, 1.250 - gap G10).
+`restore-by-id`'s SQL Server planner reads every piece's LSNs from the `RESTORE HEADERONLY` the
+listing already runs (`list-backup-files` answers `first_lsn`, `last_lsn`, `checkpoint_lsn`,
+`differential_base_lsn`), and `lib.integrity.sqlserver_chain_break` refuses the drill, naming the
+piece, when a DIFF was taken after another FULL, when the first log starts after the FULL / DIFF
+ends, or when a log does not start where the one before it ended. Before, the gap surfaced at
+`RESTORE LOG`, after the FULL and DIFF were applied, as an LSN in an error. A log that ends before
+the FULL is not a break, and an LSN the header did not give is not judged.
+
+**A PostgreSQL restore's WAL is held to its names the same way** (0.35.0). `list-backup-files` answers
+each base backup's `start_wal` (its `backup_label`'s START WAL LOCATION) and, asked with
+`wal_segments: true`, every segment name under `wal/`. `lib.integrity.postgresql_wal_break` refuses
+the drill when the newest chain member's start segment is not archived, or - to latest - when a
+segment between it and the newest is missing: recovery would stop there and open on an older state,
+and the drill would report done. A point-in-time restore is held to the start only; another
+timeline after the start and a segment size other than 16 MB are not judged.
+
+**Not covered yet**: the share-driven SQL Server workflow (`restore_database.py`, which picks pieces
+by name and time).
+
+**A script-driven drill checks the restored data's consistency too** (0.35.0, 1.251 - gap G11).
+`verify-restore` with `consistency: true` - which `restore-by-id` sets from the entry's `checkdb`,
+default true, the field the share-driven restore already reads - runs the engine's own check on
+what opened and answered:
+
+| Engine | Check | Not consistent |
+| --- | --- | --- |
+| SQL Server (container) | `DBCC CHECKDB(<db>) WITH NO_INFOMSGS` per database | any error it raises |
+| PostgreSQL | `pg_amcheck --all --install-missing --heapallindexed` (14+; creates `amcheck` on the drill's target, never the source) | a non-zero exit; no `pg_amcheck` is *not checked* - not clean |
+| Oracle | RMAN `VALIDATE CHECK LOGICAL DATABASE`, then `v$database_block_corruption` | RMAN failing, or any corrupt block |
+
+A SQL Server container that cannot create CHECKDB's snapshot (Msg 1823 / 7928) is the reason
+`checkdb: false` exists; the answer says when the check was switched off.
 
 **Every restore has a run row (1.214).** Both paths, to the end.
 
@@ -946,6 +993,12 @@ not: a base backup is a directory in a chain, the backup script removes whole ch
 the delete this command uses takes files only - it planned, then failed on every path. Each run writes its own
 `job_runs` row under `backup_restore.prune_job.<backup_id>.<job>`, so "did the cleanup run" is a
 different question from "did the backup run".
+
+**Never most of a folder at once** (0.35.0, 1.221). A window removes the oldest few files each run;
+more than half of an entry's files (of ten or more) in one run is a window cut by mistake, a clock
+gone wrong, or a folder ransomware rewrote. `--apply` then deletes **nothing**, the entry is
+`refused` in the answer, and an ERROR names it (`lib.backupfiles_retention.mass_delete_refusal`).
+`--allow-mass-delete` says it is meant. The newest chain is kept either way.
 
 Measured on 2026-08-07 across the 9 active jobs: 6 pruned, 3 skipped, 10 obsolete WAL files found
 on `CLOUD_PG_WAL` at its 7-day window, nothing deleted (report mode).
@@ -1542,13 +1595,85 @@ stop the check - through `common.cli file-checksum` (a PostgreSQL base backup th
 `backup_manifest`, whose hash is the one stored), and the catalog holds the answer to the checksum it
 stored: `on_disk`, `checksum_matches`, `state`. The answer lists `mismatch` - a backup changed after
 it was written - and `missing`, and exits 1 when there is either; a file in no mount of its
-container, or an entry no longer configured, is `skipped` with the reason. The scheduled scrub
-(1.218) is this, run every cycle.
+container, or an entry no longer configured, is `skipped` with the reason.
+
+**The rolling scrub** (0.35.0, 1.218) is this, after every successful backup run, for that entry:
+its `scrub_files_per_run` older files (default 20, 0 off), checked longest ago first, so within days
+every file on disk has been re-read - ransomware encrypts last week's backups, not tonight's. A file
+changed after it was written, or gone, makes the run's alert **CRITICAL** and names it
+(`SCRUB: 1 stored backup file(s) changed after they were written ...`); the backup itself stands
+DONE. Otherwise the message ends `- 20 older file(s) re-hashed, all unchanged`, and the run row's
+metadata carries `scrub` (`checked`, `match`, `mismatch`, `missing`, `error`). Three or more changed
+or gone engage the lockdown (1.220).
+
+**A file in a docker volume is read inside its container.** Some backups sit in a docker
+*volume*, under `/var/lib/docker`, which the SSH user may not read; the runtime store's own backups
+are one example. There, every scrub said `checked 0` and the run looked clean. Now, when the host
+cannot hash a file and the engine runs in a container, the scrub hashes it inside the container,
+by its own path. The ransom-marker listing falls back the same way. A scrub that still reads
+nothing is a WARNING, `SCRUB could not read N stored file(s): <why>` (`scrub.unreadable`); it is
+not a clean pass.
+
+**A file its retention removed is pruned, not gone** (1.233). The backup scripts prune their own
+folders (`find`, RMAN, the chain sweep) and tell the catalog nothing. So a stored file the scrub
+finds gone is first held to the windows of every job that writes its folder. FULL, DIFF and LOG
+are often three entries in one directory, and a LOG entry's shorter window cuts the FULL entry's
+files. Past its type's window, it was the
+window's: it is marked `state = 'pruned'`, with `pruned_by` naming the window, and it is neither
+an alert nor a lockdown. Only a file gone while still inside its window, or one that is kept,
+counts as gone. Without this, three ordinary retention removals engaged the lockdown on a
+correct install. The run's metadata counts them (`scrub.pruned`). A PostgreSQL WAL segment is cut
+by position, not by age: `pg_archivecleanup` removes everything before the oldest kept base
+backup's START WAL. So a gone WAL segment that ended before the oldest present full base began
+is the cleanup's (`pg_archivecleanup: before the oldest base backup kept`). On 2026-11-03,
+twenty such segments, well inside their 7-day window, engaged the lockdown before this rule
+existed.
+
+**What ransomware leaves is looked for too** (0.35.0, 1.219). After each successful run the entry's
+backup folder is listed by `lib.integrity.RANSOM_MARKERS` only - `read-me*.txt`, `*.L0CK3D`,
+`*README*`, `*DECRYPT*`, `*RESTORE_FILES*`, `*HOW_TO_RECOVER*`, `*.locked`, `*.encrypted`, `*.crypt`,
+`*.crypted` - through `file-checksum`'s folder form, so a clean folder costs one listing. A hit is
+not a backup: the alert is CRITICAL (`RANSOM MARKERS in <folder>: ...`), the names are in the run's
+metadata, and the lockdown is engaged. And each file the run wrote is held to the sizes of the same
+database's and type's earlier backups: three times the median or a third of it is a WARNING
+(`SIZE far from its history: ...`, `size_anomalies`) - encrypted data does not compress. Fewer than
+five earlier files is no history to judge by. **Not yet**: a canary file with a known hash in each
+folder (it has to be written onto every host first).
 
 A verified run says so: `... finished: done - 3/3 file(s) hashed and verified`, and the run row's
 metadata carries `catalog` (`backup_run_id`, `files`, `verified`, `unverified`, `level`). A
 PostgreSQL job is handed `CATALOG_AFTER`, the newest WAL segment the catalog holds for that entry,
 so the WAL job lists exactly what is new.
+
+### Proving the catalog was not rewritten: `catalog-verify-chain` (0.35.0, 1.224)
+
+```bash
+python -m dbabrain.backup_restore.cli catalog-verify-chain [--backup-id ACME_MSSQL_SALES_FULL]
+```
+
+The catalog is what every later check and restore trusts, so an attacker who wants a changed file
+to pass rewrites its row. Each `backup_files` row carries `row_hash`, chained per entry to the row
+before it (docs/01, schema version 5). This recomputes every chain and names, per entry, the first
+row that is not what was written. An edited row breaks itself and every row after it, and so does
+a removed row. It exits 1 when a chain is broken. Rows from before 0.35.0 have no hash and are
+counted (`before_chain`), not judged. A check, a state change or an offload is not an edit: those
+fields are outside the hash. **Not yet**: the copy of each chain's head off the estate. Without it,
+someone who rewrites every hash from the start goes unseen. It needs the vault (V-1, D2).
+
+### Choosing a clean restore point after an attack: `restore-candidates` (0.35.0, 1.244)
+
+```bash
+python -m dbabrain.backup_restore.cli restore-candidates --backup-id ACME_MSSQL_SALES_FULL
+```
+
+An attacker sits in the network before the encryption starts, so the newest chain may already be
+theirs. This lists each chain of the entry - a full and the files that need it - newest first, with
+`verified` (every member `present`, hashed ok when written, unchanged when last checked; a member
+found changed, gone or pruned makes it not), `ended_at`, the copies off the host, the last restore,
+`before_first_signal` (it ended before the entry's first file found changed or gone, or before the
+lockdown) and `candidate` - both. `first_signal` and where it came from head the answer. Read-only:
+it lists, the operator chooses; a point-in-time restore inside a candidate is `restore-by-id` as
+always.
 
 ### The backups taken before the catalog: `catalog-backfill` (1.215)
 
@@ -1571,9 +1696,21 @@ backfill does three things:
 
 A backfilled checksum proves the file has not changed since the backfill, not that it was good when
 written; the row says which it is. The command is a dry run unless `--apply`, and a second pass
-writes nothing new. Only SQL Server so far: a PostgreSQL base backup is a directory catalogued by
-its `backup_manifest`, and an RMAN piece is typed by its tag. Each needs its own rules, and the
-command refuses those engines by name.
+writes nothing new.
+
+**PostgreSQL and Oracle (0.35.0).** Each engine is read by the layout its scripts write
+(`lib.integrity.script_file_type`, the reading a restore uses for a file no backup recorded):
+
+| Engine | What is catalogued | Type | Database |
+| --- | --- | --- | --- |
+| SQL Server | `<DB>/FULL|DIFF|LOG/<file>`, `_cert/` | FULL / DIFF / LOG / CERT | the folder's `<DB>` |
+| PostgreSQL | each `base/<stamp>_<level>/` directory, **by the sha256 of its `backup_manifest`** - as its receipt does; each `wal/` segment (24 hex digits; not `.partial`, `.history`, nor a base backup's own `pg_wal`) | FULL_BASE / INCR_BASE, WAL | `cluster` |
+| Oracle | every `*.bkp`, `autobackup_*` and `c-*` piece, typed by the names the scripts give it (`_L0_`, `_L1_`, `arch_`, `ctl_`, `spfile_`, the autobackup) | RMAN_L0 / RMAN_L1 / ARCHIVELOG / CONTROLFILE / SPFILE | the entry's `ORACLE_SID` |
+
+Two things a listing cannot give, said rather than guessed: a base backup's size is its whole
+directory's, so the row keeps no size and the verdict `size_failed` (the manifest's checksum still
+covers every file); and a level run's controlfile piece is written under the level's FORMAT, so its
+name reads as that level. A listed file the layout does not catalogue is counted in `not_a_backup`.
 
 ## What `RESULT=ok` Proves — Liveness Is Not Enough
 
@@ -2125,6 +2262,88 @@ one needs every link back to the full. Deleting mid-chain leaves a set that look
 restores nothing. (SQL Server differentials are cumulative, so per-level ages would be safe there
 — but one rule that is correct everywhere beats three that need per-engine reasoning.)
 
+### Per file type (0.35.0, 1.227)
+
+The integer stays legal and means what it did: every type, one window. An object names the types
+in the catalog's words, and `default` for the rest:
+
+```jsonc
+"cleanup_retention": {"FULL": 1209600, "DIFF": 1209600, "LOG": 604800, "CERT": "keep", "default": 1209600}
+```
+
+Parsed once, in `lib.cleanup_retention.parse_per_type`. Each value is seconds, `0` (no age gate)
+or `"keep"` (never by age). A type the entry's engine never writes is refused. A CERT the object
+does not name is kept: a backup encrypted with a certificate nobody kept cannot be restored. The
+registrars (`backup-add`, `restore-add`) refuse two shapes. One is a DIFF / LOG / WAL / ARCHIVELOG
+kept longer than its base: `LOG: 14 days, FULL: 7 days` reads as 14 days of point-in-time and
+gives 7. The other is a window of its own for the incrementals that need their whole chain,
+`INCR_BASE` and `RMAN_L1`: they go with their chain, for the reason above.
+`point_in_time_reach` is the shorter of the base and the log window.
+
+**SQL Server applies it per folder** (1.228). A job whose object names types hands its script
+`RETENTION_FULL_SECONDS`, `RETENTION_DIFF_SECONDS` and `RETENTION_LOG_SECONDS` (seconds, or
+`keep`). Both scripts (`.sh`, `.ps1`) then cut `FULL/*.bak`, `DIFF/*.bak` and `LOG/*.trn` each by
+its own window, never touching the newest FULL or anything after it. All three or none: a
+partial set, or a window under 60 seconds, stops the script. A per-type `0` is refused when the
+job is built: a window says how long, or the folder is kept. `RETENTION_DAYS` still carries the
+longest window, so a script from before 1.228 removes nothing early. Fixed on the way: the
+Linux script's `find ! -newer <newest full>` matched the newest full itself, so in the one-window
+form a database whose backups stopped for longer than the window lost its last FULL. It is now
+excluded by path. The Windows script compared strictly and never had the bug.
+
+**PostgreSQL applies it per type** (1.229): `RETENTION_FULL_BASE_SECONDS` sweeps the base chains
+(an INCR goes with its chain), and `RETENTION_WAL_SECONDS` sets the WAL archive's own window. The
+WAL cut line is the START WAL of the oldest full base that began inside the WAL window, or the
+newest full base when none did. So point-in-time reaches back the WAL window, and never less
+than from the newest base. An older base still restores to its own end, because `-X stream` put
+its WAL inside it. `keep` on WAL runs no cleanup, and `keep` on FULL_BASE runs no sweep. With
+neither stated, the cut is the oldest base's START WAL, as before.
+
+**Oracle applies it per type** (1.230). `RETENTION_RMAN_L0_SECONDS` is RMAN's recovery window: whole
+days, at least one, and under a day the sweep after a level 0 applies it exactly. It replaces
+`RETENTION_DAYS`, which such a job sends as its *longest* window. `RETENTION_ARCHIVELOG_SECONDS`
+is how long a backed-up log stays **on disk**. The **backups** of the logs follow the level 0's
+window, not ARCHIVELOG's: a level 0 is a hot backup and needs the logs written during it, so
+cutting their backups shorter would leave every older level 0 present and unrestorable. (The
+plan said ARCHIVELOG's window, and this is why it does not.) `RETENTION_CONTROLFILE_SECONDS` /
+`_SPFILE_` delete those backups by their own window, after a run that succeeded and never reaching
+into it. `keep` is refused for RMAN_L0 and ARCHIVELOG, because RMAN's policy is a window and logs
+kept for ever fill the archive destination. Oracle's point-in-time reach is the level 0's window.
+
+**`prune-backup-files` and `prune-backups` judge each level by its own window** (1.231). A
+retention that names types reaches the planner as one window per listing level
+(`full` / `diff` / `log`, from `lib.cleanup_retention.windows_by_level`). `prune-backups` sends the
+job's object. Under `age`, each file is cut by its own level's cutoff, and `keep` keeps that
+level. Under `recovery_window`, the anchor is the full's window, because a chain is anchored on
+its full. The floor (each database's newest full and everything after it) is unchanged, and the
+plan answers `windows` and `level_cutoffs`. Oracle's log level is its archivelog backups, which
+follow the level 0.
+
+**Stated once, on the backup entry** (1.232). The window belongs to the directory, and one entry is
+one directory. `backups[].cleanup_retention` (the integer or the object) applies to every job of
+the entry that states none, and a job that states its own keeps it. A job and its entry stating
+different values is a `check-objects` violation, and `backup-add` refuses it. `upgrade-config`
+step `retention-per-type` moves the jobs' values onto the entry: jobs that agree become the
+integer and nothing changes. Jobs that differ become the object, each job's value on the types it
+writes and the longest as `default`, and the change is named, because until then the shortest
+job's window cut every type. On the master's configuration (2026-11-03) all 40 entries fold into
+the integer. **Run it with the deploy that carries 0.35.0, not before:** a worker on 0.34 reads
+the retention from the jobs only.
+The reference's site for jobs says `inherited_from: backup_restore.backups[]`, so `check-objects`
+does not report a job as missing the field when its entry states it. The first 0.35 deploy
+(2.87.64) reported 49 such jobs before this was added.
+
+`list-backups` prints each job's windows, and with the per-type form its point-in-time reach
+(T3, 1.233). Every backup run records both in the catalog (`backup_runs.retention_json`,
+`pitr_reach_seconds`). The backup & restore page's Recoverability section has a table of every
+entry's, and each server page prints its entries' above the backup files. Not yet in the SLA:
+its results are records with fixed fields.
+
+**Not yet per type:** restore staging (`delete-backup`, `prune-staged-backups`)
+(1.231) take the object's **longest** window, so nothing is removed earlier than any type asked
+for (a `keep` other than CERT reads as a hundred years). The fold of each job's number into its
+entry (1.232) comes after them.
+
 Over-deleting is recoverable rather than destructive: the next transfer compares against the
 source and re-copies whatever is missing. A restore in between would fail loudly, which is why the
 margin is deliberate rather than tight.
@@ -2285,6 +2504,11 @@ Two properties are deliberate:
   decision G2.10). The check runs inside the restore's own batch, before anything else; a database
   RESTORING from an earlier run, or absent, is restored as before. A drill that runs again over its
   own last restore states `"overwrite_existing": true` - SMB and script entries alike.
+- *the target ... is a production instance ... Refused* (0.35.0, 1.223): the target's
+  `environment` in `db_instances.json` is `prod` / `production` and the entry does not say
+  `"allow_production_target": true`. Checked by both paths before anything is copied. The existing
+  guard only caught a target that is the entry's own source; this one catches an id typed for
+  another. Only a real recovery onto production states it, never a drill.
 - *env.MSSQL_USER is not stated, so the restore logs in as sa* (a warning in the answer, 0.26.0): a
   script-driven SQL Server entry still logs in as `sa` when it names no login, and the next release
   refuses it (G2.11). State `"env": {"MSSQL_USER": "..."}`.

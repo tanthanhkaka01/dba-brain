@@ -1832,6 +1832,23 @@ Measured on the same host and metric: 490.1 s before, **exactly 60.0 s** after, 
 operator — the host's event log genuinely is slow to query (26,152 events of one id), and that is
 now a visible WARNING every pass instead of an invisible eight-minute stall for the whole estate.
 
+## `STORAGE_FILE_PLACEMENT`: backups beside the data are graded (0.35.0)
+
+The metric listed where each data, log and backup file lies and alerted on nothing. From 0.35.0
+(1.239 - plan 2026-10-30, *ransomware and backups kept beside the data*, R-1) each database with a
+backup in the last two days gets one graded row, `PLACEMENT | <db>`:
+
+| Status | When | Why |
+| --- | --- | --- |
+| **CRITICAL** (`same drive`) | a backup on the same drive as one of that database's data or log files | the drive failing, or encrypted, takes the data and its backup together |
+| **WARNING** (`same host`) | every backup on the database host | another drive survives a failed disk, not ransomware, which encrypts every drive the host has |
+| OK (`off host`) | a backup on a UNC share or a URL | |
+
+The message carries `same_drive_as_data`, `off_host` and one example path. A Linux path cannot be
+compared by drive letter: on the host only, it is WARNING with `mount_points_compared=0`. The file
+and backup rows stay as they were (status OK), so the inventory's disk block reads them unchanged.
+Read on the estate when it was written: 7 of 12 instances CRITICAL, every one at least WARNING.
+
 ## `LOCK_SLEEPING_OPEN_TRANSACTION`: sleeping is an instant, not a duration
 
 `sys.dm_exec_sessions.status = 'sleeping'` means only that the session has no request running *at

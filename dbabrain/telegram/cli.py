@@ -261,21 +261,12 @@ def _ai_command(args: argparse.Namespace, config: DbaBrainConfig, config_path: s
         from dbabrain.telegram.ai_assist import run_ai_assist
 
         return run_ai_assist(config=config, config_path=config_path)
-    from datetime import datetime, timedelta, timezone
-
     from dbabrain.db.ai_assist_store import AiAssistStore
 
     store = AiAssistStore.from_config(config)
     if args.command == "ai-show":
         return store.transcript(args.ai_request_id)
-    until = datetime.now(timezone.utc)
-    since = until - timedelta(days=max(int(args.days), 1))
-    stamp = "%Y-%m-%dT%H:%M:%SZ"
-    rows = store.usage_report(since=since.strftime(stamp), until=(until + timedelta(seconds=1)).strftime(stamp),
-                              group_by=args.by)
-    return {"since": since.strftime(stamp), "until": until.strftime(stamp), "by": args.by, "rows": rows,
-            "total_cost_usd": round(sum(float(row["cost_usd"] or 0) for row in rows), 6),
-            "total_tokens": sum(int(row["tokens"] or 0) for row in rows)}
+    return store.usage_since(days=int(args.days), group_by=args.by)
 
 
 def call_telegram_function(

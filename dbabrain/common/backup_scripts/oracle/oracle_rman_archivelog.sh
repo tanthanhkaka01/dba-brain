@@ -45,6 +45,9 @@ retention_seconds="${RETENTION_SECONDS:-}"
 oracle_sid="${ORACLE_SID:-}"
 # When this run began: the receipt validates the backup sets completed since (0.34.0).
 run_started="$(date +%s)"
+# The same instant as UTC text, for the receipt's start= (1.254): one RMAN command writes every
+# piece of the run, so the run's start is each piece's.
+run_started_utc="$(date -u -d "@${run_started}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
 rman_configure="${RMAN_CONFIGURE:-apply}"
 oracle_os_user="${ORACLE_OS_USER:-}"
 
@@ -83,6 +86,27 @@ esac
 # makes them unnecessary.
 log_age="${retention_days}"
 [ -n "$retention_seconds" ] && log_age="${retention_seconds}/86400"
+# >>> retention per type (0.35.0, 1.230; tests/test_oracle_pieces_keep_their_own_windows.py runs this block)
+# A job naming types: ARCHIVELOG is how long a backed-up log stays on DISK. The BACKUPS of the logs
+# follow RMAN_L0's window, never ARCHIVELOG's: a level 0 is a hot backup and needs the logs written
+# during it to become consistent - cutting their backups shorter would leave every older level 0
+# unrestorable while it still looked present.
+if [ -n "${RETENTION_ARCHIVELOG_SECONDS:-}" ]; then
+    case "$RETENTION_ARCHIVELOG_SECONDS" in
+        ''|*[!0-9]*) die "RETENTION_ARCHIVELOG_SECONDS must be seconds (at least 60): '${RETENTION_ARCHIVELOG_SECONDS}'." ;;
+    esac
+    [ "$RETENTION_ARCHIVELOG_SECONDS" -ge 60 ] \
+        || die "RETENTION_ARCHIVELOG_SECONDS must be at least 60: '${RETENTION_ARCHIVELOG_SECONDS}'."
+    log_age="${RETENTION_ARCHIVELOG_SECONDS}/86400"
+fi
+if [ -n "${RETENTION_RMAN_L0_SECONDS:-}" ]; then
+    case "$RETENTION_RMAN_L0_SECONDS" in
+        ''|*[!0-9]*) die "RETENTION_RMAN_L0_SECONDS must be seconds (at least 60): '${RETENTION_RMAN_L0_SECONDS}'." ;;
+    esac
+    retention_days=$(( RETENTION_RMAN_L0_SECONDS / 86400 ))
+    [ "$retention_days" -ge 1 ] || retention_days=1
+fi
+# <<< retention per type
 
 # Empty means "whatever the container profile exports". Anything else is exported into a shell
 # inside the container, so it has to be an identifier and nothing else.
@@ -265,8 +289,8 @@ emit_pieces() {
         # Encrypted exactly when this run SET ENCRYPTION ON - when a passphrase was given.
         p_encrypted=no
         [ -n "$enc_line" ] && p_encrypted=yes
-        printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=%s\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
-            "${oracle_sid:-database}" "$ptype" "${p_size:-}" "$p_sha" "$verify" "$p_encrypted" "$verify_note" \
+        printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=%s\tstart=%s\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
+            "${oracle_sid:-database}" "$ptype" "${p_size:-}" "$p_sha" "$verify" "$p_encrypted" "$run_started_utc" "$verify_note" \
             "$(host_path_of "$piece")" "$container" "$piece"
     done
     [ "$verify" = "failed" ] && die "RMAN VALIDATE found a backup set of this run unusable."

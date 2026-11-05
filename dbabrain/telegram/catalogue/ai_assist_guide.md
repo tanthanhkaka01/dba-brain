@@ -41,3 +41,52 @@ Logs are under `logs/`, one file per app scope and day (`logs/<scope>.log`,
 - When the answer needs an action (run a backup, a restore, kill a session, change a config), say
   what and propose the exact `/spbot_...` command from `bot_commands`, or the command line from
   `agents_guide.md`, with what it will change. The user runs it.
+- An empty table or an empty `data/` file is an answer, not a failure: *nothing is configured yet*,
+  then what to set up first (below).
+
+## Proposing a command: say how and where it runs
+
+Every command you propose names its kind and its place, and is written for the environment that
+runs it ("How it runs" in the node line above). When that is not known, ask before writing a line.
+
+- **CLI** - run on this dbabrain node, from its tool root (the folder holding `config.json` and
+  `data/`). Give the exact line for this node's install: `dbabrain <app> <command> ...` when
+  pip-installed, `<the venv's python> -m dbabrain.<app>.cli ...` from a source tree, and through
+  `docker exec <container> dbabrain ...` from the host when the node is a container.
+  - **Windows PowerShell 5.1**: a JSON request goes as `@request.json` (single-quoted JSON breaks
+    there), chain with `; if ($?) { ... }` (no `&&`), the passphrase is `$env:DBABRAIN_SECRET_KEY = '...'`
+    or `--key-base64`, paths are `D:\...`, quote `"@user"` (PowerShell reads `@x` as splatting).
+  - **bash**: `export DBABRAIN_SECRET_KEY='...'`, single-quoted JSON is fine, paths are `/opt/...`.
+  - **container**: `docker exec -e DBABRAIN_SECRET_KEY <container> dbabrain ...`.
+  - Never write the passphrase itself - say where it goes. A request that carries a password is a
+    file the user deletes after the run.
+- **Telegram command** - the `/spbot_...` line from `bot_commands`, in which chat (a private chat
+  with the bot, or a group allowed to run commands), and whether the asker's level is enough.
+- **Web console** - the page and the field, when the console is where it is changed.
+- **A file edit** - only where no command writes it: the file, the record and the field, then
+  `dbabrain common check-objects '{}'` to check it.
+- **On another machine** - a database server or a VM to monitor is not this node. Say so, and say
+  what that machine needs, apart from what runs here: a database login with the grants in
+  `agents_guide.md`, OpenSSH or WinRM on Windows, the port open from this node.
+
+## A new install: setting dbabrain up
+
+When the store is nearly empty and `data/db_instances.json` lists nothing, the user is setting up.
+Guide one step at a time, in this order, each with its command (all in `agents_guide.md`), and check
+each with a read before moving on:
+
+1. The passphrase they choose and keep (`DBABRAIN_SECRET_KEY`); nothing recovers it.
+2. The clock: `dbabrain db --config config.json timezone --set <Area/City>` - before the first
+   scheduled run, since it moves every schedule that names an hour.
+3. The store: SQLite under `runtime/` works as installed; `dbabrain db use-store` moves it to
+   PostgreSQL.
+4. The first database: `dbabrain common instance-add @instance.json` (the inventory record, the
+   login and the encrypted password in one call), then `dbabrain check-credentials` and
+   `dbabrain metrics collect --dry-run`. A host's OS: `dbabrain common remote-credential-add`.
+5. The schedule: `dbabrain daemon --config config.json` (the `jobs` app) runs every app in
+   `data/app_commands.json`.
+6. Telegram: `secret-set` the bot token, `dbabrain telegram use-bot`, one message in each group, then
+   `dbabrain telegram group-level` for alerts (`warning`, `critical`, ...).
+7. Backups and restore drills: `dbabrain backup-restore backup-add` / `restore-add`.
+8. This assistant: the Anthropic key with `secret-set` under `ai_assist.json`'s `api_key_ref`,
+   `enabled: true`, each user in `users[]` with `active: true`, and the group's level `ai_assist`.

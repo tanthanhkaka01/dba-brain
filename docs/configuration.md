@@ -448,6 +448,7 @@ else is JSON. Start from [`.env.example`](../.env.example).
 | `DBABRAIN_STORE_CONFIG` | Overrides the store declaration path, for a side-install or a test. |
 | `DBABRAIN_<APP>_CONFIG` | Per-app configuration path — see §2. |
 | `TELEGRAM_BOT_TOKEN` | The bot token, if you supply it by environment instead of the secret store. The variable *name* comes from `bot_token_env`. |
+| `DBABRAIN_SSH_KNOWN_HOSTS` | A file to pin SSH host keys in (0.35.0): a host's key is written there the first time it is seen, and a different key refuses the connection before anything is sent. Unset, every key is accepted, as before. |
 | `DBABRAIN_LOG_SCOPE` | Overrides the log scope name, when one app runs under several names. |
 
 **A credential reference doubles as an environment variable name.** At use time a `password_ref`

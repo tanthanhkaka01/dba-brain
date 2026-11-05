@@ -45,6 +45,9 @@ retention_seconds="${RETENTION_SECONDS:-}"
 # When this run began, on this host's clock: the sub-day sweep below counts back from here, so a
 # backup that takes longer than the window cannot have its own first sets removed.
 run_started="$(date +%s)"
+# The same instant as UTC text, for the receipt's start= (1.254): one RMAN command writes every
+# piece of the run, so the run's start is each piece's.
+run_started_utc="$(date -u -d "@${run_started}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
 level_override="${BACKUP_LEVEL:-}"
 oracle_sid="${ORACLE_SID:-}"
 rman_configure="${RMAN_CONFIGURE:-apply}"
@@ -78,6 +81,30 @@ esac
 case "$retention_seconds" in
     *[!0-9]*) die "RETENTION_SECONDS must be a whole number of seconds: '${retention_seconds}'." ;;
 esac
+# >>> retention per type (0.35.0, 1.230; tests/test_oracle_pieces_keep_their_own_windows.py runs this block)
+# RMAN_L0 is the recovery window - a level 1 goes with its chain - in place of RETENTION_DAYS, which
+# a job naming types sends as its LONGEST window (a CONTROLFILE: keep would make it a century).
+# Whole days for RMAN, at least one; under a day the sweep below applies it exactly.
+if [ -n "${RETENTION_RMAN_L0_SECONDS:-}" ]; then
+    case "$RETENTION_RMAN_L0_SECONDS" in
+        ''|*[!0-9]*) die "RETENTION_RMAN_L0_SECONDS must be seconds (at least 60): '${RETENTION_RMAN_L0_SECONDS}'." ;;
+    esac
+    [ "$RETENTION_RMAN_L0_SECONDS" -ge 60 ] \
+        || die "RETENTION_RMAN_L0_SECONDS must be at least 60: '${RETENTION_RMAN_L0_SECONDS}'."
+    retention_days=$(( RETENTION_RMAN_L0_SECONDS / 86400 ))
+    [ "$retention_days" -ge 1 ] || retention_days=1
+    retention_seconds=""
+    [ "$RETENTION_RMAN_L0_SECONDS" -lt 86400 ] && retention_seconds="$RETENTION_RMAN_L0_SECONDS"
+fi
+for kind in CONTROLFILE SPFILE; do
+    eval "window=\${RETENTION_${kind}_SECONDS:-}"
+    case "$window" in
+        ''|keep) ;;
+        *[!0-9]*) die "RETENTION_${kind}_SECONDS must be seconds (at least 60) or keep: '${window}'." ;;
+        *) [ "$window" -ge 60 ] || die "RETENTION_${kind}_SECONDS must be at least 60, or keep: '${window}'." ;;
+    esac
+done
+# <<< retention per type
 
 # Empty is the normal case and means "whatever the container's profile exports". Anything else has
 # to be an identifier: it is exported into a shell inside the container, so a value with a space or
@@ -299,8 +326,8 @@ emit_pieces() {
         # Encrypted exactly when this run SET ENCRYPTION ON - when a passphrase was given.
         p_encrypted=no
         [ -n "$enc_line" ] && p_encrypted=yes
-        printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=%s\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
-            "${oracle_sid:-database}" "$ptype" "${p_size:-}" "$p_sha" "$verify" "$p_encrypted" "$verify_note" \
+        printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=%s\tstart=%s\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
+            "${oracle_sid:-database}" "$ptype" "${p_size:-}" "$p_sha" "$verify" "$p_encrypted" "$run_started_utc" "$verify_note" \
             "$(host_path_of "$piece")" "$container" "$piece"
     done
     [ "$verify" = "failed" ] && die "RMAN VALIDATE found a backup set of this run unusable."
@@ -373,6 +400,28 @@ RMANEOF
     # a warning the next level 0 gets to try again.
     printf '%s\n' "$sweep_out" | grep -qE 'RMAN-00569' \
         && printf 'warning: the retention sweep reported an RMAN error\n' >&2
+fi
+
+# --- The controlfile and spfile backups by their own windows (1.230) ---------------------------
+# Only after a backup that succeeded, and never reaching into this run: the cutoff is the window,
+# then the time this run has taken - the controlfile this run just backed up always stays. Each
+# run backs them up again, so a short window keeps the newest; a window longer than the recovery
+# window changes nothing, DELETE OBSOLETE has already judged them.
+piece_sweep=""
+run_elapsed=$(( $(date +%s) - run_started ))
+for kind in CONTROLFILE SPFILE; do
+    eval "window=\${RETENTION_${kind}_SECONDS:-}"
+    case "$window" in ''|keep) continue ;; esac
+    piece_sweep="${piece_sweep}DELETE NOPROMPT BACKUP OF ${kind} COMPLETED BEFORE 'SYSDATE-${window}/86400-${run_elapsed}/86400';
+"
+done
+if [ -n "$piece_sweep" ]; then
+    printf 'piece_sweep=%s\n' "$(printf '%s' "$piece_sweep" | tr '\n' ' ')"
+    piece_out="$(printf '%sEXIT;\n' "$piece_sweep" | run_rman "${sid_export}rman target / log /dev/stdout 2>&1")" \
+        || printf 'warning: the controlfile / spfile sweep exited non-zero\n' >&2
+    printf '%s\n' "$piece_out"
+    printf '%s\n' "$piece_out" | grep -qE 'RMAN-00569' \
+        && printf 'warning: the controlfile / spfile sweep reported an RMAN error\n' >&2
 fi
 
 # Keep the pieces readable to the host's SSH user, for the same reason the PostgreSQL backup

@@ -39,9 +39,12 @@
 #      BACKUP_ENCRYPTION_PASSWORD (optional, from env_secrets; absent = unencrypted),
 #      BACKUP_CERT_NAME (default dbabrain_backup_cert), RETENTION_DAYS (default 14),
 #      RETENTION_SECONDS (optional; a window under a day, which wins over RETENTION_DAYS).
+#      RETENTION_FULL_SECONDS, RETENTION_DIFF_SECONDS, RETENTION_LOG_SECONDS (optional, all three or
+#      none; seconds or keep): each folder by its own window, instead of the one above (0.35.0).
 # Exit: 0 on success, non-zero on failure. Prints RESULT=ok only on a completed run.
 # Receipt: one `FILE` line per backup file written (0.34.0), as the Linux script prints it:
-#   FILE<TAB>db=<DB><TAB>type=FULL|DIFF|LOG<TAB>size=<n><TAB>sha256=<hex><TAB>verify=passed|failed<TAB>encrypted=yes|no<TAB>path=<file>
+#   FILE<TAB>db=<DB><TAB>type=FULL|DIFF|LOG<TAB>size=<n><TAB>sha256=<hex><TAB>verify=passed|failed<TAB>encrypted=yes|no<TAB>start=<UTC>...<TAB>path=<file>
+#   start= (0.35.0) is when the BACKUP statement for that file began, UTC 'yyyy-MM-ddTHH:mm:ssZ'.
 
 $ErrorActionPreference = 'Stop'
 
@@ -92,6 +95,22 @@ $retentionDays = [int]$retentionDays
 # A window under a day arrives in seconds, because days cannot say it - the Linux script's rule.
 $retentionSeconds = $env:RETENTION_SECONDS
 if ($retentionSeconds -and $retentionSeconds -notmatch '^\d+$') { Die "RETENTION_SECONDS must be a whole number of seconds: '$retentionSeconds'." }
+# Per file type (0.35.0, 1.228) - the Linux script's rule: FULL, DIFF and LOG each by its own window,
+# all three or none, seconds (at least 60) or keep.
+$perType = @{}
+foreach ($kind in @('FULL', 'DIFF', 'LOG')) {
+    $value = [Environment]::GetEnvironmentVariable("RETENTION_${kind}_SECONDS")
+    if ($value) { $perType[$kind] = $value }
+}
+if ($perType.Count -gt 0) {
+    foreach ($kind in @('FULL', 'DIFF', 'LOG')) {
+        $value = $perType[$kind]
+        if ($value -eq 'keep') { continue }
+        if (-not $value -or $value -notmatch '^\d+$' -or [int]$value -lt 60) {
+            Die "RETENTION_${kind}_SECONDS must be seconds (at least 60) or keep: '$value'."
+        }
+    }
+}
 # A SQL login needs both halves. One without the other silently falls back to Windows auth and
 # backs up as whoever WinRM connected as - which may have rights the operator did not intend.
 if ($mssqlUser -and -not $mssqlPass) { Die 'MSSQL_USER is set without MSSQL_PASSWORD.' }
@@ -263,7 +282,7 @@ if ($level -eq 'diff') {
 # One receipt line per file written (0.34.0), the Linux script's line: the sha256 taken here, where
 # the file lies, through .NET - Get-FileHash arrived in PowerShell 4.0 and 2008 R2 hosts ship 2.0.
 # A file this account cannot read is still listed, with an empty sha256: recorded as unverified.
-function Write-FileReceipt([string]$db, [string]$type, [string]$path, [string]$verify) {
+function Write-FileReceipt([string]$db, [string]$type, [string]$path, [string]$verify, [string]$started) {
     $size = ''
     $sha = ''
     try {
@@ -280,7 +299,7 @@ function Write-FileReceipt([string]$db, [string]$type, [string]$path, [string]$v
     # a passphrase was given (a statement that cannot encrypt fails rather than writing it plain).
     $fileEncrypted = if ($encPassword) { 'yes' } else { 'no' }
     # No container on Windows: the path the engine wrote is the server's own.
-    "FILE`tdb=$db`ttype=$type`tsize=$size`tsha256=$sha`tverify=$verify`tencrypted=$fileEncrypted`thost_path=$path`tcontainer=`tpath=$path"
+    "FILE`tdb=$db`ttype=$type`tsize=$size`tsha256=$sha`tverify=$verify`tencrypted=$fileEncrypted`tstart=$started`thost_path=$path`tcontainer=`tpath=$path"
 }
 
 # --------------------------------------------------------------------------- #
@@ -313,6 +332,8 @@ foreach ($db in $databases) {
     }
 
     "-- $db $level -> $targetFile"
+    # When this file's backup began (1.254): the run's start is the first database's, not this one's.
+    $started = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
     $result = Invoke-Sql $statement
     if ($result.ok) {
         # CHECKSUM on the way in is only half of it: VERIFYONLY re-reads what landed on disk,
@@ -325,7 +346,7 @@ foreach ($db in $databases) {
             $failed = 1
             $verdict = 'failed'
         }
-        Write-FileReceipt $db $sub $targetFile $verdict
+        Write-FileReceipt $db $sub $targetFile $verdict $started
     } else {
         Write-Stderr "ERROR backup failed: $db ($level) - $($result.output)"
         $failed = 1
@@ -346,6 +367,27 @@ foreach ($db in $databases) {
     $newestFull = Get-ChildItem -LiteralPath "$dbDir\FULL" -Filter '*.bak' -File -ErrorAction SilentlyContinue |
                   Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $newestFull) { continue }   # nothing to anchor retention to; keep everything
+    # >>> retention per type (1.228)
+    if ($perType.Count -gt 0) {
+        foreach ($kind in @('FULL', 'DIFF', 'LOG')) {
+            if ($perType[$kind] -eq 'keep') {
+                "retention: $db $kind kept (keep), below its newest full $($newestFull.Name)"
+                continue
+            }
+            $kindCutoff = (Get-Date).AddSeconds(-1 * [int]$perType[$kind])
+            $filter = if ($kind -eq 'LOG') { '*.trn' } else { '*.bak' }
+            $aged = @(Get-ChildItem -LiteralPath "$dbDir\$kind" -Filter $filter -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -lt $kindCutoff -and $_.LastWriteTime -lt $newestFull.LastWriteTime })
+            $removed = 0
+            foreach ($file in $aged) {
+                Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+                if (-not (Test-Path -LiteralPath $file.FullName)) { $removed++ }
+            }
+            "retention: $db $kind removed $removed file(s) past its window ($($perType[$kind])s), below its newest full $($newestFull.Name)"
+        }
+        continue
+    }
+    # <<< retention per type
     $aged = @(Get-ChildItem -LiteralPath $dbDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -in @('.bak', '.trn') } |
         Where-Object { $_.LastWriteTime -lt $cutoff -and $_.LastWriteTime -lt $newestFull.LastWriteTime })

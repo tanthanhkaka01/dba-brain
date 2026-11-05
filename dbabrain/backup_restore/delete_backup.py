@@ -442,6 +442,12 @@ def run_delete_backup(
     on 2026-09-05 while reporting itself as a plan. They were past retention and would have gone
     on the next real run, which is luck rather than design - a dry run may not change anything.
     """
+    if not dry_run:
+        # Nothing deleted while a lockdown is on (1.220).
+        from dbabrain.db.lockdown_store import Locked, lockdown_on
+
+        if lockdown_on():
+            raise Locked("delete-backup is refused: a lockdown is on (control.cli lockdown status).")
     restore_config = config or load_restore_config()
     _validate_safe_target_delete_root(restore_config)
     validate_restore_target_is_not_source(restore_config)

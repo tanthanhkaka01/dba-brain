@@ -210,6 +210,14 @@ def main(source: str, *, data_dir: Path, dry_run: bool = False, logger: Any = No
 
     where = f"server_id={request['server_id']}|database={request.get('database') or ''}"
     if writes(request):
+        # No SQL that writes while a lockdown is on (1.220).
+        from dbabrain.db.lockdown_store import lockdown_on
+
+        if lockdown_on():
+            note("logging", f"sql_tasks.adhoc.refused|{where}|reason=lockdown")
+            return response.emit(response.fail(
+                COMMAND, f"{COMMAND} on {request['server_id']} writes, and a lockdown is on. Nothing ran.",
+                kind=errors.KIND_REFUSED))
         if not authorize_write(request, data_dir=data_dir, echo=stderr):
             note("logging", f"sql_tasks.adhoc.refused|{where}|reason=not_confirmed")
             # An answer like every other: a caller parsing stdout reads the refusal, not silence.

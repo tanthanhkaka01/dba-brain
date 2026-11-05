@@ -38,6 +38,7 @@ from dbabrain.db.backend import StoreTarget
 from dbabrain.db.store import DbaBrainStore
 from dbabrain.db.telegram_queue import queue_telegram_message
 from dbabrain.lib import ai_assist as A
+from dbabrain.lib import node_environment
 from dbabrain.lib import timezone as timezone_lib
 from dbabrain.lib.version import __version__
 from dbabrain.telegram import ai_agent, ai_tools
@@ -73,8 +74,9 @@ def load_settings(data_dir: Path) -> tuple[A.AiAssistSettings | None, str]:
         return None, f"{A.FILE_NAME}: enabled is false."
     if not settings.api_key_ref:
         return None, f"{A.FILE_NAME}: api_key_ref is empty."
-    if not settings.telegram_chat.strip():
-        return None, f"{A.FILE_NAME}: telegram_chat is empty - no chat to answer in."
+    if not settings.chat_levels and not settings.private_chat_enabled:
+        return None, (f"{A.FILE_NAME}: telegram_chat names no level and private_chat_enabled is false - "
+                      "no chat to answer in.")
     return settings, ""
 
 
@@ -152,8 +154,10 @@ def system_prompt(settings: A.AiAssistSettings, *, node: dict[str, str]) -> str:
         # No version and no time here: the system prompt is part of every thinking block's binding and
         # of the cached prefix, so whatever changes on a deploy belongs in <dbabrain_context>.
         "This node: role {role}, runtime store {backend}, timezone {timezone}.\n"
+        "How it runs: {environment}\n"
         "Readable roots of the tool root: {roots}.\nTools mode: {mode}.".format(
             role=node.get("role", ""), backend=node.get("backend", ""),
+            environment=node.get("environment", "not known - ask the user before writing a command line"),
             timezone=node.get("timezone", ""), roots=", ".join(settings.file_roots) if settings.files_enabled
             else "none (file tools off)", mode=settings.tools_mode))
     if settings.system_prompt_extra.strip():
@@ -254,6 +258,12 @@ def read_attachments(raw: dict[str, Any], settings: A.AiAssistSettings, *,
 # --------------------------------------------------------------------------- #
 # Replies
 # --------------------------------------------------------------------------- #
+def _is_private(row: dict[str, Any], raw: dict[str, Any]) -> bool:
+    """A private chat with the bot - Telegram's ``chat.type``, as saved beside the message."""
+    kind = str(row.get("chat_type") or (raw.get("chat") or {}).get("type") or "").strip().lower()
+    return kind == "private"
+
+
 def chunks(text: str, size: int) -> list[str]:
     """An answer cut into Telegram messages, at a line break where one is near."""
     text = text.strip() or "(no answer)"
@@ -293,6 +303,9 @@ class Runner:
                      "backend": str(self.target.store.backend), "timezone": str(getattr(config, "timezone", ""))}
         self.redact = ai_tools.Redactor(secrets)
         self.tool_root = (tool_root or self.config_path.resolve().parent).resolve()
+        # How this node runs, so a proposed command line is written for its shell and its install
+        # (1.267). Stable for the node's life, so it sits in the cached system prompt.
+        self.node["environment"] = node_environment.summary_line(node_environment.describe(self.tool_root))
         self.counts = {"read": 0, "answered": 0, "refused": 0, "errors": 0, "commands": 0, "skipped": 0}
 
     def _now(self) -> datetime:
@@ -320,13 +333,18 @@ class Runner:
             started_before=_utc_text(self._now() - timedelta(seconds=self.settings.stale_running_seconds)),
             reason="the run that held it ended before it finished")
         since = int((self._now() - timedelta(seconds=self.settings.max_message_age_seconds)).timestamp())
-        chat = self.chat_id()
-        if not chat:
-            return {"ok": True, "skipped": True,
-                    "reason": f"no chat for level {self.settings.telegram_chat!r}: give the assistant's group that "
-                              f"notify_level (telegram group-level --group <id or title> --level "
-                              f"{self.settings.telegram_chat}), or map it in telegram_config.json level_chat_map."}
-        rows = self.store.unclaimed_messages(chat_ids=[chat], since_epoch=since,
+        groups, unrouted = self.group_chats()
+        private = list(self.settings.private_user_ids)
+        chats = [*groups, *(chat for chat in private if chat not in groups)]
+        if not chats:
+            first = unrouted[0] if unrouted else A.AI_ASSIST_LEVEL
+            reason = (f"no chat for level(s) {', '.join(unrouted) or '(none)'}: give the assistant's group that "
+                      f"notify_level (telegram group-level --group <id or title> --level {first}), or map it in "
+                      f"telegram_config.json level_chat_map.")
+            if self.settings.private_chat_enabled:
+                reason += " private_chat_enabled is on, but no user in users[] is active."
+            return {"ok": True, "skipped": True, "reason": reason}
+        rows = self.store.unclaimed_messages(chat_ids=chats, since_epoch=since,
                                              limit=int(self.settings.questions_per_run))
         for row in rows:
             if self.clock() >= self.deadline:
@@ -336,17 +354,31 @@ class Runner:
                 self.handle(row)
             except Exception as exc:  # noqa: BLE001 - one message must never stop the others.
                 self._failed(row, f"{type(exc).__name__}: {exc}")
-        return {"ok": True, "chat_id": chat, "closed_stale": closed, **self.counts}
+        answer = {"ok": True, "chat_ids": groups, "private_chats": len(private), "closed_stale": closed,
+                  **self.counts}
+        if unrouted:
+            # One level without a group does not stop the others; it is said, every run, until fixed.
+            answer["levels_without_chat"] = unrouted
+        return answer
 
-    def chat_id(self) -> str:
-        """The assistant's chat: ``telegram_chat`` resolved as every app resolves its level - the
-        active group with that ``notify_level``, or ``level_chat_map``'s entry. A group Telegram
-        makes a supergroup carries its level to the new id (``updates.migrate_group``), so the
-        level follows the chat and nothing here names an id."""
+    def group_chats(self) -> tuple[list[str], list[str]]:
+        """The assistant's group chats, and the levels that resolved to none: each level of
+        ``telegram_chat`` resolved as every app resolves its level - the active group with that
+        ``notify_level``, or ``level_chat_map``'s entry. A group Telegram makes a supergroup
+        carries its level to the new id (``updates.migrate_group``), so the level follows the chat
+        and nothing here names an id."""
         from dbabrain.lib.config import chat_id_for_level
 
         level_chat_map = dict(getattr(self.config.telegram, "level_chat_map", None) or {})
-        return str(chat_id_for_level(level_chat_map, self.settings.telegram_chat.strip().lower()) or "")
+        chats: list[str] = []
+        unrouted: list[str] = []
+        for level in self.settings.chat_levels:
+            chat = str(chat_id_for_level(level_chat_map, level) or "")
+            if not chat:
+                unrouted.append(level)
+            elif chat not in chats:
+                chats.append(chat)
+        return chats, unrouted
 
     def _failed(self, row: dict[str, Any], error: str) -> None:
         """A message whose handling raised: its request closed as an error, and the asker told -
@@ -394,8 +426,18 @@ class Runner:
                                      finished_at=_utc_text(self._now()))
             self.counts["skipped"] += 1
             return
+        if self.store.held_by_a_bot_command(chat_id=chat_id, user_id=user_id, message_id=message_id,
+                                            telegram_message_id=int(row["telegram_message_id"])):
+            # The answer to a question a bot command asked - often a value or a password. Its text is
+            # not kept, and it never goes to the model.
+            self.store.claim_request(**base, kind="command", status="stopped",
+                                     reason="an answer to a bot command that is asking - the bot's workflow takes it",
+                                     finished_at=_utc_text(self._now()))
+            self.counts["skipped"] += 1
+            return
+        private = _is_private(row, raw)
         word = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-        addressed, text = self._addressed(raw, text, word)
+        addressed, text = self._addressed(raw, text, word, private=private)
         if not addressed:
             # People talking to each other. Not answered, and its text is not kept - only that it
             # was read and why it was left (the operator, 2026-10-31: answer only when @mentioned).
@@ -418,22 +460,23 @@ class Runner:
                 self.counts["refused"] += 1
             return
         if word in GROUP_WORDS:
-            self.group_word(word, base=base, user=user, text=text)
+            self.group_word(word, base=base, user=user, text=text, private=private)
             return
         self.question(base=base, raw=raw, user=user, text=text)
 
-    def _addressed(self, raw: dict[str, Any], text: str, word: str) -> tuple[bool, str]:
+    def _addressed(self, raw: dict[str, Any], text: str, word: str, *, private: bool = False) -> tuple[bool, str]:
         """Is this message for the assistant - and its text without the @mention.
 
         A group word (``/usage``) is; an @mention of the bot is (the ``@username`` in the text, or a
         ``text_mention`` entity naming the bot's id); a reply to one of the bot's own messages is,
-        when ``reply_to_assistant_is_mention``. ``require_mention`` off: every message is."""
+        when ``reply_to_assistant_is_mention``. ``require_mention`` off, or a private chat (nobody
+        else is in it): every message is."""
         username = str(getattr(self.config.telegram, "telegram_bot_username", "") or "").lstrip("@")
         bot_id = str(getattr(self.config.telegram, "telegram_bot_id", "") or "")
         mention = re.compile(rf"@{re.escape(username)}\b", re.IGNORECASE) if username else None
         stripped = mention.sub(" ", text).strip() if mention else text
         stripped = re.sub(r"\s{2,}", " ", stripped)
-        if not self.settings.require_mention or word in GROUP_WORDS:
+        if private or not self.settings.require_mention or word in GROUP_WORDS:
             return True, stripped
         if mention and mention.search(text):
             return True, stripped
@@ -474,7 +517,8 @@ class Runner:
             f"{s.max_tool_calls_question} tool calls. Model {s.model}, effort {s.effort}.",
         ]
 
-    def group_word(self, word: str, *, base: dict[str, Any], user: A.AiUser, text: str) -> None:
+    def group_word(self, word: str, *, base: dict[str, Any], user: A.AiUser, text: str,
+                   private: bool = False) -> None:
         request_id = self.store.claim_request(**base, kind="command", status="running", question=text)
         if not request_id:
             return
@@ -488,7 +532,8 @@ class Runner:
         else:
             tools = [tool["name"] for tool in ai_tools.tool_definitions(self.settings)]
             answer = "\n".join([
-                ("AI assistant - @mention the bot with a question; reply to an answer to continue it."
+                ("AI assistant - write a question here; reply to an answer to continue it." if private
+                 else "AI assistant - @mention the bot with a question; reply to an answer to continue it."
                  if self.settings.require_mention
                  else "AI assistant - write a question in this group; reply to an answer to continue it."),
                 "/new - start a new conversation",

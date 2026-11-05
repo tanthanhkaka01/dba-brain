@@ -185,6 +185,28 @@ def summarize(files: list[dict], *, total: int) -> dict:
     }
 
 
+def build_retention(rows: list[dict]) -> list[dict]:
+    """Each backup entry's retention and point-in-time reach, as its newest run recorded them (1.233,
+    T3): ``BackupCatalogStore.retention_by_entry``. The reach is the number an operator means by
+    "retention" - the shorter of the base and the log window - printed rather than inferred."""
+    import json
+
+    from dbabrain.lib import cleanup_retention
+
+    out = []
+    for row in rows:
+        try:
+            stated = json.loads(row.get("retention_json") or "null")
+        except ValueError:
+            stated = row.get("retention_json")
+        reach = row.get("pitr_reach_seconds")
+        out.append({"backupId": row.get("backup_id"), "server": row.get("server_id"), "engine": row.get("engine"),
+                    "windows": cleanup_retention.describe_config(stated),
+                    "reach": "kept, no limit by age" if reach is None else cleanup_retention.describe(int(reach)),
+                    "reachSeconds": reach, "since": row.get("started_at")})
+    return out
+
+
 def build_fleet(per_server: dict[str, tuple[list[dict], list[dict]]]) -> dict:
     """Every server's files in one table - the fleet page, ``backup-restore.html``.
 
@@ -203,3 +225,92 @@ def build_fleet(per_server: dict[str, tuple[list[dict], list[dict]]]) -> dict:
     files.sort(key=lambda f: str(f.get("at") or ""), reverse=True)
     return summarize(files, total=total)
 
+
+
+# --------------------------------------------------------------------------- #
+# Recoverability (0.35.0, 1.248 / 1.252 / 1.253)
+# --------------------------------------------------------------------------- #
+def _instant(value: Any):
+    from datetime import datetime, timezone
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _drill_ok(run: dict) -> bool:
+    """A drill succeeded when it ended ``done`` and no database failed its check."""
+    return run.get("phase") == "done" and not int(run.get("databases_failed") or 0)
+
+
+def build_drills(runs: list[dict], *, now) -> list[dict]:
+    """One row per restore entry from its runs (newest first): its tier, last run, last success, the
+    7- and 30-day success rates, and its state against the tier's deadline (``lib.drill_tiers``)."""
+    from datetime import timedelta
+
+    from dbabrain.lib import drill_tiers
+
+    by_entry: dict[str, list[dict]] = {}
+    for run in runs:
+        by_entry.setdefault(str(run.get("restore_id") or "(no id)"), []).append(run)
+    rows = []
+    for restore_id, entry_runs in sorted(by_entry.items()):
+        tier = next((r.get("tier") for r in entry_runs if r.get("tier")), None)
+        success = next((r for r in entry_runs if _drill_ok(r)), None)
+        last_success = _instant(success.get("ended_at") or success.get("started_at")) if success else None
+
+        def rate(days: int) -> tuple[int, int]:
+            window = [r for r in entry_runs if (_instant(r.get("started_at")) or now) >= now - timedelta(days=days)]
+            return sum(1 for r in window if _drill_ok(r)), len(window)
+
+        ok_7, runs_7 = rate(7)
+        ok_30, runs_30 = rate(30)
+        last = entry_runs[0]
+        rows.append({
+            "restore_id": restore_id, "tier": tier, "source": last.get("source_server_id"),
+            "target": last.get("target_server_id"), "last_run": last.get("started_at"),
+            "last_phase": last.get("phase"), "last_success": success.get("ended_at") if success else None,
+            "ok_7": ok_7, "runs_7": runs_7, "ok_30": ok_30, "runs_30": runs_30,
+            "state": drill_tiers.drill_state(tier, last_success, now),
+        })
+    return rows
+
+
+def build_coverage(rows: list[dict]) -> list[dict]:
+    """Per server and database (1.252): the levels its present backups hold, how many are copied
+    off the host, the last restore that used one - and what is missing, named. Complete is: a full,
+    log or WAL backups, a copy off the host, a drill. A repository and a virus scan are not counted
+    until they exist (1.240 is off until V-1; 1.242)."""
+    grouped: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        key = (str(row.get("server_id") or ""), str(row.get("database_name") or ""))
+        item = grouped.setdefault(key, {"server_id": key[0], "database_name": key[1],
+                                        "engine": row.get("engine"), "levels": set(), "files": 0,
+                                        "offloaded": 0, "newest_full": None, "last_restored": None})
+        level = integrity.LEVEL_OF_FILE_TYPE.get(str(row.get("file_type") or "").upper())
+        if level:
+            item["levels"].add(level)
+        item["files"] += int(row.get("files") or 0)
+        item["offloaded"] += int(row.get("offloaded") or 0)
+        if level == "full":
+            item["newest_full"] = max(filter(None, [item["newest_full"], row.get("newest")]), default=None)
+        item["last_restored"] = max(filter(None, [item["last_restored"], row.get("last_restored")]), default=None)
+    out = []
+    for item in grouped.values():
+        missing = []
+        if "full" not in item["levels"]:
+            missing.append("a full backup")
+        if "log" not in item["levels"]:
+            missing.append("log / WAL backups")
+        if not item["offloaded"]:
+            missing.append("a copy off the host")
+        if not item["last_restored"]:
+            missing.append("a restore drill")
+        out.append({**item, "levels": sorted(item["levels"]), "missing": missing,
+                    "status": "complete" if not missing else "incomplete"})
+    return sorted(out, key=lambda r: (r["status"] == "complete", r["server_id"], r["database_name"]))

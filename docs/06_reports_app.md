@@ -488,6 +488,22 @@ Asked for on 2026-10-30, beside Fleet inventory, Server metrics, SLA and Index u
 server's backup files and every restore that used them, on one page, from the backup catalog
 (`docs/08_backup_restore_app.md`).
 
+**Recoverability** (0.35.0, 1.248 / 1.252 / 1.253 - gaps G8, G13, G14), above the files table, from
+the catalog alone (`backup_restore_report.render_recoverability`):
+
+- **Drills**, one row per restore entry over 30 days: its tier (`restore_runs.tier`), its state
+  against the tier's deadline - OK, OVERDUE past 26 h / 7.5 days / 32 days since the last success,
+  NEVER, or UNTIERED - the last success, the last run and its phase, and the successes of 7 and 30
+  days. A success ended `done` with no database failing its check.
+- **Coverage**, one row per server and database: the levels its present backups hold, how many are
+  copied off the host, the last restore that used one, and what is missing - a full, log or WAL
+  backups, a copy off the host, a drill. *Complete* when nothing is. A repository and a virus scan
+  join the list when they exist (1.240, 1.242).
+- **Retention** (1.233), one row per backup entry: its retention per file type and its
+  point-in-time reach (the shorter of the base and the log window), as the entry's newest run
+  recorded them (`backup_runs.retention_json`, `pitr_reach_seconds`). Each server page prints
+  its own entries' in one line above its backup files (`backup_files.js`, `retentionLine`).
+
 - **One table.** Each row is what a backup wrote: its size in bytes, its SHA-256 recorded once, the
   engine's verification, whether it is still on disk and still the same bytes, the virus scan, and
   each restore or copy that used it. There is a **Server** column, and filters by server,

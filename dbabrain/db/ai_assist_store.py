@@ -26,7 +26,7 @@ every parent inside the five, a unique key on each natural key. **No foreign key
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -317,6 +317,30 @@ class AiAssistStore:
                 (*[str(item) for item in chat_ids], int(since_epoch), int(limit))).fetchall()
         return [dict(row) for row in rows]
 
+    def held_by_a_bot_command(self, *, chat_id: str, user_id: str, telegram_message_id: int,
+                              message_id: int) -> bool:
+        """Is this message the user's answer to a bot command that is asking them something.
+
+        A ``/spbot`` command that asks (a value, a choice, a password) takes the user's next plain
+        message in that chat. In a private chat every message goes to the assistant, so without
+        this a typed password would be sent to the model as a question (2026-11-04, private chats).
+        It is the bot's while a question is open for that user there, and once the bot took it.
+
+        Open means a ``waiting`` conversation state - the only thing the bot reads an answer
+        through (``fetch_waiting_telegram_conversation_states``). A workflow step's own ``active``
+        is not: a command left half-answered keeps it for ever, and the first private question on
+        the worker (2026-11-04) was held by two steps abandoned on 2026-10-06 and 2026-10-08."""
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM telegram_conversation_states WHERE chat_id = ? AND user_id = ? "
+                "AND ((status = 'waiting' AND wait_after_message_id < ?) OR consumed_telegram_message_id = ?) "
+                "UNION ALL SELECT 1 FROM telegram_workflow_steps WHERE chat_id = ? AND user_id = ? "
+                "AND answer_telegram_message_id = ? LIMIT 1",
+                (str(chat_id), str(user_id), int(message_id), int(telegram_message_id),
+                 str(chat_id), str(user_id), int(telegram_message_id))).fetchone()
+        return row is not None
+
     def request_by_message(self, *, chat_id: str, message_id: int) -> dict[str, Any] | None:
         self.initialize()
         with self.connect() as conn:
@@ -518,6 +542,30 @@ class AiAssistStore:
                 "COALESCE(SUM(cost_usd), 0) AS cost_usd, COALESCE(SUM(tool_calls), 0) AS tool_calls "
                 "FROM ai_requests WHERE kind = 'question' AND started_at >= ? AND started_at < ? "
                 f"GROUP BY {keys[group_by]} ORDER BY 1", (since, until)).fetchall()
+        return [dict(row) for row in rows]
+
+    def usage_since(self, *, days: int, group_by: str, now: datetime | None = None) -> dict[str, Any]:
+        """The last ``days`` days of :meth:`usage_report`, with its totals. ``telegram ai-usage`` and the
+        console's *AI assistant* page both read this, so the two cannot add the same rows up differently."""
+        stamp = "%Y-%m-%dT%H:%M:%SZ"
+        until = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        since = until - timedelta(days=max(int(days), 1))
+        rows = self.usage_report(since=since.strftime(stamp),
+                                 until=(until + timedelta(seconds=1)).strftime(stamp), group_by=group_by)
+        return {"since": since.strftime(stamp), "until": until.strftime(stamp), "by": group_by, "rows": rows,
+                "total_cost_usd": round(sum(float(row["cost_usd"] or 0) for row in rows), 6),
+                "total_tokens": sum(int(row["tokens"] or 0) for row in rows)}
+
+    def recent_requests(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """The newest requests first, one line each - questions, group words and refusals alike, since a
+        refusal is the row an operator most often comes looking for."""
+        self.initialize()
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT ai_request_id, ai_conversation_id, chat_id, user_id, user_name, kind, status, reason, "
+                "model, question, total_tokens, cost_usd, turns, tool_calls, stop_reason, started_at, finished_at "
+                "FROM ai_requests ORDER BY ai_request_id DESC LIMIT ? OFFSET ?",
+                (max(int(limit), 1), max(int(offset), 0))).fetchall()
         return [dict(row) for row in rows]
 
     def transcript(self, ai_request_id: int) -> dict[str, Any]:

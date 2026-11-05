@@ -129,6 +129,18 @@ def test_a_file_confirmed_against_the_catalog_alone_is_held_to_the_recorded_size
     assert outcomes[0].verdict == "copying" and remaining == [0], "another size goes through the full gate"
 
 
+def test_a_base_backup_on_the_target_is_confirmed_by_its_manifest_not_its_directory_size():
+    """A PostgreSQL base backup is hashed through its backup_manifest and recorded with its whole
+    directory's size: held to the manifest's size it never matched, and was copied again (2026-11-02)."""
+    item = _item(file_name="20261020T010000Z_FULL", file_type="FULL_BASE", engine="postgresql",
+                 source_path="/opt/backup/pg/base/20261020T010000Z_FULL/backup_manifest",
+                 target_path="/opt/stage/base/20261020T010000Z_FULL/backup_manifest",
+                 size_after_backup=52_000_000_000)
+    outcomes, remaining = confirm_on_target([item], integrity=I.RestoreIntegrity(),
+                                            hash_targets=lambda paths: {p: (GOOD_SHA, 180_000) for p in paths})
+    assert outcomes[0].verdict == "match" and remaining == []
+
+
 @pytest.mark.parametrize("found, sha, size, expected", [
     ((GOOD_SHA, 10), GOOD_SHA, 10, True),
     ((GOOD_SHA, 10), GOOD_SHA, 11, False),

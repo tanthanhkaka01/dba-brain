@@ -148,6 +148,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              "nothing - the opposite default from `backup`, because reporting a backup that did "
              "not happen is a wasted run and reporting a deletion that did not happen is not.",
     )
+    prune.add_argument(
+        "--allow-mass-delete", action="store_true",
+        help="Delete even when more than half of an entry's files would go in one run (1.221). "
+             "Refused without it: a window cut by mistake or a folder rewritten by ransomware looks "
+             "exactly like that.",
+    )
 
     workflow = subparsers.add_parser(
         "workflow",
@@ -209,6 +215,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     # 0.34.0 (1.215): the backups taken before the catalog, hashed where they lie and recorded as
     # `baseline=backfill` - so a restore's gate has a checksum to hold each one to.
+    chain = subparsers.add_parser(
+        "catalog-verify-chain", parents=[config_parent],
+        help="Recompute the backup catalog's hash chain (1.224): a row edited after it was written breaks "
+             "it, and the first broken row of each entry is named. Exit 1 when one is.")
+    chain.add_argument("--backup-id", default="", help="Only this entry.")
+    candidates = subparsers.add_parser(
+        "restore-candidates", parents=[config_parent],
+        help="Each backup chain of an entry, newest first: verified or not, and whether it ended before "
+             "the first sign of an attack - the clean points to restore from (1.244).")
+    candidates.add_argument("--backup-id", required=True, help="The backup entry.")
     backfill = subparsers.add_parser(
         "catalog-backfill", parents=[config_parent],
         help="Hash the backup files of one entry that the catalog does not hold yet (taken before "
@@ -459,6 +475,21 @@ def _emit(result: dict) -> int:
     return response.exit_code(result)
 
 
+def _retention_text(job: Any) -> str:
+    """The job's windows, and how far back point-in-time reaches (1.233, T3) - the number an
+    operator means by "retention", printed rather than inferred."""
+    from dbabrain.lib import cleanup_retention
+
+    retention = getattr(job, "retention", None)
+    if retention is None or retention.uniform:
+        return cleanup_retention.describe(int(job.cleanup_retention))
+    windows = ", ".join(f"{kind} {cleanup_retention.describe_window(window)}"
+                        for kind, window in retention.windows.items())
+    reach = cleanup_retention.point_in_time_reach(retention, engine=str(job.db_type or ""))
+    return (f"{windows}, default {cleanup_retention.describe_window(retention.default)}"
+            f" | point-in-time reach {cleanup_retention.describe_window(reach)}")
+
+
 def _format_backup_list(jobs: list) -> str:
     """Human/Telegram-friendly listing of backup_id + engine + level + schedule.
 
@@ -499,6 +530,8 @@ def _format_backup_list(jobs: list) -> str:
         lines.append(f"- {job.backup_id}{encrypted}")
         lines.append(f"    {job.db_type} {job.server_id}")
         lines.append(f"    level: {level} | schedule: {when}")
+        if getattr(job, "cleanup_retention", None) is not None:
+            lines.append(f"    retention: {_retention_text(job)}")
     # A PostgreSQL incremental chains onto the newest backup in BACKUP_DIR/base/, so the baseline
     # has to be a job of the SAME entry - that is what makes them share one backup_dir. Split across
     # two entries, a mismatched directory is not an error: `latest` comes back empty, the script
@@ -765,6 +798,18 @@ def main(argv: list[str]) -> int:
                 key_base64=getattr(args, "key_base64", None))
             sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
             return 1 if summary["failed"] else 0
+        if args.command == "catalog-verify-chain":
+            from dbabrain.db.backup_catalog import BackupCatalogStore
+
+            summary = BackupCatalogStore.from_config(app_config).verify_row_chain(backup_id=args.backup_id)
+            sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + chr(10))
+            return 1 if summary["broken"] else 0
+        if args.command == "restore-candidates":
+            from dbabrain.backup_restore.backup import restore_candidates
+
+            summary = restore_candidates(app_config=app_config, backup_id=args.backup_id)
+            sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + chr(10))
+            return 0
         if args.command == "catalog-backfill":
             from dbabrain.backup_restore.backup import catalog_backfill
 
@@ -836,6 +881,7 @@ def main(argv: list[str]) -> int:
                 key=getattr(args, "key", None),
                 key_base64=getattr(args, "key_base64", None),
                 apply=bool(getattr(args, "apply", False)),
+                allow_mass_delete=bool(getattr(args, "allow_mass_delete", False)),
             )
             sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
             return 1 if summary.get("failed") else 0

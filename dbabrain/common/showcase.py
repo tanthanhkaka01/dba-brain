@@ -163,7 +163,7 @@ that gets published.
   verify       false only to debug a mapping - never to publish
   allow        [fragment, ...] lines carrying one of these are not counted as findings. For the
                one hit the scrub CANNOT fix: the two-octet shorthand tier reads `storage_used_pct=
-               100.108` as a reference to a machine, and rewriting a percentage would corrupt the
+               77.31` as a reference to a machine, and rewriting a percentage would corrupt the
                page it is trying to publish. Each entry is a judgement, so make it narrow and read
                `allowed` in the result.
   stamp        name each page after the moment it states, in UTC (default true):
@@ -822,9 +822,23 @@ def build_mapping(*, data_dir: str | Path | None = None, pages_text: str = "",
     # 2026-09-12, when a scrub that had replaced every address still could not certify its own
     # output, on shorthands sitting inside operator notes. Each one lands on the *fake* address's
     # own shorthand, so a note and the inventory row still name one machine.
+    #
+    # A fake's shorthand can be a REAL machine's: fakes live in 198.51.100.0/24, so theirs read
+    # `100.N`, which is every `x.x.100.N` on an estate that has them - the scrub wrote a real
+    # machine's shorthand onto the page and the export refused it (2026-11-02, 1.271). Where it
+    # would, the whole fake address is written instead: a documentation address names nothing.
+    real_shorthands = {short for term in configured_terms for short in identifier_scan.address_shorthands(term)}
     for term, fake in list(mapping.as_dict().items()):
         for short in identifier_scan.address_shorthands(term):
-            mapping.add_pair(short, _shorthand_of(short, fake), bounded=True)
+            replacement = _shorthand_of(short, fake)
+            mapping.add_pair(short, fake if replacement in real_shorthands else replacement, bounded=True)
+
+    # `<server>$<INSTANCE>_<DB>_LOG_...`: an instance joined to the database by `_` is not a whole
+    # word, so the token pass never saw it - a showcase shipped `host-570$SALESDW_SALES` (1.268).
+    # The same place the checker now looks: after `$`, before `_`.
+    for term, fake in list(mapping.as_dict().items()):
+        if term in configured_terms and re.fullmatch(r"[A-Za-z0-9]+", term):
+            mapping.add_pair(f"${term}_", f"${fake}_")
 
     mapping.skipped_as_ordinary = skipped_as_ordinary
     return mapping
@@ -1155,7 +1169,7 @@ def certify(output: str | Path, *, data_dir: str | Path | None = None,
     ``allow`` is the narrow escape hatch, and it exists for hits the scrub is structurally unable to
     fix rather than for ones nobody wants to look at. The shorthand tier reads the last two octets
     of an address wherever they stand alone, because that is how prose names a machine — and
-    `storage_used_pct=100.108` is a percentage that happens to be spelled the same way. Rewriting
+    `storage_used_pct=77.31` is a percentage that happens to be spelled the same way. Rewriting
     it would corrupt the page; leaving it refuses the release for ever. So it is stated, in the
     request, narrowly, and echoed in the result as `allowed`.
 

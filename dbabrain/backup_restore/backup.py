@@ -43,6 +43,7 @@ from dbabrain.lib.ssh_errors import SshError
 from dbabrain.lib.notify import NotifyConfig
 from dbabrain.lib import cleanup_retention
 from dbabrain.lib import integrity
+from dbabrain.db import lockdown_store
 from dbabrain.lib.backup_run import RUN_TAG_ENV, run_tag
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib import backup_scope
@@ -108,6 +109,11 @@ class BackupJob:
     # Which databases the job takes, as a list (0.34.0, dbabrain.lib.backup_scope) - handed to the
     # script by the app. ``None`` only for a job upgrade-config has not reached.
     scope: Any = None
+    # Older files of the entry re-hashed after each run (1.218, lib.integrity.scrub_files_per_run).
+    scrub_files_per_run: int = integrity.SCRUB_FILES_PER_RUN
+    # The windows per file type (1.227); ``cleanup_retention`` above is their longest, for the
+    # readers that apply one number. ``None`` for a job built without the loader.
+    retention: Any = None
 
     @property
     def retention_days(self) -> int | None:
@@ -221,7 +227,12 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
             # The same field the restore side reads, in the same unit, handled differently:
             # backup prunes the directory it wrote to, restore prunes what it staged. One idea,
             # one spelling - see dbabrain.lib.cleanup_retention.
-            retention_seconds = cleanup_retention.parse(raw_job, context=f"{backup_id}.{job_name}")
+            # The entry states it once for its folder (1.232, the plan's §1.2); a job that still
+            # states its own keeps it - check-objects names a job and an entry that disagree.
+            stated = cleanup_retention.retention_source(raw_job, entry)
+            retention_seconds = cleanup_retention.parse(stated, context=f"{backup_id}.{job_name}")
+            per_type = cleanup_retention.parse_per_type(stated, context=f"{backup_id}.{job_name}",
+                                                        engine=db_type)
             job_env = raw_job.get("env") or {}
             if not isinstance(job_env, dict):
                 raise ValueError(f"{backup_id}.{job_name}.env must be an object.")
@@ -237,6 +248,7 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
                 script=script,
                 backup_dir=job_backup_dir,
                 cleanup_retention=retention_seconds,
+                retention=per_type,
                 time_window=parsed.time_window,
                 active=entry_active and bool(raw_job.get("active", True)),
                 env={str(k): str(v) for k, v in job_env.items()},
@@ -252,6 +264,7 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
                 notify=parse_backup_restore_notify(raw_job, context=context, inherit=entry_notify),
                 offload=entry_offload,
                 scope=backup_scope.parse_backup_databases(raw_job, label=f"{backup_id}.{job_name}", db_type=db_type),
+                scrub_files_per_run=integrity.scrub_files_per_run(entry, label=backup_id),
             )
             if item.job_code in seen:
                 raise ValueError(f"Duplicate backup job: {item.label}. backup_id + job must be unique.")
@@ -454,6 +467,9 @@ def record_in_catalog(
             "file_name": entry.get("file_name") or "", "file_type": entry.get("file_type") or "",
             "file_path": entry.get("path") or "", "file_folder": entry.get("file_folder") or "",
             "host_path": entry.get("host_path") or "", "container_name": entry.get("container_name") or "",
+            # When this file's backup began, from its FILE line (1.254). NULL where the script did not
+            # say, not the run's start: a WAL segment the server archived was written before the run.
+            "backup_started_at": entry.get("backup_started_at"),
             "backup_ended_at": finished_at, "size_bytes": entry.get("size_bytes"),
             "checksum_algo": integrity.SHA256, "checksum_after_backup": entry.get("sha256"),
             "engine_verify": entry.get("engine_verify"),
@@ -481,6 +497,7 @@ def record_in_catalog(
         "engine_verify": ("failed" if "failed" in verify_results else "passed" if "passed" in verify_results
                           else "not_run" if rows else None),
         "error_text": str(result.error_text or "")[:2000],
+        **_retention_of(item),
     }
     backup_run_id = catalog.record_backup(run=run, files=rows)
     return {"backup_run_id": backup_run_id, "files": len(rows), "level": level,
@@ -508,10 +525,38 @@ def _open_catalog(app_config: Any) -> Any:
         return _UnavailableCatalog(f"{type(exc).__name__}: {exc}")
 
 
-#: What a backup folder holds that a restore uses, per engine catalog-backfill reads (1.215). Only
-#: SQL Server so far: its layout `<DB>/FULL|DIFF|LOG/<file>` types every file. A PostgreSQL base backup
-#: is a directory catalogued by its manifest, and an RMAN piece is typed by its tag - their own rules.
-BACKFILL_PATTERNS = {"sqlserver": ["*.bak", "*.trn", "*.cer", "*.pvk"]}
+#: What a backup folder holds that a restore uses, per engine catalog-backfill reads (1.215). SQL
+#: Server's layout `<DB>/FULL|DIFF|LOG/<file>` types every file; a PostgreSQL base backup is a directory
+#: catalogued, as its receipt does, by its `backup_manifest`, and a WAL segment is a 24-hex-digit name
+#: under `wal/` (0.35.0); an RMAN piece is typed by the names the Oracle scripts give it (0.35.0).
+BACKFILL_PATTERNS = {"sqlserver": ["*.bak", "*.trn", "*.cer", "*.pvk"],
+                     "postgresql": ["backup_manifest", "?" * 24],
+                     "oracle": ["*.bkp", "autobackup_*", "c-*"]}
+_BACKFILL_NOTE = "catalog-backfill: hashed as found on the server, not verified by the engine"
+_BACKFILL_NOTES = {
+    "postgresql": "catalog-backfill: the base backup's backup_manifest hashed as found, as its receipt does; "
+                  "the directory's size is not taken",
+    "oracle": "catalog-backfill: hashed as found, typed by its piece name (a level run's controlfile piece "
+              "reads as that level)",
+}
+
+
+def _backfill_item(engine: str, relative: str, name: str) -> tuple[str, str, str] | None:
+    """``(file_type, catalogued name, catalogued relative path)`` of one file ``file-checksum`` listed, or
+    None for a file the engine's layout does not catalogue. A PostgreSQL base backup is catalogued as its
+    directory - the file listed is its manifest, and the row's name and path are the directory's."""
+    if engine == "postgresql":
+        if name == "backup_manifest":
+            directory = relative.rsplit("/", 1)[0] if "/" in relative else ""
+            if not directory or "/" in directory.replace("base/", "", 1):
+                return None             # a manifest that is not base/<stamp>_<level>/backup_manifest
+            return integrity.script_file_type(engine, directory), directory.rsplit("/", 1)[-1], directory
+        if integrity.WAL_SEGMENT_NAME.match(name.upper()) and (relative.startswith("wal/") or "/wal/" in relative):
+            return "WAL", name, relative
+        return None
+    if engine == "oracle":
+        return integrity.script_file_type(engine, relative), name, relative
+    return integrity.sqlserver_file_type(relative), name, relative
 #: A file written this recently may be a backup still being written: it is left for the next pass.
 BACKFILL_SETTLE_SECONDS = 600
 
@@ -549,8 +594,8 @@ def catalog_backfill(
     engine = str(job.db_type or "").strip().lower()
     if engine not in BACKFILL_PATTERNS:
         raise ValueError(
-            f"{backup_id}: catalog-backfill reads the SQL Server layout (<DB>/FULL|DIFF|LOG) only so far; "
-            f"a {engine} backup is typed by its own rules, which are not built yet.")
+            f"{backup_id}: catalog-backfill reads the layouts the SQL Server, PostgreSQL and Oracle backup "
+            f"scripts write; a {engine or 'blank'} entry has none it knows.")
     catalog = BackupCatalogStore.from_config(app_config)
     target = resolve_backup_target(job, data_dir=data_dir)
     needs_password = not target.key_file and bool(target.password_ref)
@@ -571,14 +616,22 @@ def catalog_backfill(
                                    "found": bool(answer.get("folder_found")), "files": len(files)})
         summary["found"] += len(files)
         summary["truncated"] = summary["truncated"] or bool(answer.get("truncated"))
-        names = sorted({str(item["path"]).replace("\\", "/").rsplit("/", 1)[-1] for item in files})
-        known = catalog.stored_files(server_id=job.server_id, file_names=names) if names else {}
         windows = "\\" in host_folder or ":" in host_folder[:3]
         root = host_folder.replace("\\", "/").rstrip("/")
+        listed = []
         for item in files:
-            host_path = str(item["path"])
-            normalized = host_path.replace("\\", "/")
+            normalized = str(item["path"]).replace("\\", "/")
             name = normalized.rsplit("/", 1)[-1]
+            relative = (normalized[len(root) + 1:] if normalized.lower().startswith(root.lower() + "/")
+                        else name)
+            typed = _backfill_item(engine, relative, name)
+            if typed is None:
+                summary["not_a_backup"] = summary.get("not_a_backup", 0) + 1
+                continue
+            listed.append((item, normalized, *typed))
+        names = sorted({entry[3] for entry in listed})
+        known = catalog.stored_files(server_id=job.server_id, file_names=names) if names else {}
+        for item, normalized, file_type, name, relative in listed:
             if name in known:
                 summary["catalogued_already"] += 1
                 continue
@@ -586,22 +639,32 @@ def catalog_backfill(
             if mtime and datetime.fromisoformat(str(mtime).replace("Z", "+00:00")).timestamp() > settled_before:
                 summary["too_new"] += 1
                 continue
-            relative = (normalized[len(root) + 1:] if normalized.lower().startswith(root.lower() + "/")
-                        else name)
             parts = [part for part in relative.split("/") if part]
-            file_type = integrity.sqlserver_file_type(relative)
             separator = "\\" if windows else "/"
             file_path = folder.rstrip("/\\") + separator + relative.replace("/", separator)
+            # The server's own path of what is catalogued: a base backup's directory, not its manifest.
+            host_path = str(item["path"]) if name == normalized.rsplit("/", 1)[-1] else \
+                root + "/" + relative
+            if engine == "sqlserver":
+                database = parts[0] if len(parts) > 1 and file_type != "CERT" else ""
+            else:
+                # As the scripts' receipts say: a PostgreSQL backup is the cluster's, an RMAN piece the
+                # database's - the entry's SID when it has one.
+                database = "cluster" if engine == "postgresql" else str(job.env.get("ORACLE_SID") or "database")
             row = {
                 "backup_id": backup_id, "server_id": job.server_id, "engine": engine,
-                "database_name": parts[0] if len(parts) > 1 and file_type != "CERT" else "",
+                "database_name": database,
                 "file_name": name, "file_type": file_type, "file_path": file_path,
                 "file_folder": file_path[: -len(name)].rstrip("/\\"), "host_path": host_path,
-                "container_name": target.container_name or "", "size_bytes": item.get("size_bytes"),
-                "mtime_utc": mtime, "checksum_after_backup": item.get("sha256"), "verdict": "ok",
+                "container_name": target.container_name or "",
+                # A base backup's size is its whole directory's, which a listing of its manifest does not
+                # give: recorded as not taken (`size_failed`, the catalog's word), never as the manifest's.
+                "size_bytes": None if file_type in integrity.HASHED_MEMBER else item.get("size_bytes"),
+                "mtime_utc": mtime, "checksum_after_backup": item.get("sha256"),
+                "verdict": "size_failed" if file_type in integrity.HASHED_MEMBER else "ok",
                 "engine_verify": "not_run", "baseline": "backfill", "state": "present", "on_disk": 1,
                 "checksum_matches": 1,
-                "engine_verify_text": "catalog-backfill: hashed as found on the server, not verified by the engine",
+                "engine_verify_text": _BACKFILL_NOTES.get(engine, _BACKFILL_NOTE),
             }
             if len(summary["files"]) < 50:
                 summary["files"].append({"file": relative, "type": file_type, "size_bytes": row["size_bytes"]})
@@ -640,9 +703,18 @@ def verify_backup_files(
     catalog = BackupCatalogStore.from_config(app_config)
     files = catalog.files_to_check(server_id=server_id or "", backup_id=backup_id or "", limit=limit)
     jobs: dict[str, BackupJob] = {}
+    # Every job's retention, per FOLDER: any job writing a folder prunes it with its own window - a
+    # LOG entry's 7 days cut the FULL entry's files beside it (separate entries, one directory) -
+    # so a gone file is held to every window that can reach it, not only its own entry's.
+    retentions: dict[tuple[str, str], list[Any]] = {}
     for job in load_backup_jobs(config_path):
         jobs.setdefault(job.backup_id, job)
-    summary: dict[str, Any] = {"checked": 0, "match": 0, "mismatch": [], "missing": [], "skipped": []}
+        retentions.setdefault((job.server_id, job.backup_dir.rstrip("/\\")), []).append(
+            job.retention or cleanup_retention.Retention(default=job.cleanup_retention, uniform=True))
+    summary: dict[str, Any] = {"checked": 0, "match": 0, "mismatch": [], "missing": [], "skipped": [],
+                               "pruned": [], "unreadable": []}
+    now_utc = utc_now_text()
+    bases: dict[str, str | None] = {}
     by_entry: dict[str, list[dict[str, Any]]] = {}
     for row in files:
         by_entry.setdefault(str(row["backup_id"]), []).append(row)
@@ -663,16 +735,30 @@ def verify_backup_files(
             needs_password = not target.key_file and bool(target.password_ref)
             secrets = (_load_secrets(data_dir=data_dir, key=key, key_base64=key_base64)
                        if needs_password else {})
-            paths = {r["file_id"]: integrity.hashed_path(r["file_type"], r["host_path"]) for r in checkable}
-            answer = common_cli.run("file-checksum", {
-                "host": host_block(target, secrets=secrets, data_dir=data_dir),
-                "paths": sorted(set(paths.values()))})
+            host = host_block(target, secrets=secrets, data_dir=data_dir)
+            paths, answer = _hash_stored_files(checkable, host=host, container=getattr(target, "container_name", "") or "")
         except Exception as exc:  # noqa: BLE001 - one unreachable server must not stop the others
-            summary["skipped"] += [{"file": r["file_name"], "why": f"{job.server_id}: {exc}"} for r in checkable]
+            reasons = [{"file": r["file_name"], "why": f"{job.server_id}: {exc}"} for r in checkable]
+            summary["skipped"] += reasons
+            # Said, not swallowed: a scrub that read nothing looked exactly like a clean one.
+            summary["unreadable"] += reasons
             continue
         found = {item["path"]: item for item in answer.get("files") or []}
         for row in checkable:
             item = found.get(paths[row["file_id"]])
+            # Gone past its type's window: the backup script's own retention removed it (1.233), and
+            # the catalog says so - pruned, with the window - instead of an attack's "gone".
+            why = "" if item else next((reason for reason in (
+                cleanup_retention.removed_by_retention(
+                    retention, str(row.get("file_type") or ""),
+                    str(row.get("backup_ended_at") or row.get("created_at") or ""), now_utc=now_utc)
+                for retention in retentions.get((job.server_id, job.backup_dir.rstrip("/\\")), [])) if reason), "")
+            if not item and not why:
+                why = _cut_by_archivecleanup(catalog, row, bases)
+            if why:
+                catalog.set_backup_file(row["file_id"], state="pruned", on_disk=0, pruned_by=why)
+                summary["pruned"].append({"server_id": row["server_id"], "file": row["file_name"], "why": why})
+                continue
             result = catalog.check_backup_file(
                 row["file_id"], checksum_now=item["sha256"] if item else None,
                 size_now=item.get("size_bytes") if item else None,
@@ -684,6 +770,41 @@ def verify_backup_files(
                 summary[result].append({"server_id": row["server_id"], "file": row["file_name"],
                                         "host_path": row["host_path"]})
     return summary
+
+
+def _cut_by_archivecleanup(catalog: Any, row: dict[str, Any], bases: dict[str, str | None]) -> str:
+    """Why a gone WAL segment was the archive cleanup's, or ``""``. The PostgreSQL WAL job cuts the
+    archive at the START WAL of the oldest base backup kept - by position, not by age - so segments
+    well inside their age window go every time a base chain is dropped. Read as gone, twenty of them
+    engaged the lockdown (2026-11-03). One that ended before the oldest kept full base began is the
+    cleanup's; one after it, gone, is still the signal."""
+    if str(row.get("file_type") or "").upper() != "WAL":
+        return ""
+    server = str(row.get("server_id") or "")
+    if server not in bases:
+        bases[server] = catalog.oldest_kept_base(server_id=server)
+    base, ended = bases[server], str(row.get("backup_ended_at") or row.get("created_at") or "")
+    if base and ended and ended < base:
+        return f"pg_archivecleanup: before the oldest base backup kept ({base})"
+    return ""
+
+
+def _hash_stored_files(rows: list[dict[str, Any]], *, host: dict[str, Any],
+                       container: str) -> tuple[dict[int, str], dict[str, Any]]:
+    """Hash the stored files on their server: by their path on the host, and - when that cannot be
+    read and the engine runs in a container - inside the container by its own path. A backup in a
+    docker VOLUME (the runtime store's own, 2026-11-03) lives under /var/lib/docker, which the
+    SSH user may not read: every file was skipped and the scrub said "checked 0". Answers the path
+    each file was hashed under, and the ``file-checksum`` answer."""
+    on_host = {r["file_id"]: integrity.hashed_path(r["file_type"], r["host_path"]) for r in rows}
+    try:
+        return on_host, common_cli.run("file-checksum", {"host": host, "paths": sorted(set(on_host.values()))})
+    except Exception:
+        if not container or not all(r.get("file_path") for r in rows):
+            raise
+    inside = {r["file_id"]: integrity.hashed_path(r["file_type"], r["file_path"]) for r in rows}
+    return inside, common_cli.run("file-checksum", {
+        "host": {**host, "runtime": "docker", "container": container}, "paths": sorted(set(inside.values()))})
 
 
 def _script_path(script: str, *, label: str) -> Path:
@@ -735,6 +856,132 @@ def execute_over_ssh(
         call=common_cli.run_allowing_failure)
     result = remote.run_script(payload, timeout_seconds=timeout or None)
     return result.stdout, result.stderr, result.exit_code
+
+
+def restore_candidates(*, app_config: Any, backup_id: str) -> dict[str, Any]:
+    """Each chain of an entry - a full and the files that need it - newest first, with what a person
+    choosing a restore point after an attack needs (0.35.0, 1.244 / 1.225 - the plan of 2026-10-29, A3.6):
+
+    * ``verified``: every member on disk, hashed ok when written and unchanged when last checked;
+    * ``ended_at``: the newest member's end;
+    * ``before_first_signal``: the chain ended before the catalog's first file found changed or gone,
+      or before the lockdown - the newest chain may already be the attacker's (dwell time);
+    * ``candidate``: both - a chain to restore from.
+
+    Read-only: it lists, it chooses nothing.
+    """
+    from dbabrain.db.lockdown_store import LockdownStore
+
+    catalog = BackupCatalogStore.from_config(app_config)
+    files = catalog.chain_files(backup_id=backup_id)
+    signal = catalog.first_signal(backup_id=backup_id)
+    try:
+        lockdown = LockdownStore.from_config(app_config).active()
+    except Exception:  # noqa: BLE001 - a lockdown that cannot be read is no signal to date chains by
+        lockdown = None
+    marks = [m for m in (signal, (lockdown or {}).get("started_at")) if m]
+    first = min(marks) if marks else None
+    by_full: dict[int, list[dict[str, Any]]] = {}
+    for row in files:
+        root = row["chain_parent_file_id"] or (row["file_id"] if integrity.LEVEL_OF_FILE_TYPE.get(
+            str(row["file_type"] or "").upper()) == "full" else None)
+        if root is not None:
+            by_full.setdefault(int(root), []).append(row)
+    chains = []
+    for root, members in by_full.items():
+        full = next((m for m in members if m["file_id"] == root), None)
+        if full is None:
+            continue
+        def sound(m: dict[str, Any]) -> bool:
+            return (m["state"] == "present" and m["verdict"] == "ok" and m["on_disk"] != 0
+                    and m["checksum_matches"] != 0)
+
+        verified = all(sound(m) for m in members)
+        ended = max(str(m["ended_at"] or "") for m in members)
+        before = first is None or ended < first
+        chains.append({
+            "database_name": full["database_name"], "full": full["file_name"], "full_ended_at": full["ended_at"],
+            "files": len(members), "ended_at": ended, "verified": verified,
+            "unverified": [m["file_name"] for m in members if not sound(m)][:10],
+            "offloaded": sum(1 for m in members if m["offload_state"] == "verified"),
+            "last_restored": max((str(m["last_restore_at"]) for m in members if m["last_restore_at"]), default=None),
+            "before_first_signal": before, "candidate": verified and before,
+        })
+    chains.sort(key=lambda c: (c["database_name"] or "", c["ended_at"]), reverse=True)
+    return {"backup_id": backup_id, "first_signal": first, "signal_from": (
+                "lockdown" if first and lockdown and first == lockdown.get("started_at") else
+                "a stored file changed or gone" if first else None),
+            "chains": chains, "candidates": sum(1 for c in chains if c["candidate"])}
+
+
+def _retention_of(item: "BackupJob") -> dict[str, Any]:
+    """What a backup run records of its job's retention (1.233): the configured value and how far
+    back point-in-time reaches - the shorter of the base and the log window (T3)."""
+    retention = getattr(item, "retention", None)
+    if retention is None:
+        seconds = getattr(item, "cleanup_retention", None)
+        if seconds is None:
+            return {}
+        return {"retention_json": json.dumps(int(seconds)), "pitr_reach_seconds": int(seconds)}
+    reach = cleanup_retention.point_in_time_reach(retention, engine=str(item.db_type or ""))
+    return {"retention_json": json.dumps(retention.as_config(), sort_keys=True),
+            "pitr_reach_seconds": None if reach is None else int(reach)}
+
+
+def _engage_lockdown(app_config: Any, metadata: dict[str, Any], *, reason: str, by: str) -> str:
+    """Turn the lockdown on (1.220) and answer the words the alert carries."""
+    try:
+        engaged = lockdown_store.LockdownStore.from_config(app_config).engage(reason=reason, by=by)
+        metadata["lockdown"] = {"lockdown_id": engaged.get("lockdown_id"), "already_on": engaged.get("already_on")}
+        return " - LOCKDOWN ON: no prune, delete or overwrite until it is turned off"
+    except Exception as exc:  # noqa: BLE001 - the alert must still go out
+        return f" - the lockdown could not be engaged: {type(exc).__name__}: {exc}"
+
+
+def _ransom_markers(item: "BackupJob", *, data_dir: Any, key: str | None, key_base64: str | None) -> list[str]:
+    """The files in the entry's backup folder named like ransomware's notes or encrypted files (1.219).
+    A listing that cannot be taken answers nothing: the backup that just ran reached the same host."""
+    from dbabrain.backup_restore.spec_builder import host_block
+
+    if not item.backup_dir:
+        return []
+    try:
+        target = resolve_backup_target(item, data_dir=data_dir)
+        needs_password = not target.key_file and bool(target.password_ref)
+        secrets = _load_secrets(data_dir=data_dir, key=key, key_base64=key_base64) if needs_password else {}
+        host = host_block(target, secrets=secrets, data_dir=data_dir)
+        request = {"folder": item.backup_dir, "include": list(integrity.RANSOM_MARKERS), "max_files": 50}
+        try:
+            answer = common_cli.run("file-checksum", {**request, "host": host,
+                                                      "container": target.container_name or ""})
+        except Exception:
+            if not target.container_name:
+                raise
+            # A folder in a docker volume is not readable from the host (see _hash_stored_files):
+            # listed inside the container, by its own path.
+            answer = common_cli.run("file-checksum", {
+                **request, "host": {**host, "runtime": "docker", "container": target.container_name}})
+    except Exception:  # noqa: BLE001 - see docstring
+        return []
+    return sorted(str(f.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1] for f in answer.get("files") or [])
+
+
+def _size_anomalies(catalog: Any, item: "BackupJob", catalog_summary: dict[str, Any] | None) -> list[str]:
+    """Each file this run wrote whose size is far from the same database's and type's history (1.219)."""
+    if not catalog_summary or not catalog_summary.get("backup_run_id"):
+        return []
+    found = []
+    try:
+        for row in catalog.backup_run_files(int(catalog_summary["backup_run_id"])):
+            history = catalog.earlier_sizes(backup_id=item.backup_id, database_name=row.get("database_name") or "",
+                                            file_type=row.get("file_type") or "",
+                                            before_run=int(catalog_summary["backup_run_id"]))
+            why = integrity.size_anomaly(row.get("size_bytes"), history)
+            if why:
+                found.append(f"{row.get('file_name')}: {why}")
+    except Exception:  # noqa: BLE001 - a judgement that cannot be made is not a finding
+        return found
+    return found
 
 
 def _load_secrets(
@@ -1065,6 +1312,20 @@ def run_backup(
                 result.status = "error"
             result.error_text = " ".join(filter(None, [
                 result.error_text, f"the backup catalog could not be written: {type(exc).__name__}: {exc}"]))
+        # The rolling scrub (1.218): the entry's older files, the ones checked longest ago first,
+        # re-hashed where they lie. Not on a failed run - its host may be the reason it failed.
+        scrub: dict[str, Any] | None = None
+        if result.status == "done" and item.scrub_files_per_run and not dry_run:
+            try:
+                scrub = verify_backup_files(app_config=app_config, config_path=config_path,
+                                            backup_id=item.backup_id, limit=item.scrub_files_per_run,
+                                            data_dir=data_dir, key=key, key_base64=key_base64)
+            except Exception as exc:  # noqa: BLE001 - a scrub that could not run is said, the backup stands
+                scrub = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+        # What ransomware leaves in a folder (1.219): looked for by name only, so it costs a listing.
+        markers: list[str] = []
+        if result.status == "done" and not dry_run:
+            markers = _ransom_markers(item, data_dir=data_dir, key=key, key_base64=key_base64)
         level = "logging" if result.status == "done" else "error"
         message = (
             f"Backup {item.label} finished: {result.status}"
@@ -1092,6 +1353,47 @@ def run_backup(
             if catalog_summary["files"]:
                 message += (f" - {catalog_summary['verified']}/{catalog_summary['files']} file(s) "
                             "hashed and verified")
+        if markers:
+            # Not a backup: an attack. CRITICAL, and the lockdown engaged like a canary hit (D6).
+            level = "critical"
+            metadata["ransom_markers"] = markers[:20]
+            message += f" - RANSOM MARKERS in {item.backup_dir}: {', '.join(markers[:5])}"
+            message += _engage_lockdown(app_config, metadata, reason=f"ransomware markers in the backup folder of "
+                                        f"{item.label}: {', '.join(markers[:3])}", by=f"markers:{item.label}")
+        anomalies = _size_anomalies(catalog, item, catalog_summary)
+        if anomalies:
+            metadata["size_anomalies"] = anomalies[:10]
+            if level == "logging":
+                level = "warning"
+            message += " - SIZE far from its history: " + "; ".join(anomalies[:3])
+        if scrub is not None:
+            changed, gone = scrub.get("mismatch") or [], scrub.get("missing") or []
+            unreadable = scrub.get("unreadable") or []
+            metadata["scrub"] = {"checked": scrub.get("checked", 0), "match": scrub.get("match", 0),
+                                  "mismatch": len(changed), "missing": len(gone),
+                                  "pruned": len(scrub.get("pruned") or []), "unreadable": len(unreadable),
+                                  "error": scrub.get("error")}
+            if unreadable and not (changed or gone):
+                # Not an attack, and not a clean scrub either: the files could not be read at all.
+                if level == "logging":
+                    level = "warning"
+                message += (f" - SCRUB could not read {len(unreadable)} stored file(s): "
+                            f"{str(unreadable[0].get('why') or '')[:200]}")
+            if changed or gone:
+                # A stored backup changed after it was written, or vanished: the ransomware signal.
+                # CRITICAL whatever tonight's backup did - the backup stands, this is another finding.
+                level = "critical"
+                if len(changed) + len(gone) >= lockdown_store.AUTO_ENGAGE_FILES:
+                    # An attack is not waited out (D6): no prune, no delete, no overwrite from now on.
+                    message += _engage_lockdown(
+                        app_config, metadata, by=f"scrub:{item.label}",
+                        reason=f"the scrub of {item.label} found {len(changed)} changed and {len(gone)} "
+                               "gone stored backup file(s)")
+                names = ", ".join(str(f.get("file")) for f in [*changed, *gone][:5])
+                message += (f" - SCRUB: {len(changed)} stored backup file(s) changed after they were written, "
+                            f"{len(gone)} gone: {names}")
+            elif scrub.get("checked"):
+                message += f" - {scrub['checked']} older file(s) re-hashed, all unchanged"
         if server_metadata_result is not None:
             metadata["server_metadata"] = summarize_server_metadata(server_metadata_result)
             # Named in the message because the alternative is an operator having to open the run

@@ -185,7 +185,7 @@ class _Store:
 
     def update_job_run(self, *, log_id, status, message, error_text=None, metadata=None, **kwargs):
         _Store.rows[log_id - 1].update(status=status, message=message, error_text=error_text,
-                                       metadata=metadata)
+                                       metadata=metadata, level=kwargs.get("level"))
 
 
 def _scheduled(monkeypatch, catalog, job, lines, *, seen_env=None):
@@ -503,6 +503,8 @@ def test_verify_backup_files_rehashes_on_the_server_and_names_what_changed(monke
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [job])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: target)
     monkeypatch.setattr(backup_module.common_cli, "run", file_checksum)
+    # The day after the run: c.bak is inside its 8-day window, so its going is "gone", not retention.
+    monkeypatch.setattr(backup_module, "utc_now_text", lambda: "2026-10-30T00:00:00Z")
 
     summary = backup_module.verify_backup_files(app_config=SimpleNamespace(), config_path="x")
 
@@ -544,3 +546,207 @@ def test_every_backup_script_states_encrypted_on_each_file_line(script, says):
     text = (SCRIPTS / script).read_text(encoding="utf-8")
     assert says in text
     assert "encrypted=" in text[text.index("FILE"):], script
+
+
+# --------------------------------------------------------------------------- #
+# Each file's own start (0.35.0, 1.254)
+# --------------------------------------------------------------------------- #
+def test_a_file_carries_the_moment_its_own_backup_began():
+    """The run's start is the first database's; a run of twenty databases put hours between the two."""
+    line = _line("APPDB", "FULL", "/b/x.bak").replace("\tpath=", "\tstart=2026-11-02T01:15:00Z\tpath=")
+    assert I.parse_file_lines(line)[0]["backup_started_at"] == "2026-11-02T01:15:00Z"
+
+
+@pytest.mark.parametrize("start", ["", "2026-11-02 01:15", "yesterday", "2026-11-02T01:15:00+07:00"])
+def test_a_start_that_is_not_a_utc_stamp_is_unknown_never_a_guess(start):
+    line = _line("APPDB", "FULL", "/b/x.bak").replace("\tpath=", f"\tstart={start}\tpath=")
+    assert I.parse_file_lines(line)[0]["backup_started_at"] is None
+
+
+def test_the_catalog_keeps_each_files_start_and_not_the_runs(catalog):
+    job = _job()
+    lines = [_line(db, "FULL", f"/b/{db}/f.bak").replace("\tpath=", f"\tstart={start}\tpath=")
+             for db, start in (("APPDB", "2026-11-02T01:00:05Z"), ("HRDB", "2026-11-02T03:40:00Z"))]
+    lines.append(_line("OLDDB", "FULL", "/b/OLDDB/f.bak"))      # an older script says nothing
+    backup_module.record_in_catalog(catalog, job, _result(job, lines), job_run_id=1,
+                                    started_at="2026-11-02T01:00:00Z", finished_at="2026-11-02T04:00:00Z")
+    rows = {r["database_name"]: r for r in catalog.backup_history(server_id="ACME-192-0-2-250")}
+    assert rows["APPDB"]["backup_started_at"] == "2026-11-02T01:00:05Z"
+    assert rows["HRDB"]["backup_started_at"] == "2026-11-02T03:40:00Z"
+    assert rows["OLDDB"]["backup_started_at"] is None, "unknown, not the run's start"
+
+
+@pytest.mark.parametrize("script", [
+    "sqlserver/mssql_backup_database.sh", "sqlserver/mssql_backup_database.ps1",
+    "postgresql/pg_basebackup_database.sh", "oracle/oracle_rman_database.sh", "oracle/oracle_rman_archivelog.sh",
+])
+def test_every_script_that_starts_a_backup_says_when(script):
+    text = (SCRIPTS / script).read_text(encoding="utf-8")
+    sep = "`t" if script.endswith(".ps1") else r"\t"
+    receipt = text[text.index(f"FILE{sep}db="):]
+    assert f"{sep}start=" in receipt[:receipt.index(f"{sep}path=")], script
+
+
+# --------------------------------------------------------------------------- #
+# The rolling scrub (0.35.0, 1.218)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("entry, expected", [({}, 20), ({"scrub_files_per_run": 0}, 0),
+                                              ({"scrub_files_per_run": 50}, 50)])
+def test_an_entry_states_how_many_older_files_each_run_rehashes(entry, expected):
+    assert I.scrub_files_per_run(entry) == expected
+
+
+@pytest.mark.parametrize("value", [-1, 1001, "20", True])
+def test_a_scrub_count_that_is_not_a_whole_number_in_range_is_refused(value):
+    with pytest.raises(I.IntegrityConfigError, match="scrub_files_per_run"):
+        I.scrub_files_per_run({"scrub_files_per_run": value})
+
+
+def test_a_changed_older_backup_makes_the_run_critical_and_names_it(monkeypatch, catalog):
+    asked = {}
+
+    def scrub(**kwargs):
+        asked.update(kwargs)
+        return {"checked": 20, "match": 19, "missing": [],
+                "mismatch": [{"server_id": "ACME-192-0-2-250", "file": "APPDB_FULL_20261020.bak"}]}
+
+    monkeypatch.setattr(backup_module, "verify_backup_files", scrub)
+    row = _scheduled(monkeypatch, catalog, _job(), [_line("A", "FULL", "/b/a.bak")])
+    assert asked["backup_id"] == "ACME_250_APPDB" and asked["limit"] == 20
+    assert row["status"] == "DONE", "tonight's backup stands"
+    assert row["level"] == "critical"
+    assert "SCRUB: 1 stored backup file(s) changed after they were written" in row["message"]
+    assert "APPDB_FULL_20261020.bak" in row["message"]
+
+
+def test_an_unchanged_scrub_is_said_and_stays_quiet(monkeypatch, catalog):
+    monkeypatch.setattr(backup_module, "verify_backup_files",
+                        lambda **k: {"checked": 20, "match": 20, "mismatch": [], "missing": []})
+    row = _scheduled(monkeypatch, catalog, _job(), [_line("A", "FULL", "/b/a.bak")])
+    assert row["level"] == "logging" and "20 older file(s) re-hashed, all unchanged" in row["message"]
+
+
+def test_a_failed_run_does_not_scrub(monkeypatch, catalog):
+    called = []
+    monkeypatch.setattr(backup_module, "verify_backup_files", lambda **k: called.append(k) or {})
+    _scheduled(monkeypatch, catalog, _job(), [_line("A", "FULL", "/b/a.bak", sha="")])
+    assert called == []
+
+
+def test_a_file_gone_past_its_window_was_its_retentions_and_is_marked_pruned_not_gone(monkeypatch, catalog):
+    """The backup scripts prune their own folders and tell the catalog nothing (0.35.0, 1.233). Read
+    as "gone", three such files engaged the lockdown on a correct install; past its type's window a
+    gone file is the window's - pruned, with the window named - and only one inside it is a signal."""
+    job = _job()
+    lines = [_receipt("A", "FULL", SHA_A, "/srv/old.bak", "/c/old.bak"),
+             _receipt("B", "FULL", SHA_B, "/srv/new.bak", "/c/new.bak")]
+    backup_module.record_in_catalog(catalog, job, _result(job, lines[:1]), job_run_id=1,
+                                    started_at="2026-10-01T01:00:00Z", finished_at="2026-10-01T01:10:00Z")
+    backup_module.record_in_catalog(catalog, job, _result(job, lines[1:]), job_run_id=2,
+                                    started_at="2026-10-29T01:00:00Z", finished_at="2026-10-29T01:10:00Z")
+    target = SimpleNamespace(host="192.0.2.10", port=22, username="u", key_file="", password_ref="",
+                             platform="linux", access="ssh", ssl=False)
+    monkeypatch.setattr(backup_module, "BackupCatalogStore", SimpleNamespace(from_config=lambda c: catalog))
+    monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [job])
+    monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: target)
+    monkeypatch.setattr(backup_module.common_cli, "run", lambda *a, **k: {"files": [], "missing": []})
+    monkeypatch.setattr(backup_module, "utc_now_text", lambda: "2026-10-30T00:00:00Z")
+
+    summary = backup_module.verify_backup_files(app_config=SimpleNamespace(), config_path="x")
+
+    assert [m["file"] for m in summary["pruned"]] == ["old.bak"]
+    assert [m["file"] for m in summary["missing"]] == ["new.bak"]
+    rows = {r["file_name"]: r for r in catalog.backup_history(server_id="ACME-192-0-2-250")}
+    assert rows["old.bak"]["state"] == "pruned" and "past its FULL window" in rows["old.bak"]["pruned_by"]
+
+
+def test_a_file_the_host_cannot_read_is_hashed_inside_its_container(monkeypatch, catalog):
+    """The runtime store's own backups sit in a docker VOLUME under /var/lib/docker, which the SSH
+    user may not read: every scrub there said "checked 0" (2026-11-03). Refused on the host, the
+    files are hashed inside the container by their own paths."""
+    job = _job()
+    backup_module.record_in_catalog(catalog, job, _result(job, [_receipt("A", "FULL", SHA_A, "/vol/a.bak", "/c/a.bak")]),
+                                    job_run_id=1, started_at="2026-10-29T01:00:00Z", finished_at="2026-10-29T01:10:00Z")
+    asked = []
+
+    def file_checksum(command, request, **_kw):
+        asked.append(request)
+        if request["host"].get("runtime") != "docker":
+            raise RuntimeError("sha256sum: /vol/a.bak: Permission denied")
+        return {"files": [{"path": "/c/a.bak", "sha256": SHA_A, "size_bytes": 1}], "missing": []}
+
+    target = SimpleNamespace(host="192.0.2.10", port=22, username="u", key_file="", password_ref="",
+                             platform="linux", access="ssh", ssl=False, container_name="store")
+    monkeypatch.setattr(backup_module, "BackupCatalogStore", SimpleNamespace(from_config=lambda c: catalog))
+    monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [job])
+    monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: target)
+    monkeypatch.setattr(backup_module.common_cli, "run", file_checksum)
+    monkeypatch.setattr(backup_module, "utc_now_text", lambda: "2026-10-30T00:00:00Z")
+
+    summary = backup_module.verify_backup_files(app_config=SimpleNamespace(), config_path="x")
+
+    assert summary["checked"] == 1 and summary["match"] == 1 and summary["unreadable"] == []
+    assert asked[-1]["host"]["container"] == "store" and asked[-1]["paths"] == ["/c/a.bak"]
+
+
+def test_a_scrub_that_could_read_nothing_says_so(monkeypatch, catalog):
+    monkeypatch.setattr(backup_module, "verify_backup_files", lambda **k: {
+        "checked": 0, "match": 0, "mismatch": [], "missing": [],
+        "unreadable": [{"file": "a.bak", "why": "ACME: Permission denied"}]})
+    row = _scheduled(monkeypatch, catalog, _job(), [_line("A", "FULL", "/b/a.bak")])
+    assert row["level"] == "warning" and "SCRUB could not read 1 stored file(s): ACME: Permission denied" in row["message"]
+
+
+def test_a_wal_segment_before_the_oldest_kept_base_was_the_cleanups(monkeypatch, catalog):
+    """pg_archivecleanup cuts the archive at the oldest kept base's START WAL - by position, not by
+    age - so twenty segments well inside their 7-day window went at once and the scrub engaged the
+    lockdown on them (2026-11-03). Before the oldest kept full base they are pruned; after it, gone."""
+    base, wal = _job(db_type="postgresql", job="database"), _job(backup_id="ACME_PG_WAL", db_type="postgresql", job="wal")
+    backup_module.record_in_catalog(catalog, wal, _result(wal, [
+        _receipt("cluster", "WAL", SHA_A, "/srv/wal/old", "/c/wal/old"),
+        _receipt("cluster", "WAL", SHA_B, "/srv/wal/new", "/c/wal/new")]),
+        job_run_id=1, started_at="2026-10-29T01:00:00Z", finished_at="2026-10-29T01:00:05Z")
+    backup_module.record_in_catalog(catalog, base, _result(base, [
+        _receipt("cluster", "FULL_BASE", SHA_A, "/srv/base/F", "/c/base/F")]),
+        job_run_id=2, started_at="2026-10-31T18:00:00Z", finished_at="2026-10-31T19:00:00Z")
+    # The second WAL segment ended after the base began: it must still be there.
+    with catalog.connect() as conn:
+        conn.execute("UPDATE backup_files SET backup_ended_at = '2026-11-01T00:00:00Z' WHERE file_name = 'new'")
+    target = SimpleNamespace(host="192.0.2.10", port=22, username="u", key_file="", password_ref="",
+                             platform="linux", access="ssh", ssl=False)
+    monkeypatch.setattr(backup_module, "BackupCatalogStore", SimpleNamespace(from_config=lambda c: catalog))
+    monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [base, wal])
+    monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: target)
+    monkeypatch.setattr(backup_module.common_cli, "run", lambda *a, **k: {
+        "files": [{"path": "/srv/base/F/backup_manifest", "sha256": SHA_A, "size_bytes": 1}], "missing": []})
+    monkeypatch.setattr(backup_module, "utc_now_text", lambda: "2026-11-03T00:00:00Z")
+
+    summary = backup_module.verify_backup_files(app_config=SimpleNamespace(), config_path="x", backup_id="ACME_PG_WAL")
+
+    assert [m["file"] for m in summary["pruned"]] == ["old"]
+    assert "pg_archivecleanup" in summary["pruned"][0]["why"]
+    assert [m["file"] for m in summary["missing"]] == ["new"]
+
+
+def test_a_gone_file_is_held_to_every_window_that_prunes_its_folder(monkeypatch, catalog):
+    """FULL, DIFF and LOG are often three entries writing ONE folder, and each script prunes the
+    folder with its own window: the LOG entry's 7 days cut the FULL entry's files. Held only to its
+    own entry's 14 days, a 10-day-old FULL gone read as an attack; held to every window that reaches
+    the folder, it is the LOG job's retention."""
+    import dataclasses
+
+    full = dataclasses.replace(_job(backup_id="ACME_FULL", job="full"), cleanup_retention=14 * 86400)
+    log = dataclasses.replace(_job(backup_id="ACME_LOG", job="log"), cleanup_retention=7 * 86400)
+    backup_module.record_in_catalog(catalog, full, _result(full, [_receipt("A", "FULL", SHA_A, "/srv/a.bak", "/c/a.bak")]),
+                                    job_run_id=1, started_at="2026-10-24T01:00:00Z", finished_at="2026-10-24T01:10:00Z")
+    target = SimpleNamespace(host="192.0.2.10", port=22, username="u", key_file="", password_ref="",
+                             platform="linux", access="ssh", ssl=False)
+    monkeypatch.setattr(backup_module, "BackupCatalogStore", SimpleNamespace(from_config=lambda c: catalog))
+    monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [full, log])
+    monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: target)
+    monkeypatch.setattr(backup_module.common_cli, "run", lambda *a, **k: {"files": [], "missing": []})
+    monkeypatch.setattr(backup_module, "utc_now_text", lambda: "2026-11-03T00:00:00Z")
+
+    summary = backup_module.verify_backup_files(app_config=SimpleNamespace(), config_path="x")
+
+    assert [m["file"] for m in summary["pruned"]] == ["a.bak"] and summary["missing"] == []

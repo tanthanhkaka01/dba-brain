@@ -82,6 +82,18 @@ if [ -n "$retention_seconds" ]; then
     esac
     retention_window="${retention_seconds} seconds ago"
 fi
+# Per file type (0.35.0, 1.229): the base chains by FULL_BASE's own window, when the job states it.
+# keep = no sweep. An INCR goes with its chain, so there is no INCR window to read.
+sweep_bases=1
+if [ -n "${RETENTION_FULL_BASE_SECONDS:-}" ]; then
+    case "$RETENTION_FULL_BASE_SECONDS" in
+        keep) sweep_bases="" ;;
+        *[!0-9]*) die "RETENTION_FULL_BASE_SECONDS must be seconds (at least 60) or keep: '${RETENTION_FULL_BASE_SECONDS}'." ;;
+        *) [ "$RETENTION_FULL_BASE_SECONDS" -ge 60 ] \
+               || die "RETENTION_FULL_BASE_SECONDS must be at least 60, or keep: '${RETENTION_FULL_BASE_SECONDS}'."
+           retention_window="${RETENTION_FULL_BASE_SECONDS} seconds ago" ;;
+    esac
+fi
 # Unset is the normal case and means the image's default. A non-numeric value is not: it would be
 # pasted into the psql argument list and produce a connection error naming the port, four calls in.
 case "$pg_port" in
@@ -244,6 +256,8 @@ take_backup() {
     fi
     printf 'backup_level=%s where=%s target=%s retention_days=%s\n' \
         "$level" "$where" "$target" "$retention_days"
+    # When the backup began (1.254), UTC - for the receipt.
+    started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     bb_output="$(run_db "pg_basebackup ${pg_conn} ${bb_args} 2>&1")"
     bb_status=$?
     [ -n "$bb_output" ] && printf '%s\n' "$bb_output"
@@ -337,8 +351,8 @@ manifest_sha="$(run_db "sha256sum '${target}/backup_manifest'" 2>/dev/null | cut
 [ "${#manifest_sha}" -eq 64 ] || { printf 'warning: could not hash %s/backup_manifest\n' "$target" >&2; manifest_sha=""; }
 target_bytes="$(run_db "du -sb '${target}' 2>/dev/null | cut -f1" | tr -d '[:space:]')"
 # pg_basebackup has no encryption of its own: the backup is written plain.
-printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=no\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
-    "cluster" "$file_type" "${target_bytes:-}" "$manifest_sha" "$verify" "$verify_note" \
+printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=no\tstart=%s\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
+    "cluster" "$file_type" "${target_bytes:-}" "$manifest_sha" "$verify" "${started:-}" "$verify_note" \
     "$(host_path_of "$target")" "$container" "$target"
 [ "$verify" = "failed" ] && die "pg_verifybackup found the backup in '${target}' does not match its manifest."
 
@@ -368,7 +382,11 @@ done
 drop_chain
 CLEANUP
 )
-run_db "$cleanup" || printf 'warning: retention sweep reported an error\n' >&2
+if [ -n "$sweep_bases" ]; then
+    run_db "$cleanup" || printf 'warning: retention sweep reported an error\n' >&2
+else
+    printf 'retention: base chains kept (keep)\n'
+fi
 
 # Make the pieces readable to the host's SSH user. They are written 0600 by the database user,
 # which is right for a local backup but blocks the cross-machine restore: the transfer reads the

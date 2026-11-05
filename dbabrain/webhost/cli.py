@@ -201,6 +201,7 @@ def _web_settings():
 
 def _handle_serve(args, config, logger) -> int:
     from dbabrain.db import DbaBrainStore
+    from dbabrain.db.ai_assist_store import AiAssistStore
     from dbabrain.db.config_store import ConfigStore
     from dbabrain.db.run_requests import RunRequestStore
     from dbabrain.db.web_auth_store import WebAuthStore
@@ -222,6 +223,7 @@ def _handle_serve(args, config, logger) -> int:
             config_store=ConfigStore.from_config(config),
             ops_store=DbaBrainStore.from_config(config),
             request_store=RunRequestStore.from_config(config),
+            ai_store=AiAssistStore.from_config(config),
             data_dir=DEFAULT_DATA_DIR,
             log_dir=config.log_dir,
             settings=settings,

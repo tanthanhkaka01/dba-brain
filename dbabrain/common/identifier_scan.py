@@ -33,6 +33,7 @@ something to learn.
 from __future__ import annotations
 
 from dbabrain.lib import errors
+from dbabrain.lib import trie_regex
 import json
 import re
 from pathlib import Path
@@ -470,13 +471,18 @@ def _patterns(searchable: dict[str, tuple[str, str, str]]) -> list[tuple[re.Patt
     wordy = sorted((k for k in strict if searchable[k][2] == REVIEW), key=len, reverse=True)
     built: list[tuple[re.Pattern[str], bool]] = []
     if loose:
-        built.append((re.compile("|".join(re.escape(k) for k in loose), re.IGNORECASE), True))
+        built.append((re.compile(trie_regex.alternation(loose, fold=True), re.IGNORECASE), True))
     if named:
-        built.append((re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(k) for k in named)
-                                 + r")(?![\w-])", re.IGNORECASE), False))
+        built.append((re.compile(r"(?<![\w-])" + trie_regex.alternation(named, fold=True)
+                                 + r"(?![\w-])", re.IGNORECASE), False))
+        # A backup file's name joins the instance to the database: `<server>$<INSTANCE>_<DB>_LOG_...`
+        # (the layout SQL Server maintenance scripts write). `_` is a word character, so the instance
+        # was never a whole word there - a showcase shipped `host-570$SALESDW_SALES` (0.35.0, 1.268).
+        built.append((re.compile(r"(?<=\$)" + trie_regex.alternation(named, fold=True)
+                                 + r"(?=_)", re.IGNORECASE), False))
     if wordy:
-        built.append((re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(k) for k in wordy)
-                                 + r")(?![\w-])"), False))
+        built.append((re.compile(r"(?<![\w-])" + trie_regex.alternation(wordy)
+                                 + r"(?![\w-])"), False))
     if shorthand:
         # The boundary has to reject two things and accept a third, and the obvious `(?<![\w.-])`
         # gets the third wrong. Reject a neighbouring **digit or dot**, which is what keeps the
@@ -493,9 +499,11 @@ def _patterns(searchable: dict[str, tuple[str, str, str]]) -> list[tuple[re.Patt
         # `<something>_<octet>_<octet>` — a name, touching a letter. A page of measurements could
         # otherwise never be certified, and the scrub could not help: rewriting `0.2` inside
         # `"sharePct": 0.2` corrupts the page it is publishing.
-        core = "(?:" + "|".join(re.escape(k) for k in shorthand) + ")"
+        core = trie_regex.alternation(shorthand)
         left, right = r"(?<![\d.])(?<!\d-)(?<!\d_)", r"(?!\d)(?![.\-_]\d)"
-        built.append((re.compile(f"(?:(?<=[A-Za-z_]){core}{right}|{left}{core}(?=[A-Za-z_]))"),
+        # Touching only on the right, an underscore or a word of three letters or more: a unit is
+        # shorter (`0.2x`, `17.1s`, `4.5ms`) - a burn rate `3d 0.2x` read as a machine (1.271).
+        built.append((re.compile(f"(?:(?<=[A-Za-z_]){core}{right}|{left}{core}(?=_|[A-Za-z]{{3}}))"),
                       False))
     return built
 

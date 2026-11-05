@@ -15,6 +15,146 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-05
+
+### Added
+
+- **The AI assistant answers in several groups and in private chats** (2026-11-04).
+  `ai_assist.json` `telegram_chat` takes one level or a list of them; a level no group carries is
+  named in the run's answer and the others still answer. The new mandatory `private_chat_enabled`
+  (shipped `false`; `upgrade-config` writes it) also answers the active users of `users[]` in their
+  own private chat with the bot, with no @mention; nobody else's private chat is read. A message that
+  answers a bot command asking for a value (a password, often) is left to the bot and never sent to
+  the model, in any chat. Code first, then the file: an older node refuses a list in `telegram_chat`.
+- **The console's *AI assistant* page** (1.266), under Administration, for admins: the assistant's
+  usage over the last N days by day, user or model; every request newest first, refusals with their
+  reason; one request in full - its messages as the model took them, every API call, every tool run.
+  Read-only. `telegram ai-usage` and the page add the rows up with the same store call.
+- **The AI assistant writes command lines for the node it runs on** (1.267): it is told the node's OS,
+  shell, install (pip, source tree, container) and tool root, and names every command it proposes by
+  kind and place - a CLI line for that shell, a Telegram command and its chat, a console page, what
+  another machine needs. On a new install it guides the setup in order; `dbabrain init` says the
+  assistant exists and what it needs.
+- **Each backup file's own start time** (1.254): the backup scripts print `start=` on every file's
+  receipt line and the catalog keeps it in `backup_files.backup_started_at` - the run's start is the
+  first database's. Unknown (null) for a WAL segment and for a script that does not say.
+- **`catalog-backfill` reads PostgreSQL and Oracle backups** (1.215): a base backup by its
+  `backup_manifest`, WAL segments under `wal/`, RMAN pieces by the names the scripts give them. One
+  reading of the layout, shared with the restore (`lib.integrity.script_file_type`).
+- **A broken SQL Server backup chain is named before anything is restored** (1.250): `restore-by-id`
+  checks the pieces' LSNs - a DIFF of another FULL, a missing log - and refuses the drill naming the
+  file, instead of failing at `RESTORE LOG` with the target half-restored. `list-backup-files`
+  answers each SQL Server piece's `checkpoint_lsn` and `differential_base_lsn` too.
+- **A script-driven drill checks the restored data's consistency** (1.251): `DBCC CHECKDB` on a
+  SQL Server container, `pg_amcheck --all` on PostgreSQL, RMAN `VALIDATE CHECK LOGICAL` on Oracle -
+  `verify-restore`'s new `consistency`, set from the entry's `checkdb` (default true).
+- **A hole in a PostgreSQL restore's WAL is named before anything is restored** (1.250): the base
+  backup's start segment must be archived and, to latest, every segment after it - recovery would
+  otherwise stop at the hole and open on an older state. `list-backup-files` answers `start_wal`
+  and, asked with `wal_segments`, the segment names.
+
+- **Recoverability on the backup & restore page** (1.248, 1.252, 1.253): a restore entry states its
+  `tier` (daily, weekly, monthly) and every run records it; each drill is OK or OVERDUE against its
+  tier's deadline, with its 7- and 30-day success rate, and each database's coverage names what a
+  restore of it lacks - a full, log or WAL backups, a copy off the host, a drill. The catalog's
+  schema 4 adds `restore_runs.tier` in place.
+
+### Changed
+
+- **Fixed: a file a sibling entry's retention removed read as gone.** A gone file is held to the
+  windows of every job writing its folder: FULL, DIFF and LOG entries share one directory, and the
+  shortest window prunes them all.
+- **`lockdown off` answers the lockdown as it now stands**, not the row read before it ended.
+- **Fixed: WAL cut by `pg_archivecleanup` read as gone.** The cleanup cuts at the oldest kept base's
+  START WAL, not by age; a gone segment before the oldest present full base is now pruned.
+  Twenty of them engaged a false lockdown on the worker (2026-11-03).
+- **Fixed: a scrub that could read nothing looked clean.** Files in a docker volume (the runtime
+  store's own backups) were unreadable from the host, and every scrub there said `checked 0`. They
+  are now hashed inside the container, the ransom-marker listing falls back the same way, and an
+  unreadable scrub is a WARNING.
+- **Fixed: `metrics collect --test-run` refused a host** for a `major_version` a machine without a
+  database cannot have.
+- **The pages print each backup entry's retention and point-in-time reach** (1.233): a table on the
+  backup & restore page and a line on each server page. Each backup run records both (catalog
+  schema version 7).
+- **Fixed before it shipped: a file its retention removed read as "gone"** (1.233). The scrub
+  now marks a stored file gone past its type's window as `pruned` (`pruned_by` names the window).
+  Until then, three ordinary retention removals would have engaged the lockdown. `list-backups`
+  prints each job's retention and its point-in-time reach. Catalog schema version 6.
+- **A backup entry states `cleanup_retention` once** (1.232): the entry's value applies to its jobs
+  that state none; a job and its entry that disagree are a check-objects violation;
+  `upgrade-config` step `retention-per-type` folds the jobs' values onto the entry and names every
+  entry whose behaviour that changes.
+- **`prune-backup-files` / `prune-backups` judge each level by its own window** (1.231) when the
+  retention names types; the newest chain stays the floor.
+- **Oracle's pieces keep their own windows** (1.230): the level 0 sets RMAN's recovery window,
+  ARCHIVELOG how long a log stays on disk (its backups follow the level 0, which needs them),
+  CONTROLFILE and SPFILE backups their own.
+- **PostgreSQL keeps its base chains and its WAL archive by their own windows** (1.229): WAL may be
+  kept shorter than the bases, cut at the oldest full base inside the WAL window.
+- **SQL Server backups prune FULL, DIFF and LOG each by its own window** (1.228), when the job's
+  `cleanup_retention` names types: the LOG job no longer cuts the FULLs by its shorter window.
+- **Fixed: the Linux SQL Server script could delete a database's last FULL** - `find ! -newer`
+  matched the newest full itself, so a database whose backups stopped for longer than the window
+  lost it. It is excluded by path now.
+- **`cleanup_retention` may state a window per file type** (1.227): `{"FULL": ..., "LOG": ...,
+  "CERT": "keep", "default": ...}` beside the integer. Refused by the registrars: a type the
+  engine never writes, a log kept past its base, a chain incremental with a window of its own.
+  The engines still prune with one number, the longest stated, until 1.228 - 1.231.
+- **SSH host keys can be pinned** (1.223): with `DBABRAIN_SSH_KNOWN_HOSTS` naming a file, a host's
+  key is pinned the first time it is seen and a changed one refuses before anything is sent.
+  Unset, nothing changes.
+- **A restore into a production instance needs `allow_production_target: true`** (1.223): a target
+  the inventory calls `prod` / `production` is refused otherwise, on both restore paths.
+- **The rebuild runbook** (1.226, `docs/security.md` §5b): what must be kept off the worker
+  (the `export-data` bundle, the store's backup, the passphrase offline) and the rebuild in
+  order: lockdown, a new host, `import-data`, the store, `catalog-verify-chain`,
+  `restore-candidates`, rotate every credential.
+- **`/spbot_lockdown`** (1.220): see, turn on or turn off the lockdown from Telegram - private,
+  clearance 50; on and off ask why and one yes, and record who typed it.
+- **The backup catalog is hash-chained** (1.224): every `backup_files` row carries `row_hash` over
+  what the backup wrote and the row before it; `backup_restore catalog-verify-chain` names the first
+  row that was edited or removed. Catalog schema version 5.
+- **`backup_restore restore-candidates --backup-id`** (1.244): each backup chain, newest first,
+  verified or not, and whether it ended before the first sign of an attack - the clean points to
+  restore from when the newest chain may already be the attacker's.
+- **Ransomware's marks in a backup folder are looked for after every backup** (1.219): a ransom
+  note or an encrypted file's name (`read-me3.txt`, `*.L0CK3D`, `*.locked`, ...) is CRITICAL and
+  engages the lockdown; a new file three times bigger or a third the size of its history is a WARNING.
+- **Lockdown** (1.220): `control.cli lockdown on|off|status`. While on: no prune, no delete, no
+  restore over an ONLINE SQL Server database, no ad-hoc SQL that writes, no delete after an offload;
+  backups, the scrub and alerts keep running. The scrub turns it on by itself on three or more
+  stored backups changed or gone; only a person turns it off, with a note. A new store table,
+  `lockdowns`.
+- **Every backup run re-hashes older files of its entry** (1.218, a rolling scrub): the entry's
+  `scrub_files_per_run` files checked longest ago (default 20, 0 off); one changed or gone makes
+  the run's alert CRITICAL and names it.
+- **`prune-backups --apply` refuses to delete most of a folder at once** (1.221): more than half of
+  an entry's files (of ten or more) in one run deletes nothing and records an ERROR;
+  `--allow-mass-delete` goes past it when it is meant.
+- **Backups kept beside the data are alerted** (1.239): `STORAGE_FILE_PLACEMENT` grades each SQL
+  Server database with a recent backup - CRITICAL when a backup shares a drive with its data or log
+  files, WARNING when every backup stays on the database host. It was logging only; expect these
+  alerts on the first collection, and they stay until the backups leave the host.
+- **A new restore entry refuses a backup file no backup catalogued** (1.249): `restore-add` writes
+  `integrity.uncatalogued: refuse` unless told otherwise. Existing entries keep `compare_copy` -
+  `upgrade-config` states what they did; move one by backfilling its backups and setting it.
+
+### Fixed
+
+- **A PostgreSQL base backup already on a restore's target is confirmed instead of copied again.**
+  It is hashed through its `backup_manifest`, and the gate held that file to the size recorded for
+  the whole directory (1.245), so it never matched. The manifest's checksum decides.
+- An Oracle `ctl_` or `autobackup_` piece staged without a catalog row is typed CONTROLFILE, no
+  longer RMAN_L0.
+- **`build-showcase` no longer rewrites a measurement as a machine** (1.271): a two-octet number
+  with a short unit after it (`3d 0.2x`, `17.1s`) is not an address's shorthand, and a fake whose
+  shorthand is a real machine's is written whole. `check-identifiers` reads the shorthand the same way.
+- **`check-identifiers` runs in about a minute instead of over ten** (1.269): its word lists, and
+  the showcase scrub's, are matched as one trie instead of a plain alternation - the same matches.
+- **An instance joined to its database in a backup file's name** (`$INSTANCE_DB_LOG_...`) is found
+  by `check-identifiers` and rewritten by `build-showcase` (1.268).
+
 ## [0.34.0] - 2026-11-02
 
 0.31.0, 0.32.0 and 0.33.0 were built and run on a worker and never released (the operator, 2026-10-26, 2026-10-29 and 2026-10-31); everything they carried is here, in the version that is.

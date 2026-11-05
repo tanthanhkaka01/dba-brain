@@ -2,6 +2,7 @@
     "enabled": false,
     "api_key_ref": "",
     "telegram_chat": "ai_assist",
+    "private_chat_enabled": false,
     "model": "claude-sonnet-5-5",
     "effort": "medium",
     "require_mention": true,

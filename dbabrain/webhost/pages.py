@@ -222,6 +222,14 @@ form.newuser .grid { display: grid; grid-template-columns: repeat(4, minmax(150p
 form.newuser label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 form.newuser label.check { flex-direction: row; align-items: center; }
 button:disabled { opacity: .45; cursor: not-allowed; }
+.ai-filter { display: flex; gap: 10px; align-items: center; margin: 4px 0 10px; font-size: 13px; }
+.ai-filter select { padding: 4px 6px; }
+table.records td.q { max-width: 520px; }
+pre.ai { white-space: pre-wrap; word-break: break-word; margin: 6px 0; padding: 8px 10px; font-size: 12px;
+         background: #f8fafc; border: 1px solid var(--line, #e5e7eb); border-radius: 6px; max-height: 420px;
+         overflow: auto; }
+.ai-msg { margin-bottom: 10px; }
+.ai-msg .role { font-size: 12px; color: var(--muted); }
 """
 
 #: The sign-in and password pages: Tabler's sign-in layout - the product mark above a centred card
@@ -474,10 +482,14 @@ def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str,
     admin = ""
     if can_admin:
         users_active = " active" if active == ADMIN_USERS else ""
+        ai_active = " active" if active == ADMIN_AI else ""
         admin = (f'<div class="group">Administration</div>'
                  f'<a class="item{users_active}" href="{escape(prefix)}/users">'
                  f'<span class="dot idle"></span><span class="ord"></span>'
-                 f'<span class="name">Users</span></a>')
+                 f'<span class="name">Users</span></a>'
+                 f'<a class="item{ai_active}" href="{escape(prefix)}/ai">'
+                 f'<span class="dot idle"></span><span class="ord"></span>'
+                 f'<span class="name">AI assistant</span></a>')
     return f"""
 <nav class="apps">
   <a class="item{overview}" href="{escape(prefix)}/"><span class="dot idle"></span>
@@ -491,6 +503,8 @@ def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str,
 
 #: The sidebar key of the Users page - not an app code, so no app can ever be marked active by it.
 ADMIN_USERS = "__users__"
+#: The sidebar key of the AI assistant page, for the same reason.
+ADMIN_AI = "__ai__"
 
 
 def _utc_text(value: Any) -> str:
@@ -634,6 +648,203 @@ The same operations exist on the command line: <code>python -m dbabrain.webhost.
 """
     return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active=ADMIN_USERS,
                   detail=detail, title="Users — dbabrain", report_links=report_links)
+
+
+#: The most of one message, tool input or tool output a transcript page prints; the rest is a CLI away.
+_AI_TEXT_LIMIT = 20000
+
+
+def _money(value: Any) -> str:
+    return f"${float(value or 0):.4f}"
+
+
+def _ai_status(status: str) -> str:
+    cls = {"done": "ok", "running": "warn", "blocked": "warn", "error": "bad", "stopped": "warn"}.get(status, "")
+    return f'<span class="tag {cls}">{escape(status)}</span>'
+
+
+def _ai_text(value: Any) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
+    cut = ""
+    if len(text) > _AI_TEXT_LIMIT:
+        cut = f"\n… {len(text) - _AI_TEXT_LIMIT:,} more characters (telegram.cli ai-show prints them all)"
+        text = text[:_AI_TEXT_LIMIT]
+    return f'<pre class="ai">{escape(text)}{escape(cut)}</pre>'
+
+
+def _ai_block(block: Any) -> str:
+    """One content block of a message, as the model sent or received it."""
+    if not isinstance(block, dict):
+        return _ai_text(block)
+    kind = str(block.get("type") or "")
+    if kind == "text":
+        return _ai_text(block.get("text") or "")
+    if kind in ("thinking", "redacted_thinking"):
+        thought = str(block.get("thinking") or "")
+        return (f'<details class="raw"><summary>{escape(kind)} ({len(thought):,} characters)</summary>'
+                f'{_ai_text(thought) if thought else ""}</details>')
+    if kind == "tool_use":
+        return (f'<div class="sub">tool call <b>{escape(block.get("name"))}</b> '
+                f'<code>{escape(block.get("id"))}</code></div>{_ai_text(block.get("input") or {})}')
+    if kind == "tool_result":
+        flag = ' <span class="tag bad">error</span>' if block.get("is_error") else ""
+        return (f'<div class="sub">tool result <code>{escape(block.get("tool_use_id"))}</code>{flag}</div>'
+                f'{_ai_text(block.get("content") or "")}')
+    return _ai_text(block)
+
+
+def ai_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]],
+            report_links: list[tuple[str, str]] | tuple = (), usage: dict[str, Any] | None,
+            requests: list[dict[str, Any]], days: int, by: str, page: int, has_more: bool) -> str:
+    """The AI assistant: what it cost, and every question it was asked (0.35.0, 1.266).
+
+    petweb's admin page is the model (0.34.0 D-AI8): usage by day, user or model over a window,
+    then the questions newest first - refusals included, since a refusal is the row an operator
+    most often comes looking for - each opening its whole transcript.
+    """
+    head = ('<h2>AI assistant</h2><p class="lede">What the Telegram AI assistant was asked, what it '
+            'answered and what it cost, from the store (<code>ai_requests</code> and the four tables '
+            'beside it). Read-only.</p>')
+    if usage is None:
+        detail = (head + '<div class="alert info">The assistant\'s tables are not open here - this '
+                  'console was started without the store they live in. Nothing is wrong with the '
+                  'assistant because of it; <code>python -m dbabrain.telegram.cli ai-usage</code> reads '
+                  'the same rows.</div>')
+        return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active=ADMIN_AI,
+                      detail=detail, title="AI assistant — dbabrain", report_links=report_links)
+    rows = usage.get("rows") or []
+    questions = sum(int(row.get("questions") or 0) for row in rows)
+    refused = sum(int(row.get("refused") or 0) for row in rows)
+    errors = sum(int(row.get("errors") or 0) for row in rows)
+    bucket_label = {"day": "Day (UTC)", "user": "User", "model": "Model"}[by]
+    usage_rows = "".join(
+        f"<tr><td class='key'>{escape(row.get('bucket') or '—')}</td>"
+        f"<td class='num'>{int(row.get('questions') or 0)}</td><td class='num'>{int(row.get('refused') or 0)}</td>"
+        f"<td class='num'>{int(row.get('errors') or 0)}</td><td class='num'>{int(row.get('tokens') or 0):,}</td>"
+        f"<td class='num'>{int(row.get('cache_read') or 0):,}</td><td class='num'>{int(row.get('tool_calls') or 0)}</td>"
+        f"<td class='num'>{_money(row.get('cost_usd'))}</td></tr>"
+        for row in rows) or f'<tr><td colspan="8" class="none">No questions in the last {days} day(s).</td></tr>'
+    options = "".join(f'<option value="{key}"{" selected" if key == by else ""}>{label}</option>'
+                      for key, label in (("day", "by day"), ("user", "by user"), ("model", "by model")))
+    request_rows = []
+    for item in requests:
+        rid = int(item.get("ai_request_id") or 0)
+        question = str(item.get("question") or "")
+        short = question if len(question) <= 160 else question[:160] + "…"
+        why = f'<div class="sub">{escape(item.get("reason"))}</div>' if item.get("reason") else ""
+        request_rows.append(
+            f"<tr><td class='num'><a href='{escape(prefix)}/ai/{rid}'>{rid}</a></td>"
+            f"<td>{_utc_text(item.get('started_at'))}</td>"
+            f"<td>{escape(item.get('user_name') or item.get('user_id'))}</td>"
+            f"<td>{escape(item.get('kind'))}</td><td>{_ai_status(str(item.get('status') or ''))}{why}</td>"
+            f"<td class='q'>{escape(short)}</td><td>{escape(item.get('model') or '')}</td>"
+            f"<td class='num'>{int(item.get('tool_calls') or 0)}</td>"
+            f"<td class='num'>{int(item.get('total_tokens') or 0):,}</td>"
+            f"<td class='num'>{_money(item.get('cost_usd'))}</td></tr>")
+    pager = []
+    if page > 1:
+        pager.append(f'<a href="{escape(prefix)}/ai?days={days}&amp;by={by}&amp;page={page - 1}">&larr; newer</a>')
+    if has_more:
+        pager.append(f'<a href="{escape(prefix)}/ai?days={days}&amp;by={by}&amp;page={page + 1}">older &rarr;</a>')
+    detail = f"""
+{head}
+<div class="tiles">
+  <div class="tile"><div class="n">{questions}</div><div class="l">questions, last {days} day(s)</div></div>
+  <div class="tile{" warn" if refused else ""}"><div class="n">{refused}</div><div class="l">refused</div></div>
+  <div class="tile{" bad" if errors else ""}"><div class="n">{errors}</div><div class="l">errors</div></div>
+  <div class="tile"><div class="n">{int(usage.get("total_tokens") or 0):,}</div><div class="l">tokens</div></div>
+  <div class="tile"><div class="n">{_money(usage.get("total_cost_usd"))}</div><div class="l">cost (USD)</div></div>
+</div>
+<h3 class="block">Usage</h3>
+<form method="get" action="{escape(prefix)}/ai" class="ai-filter">
+  last <input type="number" name="days" min="1" max="366" value="{days}" style="width:70px"> day(s)
+  <select name="by">{options}</select> <button type="submit" class="small">Show</button>
+  <span class="hint">{_utc_text(usage.get("since"))} to {_utc_text(usage.get("until"))}</span>
+</form>
+<div class="card"><table class="records">
+  <thead><tr><th>{bucket_label}</th><th>Questions</th><th>Refused</th><th>Errors</th><th>Tokens</th>
+  <th>Cache read</th><th>Tool calls</th><th>Cost</th></tr></thead>
+  <tbody>{usage_rows}</tbody>
+</table></div>
+<h3 class="block">Requests, newest first</h3>
+<div class="card"><table class="records">
+  <thead><tr><th>#</th><th>When</th><th>Who</th><th>Kind</th><th>Status</th><th>Question</th><th>Model</th>
+  <th>Tools</th><th>Tokens</th><th>Cost</th></tr></thead>
+  <tbody>{"".join(request_rows) or '<tr><td colspan="10" class="none">No requests recorded.</td></tr>'}</tbody>
+</table></div>
+<p class="hint">{" &middot; ".join(pager)}</p>
+<p class="hint">The same figures on the command line: <code>python -m dbabrain.telegram.cli ai-usage --days {days} --by {by}</code>.</p>
+"""
+    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active=ADMIN_AI,
+                  detail=detail, title="AI assistant — dbabrain", report_links=report_links)
+
+
+def ai_request_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]],
+                    report_links: list[tuple[str, str]] | tuple = (), transcript: dict[str, Any]) -> str:
+    """One question in full: the row, the messages as the model took them, every API call, every tool run."""
+    request = transcript.get("request") or {}
+    rid = int(request.get("ai_request_id") or 0)
+    facts = [("Asked", _utc_text(request.get("started_at"))), ("Finished", _utc_text(request.get("finished_at"))),
+             ("By", escape(f"{request.get('user_name') or ''} ({request.get('user_id') or ''})")),
+             ("Chat", f"<code>{escape(request.get('chat_id'))}</code>"),
+             ("Status", _ai_status(str(request.get("status") or ""))),
+             ("Reason", escape(request.get("reason") or "—")),
+             ("Model", escape(f"{request.get('model') or ''} · effort {request.get('effort') or '—'} · "
+                              f"tools {request.get('tools_mode') or '—'}")),
+             ("Turns · tool calls", f"{int(request.get('turns') or 0)} · {int(request.get('tool_calls') or 0)}"),
+             ("Tokens", f"{int(request.get('input_tokens') or 0):,} in · {int(request.get('output_tokens') or 0):,} out"
+                        f" · {int(request.get('cache_read_tokens') or 0):,} cache read"
+                        f" · {int(request.get('cache_write_tokens') or 0):,} cache write"),
+             ("Cost", _money(request.get("cost_usd"))), ("Stop reason", escape(request.get("stop_reason") or "—")),
+             ("Conversation", escape(request.get("ai_conversation_id") or "—")),
+             ("Node", escape(f"{request.get('node_host') or ''} {request.get('app_version') or ''}".strip() or "—"))]
+    fact_rows = "".join(f"<tr><th>{label}</th><td>{value}</td></tr>" for label, value in facts)
+    messages = []
+    for message in transcript.get("messages") or []:
+        content = message.get("content")
+        parts = content if isinstance(content, list) else [{"type": "text", "text": str(content or "")}]
+        messages.append(f'<div class="ai-msg"><div class="role">#{int(message.get("seq") or 0)} '
+                        f'<b>{escape(message.get("role"))}</b> &middot; {_utc_text(message.get("created_at"))}</div>'
+                        f'{"".join(_ai_block(part) for part in parts)}</div>')
+    calls = "".join(
+        f"<tr><td class='num'>{int(call.get('turn_no') or 0)}</td><td>{escape(call.get('model_served') or call.get('model_requested'))}</td>"
+        f"<td><code>{escape(call.get('anthropic_request_id') or '')}</code></td><td>{escape(call.get('stop_reason') or '')}</td>"
+        f"<td class='num'>{int(call.get('input_tokens') or 0):,}</td><td class='num'>{int(call.get('output_tokens') or 0):,}</td>"
+        f"<td class='num'>{int(call.get('cache_read_tokens') or 0):,}</td><td class='num'>{_money(call.get('cost_usd'))}</td>"
+        f"<td class='num'>{int(call.get('duration_ms') or 0):,} ms</td><td>{escape(call.get('error_text') or '')}</td></tr>"
+        for call in transcript.get("api_calls") or []) or '<tr><td colspan="10" class="none">No call to the model.</td></tr>'
+    tools = []
+    for run in transcript.get("tool_runs") or []:
+        try:
+            tool_input = json.loads(run.get("input_json") or "{}")
+        except ValueError:
+            tool_input = run.get("input_json")
+        flag = ' <span class="tag bad">error</span>' if int(run.get("is_error") or 0) else ""
+        tools.append(f"""<details class="raw"><summary><b>{escape(run.get("tool_name"))}</b>{flag} &middot;
+  {int(run.get("duration_ms") or 0):,} ms &middot; {int(run.get("output_chars") or 0):,} characters, {int(run.get("sent_chars") or 0):,} sent
+  {f"&middot; {int(run['row_count'])} row(s)" if run.get("row_count") is not None else ""}</summary>
+  <div class="sub">input</div>{_ai_text(tool_input)}<div class="sub">output (redacted, as kept)</div>{_ai_text(run.get("output_text") or "")}
+</details>""")
+    detail = f"""
+<p class="crumbs"><a href="{escape(prefix)}/ai">&larr; AI assistant</a></p>
+<h2>AI request {rid}</h2>
+<div class="card"><table class="fields">{fact_rows}</table></div>
+<h3 class="block">Question</h3>{_ai_text(request.get("question") or "")}
+<h3 class="block">Answer sent</h3>{_ai_text(request.get("answer_text") or "") if request.get("answer_text") else '<p class="none">No answer was sent.</p>'}
+<h3 class="block">Messages, as the model took them</h3>
+{"".join(messages) or '<p class="none">No message was kept for this request.</p>'}
+<h3 class="block">Calls to the model</h3>
+<div class="card"><table class="records">
+  <thead><tr><th>Turn</th><th>Model</th><th>Request id</th><th>Stop</th><th>In</th><th>Out</th><th>Cache read</th>
+  <th>Cost</th><th>Took</th><th>Error</th></tr></thead>
+  <tbody>{calls}</tbody>
+</table></div>
+<h3 class="block">Tool runs</h3>
+{"".join(tools) or '<p class="none">No tool was run.</p>'}
+<p class="hint">The same record on the command line: <code>python -m dbabrain.telegram.cli ai-show --id {rid}</code>.</p>
+"""
+    return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active=ADMIN_AI,
+                  detail=detail, title=f"AI request {rid} — dbabrain", report_links=report_links)
 
 
 def nav_items(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:

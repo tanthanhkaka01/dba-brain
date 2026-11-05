@@ -58,6 +58,18 @@ if [ -n "$retention_seconds" ]; then
         || die "RETENTION_SECONDS must be at least 60: '${retention_seconds}'."
     age_test="-mmin +$(( retention_seconds / 60 ))"
 fi
+# Per file type (0.35.0, 1.229): the WAL archive by its own window, when the job states it - keep
+# = no cleanup at all. Below, the cut line becomes the START WAL of the oldest full base backup that
+# began inside the window (else the newest): point-in-time reaches back the WAL window, never less
+# than from the newest base, and an older base still restores to its own end - -X stream put the
+# WAL it needs inside it.
+wal_window="${RETENTION_WAL_SECONDS:-}"
+case "$wal_window" in
+    ''|keep) ;;
+    *[!0-9]*) die "RETENTION_WAL_SECONDS must be seconds (at least 60) or keep: '${wal_window}'." ;;
+    *) [ "$wal_window" -ge 60 ] || die "RETENTION_WAL_SECONDS must be at least 60, or keep: '${wal_window}'."
+       age_test="-mmin +$(( wal_window / 60 ))" ;;
+esac
 
 # $DOCKER_CONTAINER is optional since 0.21.0, exactly as in pg_basebackup_database.sh: set it for a
 # cluster inside a container, leave it unset for one on the host. Chosen once, here, so nothing below
@@ -248,7 +260,19 @@ fi
 # The oldest base backup's START WAL is the cut line. pg_archivecleanup deletes everything
 # strictly older and nothing that is still required.
 oldest_base="$(run_db "ls -1d ${base_dir}/*_FULL 2>/dev/null | sort | head -1" | tr -d '\r')"
-if [ -n "$oldest_base" ]; then
+# >>> wal floor (1.229; tests/test_postgresql_wal_and_bases_keep_their_own_windows.py runs this block)
+if [ -n "$wal_window" ] && [ "$wal_window" != keep ] && [ -n "$oldest_base" ]; then
+    wal_cutoff="$(date -u -d "${wal_window} seconds ago" +%Y%m%dT%H%M%SZ)"
+    floor_base="$(run_db "ls -1d ${base_dir}/*_FULL 2>/dev/null | sort" | tr -d '\r' \
+        | awk -v cut="$wal_cutoff" '{ n = $0; sub(".*/", "", n); split(n, p, "_"); if (p[1] >= cut) { print; exit } }')"
+    [ -n "$floor_base" ] \
+        || floor_base="$(run_db "ls -1d ${base_dir}/*_FULL 2>/dev/null | sort | tail -1" | tr -d '\r')"
+    oldest_base="$floor_base"
+fi
+# <<< wal floor
+if [ "$wal_window" = keep ]; then
+    printf 'wal_cleanup: kept (keep)\n'
+elif [ -n "$oldest_base" ]; then
     start_wal="$(run_db "grep -m1 -o '[0-9A-F]\{24\}' '${oldest_base}/backup_label' 2>/dev/null" | tr -d '\r')"
     if [ -n "$start_wal" ]; then
         printf 'wal_cleanup_floor=%s from=%s\n' "$start_wal" "$oldest_base"
@@ -276,7 +300,7 @@ if [ -n "$oldest_base" ]; then
 else
     # Nothing to protect yet, but do not let the archive grow without bound while the first
     # base backup has not run: fall back to the age floor.
-    printf 'no base backup yet; falling back to age-based WAL cleanup (%s days)\n' "$retention_days"
+    printf 'no base backup yet; falling back to age-based WAL cleanup (%s)\n' "$age_test"
     run_db "find '${wal_dir}' -type f ${age_test} -delete" \
         || printf 'warning: age-based WAL cleanup reported an error\n' >&2
 fi

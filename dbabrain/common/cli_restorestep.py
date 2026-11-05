@@ -89,6 +89,10 @@ that put them there.
 A state column is not enough - a real query is run, because a database can read ONLINE and still
 refuse one while it finishes an upgrade step.
 
+"consistency": true also runs the engine's own consistency check (0.35.0) - DBCC CHECKDB per SQL
+Server database, pg_amcheck --all on PostgreSQL, RMAN VALIDATE CHECK LOGICAL plus
+v$database_block_corruption on Oracle - and a database that fails it is not ok.
+
 data: {{"ok", "checked", "failed", "databases": [{{"database", "state", "ok", "detail"}}]}}
 """
 

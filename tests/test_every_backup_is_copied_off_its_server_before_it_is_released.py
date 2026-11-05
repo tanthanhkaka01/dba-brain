@@ -511,7 +511,10 @@ def test_a_catalog_from_before_the_offload_gains_its_columns_once_and_twice_chan
     _migrate(conn, "sqlite")
     _migrate(conn, "sqlite")
     columns = [r["name"] for r in conn.execute("PRAGMA table_info(backup_files)")]
-    assert columns[2:] == [name for name, _sql in OFFLOAD_COLUMNS]
+    # Later versions add columns of their own after these (row_hash, 1.224): the offload's are there,
+    # in order, and none twice.
+    offload = [name for name, _sql in OFFLOAD_COLUMNS]
+    assert columns[2:2 + len(offload)] == offload and len(columns) == len(set(columns))
 
 
 def test_the_live_postgresql_catalog_is_widened_in_place_and_new_rules_are_not_reproven_over_old_rows():

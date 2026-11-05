@@ -36,6 +36,7 @@ from collections.abc import Callable
 from typing import Any
 
 from dbabrain.lib import errors, stated_facts
+from dbabrain.lib import drill_tiers
 from dbabrain.backup_restore.events import announce
 from dbabrain.backup_restore import schedule
 from dbabrain.backup_restore.backup import (
@@ -110,6 +111,14 @@ class ScriptRestore:
     # SQL Server: a full restore over a database ONLINE on the target is refused unless stated
     # (owner decision G2.10). See config.BackupRestoreConfig.overwrite_existing.
     overwrite_existing: bool = False
+    # A target the inventory calls production is refused unless this says so (1.223).
+    allow_production_target: bool = False
+    # The engine's own consistency check after the restore (1.251): CHECKDB on a SQL Server
+    # container, pg_amcheck, RMAN VALIDATE. The share-driven entry's `checkdb`, read here too.
+    checkdb: bool = True
+    # How often this drill must succeed - daily, weekly, monthly, or None (1.248); recorded on
+    # each run so the reports judge it by its own deadline (lib.drill_tiers).
+    tier: str | None = None
     # How the backup crosses to a target on another machine: `auto` (one tar stream, file by file
     # when tar cannot be used - and the answer says which), or `tar` / `sftp` pinned, where the
     # other way is never tried (owner decision G4). See dbabrain.lib.restore.copy_mode.
@@ -368,6 +377,9 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
         ),
         active=bool(entry.get("active", True)),
         overwrite_existing=entry.get("overwrite_existing") is True,
+        allow_production_target=entry.get("allow_production_target") is True,
+        checkdb=entry.get("checkdb") is not False,
+        tier=drill_tiers.parse_tier(entry.get("tier"), where=f"backup_restore.restores[{index}].tier"),
         copy_mode=copy_mode,
         space_check=space_check,
         integrity=integrity,
@@ -631,28 +643,9 @@ def _ssh_host_block(login: dict[str, Any]) -> dict[str, Any]:
     return {"runtime": "linux", "access": "ssh", **login}
 
 
-def _script_file_type(db_type: str, relative: str) -> str:
-    """A staged file's ``file_type`` from the layout the PostgreSQL and Oracle jobs write: ``base/`` and
-    ``wal/`` for PostgreSQL, RMAN's piece names for Oracle (a best reading - the catalog's own type is
-    used whenever the backup recorded the file); SQL Server's own layout."""
-    path = relative.replace("\\", "/")
-    name = posixpath.basename(path).upper()
-    engine = str(db_type or "").lower()
-    if engine == "postgresql":
-        if path.startswith("wal/") or "/wal/" in path:
-            return "WAL"
-        if name == "BACKUP_MANIFEST":
-            return "MANIFEST"
-        return "INCR_BASE" if "_INCR" in path.upper() else "FULL_BASE"
-    if engine == "oracle":
-        if name.startswith("C-"):
-            return "CONTROLFILE"      # RMAN's autobackup: c-<dbid>-<yyyymmdd>-<nn>
-        for marker, kind in (("CONTROLFILE", "CONTROLFILE"), ("SPFILE", "SPFILE"), ("ARCH", "ARCHIVELOG"),
-                             ("L1", "RMAN_L1"), ("INCR", "RMAN_L1")):
-            if marker in name:
-                return kind
-        return "RMAN_L0"
-    return restore_integrity.sqlserver_file_type(path)
+#: A staged file's ``file_type`` from its place in the layout - one reading, in ``lib.integrity``, shared
+#: with ``catalog-backfill`` (0.35.0, 1.215), which types the same files the same way.
+_script_file_type = restore_integrity.script_file_type
 
 
 def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, source: BackupTarget,
@@ -722,7 +715,7 @@ def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, so
             action=restore_integrity.ACTION_COPY_ONLY if getattr(job, "action", None) == restore_integrity.ACTION_COPY_ONLY
             else restore_integrity.ACTION_RESTORE, restore_id=job.restore_id, source_server_id=job.server_id,
             target_server_id=job.target_server_id, target_folder=target_dir,
-            copy_max_retry=integrity.copy_max_retry, phase="copying",
+            copy_max_retry=integrity.copy_max_retry, phase="copying", tier=getattr(job, "tier", None),
             node_host=socket.gethostname(), app_version=__version__)
 
     copies: list[dict[str, Any]] = []

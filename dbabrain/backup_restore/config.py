@@ -23,6 +23,7 @@ from dbabrain.lib import (
     cleanup_retention, errors, field_names, restore_space, sqlserver_certificate, stated_facts,
 )
 from dbabrain.lib import integrity as restore_integrity
+from dbabrain.lib import drill_tiers
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib.time_window import TimeWindow, parse_time_window_config
 from dbabrain.lib.config import DEFAULT_CONFIG_PATH
@@ -247,10 +248,14 @@ class BackupRestoreConfig:
     # `checkdb: false` - the check is what proves the restored data is consistent, and turning it
     # off by default would silently weaken every drill on upgrade (the operator, 2026-09-24).
     checkdb: bool = True
+    # The drill's tier - daily, weekly, monthly, or None (1.248, lib.drill_tiers).
+    tier: str | None = None
     # A full restore over a database that is ONLINE on the target is refused unless the entry says
     # so (owner decision G2.10): REPLACE overwrites it, users and all. A drill that runs again over
     # its own last restore states `overwrite_existing: true`.
     overwrite_existing: bool = False
+    # A target the inventory calls production is refused unless this says so (1.223).
+    allow_production_target: bool = False
     # Every database whose FULL is on the share, each under its backup's own name - stated, never
     # implied by an empty `database_mappings` (0.27.0 1.101): the entry says either which databases
     # or this. The check after the restore then opens each one the run restored.
@@ -434,6 +439,33 @@ def _same_machine(first: str, second: str) -> bool:
     if not first or not second:
         return False
     return first == second or bool(_addresses(first) & _addresses(second))
+
+
+class ProductionTargetRefused(errors.Refused, ValueError):
+    """A restore aimed at a production instance its entry does not allow (1.223). A ValueError too,
+    so a caller that handles an unsafe restore config handles this one the same way."""
+
+
+def target_environment(target_server_id: str, *, data_dir: Any = None) -> str:
+    """The inventory's ``environment`` of a restore target, or ``""`` when it is not listed."""
+    from dbabrain.lib import data_sources
+
+    wanted = str(target_server_id or "").strip()
+    if not wanted:
+        return ""
+    for record in data_sources.load_db_instances(data_dir):
+        if str(record.get("server_id") or "").strip() == wanted:
+            return str(record.get("environment") or "")
+    return ""
+
+
+def assert_target_is_allowed(*, restore_id: str, target_server_id: str, allowed: bool, data_dir: Any = None) -> None:
+    """Refuse a restore into a production instance its entry does not allow (1.223)."""
+    why = restore_integrity.production_target_refusal(
+        target_environment(target_server_id, data_dir=data_dir), allowed=allowed,
+        restore_id=restore_id, target=target_server_id)
+    if why:
+        raise ProductionTargetRefused(why)
 
 
 def validate_restore_target_is_not_source(config: BackupRestoreConfig) -> None:
@@ -757,7 +789,9 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         execution_mode=_parse_execution_mode(values.get("execution_mode")),
         active=_parse_bool(values.get("active"), default=True),
         checkdb=_parse_bool(values.get("checkdb"), default=True),
+        tier=drill_tiers.parse_tier(values.get("tier"), where="restore entry tier"),
         overwrite_existing=values.get("overwrite_existing") is True,
+        allow_production_target=values.get("allow_production_target") is True,
         restore_all_databases=restore_all,
         time_window=parse_time_window_config(
             values, context=f"backup_restore.restores[{values.get('restore_id') or '?'}]"

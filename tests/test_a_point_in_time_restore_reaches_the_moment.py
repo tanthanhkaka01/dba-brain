@@ -225,7 +225,9 @@ def test_an_incremental_staged_in_the_same_second_as_its_full_stays_in_the_chain
             "diff": [{"path": "/s/base/20260925T035310Z_INCR", "kind": "diff",
                       "finished_at": "2026-09-25 10:53:22"},
                      {"path": "/s/base/20260925T004716Z_INCR", "kind": "diff",
-                      "finished_at": "2026-09-25 10:53:22"}]}
+                      "finished_at": "2026-09-25 10:53:22"}],
+            # The WAL the plan reads for its continuity (1.250): nothing listed, nothing judged.
+            "log": [{"path": "/s/wal", "kind": "log", "finished_at": "2026-09-25 10:53:22"}]}
     monkeypatch.setattr(rbi, "_list_backup_files", lambda request: {
         "files": rows[request["kinds"][0]],
         "newest_finished_at": rows[request["kinds"][0]][-1]["finished_at"]})

@@ -14,6 +14,7 @@ The rule, for both folders: a collector that joins ``sys.dm_exec_connections`` i
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -46,7 +47,9 @@ def test_a_collector_that_joins_the_connection_names_the_client_address(path):
 
 
 def _naming_collectors() -> list[Path]:
-    return sorted(p for p in COLLECTORS.rglob("*.sql") if "host=" in _live_sql(p))
+    # `host=` as a key of its own: `off_host=` (055, where a database's backups are kept) names no
+    # client, and read as a substring it asked the file-placement collector for a client address.
+    return sorted(p for p in COLLECTORS.rglob("*.sql") if re.search(r"(?<![\w])host=", _live_sql(p)))
 
 
 @pytest.mark.parametrize("path", _naming_collectors(), ids=lambda p: str(p.relative_to(COLLECTORS)))
