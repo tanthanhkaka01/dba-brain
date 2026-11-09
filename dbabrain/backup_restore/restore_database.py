@@ -330,6 +330,11 @@ def run_restore_database(
                 level="critical",
             )
             raise FileNotFoundError(f"Selected restore file is missing on target: {selected_path}")
+    # The chain is held to its LSNs before anything is restored (1.250, gap G10), as restore-by-id's
+    # is: a missing log found at RESTORE LOG leaves the target half-restored, and found here it is
+    # named instead.
+    _check_backup_chain(restore_config, candidate, selected_diff_backup, selected_log_backups,
+                        logger=logger, restore_mode=restore_mode)
 
     # Print the restore plan before executing so the exact FULL -> DIFF -> LOG chain and the
     # STOPAT point are auditable up front (and visible in a dry run). Only the final LOG uses
@@ -516,6 +521,57 @@ def run_restore_database(
         "steps": steps,
         "certificate": certificate_result,
     }
+
+
+def _read_chain_headers(config: BackupRestoreConfig, candidate: RestoreCandidate, paths: list[str],
+                        *, logger: object | None) -> str:
+    """The target's ``sqlcmd`` output for one batch reading every chain file's header."""
+    from dbabrain.backup_restore import restore_chain_check
+
+    result = run_sqlcmd_query_command(
+        build_sqlcmd_query_command(sql=restore_chain_check.build_header_sql(paths), config=config),
+        config=config,
+        logger=logger,
+        progress_step="backup-chain-check",
+        progress_database=candidate.source_database_name,
+        restore_id=config.restore_id,
+        allow_transient_retry=True,
+    )
+    return result.stdout or ""
+
+
+def _check_backup_chain(config: BackupRestoreConfig, candidate: RestoreCandidate, diff: Path | str | None,
+                        logs: list, *, logger: object | None, restore_mode: str) -> None:
+    """Refuse a chain whose LSNs do not join, naming the piece; a chain that cannot be read is
+    logged as not judged and restored as before (``restore_chain_check``)."""
+    from dbabrain.backup_restore import restore_chain_check
+
+    def on_target(path) -> str:
+        return _target_path_str(vm_unc_to_local_path(Path(str(path)), config), config)
+
+    full = _target_path_str(Path(str(candidate.backup_file_on_vm)), config)
+    diff_path = on_target(diff) if diff else None
+    log_paths = [on_target(item) for item in logs]
+    paths = [full, *([diff_path] if diff_path else []), *log_paths]
+    meta = {"restore_id": config.restore_id or None, "target_id": config.target_id,
+            "database": candidate.source_database_name, "restore_mode": restore_mode, "files": len(paths)}
+    try:
+        stdout = _read_chain_headers(config, candidate, paths, logger=logger)
+        broken, unjudged = restore_chain_check.chain_break(full, diff_path, log_paths, stdout)
+    except errors.NotConfigured:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a check that cannot run is not judged, never a refusal
+        broken, unjudged = "", f"the headers could not be read: {exc}"
+    if unjudged:
+        _emit_restore_log(logger, "restore-db backup-chain not-judged "
+                          + _format_metadata(**meta, reason=unjudged), level="warning")
+        return
+    if broken:
+        _emit_restore_log(logger, "restore-db backup-chain refused "
+                          + _format_metadata(**meta, reason=broken), level="critical")
+        raise errors.Refused(f"{candidate.source_database_name}: the backup chain is broken - {broken}. "
+                             "Nothing was restored.")
+    _emit_restore_log(logger, "restore-db backup-chain checked " + _format_metadata(**meta))
 
 
 def _check_restore_room(config: BackupRestoreConfig, candidate: RestoreCandidate,

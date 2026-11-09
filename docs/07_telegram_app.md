@@ -1038,6 +1038,27 @@ step by step in `agents_guide.md`'s order - passphrase, clock, store, the first 
 schedule, Telegram, backups, the assistant itself - and `dbabrain init`'s next steps say once that
 the assistant exists and what it needs.
 
+**Asked at the command line: `dbabrain telegram ai-ask "<question>"`** (0.36.0, 1.267). On a new
+install the assistant could be reached only through Telegram, which is step 6 of the setup it
+guides. The operator's test on 2026-11-06 was: a clean install, the AI key added, then ask the CLI
+what to set up next. `ai_assist.ask_from_cli` needs only `ai_assist.json`'s `enabled` and
+`api_key_ref`, the key in the store and the `ai` extra. It needs no chat level and no `users[]` row:
+whoever runs the node's CLI already holds its passphrase. The system's and the question's limits
+still hold. The question is kept under chat `cli` with its calls and tool runs, exactly as a chat
+question is, and is printed with its `ai_request_id`. The next question continues the same
+conversation within `conversation_idle_seconds`; `--new` starts another.
+
+The same test found two faults in the file tools, both fixed:
+- **A pip install's package was unreadable.** A wheel puts `dbabrain/` in site-packages, not in the
+  tool root, so the `dbabrain` readable root pointed at nothing and the guide the assistant is told
+  to follow could not be opened. `ai_tools` now reads `dbabrain/...` from the installed package when
+  the tool root has none, and never anything beside it.
+- **A missing path read as a negative answer.** `grep_files` on a path that does not exist answered
+  "no match", and the model said the guide did not contain the commands. It now says the path does
+  not exist.
+
+Five questions on the clean install were answered for about $0.15 in all.
+
 **Reading what it did**: `telegram.cli ai-usage --days 30 --by day|user|model` and
 `telegram.cli ai-show --id <ai_request_id>`, or the console's *AI assistant* page (0.35.0, admins;
 `docs/12_webhost_app.md`), which reads the same `AiAssistStore.usage_since` and `transcript`.

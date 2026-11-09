@@ -620,6 +620,10 @@ def _area_columns(summary) -> list[tuple[str, str]]:
 
 def _reading(result) -> str:
     """The shortest honest reading of one result, for a matrix cell."""
+    # Nothing measured is said first, whatever the model: a current_state check with no data read
+    # "ok" here (D2).
+    if getattr(result, "no_data", False) or (result.policy_model == "current_state" and result.actual_value is None):
+        return "no data"
     if result.policy_model == "finding_inventory":
         return f"{result.affected_objects} obj"
     if result.policy_model == "current_state":
@@ -640,7 +644,9 @@ def _cell_title(result) -> str:
     return html.escape(
         f"{result.policy_id}: {result.status} · measured {_reading(result)} · objective "
         f"{result.comparison_operator} {objective} · now {getattr(result, 'current_status', '') or '-'}"
-        f" · data {result.data_quality_status}", quote=True)
+        f" · data {result.data_quality_status}"
+        + (f" · point-in-time reach {result.recovery_reach}" if getattr(result, "recovery_reach", "") else ""),
+        quote=True)
 
 
 def _instance_matrix(instances: list[dict], columns: list[tuple[str, str]]) -> str:
@@ -695,6 +701,10 @@ def _attention_table(instances: list[dict]) -> str:
         objective = (result.objective_value if result.objective_value is not None
                      else result.objective_percent)
         reason = str(getattr(result, "reason", "") or "")
+        # How far back a restore reaches beside how old the newest backup is (1.233).
+        reach = str(getattr(result, "recovery_reach", "") or "")
+        if reach:
+            reason = f"{reason} Point-in-time reach: {reach}." if reason else f"Point-in-time reach: {reach}."
         body.append(
             "<tr>"
             f"<td>{_badge(result.status)}</td>"
@@ -766,6 +776,8 @@ def _actual_cell(result: SlaPolicyResult) -> str:
     objects appeared as "4.09 percentage" — a number that looks like availability and is not. Each
     model gets the reading that answers its own question.
     """
+    if getattr(result, "no_data", False) or (result.policy_model == "current_state" and result.actual_value is None):
+        return "no data"
     if result.policy_model == "finding_inventory":
         return f"{result.affected_objects} objects affected"
     if result.policy_model == "current_state":

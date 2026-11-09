@@ -166,3 +166,41 @@ def test_the_2008_r2_variant_uses_none_of_the_features_introduced_after_2008_r2(
     for keyword in forbidden:
         # As a call: the file matches log text such as "informational message", which holds FORMAT.
         assert not re.search(rf"\b{keyword}\s*\(", code, re.IGNORECASE), f"{keyword} is not supported in 2008 R2"
+
+
+# --------------------------------------------------------------------------- #
+# Error 18056: severity 20, and not a server fault (2026-11-05)
+# --------------------------------------------------------------------------- #
+# A pooled session the engine could not reset for its next user - the client had gone. One server
+# paged CRITICAL on it every few hours for two weeks; every row was "Error: 18056, Severity: 20,
+# State: 29". It keeps its own type, ahead of the severity tests, and outside the critical class:
+# counted and shown, a WARNING within the day, never a page.
+@pytest.mark.parametrize("relative", VARIANTS)
+def test_error_18056_is_its_own_type_tested_before_the_severity_that_would_make_it_critical(relative):
+    code = _code(_text(relative))
+    own = code.index("WHEN [Text] LIKE N'%Error: 18056%' THEN 'ERROR_18056_SESSION_RESET'")
+    assert own < code.index("WHEN [Text] LIKE N'%Severity: 20%' THEN 'SEVERITY_20'")
+    assert "OR [Text] LIKE N'%Error: 18056%'" in code
+
+
+@pytest.mark.parametrize("relative", VARIANTS)
+def test_error_18056_is_not_in_the_critical_class(relative):
+    code = _code(_text(relative))
+    critical = code[code.index("INSERT INTO @critical_types"):code.index("DECLARE @since_hours")]
+    assert "ERROR_18056" not in critical
+    assert "'SEVERITY_20'" in critical
+
+
+# --------------------------------------------------------------------------- #
+# A database set to SIMPLE recovery (1.219, RECOVERABILITY_CHANGED - 2026-11-06)
+# --------------------------------------------------------------------------- #
+# LOG backups are required for FULL recovery only, so a database switched to SIMPLE drops out of
+# the backup policy's LOG check without a word, and its point-in-time restore is gone. The engine
+# writes message 5084 to the error log when it happens; it is read here, as a WARNING of the day.
+@pytest.mark.parametrize("relative", VARIANTS)
+def test_a_database_set_to_simple_recovery_is_its_own_warning(relative):
+    code = _code(_text(relative))
+    assert "WHEN [Text] LIKE N'%Setting database option RECOVERY to SIMPLE%' THEN 'RECOVERY_SET_SIMPLE'" in code
+    assert "OR [Text] LIKE N'%Setting database option RECOVERY to SIMPLE%'" in code
+    critical = code[code.index("INSERT INTO @critical_types"):code.index("DECLARE @since_hours")]
+    assert "RECOVERY_SET_SIMPLE" not in critical

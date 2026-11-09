@@ -8,8 +8,8 @@
   has not succeeded; a failed check (``databases_failed``) is no success.
 * A database is *complete* with a full, log or WAL backups, a copy off the host and a drill; what is
   missing is named.
-* The backup & restore page carries both, from the catalog alone - the reports never read the
-  backup app's configuration.
+* The backup & restore page carries both, from the catalog - plus the configured entries, read
+  through ``lib.data_sources`` (never the backup app), so a tiered drill with no run is listed.
 """
 
 from __future__ import annotations
@@ -105,3 +105,94 @@ def test_an_older_catalog_gets_the_tier_column(tmp_path):
     BackupCatalogStore(path).initialize(force=True)
     with sqlite3.connect(path) as conn:
         assert "tier" in {row[1] for row in conn.execute("PRAGMA table_info(restore_runs)")}
+
+
+# --------------------------------------------------------------------------- audit 2026-11-05, C1 / C3
+
+
+def _full_backup(catalog):
+    return catalog.record_backup_file(server_id="S1", backup_id="SALES_FULL", engine="sqlserver",
+                                         file_name="SALES_FULL.bak", file_type="FULL", database_name="SALES",
+                                         file_path="/b/SALES_FULL.bak", verdict="ok", size_bytes=10,
+                                         checksum_after_backup="0" * 64, backup_ended_at=_at(30))
+
+
+def _file_used_by(catalog, file_id, *, action, phase, hours_ago, verdict="copied"):
+    run = catalog.start_restore_run(action=action, restore_id="SALES_WEEKLY", source_server_id="S1",
+                                    target_server_id="LAB", copy_max_retry=3, started_at=_at(hours_ago + 1), phase="copying")
+    catalog.add_run_file(restore_run_id=run, file_id=file_id, source_server_id="S1", target_server_id="LAB",
+                         file_name="SALES_FULL.bak", file_type="FULL", source_path="/b/SALES_FULL.bak",
+                         target_path="/r/SALES_FULL.bak", copy_max_retry=3, verdict=verdict,
+                         checksum_after_backup="0" * 64, checksum_source_before_copy="0" * 64,
+                         checksum_target_after_copy="0" * 64, size_source_bytes=10, size_target_bytes=10,
+                         copy_attempts=1)
+    catalog.set_restore_run(run, phase=phase, ended_at=_at(hours_ago))
+
+
+def test_a_copy_only_or_failed_run_is_not_a_restore_on_the_coverage_table(tmp_path):
+    catalog = BackupCatalogStore(tmp_path / "catalog.sqlite")
+    catalog.initialize()
+    file_id = _full_backup(catalog)
+    _file_used_by(catalog, file_id, action="copy_only", phase="done", hours_ago=10)
+    _file_used_by(catalog, file_id, action="restore", phase="error", hours_ago=8)
+    (row,) = [r for r in catalog.coverage() if r["file_type"] == "FULL"]
+    assert row["last_restored"] is None
+
+    _file_used_by(catalog, file_id, action="restore", phase="done", hours_ago=19)
+    (row,) = [r for r in catalog.coverage() if r["file_type"] == "FULL"]
+    assert row["last_restored"] == _at(19)
+
+
+def test_a_monthly_drill_that_succeeded_31_days_ago_is_ok_not_never(tmp_path):
+    catalog = BackupCatalogStore(tmp_path / "catalog.sqlite")
+    catalog.initialize()
+    ok = catalog.start_restore_run(action="restore", restore_id="SALES_MONTHLY", source_server_id="S1",
+                                   target_server_id="LAB", copy_max_retry=3, tier="monthly",
+                                   started_at=_at(24 * 31 + 1), phase="restoring")
+    catalog.set_restore_run(ok, phase="done", databases_ok=1, databases_failed=0, ended_at=_at(24 * 31))
+    html = backup_restore_report.render_recoverability(catalog, now=NOW)
+    assert "SALES_MONTHLY" in html and "st-OK" in html and "st-NEVER" not in html
+
+
+def test_the_sla_reads_the_catalogs_drills_beside_the_share_restores_history(tmp_path):
+    """D3: RESTORE_DRILL_RTO_30D read only backup_restore_history, which script-driven drills never
+    write - so the SLA said "never drilled" for drills this page showed OK."""
+    from dbabrain.db.backup_restore_history import catalog_drill_rows
+
+    catalog = BackupCatalogStore(tmp_path / "catalog.sqlite")
+    catalog.initialize()
+    file_id = _full_backup(catalog)
+    _file_used_by(catalog, file_id, action="restore", phase="done", hours_ago=19)
+    _file_used_by(catalog, file_id, action="copy_only", phase="done", hours_ago=10)
+    with catalog.connect() as conn:
+        rows = catalog_drill_rows(conn)
+    assert rows == [{"database_name": "SALES", "server_id": "S1", "status": "SUCCESS", "restore_start": _at(20),
+                     "restore_end": _at(19), "duration_seconds": 3600.0}]
+
+
+def test_a_store_without_the_catalog_has_no_catalog_drills(tmp_path):
+    from dbabrain.db.backup_restore_history import catalog_drill_rows
+
+    with sqlite3.connect(tmp_path / "empty.sqlite") as conn:
+        assert catalog_drill_rows(conn) == []
+
+
+def test_a_configured_tiered_drill_with_no_run_in_the_window_is_listed_overdue():
+    """C3 rest (audit 2026-11-05): such a drill was absent from the table, as if nothing were due."""
+    entries = [{"restore_id": "SALES_MONTHLY", "tier": "monthly", "active": True, "server_id": "S1",
+                "target_server_id": "LAB"},
+               {"restore_id": "OFF_WEEKLY", "tier": "weekly", "active": False},
+               {"restore_id": "UNTIERED", "active": True}]
+    rows = S.build_drills([], now=NOW, entries=entries)
+    assert [(row["restore_id"], row["state"]) for row in rows] == [("SALES_MONTHLY", drill_tiers.OVERDUE)]
+
+
+def test_two_servers_with_one_database_name_are_two_drills():
+    """D3 rest: drills were keyed by database name alone, so one server's success covered another's
+    failure."""
+    from dbabrain.db import restore_drill
+
+    rows = [{"database_name": "SALES", "server_id": "S1", "status": "SUCCESS", "restore_start": _at(10)},
+            {"database_name": "SALES", "server_id": "S2", "status": "FAILED", "restore_start": _at(5)}]
+    verdicts = {v["server_id"]: v["status"] for v in restore_drill.evaluate(rows, policy={}, now=NOW)}
+    assert verdicts == {"S1": "OK", "S2": "CRITICAL"}

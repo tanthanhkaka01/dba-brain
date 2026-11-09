@@ -15,6 +15,96 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-11-09
+
+### Added
+
+- **`dbabrain db create-app-login`: another tool gets its own login and schema in the store's
+  database** (2026-11-04). The command creates the role (no superuser, no CREATEDB/CREATEROLE) and
+  a schema owned by it, grants CONNECT, and points the role's search_path at the schema. It grants
+  nothing on the store's own schema. It is idempotent and has `--dry-run`. The password comes from a
+  JSON file and is printed as `***`. An existing role's password is left alone unless
+  `--reset-password` is given. A superuser role, the store's schema, or `public` is refused. First
+  use: `daily_assists` for daily-assists.
+- **The SLA's backup results say how far back a restore reaches.** Each `backup_rpo` result
+  carries `recovery_reach`: the server's backup entries and their point-in-time reach, as each
+  entry's newest run recorded it in the backup catalog. The SLA page prints it after the reason and
+  in the matrix cell's title. It does not change the verdict; with no catalog it is empty.
+- **The share-driven SQL Server restore checks its backup chain before restoring.** It reads every
+  chain file's `RESTORE HEADERONLY` through the target's `sqlcmd` in one batch, and refuses a broken
+  chain by naming the file: a DIFF of another FULL, or a missing log. `restore-by-id` has done this
+  since 0.35.0. Before, the gap showed only at `RESTORE LOG`, with the database left in RESTORING. A
+  header it cannot read is logged as not judged, and the restore runs as before.
+- **`dbabrain telegram ai-ask "<question>"`: the AI assistant at the command line.** A new install
+  can ask what to set up next as soon as the AI key is added. Telegram, a chat level and a `users[]`
+  row are not needed; the limits still hold and every call is kept. `init`'s next steps now say so.
+
+### Changed
+
+- **A SQL Server database switched to SIMPLE recovery is a WARNING** (`LOG_RECENT_CRITICAL`, type
+  `RECOVERY_SET_SIMPLE`, from the error log's message 5084). LOG backups are required for FULL
+  recovery only, so such a database left the backup policy's LOG check silently, and its
+  point-in-time restore was gone.
+- **SQL Server error 18056 no longer pages** (`LOG_RECENT_CRITICAL`). Severity 20, but a pooled
+  session the engine could not reset for its next user - the client had gone. It is counted under
+  its own type, `ERROR_18056_SESSION_RESET`, and is a WARNING within the day like severities 17 and
+  18; any other severity 19 - 25 error still pages. One server's every CRITICAL for two weeks was
+  this line.
+
+### Fixed
+
+- **One hourly CPU reading of two no longer makes a host CRITICAL on the report pages.** The pages
+  keep the severity at least half of the last hour's samples reached. CPU is read once an hour, so
+  its hour held two readings, and one 90 % reading from an hour ago beside a newest 74 % turned the
+  fleet card CRITICAL. A severity now needs two samples whenever the window has more than one.
+- **The AI assistant can read the guide on a pip install.** A wheel puts the package in site-packages,
+  so the `dbabrain` readable root pointed at nothing and the assistant said it could not find the
+  setup commands. A search of a missing path now says the path does not exist, not "no match".
+- **The Markdown inventory summaries count a low disk by its collector's verdict**, as the fleet
+  page does, not by a 15 % rule of their own.
+
+- **The fleet inventory page grades a volume from this cycle's figures, by the collector's verdict.**
+  A free figure with no size (SQL Server 2008) was divided by the size in the canonical inventory
+  file, which may be months old - a resized volume read nearly full; it now takes the OS metric's
+  size. The page no longer grades drives again on its own 10 / 15 %: a drive's status is the
+  collector's, before any `severity_map`, and the server's status and the disk cards follow it. A
+  drive known only from that file prints *not collected*. (Named under *Known not to work* in 0.35.0.)
+- **Both database tables colour a backup age by the backup policy and a log's fullness by
+  `LOG_FILE_SPACE`.** They used hours and percentages of their own (26 / 48 h for a FULL, 4 / 24 h for
+  a LOG; 95 / 85 % on one page and 90 / 75 % on the other): a weekly FULL five days old read red
+  while the policy called it in time. A type the policy does not require reads `n/r`.
+- **A server nothing current was read from is shown as such on the fleet page**: graded *idle*, kept
+  out of every card, and named in one *show last known values* card - not counted critical on
+  values from days or months ago.
+- **SLA: a backup's age is read as of the window's end**, not frozen at collection - a log one hour
+  old in a row collected 20 hours earlier passed `ALL_BACKUP_RPO_24H`. A current-state check with
+  nothing measured reads *no data*, not *ok / compliant*; freshness is the newest measurement's age,
+  not the newest failed attempt's; and an age taken from a finish date is on the operator's clock.
+- **Backup & restore: *last restored* is a restore that succeeded**, not any run that used a file
+  (a copy-only or failed run made a database read *complete*); the coverage table prints each
+  database's newest full and log; the drill table reads back far enough that a monthly drill 31
+  days old is OK, not NEVER. The SLA's restore-drill policy reads the catalog's drills too - it
+  said *never drilled* for every script-driven drill.
+- **The fleet page stops grading on rules of its own**: an Oracle database open READ WRITE is no
+  longer badged red; page life expectancy is graded by the rule both pages share (CRITICAL under
+  300 s, WARNING under 2000 s); the failed-login and password-age cards follow the collectors'
+  verdict - a principal the collector flags at 500 attempts gets its card, one it does not flag at
+  1,200 gets none.
+- **A volume read by two collectors shows the newer reading** when one of them has stopped, on both
+  pages; the server page's volume status is the collector's before any remap, as on the fleet page;
+  the capacity forecast lists each volume once and only those the newest collection reports.
+- **What the pages take from the canonical inventory file is marked**: curated findings, and host
+  RAM, OS, HA / DR and a Config row that no metric read, say *static* / *documented*; a TempDB file
+  count from the file says so. OS-only CPU and memory follow the collectors' verdicts; the Workload,
+  Databases and *Fragmented* headings say when they were read; an index page older than the window
+  is no longer linked; a Linux root volume keeps its name `/`.
+- **A tiered restore drill with no run is listed OVERDUE** on the backup & restore page (it was
+  absent), and the SLA's restore-drill policy tells two servers' databases of one name apart - one
+  server's success no longer covers another's failure.
+- **An empty backup reading stays empty on the fleet page.** When the newest collection found no
+  finished backup, the page printed the canonical file's static last backups - and their old ages -
+  as current.
+
 ## [0.35.0] - 2026-11-05
 
 ### Added

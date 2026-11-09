@@ -25,6 +25,47 @@ def drill_rows(conn: Any) -> list[dict[str, Any]]:
         "FROM backup_restore_history")]
 
 
+def catalog_drill_rows(conn: Any) -> list[dict[str, Any]]:
+    """The drills the backup catalog recorded, in :func:`drill_rows`' shape - one row per finished
+    ``restore`` run and database it restored.
+
+    ``backup_restore_history`` is written only by the share-driven SQL Server restore; every
+    script-driven drill (PostgreSQL, Oracle, the container drills) is a ``restore_runs`` row, which
+    the backup & restore page reads - so the SLA said "never drilled" for drills the page showed OK
+    (audit 2026-11-05, D3). A run's databases are those of the catalogued files it restored; a run
+    with none named is left out. ``[]`` where the catalog has never been created.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT rr.restore_run_id, rr.started_at, rr.ended_at, rr.phase, rr.databases_failed, "
+            "bf.server_id, bf.database_name FROM restore_runs rr "
+            "JOIN restore_run_files rf ON rf.restore_run_id = rr.restore_run_id "
+            "JOIN backup_files bf ON bf.file_id = rf.file_id "
+            "WHERE rr.action = 'restore' AND rr.phase IN ('done', 'error', 'refused') "
+            "AND COALESCE(bf.database_name, '') <> ''").fetchall()
+    except Exception as exc:  # noqa: BLE001 - only a catalog that does not exist yet is "no rows"
+        if "restore_runs" in str(exc) or "backup_files" in str(exc) or "no such table" in str(exc).lower():
+            return []
+        raise
+    out = []
+    for row in rows:
+        row = dict(row)
+        ok = row["phase"] == "done" and not int(row.get("databases_failed") or 0)
+        duration = None
+        try:
+            from datetime import datetime
+            start = datetime.fromisoformat(str(row["started_at"]).replace("Z", "+00:00"))
+            end = datetime.fromisoformat(str(row["ended_at"]).replace("Z", "+00:00")) if row.get("ended_at") else None
+            duration = (end - start).total_seconds() if end else None
+        except (TypeError, ValueError):
+            pass
+        out.append({"database_name": row["database_name"], "server_id": row.get("server_id") or "",
+                    "status": "SUCCESS" if ok else "FAILED",
+                    "restore_start": row["started_at"], "restore_end": row.get("ended_at"),
+                    "duration_seconds": duration})
+    return out
+
+
 class BackupRestoreHistory:
     def __init__(self, source, *, key: str | None = None, password: str | None = None) -> None:
         self.store = DbaBrainStore(source, key=key, password=password)

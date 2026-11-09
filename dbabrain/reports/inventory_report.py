@@ -21,16 +21,19 @@ xp_cmdshell, un-collected hosts), not hand-written.
 from __future__ import annotations
 from dbabrain.lib.coerce import as_float
 from dbabrain.lib.data_sources import inventory_exclude_ip_prefixes
+from dbabrain.lib.inventory_render import backup_latest_by_type
 from dbabrain.lib.inventory_render import DEFAULT_INVENTORY, DISK_CRIT_PCT, DISK_WARN_PCT, EXCLUDE_IP_PREFIXES, _primary_db  # noqa: F401 - one definition
 
 import datetime
 import json
+import time
 
 from dbabrain.lib.html_json import json_for_html
 import re
 from pathlib import Path
 
 from dbabrain.lib import backup_policy
+from dbabrain.lib import health_model as _health_model
 from dbabrain.reports import inventory_health
 from dbabrain.reports.inventory_health import merged_drives, merged_sql_resources
 from dbabrain.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
@@ -40,16 +43,10 @@ from dbabrain.lib.timezone import (file_stamp, format_offset, label_from_file_st
 
 TEMPLATE_HTML = Path(__file__).resolve().parent / "templates" / "inventory_report.html"
 
-CPU_WARN_PCT = 90.0
-MEMORY_WARN_PCT = 90.0
-PLE_WARN = 2000
-# A principal failing to authenticate this often in 24h is not a user mistyping a password:
-# it is a credential being guessed or an integration retrying a dead one.
-FAILED_LOGIN_CRIT = 1000
-# SQL logins are rotated far less often than domain accounts; a year is already generous, and
-# the collector's own warning threshold is 180 days.
-PASSWORD_AGE_WARN_DAYS = 365
 STALE_LOG_HOURS = 48
+#: What a curated note from the canonical inventory file is prefixed with wherever it is listed
+#: beside live findings: it was written by hand at some point and is not re-read (A14).
+STATIC_NOTE_PREFIX = "[documented note, not re-read] "
 # Beyond this, a server's health blocks are "last known", not "current". The metrics run
 # hourly at worst, so a day of silence means the collector is not reaching this target —
 # and its numbers must not be shown as if they were taken today.
@@ -103,6 +100,10 @@ def _build_os(os_health: dict) -> dict:
         "uptime": _uptime_text(info.get("uptime_seconds")),
         "lastBoot": info.get("last_boot_time") or "",
         "cpuPct": cpu.get("usage_percent"),
+        # The OS collectors' verdicts (CPU, memory: WARNING >= 85, CRITICAL >= 95 for memory), before
+        # any remap - the page coloured both at 80 / 90 % and warned at 90 % (audit 2026-11-05, A15).
+        "cpuStatus": cpu.get("status") or "",
+        "memStatus": memory.get("status") or "",
         "cpuModel": cpu.get("model") or "",
         "cores": cpu.get("cores") or None,
         "logicalCpus": cpu.get("logical_cpus") or None,
@@ -162,7 +163,7 @@ def _build_backup(server) -> dict:
                 "policyConfigured": True, "note": "No database on this host"}
     # Prefer the fresh metric-derived backup_evidence health block; fall back to the
     # semi-static backup.latest_by_type only when the overlay has not been merged yet.
-    lbt = server.get("backup_evidence") or ((server.get("backup") or {}).get("latest_by_type")) or {}
+    lbt = backup_latest_by_type(server)
     full_row, diff_row, log_row = (lbt.get("FULL") or {}), (lbt.get("DIFF") or {}), (lbt.get("LOG") or {})
     full = full_row.get("latest_finish")
     diff = diff_row.get("latest_finish")
@@ -231,9 +232,19 @@ def _build_cfg(server) -> dict:
     mem = sr.get("memory") or {}
     ic = sr.get("important_config") or {}
     tdb = sr.get("tempdb") or {}
-    tempdb = f"{tdb.get('total_mb', '')} MB / {tdb.get('file_count', '')} files" if tdb else "—"
+    gov = server.get("sql_governance") or {}
+    # The size is the overlay's (STORAGE_TEMP_SPACE, now); the file count may be the canonical
+    # file's: "4160 MB / 9 files" printed a live size beside June's count (audit 2026-11-05, A8).
+    files_live = (gov.get("tempdb") or {}).get("file_count") is not None
+    tempdb = (f"{tdb.get('total_mb', '')} MB / {tdb.get('file_count', '')} files"
+              + ("" if files_live or tdb.get("file_count") in (None, "") else " (file count static)")) if tdb else "—"
     return {
+        # Nothing of this row was collected: every value is the canonical file's (A8).
+        "static": not gov,
         "cpu": cpu.get("sql_visible_cpu_count"),
+        "cpuText": _fmt_cpu({"cpu": cpu.get("sql_visible_cpu_count"),
+                             "cpuLive": cpu.get("cpu_count_source") == "metric",
+                             "cpuSeenAt": cpu.get("cpu_seen_at") or ""}),
         "sched": cpu.get("scheduler_count"),
         # Where the two counts came from, and when the instance was last asked. After the merge a
         # live value and a hand-written one look identical, and they must not read identically:
@@ -253,6 +264,15 @@ def _build_cfg(server) -> dict:
         "xpcmd": ic.get("xp_cmdshell"),
         "warns": len(server.get("config_warnings") or []),
     }
+
+
+def _disk_sev(d: dict) -> str:
+    """A drive's severity on the fleet page: the one `_build_disks` settled, or else the stated
+    status. Never a percentage of the page's own beside it (see build_triage)."""
+    if d.get("sev"):
+        return d["sev"]
+    st = str(d.get("st") or "").upper()
+    return "crit" if st in ("CRITICAL", "ERROR") else "warn" if st in ("WARNING", "WARN") else ""
 
 
 def _build_disks(server) -> list:
@@ -290,6 +310,11 @@ def _build_disks(server) -> list:
         }
         if pct is None and info.get("status") and info["status"] != "OK":
             entry["flag"] = info["status"]
+        if info.get("snapshot_only"):
+            # Known only from the canonical file's os_resources (a snapshot, 2026-09-26 on the
+            # estate): no figure of it is today's. A server with its metrics off printed D: "0.2/2047.98 GB free"
+            # in an orange badge with no date. Say that nothing current was read instead.
+            entry.update(freeGB=None, totalGB=None, flag="not collected", sev="idle")
         out.append(entry)
     return out
 
@@ -398,6 +423,7 @@ def _build_security(server) -> dict:
     worst_login = principals[0] if principals else None
     return {
         "failed24h": sec.get("failed_logins_24h"),
+        "failed24hStatus": sec.get("failed_logins_24h_status"),
         "principals": principals,
         "worstLogin": worst_login,
         "passwordsOld": passwords,
@@ -458,6 +484,14 @@ def _build_inv(server) -> str:
     return " · ".join(parts)
 
 
+def _ple_severity(model) -> str:
+    """Page life expectancy by the rule both pages share (``health_model.report_judged_severity``:
+    CRITICAL under 300 s, WARNING under 2000 s). The fleet page had its own - a red badge under 500,
+    a warning card and status under 2000, never critical - so 150 s read as a warning and 400 s
+    as red (audit 2026-11-05, A10)."""
+    return _health_model.report_judged_severity("PAGE_LIFE_EXPECTANCY", model.get("ple"))
+
+
 def _status(model) -> str:
     """Worst-severity status: crit > warn > idle (no data) > ok.
 
@@ -466,6 +500,12 @@ def _status(model) -> str:
     it is **crit**, not 'no data'. This keeps the fleet KPI counts consistent with the crit
     items shown in Priority Attention. A host is 'idle' only when nothing actionable at all
     was collected. Disk severity follows the metric-computed ``st`` (CRITICAL/WARNING)."""
+    # A server whose blocks are older than STALE_DATA_HOURS (or that no live metric ever reached)
+    # carries its last merged values, not current ones: it is graded 'idle' and said to be stale,
+    # never counted crit / warn on what it looked like days ago. A server with its metrics switched
+    # off kept a near-full September disk and read critical (audit 2026-11-05, A4).
+    if (model.get("freshness") or {}).get("stale"):
+        return "idle"
     bk = model["backup"]
     disks = model["disks"]
     osh = model.get("os_health") or {}
@@ -475,10 +515,8 @@ def _status(model) -> str:
     # reported CRITICAL - 1533 stack dumps in LOG_RECENT_CRITICAL, sessions pinning locks - read
     # healthy on the fleet page and critical on its own. The two pages now rest on the same fact.
     severity = str((model.get("severity") or {}).get("worst") or "").upper()
-    crit_disk = any((str(d.get("st") or "").upper() == "CRITICAL")
-                    or (d.get("free") is not None and d["free"] < DISK_CRIT_PCT) for d in disks)
-    warn_disk = any((str(d.get("st") or "").upper() == "WARNING")
-                    or (d.get("free") is not None and d["free"] < DISK_WARN_PCT) for d in disks)
+    crit_disk = any(_disk_sev(d) == "crit" for d in disks)
+    warn_disk = any(_disk_sev(d) == "warn" for d in disks)
     # A configured service that is not running is the OS equivalent of a database offline:
     # it is the reason the host is monitored at all.
     stopped_service = any(str(item.get("status") or "").upper() == "CRITICAL"
@@ -487,7 +525,7 @@ def _status(model) -> str:
                           for item in (osh.get("services") or []))
 
     # --- CRITICAL ---
-    if severity == "CRITICAL":
+    if severity == "CRITICAL" or _ple_severity(model) == "CRITICAL":
         return "crit"
     if str(bk.get("status") or "").upper() == "CRITICAL" or crit_disk or stopped_service:
         return "crit"
@@ -498,11 +536,11 @@ def _status(model) -> str:
         return "warn"
     if str(bk.get("status") or "").upper() == "WARNING":
         return "warn"
-    if model["ple"] and 0 < model["ple"] < PLE_WARN:
+    if _ple_severity(model) == "WARNING":
         return "warn"
     if warn_disk or missing_service:
         return "warn"
-    if (osh.get("cpuPct") or 0) >= CPU_WARN_PCT or (osh.get("memPct") or 0) >= MEMORY_WARN_PCT:
+    if osh.get("cpuStatus") in ("CRITICAL", "WARNING") or osh.get("memStatus") in ("CRITICAL", "WARNING"):
         return "warn"
     if model.get("oracle") and (model["total"] or 0) > (model["online"] or 0):
         return "warn"
@@ -538,7 +576,11 @@ def _merge_findings(server) -> list:
             f"{severity.get('warning_rows', 0)} warning metric result(s) from: "
             f"{', '.join(warning[:6])}{', ...' if len(warning) > 6 else ''}"
         )
-    for item in list(server.get("findings") or []) + list(server.get("config_warnings") or []):
+    # `findings` are curated notes in the canonical file - written once, never re-read - and sat
+    # beside the live lines unmarked: "LOG backup stale: 1633.0 hours (as of 2026-06-20)" read as
+    # today's (audit 2026-11-05, A14). They say what they are. config_warnings are the overlay's.
+    for item in [f"{STATIC_NOTE_PREFIX}{note}" for note in server.get("findings") or []] + list(
+            server.get("config_warnings") or []):
         if item not in merged:
             merged.append(item)
     return merged
@@ -580,9 +622,18 @@ def build_models(data: dict, *, exclude_ip_prefixes=EXCLUDE_IP_PREFIXES):
             # The live OS metric wins over the static WinRM inventory and the DB's view of it.
             "os": os_info.get("os_name") or os_res.get("os_caption") or db0.get("os") or "—",
             "ramGB": os_mem.get("total_gb") or mem.get("host_physical_memory_gb") or os_res.get("physical_memory_gb"),
+            # The facts on this row taken from the canonical file rather than a metric - said, not
+            # shown as readings (audit 2026-11-05, A9 / A15 / B3). HA / DR is documented only.
+            "staticFields": [name for name, live in (
+                ("ramGB", bool(os_mem.get("total_gb")
+                               or ((s.get("sql_governance") or {}).get("memory") or {}).get("host_physical_memory_gb"))),
+                ("os", bool(os_info.get("os_name"))),
+                ("ha", False)) if not live],
             "online": online,
             "total": total,
             "ple": ph.get("page_life_expectancy") if ph else None,
+            "pleSev": _health_model.report_judged_severity(
+                "PAGE_LIFE_EXPECTANCY", ph.get("page_life_expectancy") if ph else None),
             "sessions": ph.get("active_session_count") if ph else None,
             "backup": _build_backup(s),
             "ha": " · ".join(str(x) for x in ((s.get("ha") or {}).get("mode"),
@@ -771,6 +822,22 @@ def _monitoring_gap_cards(models: list) -> list:
 def build_triage(models: list) -> list:
     cards = []
 
+    # A stale server's blocks are its last known values (A4): one card names them with their age,
+    # and none of the cards below is built from them.
+    stale = [m for m in models if (m.get("freshness") or {}).get("stale")]
+    if stale:
+        def _last(m):
+            f = m.get("freshness") or {}
+            return f"last {f['asOf'][:16]}" if f.get("asOf") else "no live metrics"
+        cards.append({"sev": "warn",
+                      "title": f"{len(stale)} server(s) show last known values, not current ones",
+                      "body": "Nothing was collected from these recently, so none of their figures is "
+                              "graded here: " + "; ".join(f"{m['role']} ({m['ip']}) — {_last(m)}" for m in stale) + ".",
+                      "action": "Bring collection back (metrics switched off, a login or host access lost), "
+                                "or take the server off the report.",
+                      "tags": [_ip_tag(m) for m in stale]})
+        models = [m for m in models if m not in stale]
+
     stopped = [
         (m, item)
         for m in models
@@ -868,40 +935,50 @@ def build_triage(models: list) -> list:
 
     # Security. A login being hammered thousands of times a day is either an attack or an
     # integration holding a dead credential; both are findings, and both were invisible here.
-    hammered = [m for m in models
-                if (m.get("security") or {}).get("worstLogin")
-                and (m["security"]["worstLogin"].get("attempts") or 0) >= FAILED_LOGIN_CRIT]
+    # Graded by the collectors (060 failed logins, 063 password age), never by counts of the page's
+    # own: a principal failing 500 times a day - the collector's WARNING - had no card at all, and
+    # one at 1,200 a critical card the collector never raised (audit 2026-11-05, A11).
+    flagged = {"CRITICAL", "WARNING"}
+
+    def _hammered_logins(m):
+        return [p for p in (m.get("security") or {}).get("principals") or [] if p.get("status") in flagged]
+
+    hammered = [m for m in models if _hammered_logins(m)]
     if hammered:
-        cards.append({"sev": "crit",
-                      "title": f"Sustained failed logins on {len(hammered)} server(s)",
-                      "body": "A single principal is failing to authenticate thousands of times a day: "
+        worst = "crit" if any(p.get("status") == "CRITICAL" for m in hammered for p in _hammered_logins(m)) else "warn"
+        cards.append({"sev": worst,
+                      "title": f"Failed logins on {len(hammered)} server(s)",
+                      "body": "Principals failing to authenticate, as the collector flags them: "
                               + "; ".join(
-                                  f"{m['role']} ({m['ip']}) — {m['security']['worstLogin']['login']}: "
-                                  f"{int(m['security']['worstLogin']['attempts']):,} attempts/24h"
+                                  f"{m['role']} ({m['ip']}) - " + ", ".join(
+                                      f"{p['login']}: {int(p.get('attempts') or 0):,} attempts/24h"
+                                      for p in _hammered_logins(m)[:3])
                                   for m in hammered)
                               + ". Either the credential is being guessed, or an integration is retrying "
-                                "a dead one — and the error log is being filled either way.",
+                                "a dead one, and the error log is being filled either way.",
                       "action": "Identify the source host of the attempts, then disable/fix the principal "
                                 "or block the source. Do not simply raise the alert threshold.",
                       "tags": [_ip_tag(m) for m in hammered]})
 
-    stale_pw = [m for m in models
-                if (m.get("security") or {}).get("oldestPasswordDays")
-                and m["security"]["oldestPasswordDays"] >= PASSWORD_AGE_WARN_DAYS]
+    def _old_passwords(m):
+        return [p for p in (m.get("security") or {}).get("passwordsOld") or [] if p.get("status") in flagged]
+
+    stale_pw = [m for m in models if _old_passwords(m)]
     if stale_pw:
         cards.append({"sev": "warn",
-                      "title": f"SQL logins with passwords older than {PASSWORD_AGE_WARN_DAYS} days",
+                      "title": "SQL logins with old passwords",
                       "body": "; ".join(
-                          f"{m['role']} ({m['ip']}) — {len(m['security']['passwordsOld'])} login(s), "
-                          f"oldest {int(m['security']['oldestPasswordDays'])} days"
+                          f"{m['role']} ({m['ip']}) - {len(_old_passwords(m))} login(s) past "
+                          f"{(m.get('security') or {}).get('passwordThresholdDays') or 180} days, oldest "
+                          f"{int(max(p.get('age_days') or 0 for p in _old_passwords(m)))} days"
                           for m in stale_pw) + ".",
                       "action": "Rotate the service logins on a schedule; start with sa and anything with "
                                 "db_owner.",
                       "tags": [_ip_tag(m) for m in stale_pw]})
 
-    low_ple = [m for m in models if m["ple"] and 0 < m["ple"] < PLE_WARN]
+    low_ple = [m for m in models if _ple_severity(m) != "OK"]
     if low_ple:
-        cards.append({"sev": "warn",
+        cards.append({"sev": "crit" if any(_ple_severity(m) == "CRITICAL" for m in low_ple) else "warn",
                       "title": "Memory pressure — low PLE under session load",
                       "body": "Page Life Expectancy is low (buffer pool churning) on: "
                               + "; ".join(f"{m['role']} (PLE {m['ple']} · {m['sessions']} sessions)" for m in low_ple) + ".",
@@ -919,9 +996,12 @@ def build_triage(models: list) -> list:
             free = d.get("free")
             label = (f"{_ip_tag(m)} {d['m']} ({free}% free)" if free is not None
                      else f"{_ip_tag(m)} {d['m']} ({d.get('flag') or st})")
-            if st == "CRITICAL" or (free is not None and free < DISK_CRIT_PCT):
+            # `sev` is the collector's verdict (_build_disks); the page's own percentages decide
+            # only for a drive no collector graded. A second "or free < 10" here listed
+            # a 6.45 % drive (the collector's WARNING) as critically low (2026-11-05).
+            if _disk_sev(d) == "crit":
                 crit_disk.append(label)
-            elif st == "WARNING" or (free is not None and free < DISK_WARN_PCT):
+            elif _disk_sev(d) == "warn":
                 warn_disk.append(label)
     if crit_disk:
         cards.append({"sev": "crit",
@@ -1357,7 +1437,12 @@ def build_inventory_report(*, inventory: str | Path = DEFAULT_INVENTORY,
             # so a server whose index metric has not run yet shows no link instead of a 404.
             from dbabrain.reports.server_report import index_usage_file_name
             index_file = index_usage_file_name(str(model.get("server_id") or ""))
-            model["indexUrl"] = index_file if (Path(output_dir) / index_file).exists() else ""
+            index_path = Path(output_dir) / index_file
+            # Nor when the file is older than the window this page reads: a server whose index
+            # metric stopped kept a link to its last page, which said nothing of having stopped
+            # (audit 2026-11-05, E2). The file stays; the link goes.
+            fresh = index_path.exists() and (time.time() - index_path.stat().st_mtime) <= int(days) * 86400
+            model["indexUrl"] = index_file if fresh else ""
 
     linked_servers = build_fleet_linked_servers(sqlite_path, days=int(days)) if sqlite_path else []
     html_path.write_text(

@@ -154,3 +154,37 @@ def test_a_full_volume_is_counted_by_severity_so_the_section_opens_itself():
 def test_a_server_with_no_disk_metric_at_all_renders_nothing():
     assert build_volumes([]) == {"volumes": [], "summary": {}}
     assert build_volumes([DISK_IOPS])["volumes"] == []
+
+
+def test_a_reading_from_a_collector_that_stopped_gives_way_to_the_newer_one():
+    """B5 (audit 2026-11-05): the OS row was kept whatever its age, so an OS collector stopped for
+    days beat a SQL reading from minutes ago. Inside one cycle the OS row still wins (above)."""
+    old_os = {**WINDOWS_C, "collected_at": "2026-08-15T04:05:11Z"}
+    result = build_volumes([
+        old_os,
+        _engine("C:\\", "20.00", "drive=C:\\, free_gb=20.00, total_gb=199.40, free_pct=10.03, used_pct=89.97"),
+    ])
+    assert result["volumes"][0]["source"] == "engine"
+    assert result["volumes"][0]["freeGB"] == 20.0
+
+
+def test_a_remapped_volume_shows_the_collectors_own_verdict():
+    """B6: the fleet page shows the verdict before a severity_map; this table now does too."""
+    row = _engine("E:\\", "240.38", "drive=E:\\, free_gb=240.38, total_gb=3725.48, free_pct=6.45, used_pct=93.55 "
+                                    "Policy: severity remapped WARNING->LOGGING by metric_overrides.", status="LOGGING")
+    assert build_volumes([row])["volumes"][0]["status"] == "WARNING"
+
+
+def test_the_capacity_forecast_lists_each_volume_once_and_only_those_reported_now():
+    """B7: an upgrade that renamed `E:` to `E:\\` left two forecasts for one drive, and a removed
+    volume kept a forecast from its old samples for the whole window."""
+    from dbabrain.reports.server_sections import build_capacity
+
+    def sample(item, at, free):
+        return {"metric_code": "STORAGE_DISK_FREE_SPACE", "metric_item": item, "metric_unit": "GB",
+                "metric_value": str(free), "collected_at": at, "status": "OK", "message": ""}
+
+    rows = [sample("E:", "2026-11-01T00:00:00Z", 500), sample("F:", "2026-11-01T00:00:00Z", 90),
+            sample("E:\\", "2026-11-05T00:00:00Z", 480)]
+    forecast = build_capacity(rows)
+    assert [entry["item"] for entry in forecast] == ["E:\\"]

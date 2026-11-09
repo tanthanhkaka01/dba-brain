@@ -60,6 +60,7 @@ TELEGRAM_GROUPS_FILENAME = "telegram_groups.json"
 TELEGRAM_USERS_FILENAME = "telegram_users.json"
 BACKUP_POLICY_FILENAME = "backup_policy.json"
 CAPACITY_POLICY_FILENAME = "capacity_policy.json"
+RESTORE_CONFIG_FILENAME = "restore_config.json"
 SQLSERVER_INSTANCE_POLICY_FILENAME = "sqlserver_instance_policy.json"
 #: The lab-DB registry the SRE provisioner writes and the deploy merge reads. Spelled here
 #: with the other data/ filenames so `control` and `sre` cannot disagree about it — they
@@ -196,6 +197,22 @@ def load_capacity_policy(
     """``data/capacity_policy.json`` — growth thresholds and reserves. See above."""
     return _policy_document(
         path or _resolve_data_dir(data_dir) / CAPACITY_POLICY_FILENAME, root_key="capacity_policy")
+
+
+def load_restore_entries(
+    path: str | Path | None = None, *, data_dir: str | Path | None = None
+) -> list[dict[str, Any]]:
+    """``data/restore_config.json``'s restore entries (``backup_restore.restores``), as written.
+
+    For a reader that must know which drills are configured - the backup & restore page lists a
+    tiered drill with no run in its window as OVERDUE instead of leaving it out (audit 2026-11-05,
+    C3). ``[]`` when there is no file: an install with no restores has no drill to be late.
+    """
+    source = Path(path) if path else _resolve_data_dir(data_dir) / RESTORE_CONFIG_FILENAME
+    if not source.exists():
+        return []
+    entries = (load_json_file(source).get("backup_restore") or {}).get("restores")
+    return [entry for entry in entries or [] if isinstance(entry, dict)]
 
 
 def load_sqlserver_instance_policy(

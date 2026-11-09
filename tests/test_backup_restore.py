@@ -918,6 +918,8 @@ def test_run_restore_database_stops_before_recovery_when_full_fails(tmp_path, mo
         raise RuntimeError("Msg 3013, Level 16\nRESTORE DATABASE is terminating abnormally.")
 
     patch_restore(monkeypatch, "run_sqlcmd_query_command", fail_full)
+    # The chain check's own read is test_the_share_restore_checks_its_chain_first's subject.
+    patch_restore(monkeypatch, "_read_chain_headers", lambda *_a, **_k: "")
 
     with pytest.raises(RuntimeError, match="Msg 3013"):
         run_restore_database(

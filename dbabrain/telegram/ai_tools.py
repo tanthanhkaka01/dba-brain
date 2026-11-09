@@ -215,8 +215,31 @@ def _store_query(context: ToolContext, args: dict[str, Any]) -> ToolOutput:
 # --------------------------------------------------------------------------- #
 # Files
 # --------------------------------------------------------------------------- #
+#: The readable root that is the package's own source. In a source checkout and in the image it is a
+#: folder of the tool root; a wheel installs it in site-packages, and the tool root holds no
+#: ``dbabrain/`` at all - so on a new install the assistant could not read the guide it is told to
+#: follow (``dbabrain/common/agents_guide.md``), and said so (1.267, 2026-11-06).
+PACKAGE_ROOT = "dbabrain"
+
+
+def _package_base(context: ToolContext) -> Path | None:
+    """The folder ``dbabrain/...`` paths are read under when the tool root has no package of its own:
+    the installed package's parent (site-packages). ``None`` when the tool root has it."""
+    if (context.tool_root / PACKAGE_ROOT).is_dir():
+        return None
+    import dbabrain
+
+    return Path(dbabrain.__file__).resolve().parent.parent
+
+
 def _relative(context: ToolContext, path: Path) -> str:
-    return path.relative_to(context.tool_root).as_posix()
+    try:
+        return path.relative_to(context.tool_root).as_posix()
+    except ValueError:
+        base = _package_base(context)
+        if base is None:
+            raise
+        return path.relative_to(base).as_posix()
 
 
 def _denied(context: ToolContext, relative: str) -> bool:
@@ -238,11 +261,16 @@ def _resolve(context: ToolContext, raw: str, *, allow_root: bool = False) -> Pat
     roots leave out."""
     text = str(raw or "").strip().replace("\\", "/").lstrip("/")
     root = context.tool_root.resolve()
-    target = (root / text).resolve() if text else root
+    package = _package_base(context)
+    base = package if package is not None and text.split("/", 1)[0] == PACKAGE_ROOT else root
+    target = (base / text).resolve() if text else root
     try:
-        relative = target.relative_to(root).as_posix()
+        relative = target.relative_to(base).as_posix()
     except ValueError:
         raise PermissionError(f"{raw!r} is outside the tool root.") from None
+    if base is not root and relative != PACKAGE_ROOT and not relative.startswith(PACKAGE_ROOT + "/"):
+        # "dbabrain/../x" under site-packages is another package's file, never a readable root.
+        raise PermissionError(f"{raw!r} is outside the package.")
     roots = [item.strip("/") for item in context.settings.file_roots]
     if relative in ("", "."):
         if allow_root:
@@ -263,7 +291,7 @@ def _list_files(context: ToolContext, args: dict[str, Any]) -> ToolOutput:
     root = context.tool_root.resolve()
     if target == root:
         entries = [{"path": item, "readable_root": True} for item in context.settings.file_roots
-                   if (root / item).exists()]
+                   if (root / item).exists() or (item == PACKAGE_ROOT and _package_base(context) is not None)]
         return _ok({"path": ".", "entries": entries}, rows=len(entries))
     if not target.exists():
         return _error(f"{_relative(context, target)} does not exist on this node.")
@@ -347,6 +375,12 @@ def _grep_files(context: ToolContext, args: dict[str, Any]) -> ToolOutput:
         except PermissionError as exc:
             if asked:
                 return _error(str(exc))
+            continue
+        if not base.exists():
+            # Said, not "no match": a guide searched at a path that is not there read as a guide
+            # without the command (2026-11-06).
+            if asked:
+                return _error(f"{_relative(context, base)} does not exist on this node.")
             continue
         files = [base] if base.is_file() else sorted(item for item in base.rglob("*") if item.is_file())
         for path in files:

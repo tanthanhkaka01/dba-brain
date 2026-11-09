@@ -623,3 +623,46 @@ def test_the_existing_three_policy_models_behave_identically_to_their_establishe
 
     assert results["INDEX_FRAGMENTATION_BACKLOG"].actual_value == 1.0
     assert results["INDEX_FRAGMENTATION_BACKLOG"].status == "FAILED"
+
+
+def test_a_backup_result_says_how_far_back_a_restore_reaches(tmp_path):
+    """The policy judges how old the newest backup is; the catalog knows how far back the kept
+    files reach, and the result carries it beside the verdict (1.233)."""
+    from dbabrain.db.backup_catalog import BackupCatalogStore
+    from dbabrain.sla import publish
+
+    data_dir = _inventory(tmp_path, ("ACME-192-0-2-10", "sqlserver"))
+    _write_backup_policy(data_dir, {"defaults": {"types": {
+        "FULL": {"required": True, "warn_hours": 24, "critical_hours": 48}}}})
+    store = MetricStore(tmp_path / "dbabrain.sqlite")
+    store.insert_results(run_id=1, results=[_backup_metric_result(backup_type="FULL", age_hours=10.0)])
+    catalog = BackupCatalogStore(tmp_path / "dbabrain.sqlite")
+    catalog.start_backup_run(backup_id="APP_FULL", server_id="ACME-192-0-2-10", engine="sqlserver",
+                             retention_json=json.dumps({"FULL": 604800}), pitr_reach_seconds=604800)
+    catalog.start_backup_run(backup_id="OTHER_HOST", server_id="ACME-192-0-2-99", engine="sqlserver",
+                             retention_json=json.dumps(86400), pitr_reach_seconds=86400)
+
+    policy = SlaPolicy(policy_id="ALL_BACKUP_RPO_24H", name="Backup RPO compliance", policy_model="backup_rpo",
+                       comparison_operator="<=", target_value=0.0, window_hours=24,
+                       target_ids=("ACME-192-0-2-10/sqlserver/app_db",), metric_codes=("BACKUP_LAST_RESULT",))
+    (result,) = validate_sla_policies(sqlite_path=tmp_path / "dbabrain.sqlite", policies=[policy],
+                                      window_end="2026-05-28T04:00:00Z", data_dir=data_dir).results
+
+    assert result.status == "PASSED"
+    assert result.recovery_reach.startswith("APP_FULL: ")
+    assert "OTHER_HOST" not in result.recovery_reach   # another server's entry is not this one's
+    assert "point-in-time reach APP_FULL" in publish._cell_title(result)
+
+
+def test_a_backup_result_without_a_catalog_carries_no_reach(tmp_path):
+    data_dir = _inventory(tmp_path, ("ACME-192-0-2-10", "sqlserver"))
+    _write_backup_policy(data_dir, {"defaults": {"types": {
+        "FULL": {"required": True, "warn_hours": 24, "critical_hours": 48}}}})
+    MetricStore(tmp_path / "dbabrain.sqlite").insert_results(
+        run_id=1, results=[_backup_metric_result(backup_type="FULL", age_hours=10.0)])
+    policy = SlaPolicy(policy_id="ALL_BACKUP_RPO_24H", name="Backup RPO compliance", policy_model="backup_rpo",
+                       comparison_operator="<=", target_value=0.0, window_hours=24,
+                       target_ids=("ACME-192-0-2-10/sqlserver/app_db",), metric_codes=("BACKUP_LAST_RESULT",))
+    (result,) = validate_sla_policies(sqlite_path=tmp_path / "dbabrain.sqlite", policies=[policy],
+                                      window_end="2026-05-28T04:00:00Z", data_dir=data_dir).results
+    assert result.status == "PASSED" and result.recovery_reach == ""

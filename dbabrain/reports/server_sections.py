@@ -155,6 +155,29 @@ def _volume_key(name: str) -> str:
     return trimmed or str(name or "").strip()
 
 
+#: Two readings of one volume further apart than this are not one collection cycle: the older
+#: collector has stopped writing, and its figure is not the volume's any more (B5).
+STOPPED_AFTER_SECONDS = 2 * 3600
+
+
+def _stopped_before(held_at: str, new_at: str) -> bool:
+    from datetime import datetime
+
+    try:
+        held = datetime.fromisoformat(str(held_at).replace("Z", "+00:00"))
+        new = datetime.fromisoformat(str(new_at).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (new - held).total_seconds() > STOPPED_AFTER_SECONDS
+
+
+def _volume_status(row) -> str:
+    from dbabrain.lib import health_model
+
+    status = str(row.get("status") or "OK")
+    return health_model.downgraded_from(row.get("message")) or status
+
+
 def _volume_from_os_row(row: dict) -> dict | None:
     """One mount point as the OS sees it: size, use, filesystem, and the device behind it."""
     item = str(row.get("metric_item") or "").strip()
@@ -176,7 +199,9 @@ def _volume_from_os_row(row: dict) -> dict | None:
     return {
         "name": item,
         "source": "os",
-        "status": str(row.get("status") or "OK"),
+        # The collector's verdict before any severity_map, as the fleet page shows it: a remap
+        # silences an alert, not the page (audit 2026-11-05, B6).
+        "status": _volume_status(row),
         "totalGB": round(total, 2),
         "usedGB": round(used, 2) if used is not None else None,
         "freeGB": round(free, 2) if free is not None else None,
@@ -216,7 +241,9 @@ def _volume_from_engine_row(row: dict) -> dict | None:
     return {
         "name": item,
         "source": "engine",
-        "status": str(row.get("status") or "OK"),
+        # The collector's verdict before any severity_map, as the fleet page shows it: a remap
+        # silences an alert, not the page (audit 2026-11-05, B6).
+        "status": _volume_status(row),
         "totalGB": round(total, 2) if total is not None else None,
         "usedGB": round(used, 2) if used is not None else None,
         "freeGB": round(free, 2) if free is not None else None,
@@ -251,7 +278,14 @@ def build_volumes(rows: list[dict]) -> dict:
             volume = parse(row)
             if volume is None:
                 continue
-            volumes.setdefault(_volume_key(volume["name"]), volume)
+            # The newer reading wins when the other collector has stopped (older by more than
+            # STOPPED_AFTER); inside one collection cycle the OS row, read first, keeps its file
+            # system and device. Taking a source first kept an OS row its collector
+            # had stopped writing over a SQL row from minutes ago (audit 2026-11-05, B5).
+            key = _volume_key(volume["name"])
+            held = volumes.get(key)
+            if held is None or _stopped_before(held["collectedAt"], volume["collectedAt"]):
+                volumes[key] = volume
 
     listed = sorted(volumes.values(),
                     key=lambda v: (-(v["usedPct"] or 0), v["name"].casefold()))
@@ -293,6 +327,9 @@ def build_capacity(rows: list[dict], *, server_id: str = "") -> list[dict]:
     page cannot disagree about which volume is about to fill.
     """
     by_item: dict[str, list[tuple[str, str]]] = {}
+    names: dict[str, str] = {}
+    newest_at = ""
+    newest_keys: set[str] = set()
     for row in rows:
         if str(row.get("metric_code") or "") != CAPACITY_CODE:
             continue
@@ -301,12 +338,26 @@ def build_capacity(rows: list[dict], *, server_id: str = "") -> list[dict]:
         item = str(row.get("metric_item") or "").strip()
         if not item:
             continue
-        by_item.setdefault(item, []).append((row.get("collected_at"), row.get("metric_value")))
+        # One volume under each spelling the engine used for it (`E:` on 2008 R2, `E:\` after), so
+        # an upgrade does not leave two forecasts for one drive (audit 2026-11-05, B7).
+        key = _volume_key(item) or item
+        at = str(row.get("collected_at") or "")
+        if at > newest_at:
+            newest_at, newest_keys = at, set()
+        if at == newest_at:
+            newest_keys.add(key)
+        if at >= max((a for a, _v in by_item.get(key, [])), default=""):
+            names[key] = item
+        by_item.setdefault(key, []).append((row.get("collected_at"), row.get("metric_value")))
+    # Only volumes the newest collection still reports: a volume removed keeps no forecast from
+    # its old samples, with a days-old "free now".
+    by_item = {key: samples for key, samples in by_item.items() if key in newest_keys}
 
     # The read is data_sources' (the one reader of data/); the forecasting is lib's.
     policy = data_sources.load_capacity_policy()
     out: list[dict] = []
-    for item, samples in by_item.items():
+    for key, samples in by_item.items():
+        item = names.get(key, key)
         reserve = capacity_forecast.reserve_gb(policy, server_id=server_id, item=item)
         result = capacity_forecast.forecast(samples, floor=reserve)
         days = result.get("days_to_threshold")
@@ -701,6 +752,11 @@ def build_server_detail(model: dict | None) -> dict:
         ["Page life expectancy", "" if m.get("ple") is None else _num(m.get("ple"), "s")],
         ["Active sessions", "" if m.get("sessions") is None else _num(m.get("sessions"))],
     ]
+    # A fact taken from the canonical file is marked "static", as the detail rows are (B3).
+    static_fields = set(m.get("staticFields") or [])
+    for row, field in zip(summary_rows, (None, None, "os", None, None, "ramGB", "ha", None, None, None)):
+        if field in static_fields and row[1]:
+            row.append("static")
     disks = m.get("disks") or []
     if disks:
         summary_rows.append(["Disks", " · ".join(_disk_text(d) for d in disks)])
@@ -762,6 +818,8 @@ def build_databases(code_map, backup_result=None) -> dict:
             "backupOk": protected,
             "backupGraded": sum(1 for row in rows if row.get("backupStatus")),
             "asOf": max((row["asOf"] for row in rows if row["asOf"]), default=""),
+            # The oldest input of any row: a daily size sits beside a 15-minute log % (B9).
+            "oldestAsOf": min((row["oldestAsOf"] for row in rows if row.get("oldestAsOf")), default=""),
         },
     }
 

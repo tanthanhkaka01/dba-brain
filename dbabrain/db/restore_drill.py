@@ -117,14 +117,18 @@ def evaluate(rows: list[dict[str, Any]], *, policy: dict | None = None,
     policy = policy if policy is not None else load_restore_drill_policy()
     now = now or datetime.now(timezone.utc)
 
-    latest: dict[str, dict[str, Any]] = {}
+    # Keyed by the server as well as the name where a row says it: two servers each with a SALES
+    # database are two drills, and one's success covered the other's failure (audit 2026-11-05,
+    # D3). backup_restore_history names no server (""), so its rows keep their old key.
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
         database = str(row.get("database_name") or "").strip()
+        server = str(row.get("server_id") or "").strip()
         started = as_utc_datetime(row.get("restore_start"))
         if not database or started is None or not is_drilled(policy, database=database):
             continue
         status = str(row.get("status") or "").strip().upper()
-        entry = latest.setdefault(database, {"success": None, "attempt": None, "attempt_status": ""})
+        entry = latest.setdefault((server, database), {"success": None, "attempt": None, "attempt_status": ""})
         if entry["attempt"] is None or started > entry["attempt"]:
             entry["attempt"] = started
             entry["attempt_status"] = status
@@ -132,7 +136,7 @@ def evaluate(rows: list[dict[str, Any]], *, policy: dict | None = None,
             entry["success"] = started
 
     out: list[dict] = []
-    for database, entry in latest.items():
+    for (server, database), entry in latest.items():
         limit = max_age_hours(policy, database=database, override=override_hours)
         success, attempt = entry["success"], entry["attempt"]
         age_hours = round((now - success).total_seconds() / 3600.0, 1) if success else None
@@ -153,6 +157,7 @@ def evaluate(rows: list[dict[str, Any]], *, policy: dict | None = None,
                       f"success before it was {age_hours}h ago")
         out.append({
             "database_name": database,
+            "server_id": server,
             "status": status,
             "ageHours": age_hours,
             "maxAgeHours": limit,

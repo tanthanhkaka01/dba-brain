@@ -194,6 +194,9 @@ def collect_index_rows(store_source, *, days: int = 3,
         entry = servers.setdefault(server, {
             "server_id": server, "ip": str(row["ip"] or ""), "collected_at": newest.get(server, ""),
             "totals": {}, "databases": [], "disabled": [], "droppable": [], "fragmented": [],
+            # The fragmentation run's own time: it runs on its own schedule, and its list sat under
+            # the usage run's stamp as if read with it (audit 2026-11-05, E1).
+            "fragmentation_as_of": newest_fragmentation.get(server, ""),
             "indexes": [],
         })
         code = str(row["metric_code"])
@@ -692,7 +695,7 @@ def _float(value: Any) -> float:
         return -1.0
 
 
-def _fragmented_section(fragmented: list[dict[str, Any]], limit: int | None) -> list[str]:
+def _fragmented_section(fragmented: list[dict[str, Any]], limit: int | None, *, as_of: str = "") -> list[str]:
     """The fragmented table, with enough on each row to decide what to do about it.
 
     It used to be three columns — index, percentage, and an action the page recomputed with the
@@ -722,6 +725,8 @@ def _fragmented_section(fragmented: list[dict[str, Any]], limit: int | None) -> 
         # Said in the heading, because "157 fragmented indexes" and "157 fragmented partitions of
         # 22 indexes" are different findings and only the second one is true.
         heading += f" — {len(fragmented)} partitions across {len(distinct)} indexes"
+    if as_of:
+        heading += f" · fragmentation read {as_of.replace('T', ' ').replace('Z', ' UTC')}"
     out = [heading, ""]
     if total_mb > 0:
         out += [f"Total {total_mb:,.1f} MB of index to rebuild. "
@@ -1007,7 +1012,7 @@ def format_index_report(entry: dict[str, Any], *, limit: int | None = DEFAULT_DE
 
     fragmented = entry.get("fragmented") or []
     if fragmented:
-        out += _fragmented_section(fragmented, limit)
+        out += _fragmented_section(fragmented, limit, as_of=str(entry.get("fragmentation_as_of") or ""))
 
     every = entry.get("indexes") or []
     if every:

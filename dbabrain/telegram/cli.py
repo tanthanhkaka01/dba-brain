@@ -250,6 +250,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "ai-show", help="One AI question in full: its messages, every API call and every tool run.")
     ai_show_parser.add_argument("--id", type=int, required=True, dest="ai_request_id", help="ai_request_id.")
     ai_show_parser.set_defaults(telegram_function=None)
+    ai_ask_parser = subparsers.add_parser(
+        "ai-ask", help="Ask the AI assistant here, at the command line - no Telegram needed (a new install).")
+    ai_ask_parser.add_argument("question", nargs="+", help="The question.")
+    ai_ask_parser.add_argument("--new", action="store_true", dest="new_conversation",
+                               help="Start a new conversation instead of continuing the last hour's.")
+    ai_ask_parser.set_defaults(telegram_function=None)
 
     return parser.parse_args(argv)
 
@@ -257,6 +263,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def _ai_command(args: argparse.Namespace, config: DbaBrainConfig, config_path: str) -> dict[str, Any]:
     """``ai-assist`` / ``ai-usage`` / ``ai-show`` - the assistant reads the store, not Telegram,
     so these run before the token check (ai-assist downloads an attachment with the token)."""
+    if args.command == "ai-ask":
+        from dbabrain.telegram.ai_assist import ask_from_cli
+
+        return ask_from_cli(config=config, config_path=config_path, question=" ".join(args.question),
+                            new_conversation=bool(args.new_conversation))
     if args.command == "ai-assist":
         from dbabrain.telegram.ai_assist import run_ai_assist
 
@@ -421,8 +432,17 @@ def main(argv: list[str]) -> int:
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
 
-        if args.command in ("ai-assist", "ai-usage", "ai-show"):
+        if args.command in ("ai-assist", "ai-usage", "ai-show", "ai-ask"):
             result = _ai_command(args, config, config_path)
+            if args.command == "ai-ask":
+                # The answer is already printed; a line after it says which request it was, or why
+                # nothing was asked.
+                if result.get("skipped"):
+                    print(f"Not asked: {result.get('reason')}")
+                else:
+                    print(f"\n(ai_request_id {result.get('ai_request_id')} - "
+                          f"dbabrain telegram ai-show --id {result.get('ai_request_id')})")
+                return 0 if result.get("ok") else 1
             print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
             return 0
 

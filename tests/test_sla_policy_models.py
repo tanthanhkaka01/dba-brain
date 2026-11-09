@@ -197,3 +197,28 @@ def test_time_slo_remains_the_default_and_is_unchanged():
 
     assert policy.policy_model == "time_slo"
     assert _build(policy, rows).actual_percent == 99.0
+
+
+# --------------------------------------------------------------------------- nothing measured (audit 2026-11-05, D2)
+
+
+def test_current_state_with_only_failed_collections_has_no_value_and_reads_no_data():
+    """"No bad row" over no measured rows is unknown, not compliant: the pages printed it "ok"."""
+    from dbabrain.sla.publish import _reading
+
+    failed = _Row(status="WARNING", collected_at="2026-08-04T23:00:00Z")
+    failed["error_type"] = "AUTH_FAILED"
+    result = _build(_policy("current_state"), [failed])
+
+    assert result.actual_value is None
+    assert _reading(result) == "no data"
+
+
+def test_freshness_is_the_age_of_the_newest_measurement_not_of_the_newest_attempt():
+    """A stream of failed attempts kept freshness young while the last good cycle grew old."""
+    good = _Row(status="OK", collected_at="2026-08-04T01:00:00Z")
+    failed = _Row(status="WARNING", collected_at="2026-08-04T23:00:00Z")
+    failed["error_type"] = "AUTH_FAILED"
+    result = _build(_policy("current_state"), [good, failed])
+
+    assert result.data_freshness_seconds == 23 * 3600

@@ -98,6 +98,17 @@ INSERT INTO #matched (LogDate, ProcessInfo, [Text], error_type)
                 WHEN [Text] LIKE N'%Error: 824%' THEN 'ERROR_824_LOGICAL_IO'
                 WHEN [Text] LIKE N'%Error: 825%' THEN 'ERROR_825_RETRY_IO'
                 WHEN [Text] LIKE N'%Error: 17886%' THEN 'ERROR_17886_CONNECTION_SESSION'
+                -- Severity 20, but a pooled session the engine could not reset for its next user -
+                -- the client had gone or cancelled. Its own type, outside @critical_types, ahead of
+                -- the severity tests: counted and shown (WARNING within 24 h), never paging. Every
+                -- CRITICAL of one server for two weeks was this line, State 29 (2026-11-05).
+                WHEN [Text] LIKE N'%Error: 18056%' THEN 'ERROR_18056_SESSION_RESET'
+                -- Message 5084, written when ALTER DATABASE ... SET RECOVERY SIMPLE runs. A database
+                -- leaving FULL recovery drops its LOG backups out of the backup policy without a word
+                -- (LOG is required for FULL only): point-in-time restore is gone and nothing else
+                -- says so. Also a step of a ransomware attack (1.219, RECOVERABILITY_CHANGED). Not
+                -- critical: a WARNING within the day.
+                WHEN [Text] LIKE N'%Setting database option RECOVERY to SIMPLE%' THEN 'RECOVERY_SET_SIMPLE'
                 WHEN [Text] LIKE N'%I/O requests taking longer%' THEN 'IO_STALL_15S'
                 WHEN [Text] LIKE N'%I/O error%' THEN 'IO_ERROR'
                 WHEN [Text] LIKE N'%stack dump%' THEN 'STACK_DUMP'
@@ -142,6 +153,8 @@ INSERT INTO #matched (LogDate, ProcessInfo, [Text], error_type)
        OR [Text] LIKE N'%Error: 824%'
        OR [Text] LIKE N'%Error: 825%'
        OR [Text] LIKE N'%Error: 17886%'
+       OR [Text] LIKE N'%Error: 18056%'
+       OR [Text] LIKE N'%Setting database option RECOVERY to SIMPLE%'
        OR [Text] LIKE N'%corrupt%'
        OR [Text] LIKE N'%corruption%'
        OR [Text] LIKE N'%consistency-based I/O error%'

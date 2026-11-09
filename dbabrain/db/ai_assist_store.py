@@ -272,6 +272,15 @@ class AiAssistStore:
                     return None
                 raise
 
+    def next_message_id(self, chat_id: str) -> int:
+        """The next message number of a chat no Telegram numbers - the command line's (``ai-ask``):
+        a request is keyed by its chat and message, and each question asked there is a message."""
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute("SELECT COALESCE(MAX(message_id), 0) AS last FROM ai_requests WHERE chat_id = ?",
+                               (str(chat_id),)).fetchone()
+        return int(row["last"] or 0) + 1
+
     def set_request(self, ai_request_id: int, **values: Any) -> None:
         values = _known("ai_requests", values)
         if not values:

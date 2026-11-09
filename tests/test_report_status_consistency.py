@@ -99,7 +99,8 @@ def test_static_findings_and_config_warnings_survive():
                             "critical_codes": ["BACKUP_AGE"], "warning_codes": []},
     }
     findings = _merge_findings(server)
-    assert "documented finding" in findings
+    # Kept, and said to be a curated note rather than a reading (audit 2026-11-05, A14).
+    assert "[documented note, not re-read] documented finding" in findings
     assert any("compatibility level 80" in f for f in findings)
     assert findings[0].startswith("1 critical metric result(s)")
 

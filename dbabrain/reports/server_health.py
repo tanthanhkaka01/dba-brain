@@ -94,7 +94,10 @@ AREAS: list[dict] = [
                    # tile printed "20000 MB" and "48803043007 bytes" as if they were fullness.
                    {"code": "STORAGE_DATA_FILE_SPACE", "units": "percent"},
                    {"code": "LOG_FILE_SPACE", "units": "percent"}],
-     "threshold": "WARN ≥ 85% used · CRITICAL ≥ 95% used",
+     # Each collector's own rule, as the tile grades every one of them (audit 2026-11-05, B9): the
+     # host's OS collector, and SQL Server's by free space - which said only the first.
+     "threshold": "host: WARN ≥ 85% used · CRITICAL ≥ 95% used; SQL Server: WARN < 10% or 10 GB free · "
+                  "CRITICAL < 5% or 5 GB free",
      "note": "A full data or log volume stops writes: the database goes read-only or the instance stalls."},
     {"key": "disk_latency", "label": "Disk latency",
      "selectors": [{"code": "PERFORMANCE_IO_LATENCY"}],
@@ -760,8 +763,10 @@ def _volume_sizes(entry: dict) -> tuple[float, float, float] | None:
 def _disk_capacity(worst: dict, members: list[tuple[int, dict]]) -> str:
     """The worst volume as ``used / total`` and its free space, then every volume together."""
     volumes: dict[str, tuple[str, tuple[float, float, float]]] = {}
-    # OS_DISK_USAGE first: where both collectors saw a volume, the host's reading is the one kept.
-    # A container's volume is named by its mount, not by the item that carries the container's name.
+    seen_at: dict[str, float] = {}
+    # The newer reading of a volume wins when the other collector has stopped (audit 2026-11-05,
+    # B5). A container's volume is named by its mount, not by the
+    # item that carries the container's name.
     for code in ("OS_DISK_USAGE", "STORAGE_DISK_FREE_SPACE", "DOCKER_CONTAINER_STATS"):
         for _priority, entry in members:
             if entry.get("code") != code:
@@ -769,8 +774,12 @@ def _disk_capacity(worst: dict, members: list[tuple[int, dict]]) -> str:
             sizes = _volume_sizes(entry)
             key = _volume_key(entry.get("item"))
             name = _message_fields(entry).get("mount") or str(entry.get("item") or "")
-            if sizes and key and key not in volumes:
+            at = float(entry.get("lastAt") or 0)
+            # A later collector replaces an earlier one only when that one has stopped (older by
+            # more than two hours); within one cycle OS_DISK_USAGE, read first, is kept.
+            if sizes and key and (key not in volumes or at - seen_at[key] > 2 * 3600):
                 volumes[key] = (name, sizes)
+                seen_at[key] = at
     if not volumes:
         return ""
     worst_key = _volume_key(worst.get("item"))

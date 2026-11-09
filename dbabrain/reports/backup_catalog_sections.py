@@ -248,9 +248,13 @@ def _drill_ok(run: dict) -> bool:
     return run.get("phase") == "done" and not int(run.get("databases_failed") or 0)
 
 
-def build_drills(runs: list[dict], *, now) -> list[dict]:
+def build_drills(runs: list[dict], *, now, entries: list[dict] | None = None) -> list[dict]:
     """One row per restore entry from its runs (newest first): its tier, last run, last success, the
-    7- and 30-day success rates, and its state against the tier's deadline (``lib.drill_tiers``)."""
+    7- and 30-day success rates, and its state against the tier's deadline (``lib.drill_tiers``).
+
+    ``entries`` are the configured restore entries: an active one with a tier and no run in the
+    window read is listed OVERDUE - the window is twice the longest deadline, so it is late whatever
+    it did before - instead of being absent from the table (audit 2026-11-05, C3)."""
     from datetime import timedelta
 
     from dbabrain.lib import drill_tiers
@@ -278,6 +282,19 @@ def build_drills(runs: list[dict], *, now) -> list[dict]:
             "ok_7": ok_7, "runs_7": runs_7, "ok_30": ok_30, "runs_30": runs_30,
             "state": drill_tiers.drill_state(tier, last_success, now),
         })
+    listed = {row["restore_id"] for row in rows}
+    for entry in entries or []:
+        restore_id = str(entry.get("restore_id") or "")
+        tier = str(entry.get("tier") or "").lower() or None
+        if not restore_id or restore_id in listed or not tier or entry.get("active") is False:
+            continue
+        rows.append({
+            "restore_id": restore_id, "tier": tier, "source": entry.get("server_id"),
+            "target": entry.get("target_server_id"), "last_run": None, "last_phase": "no run in the window",
+            "last_success": None, "ok_7": 0, "runs_7": 0, "ok_30": 0, "runs_30": 0,
+            "state": drill_tiers.OVERDUE if drill_tiers.deadline(tier) else drill_tiers.UNTIERED,
+        })
+    rows.sort(key=lambda row: row["restore_id"])
     return rows
 
 
@@ -291,7 +308,8 @@ def build_coverage(rows: list[dict]) -> list[dict]:
         key = (str(row.get("server_id") or ""), str(row.get("database_name") or ""))
         item = grouped.setdefault(key, {"server_id": key[0], "database_name": key[1],
                                         "engine": row.get("engine"), "levels": set(), "files": 0,
-                                        "offloaded": 0, "newest_full": None, "last_restored": None})
+                                        "offloaded": 0, "newest_full": None, "newest_log": None,
+                                        "last_restored": None})
         level = integrity.LEVEL_OF_FILE_TYPE.get(str(row.get("file_type") or "").upper())
         if level:
             item["levels"].add(level)
@@ -299,6 +317,8 @@ def build_coverage(rows: list[dict]) -> list[dict]:
         item["offloaded"] += int(row.get("offloaded") or 0)
         if level == "full":
             item["newest_full"] = max(filter(None, [item["newest_full"], row.get("newest")]), default=None)
+        if level == "log":
+            item["newest_log"] = max(filter(None, [item["newest_log"], row.get("newest")]), default=None)
         item["last_restored"] = max(filter(None, [item["last_restored"], row.get("last_restored")]), default=None)
     out = []
     for item in grouped.values():

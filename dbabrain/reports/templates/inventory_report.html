@@ -311,7 +311,8 @@ const diskText = d => {
   const value = capacity && percent ? `${capacity} (${percent})` : capacity || percent || d.flag || "unknown";
   return `${d.m} ${value}`;
 };
-const pleClass = p => p==null?"b-idle" : p<500?"b-crit" : p<2000?"b-warn" : "b-ok";
+/* The shared PLE rule, graded on the server (pleSev): CRITICAL < 300 s, WARNING < 2000 s (A10). */
+const pleClass = s => s.ple==null?"b-idle" : s.pleSev==="CRITICAL"?"b-crit" : s.pleSev==="WARNING"?"b-warn" : "b-ok";
 
 /* ---------- Scope KPIs ---------- */
 const critCount = SERVERS.filter(s=>s.status==="crit").length;
@@ -345,6 +346,17 @@ document.getElementById("triage").innerHTML = TRIAGE.map((t,i)=>`
     <span class="sev ${t.sev}">${t.sev==="info"?"Note":t.sev}</span>
   </div>`).join("");
 
+const freshBadge = s => {
+  const f = s.freshness||{};
+  if(f.collectFailed) return `<span class="badge b-crit" title="${esc(f.collectReason||'')}">⚠ collection failed</span>`;
+  if(f.stale) return `<span class="badge b-warn" title="Showing the last values collected, not current ones">⚠ stale${f.lastChecked?' · last '+esc(f.lastChecked):''}</span>`;
+  return '';
+};
+/* A collector's verdict as a colour (A15): the OS tiles were coloured on 80 / 90 % of the page's own. */
+const stColor = st => st==='CRITICAL' ? 'var(--crit)' : st==='WARNING' ? 'var(--warn)' : 'inherit';
+/* A fact from the canonical inventory file, not a reading (A9 / A15): said beside it. */
+const staticTag = (s, field) => (s.staticFields||[]).includes(field)
+  ? ' <span style="color:var(--faint);font-size:10.5px" title="From the canonical inventory file, not a metric">static</span>' : '';
 /* ---------- Fleet matrix ---------- */
 /* Every tab renders servers in server_order (set per server in the inventory JSON, defaulting
    to the file order 1,2,3...). Server_id breaks ties so the order is always stable. */
@@ -381,19 +393,19 @@ const srvCell = s => s.reportUrl
 document.querySelector("#matrix tbody").innerHTML = sorted.map(s=>`
   <tr>
     <td class="srv">${srvCell(s)}</td>
-    <td>${esc(s.platform)}<div style="color:var(--faint);font-size:11px">${s.ramGB?esc(s.ramGB)+" GB RAM":""}</div></td>
+    <td>${esc(s.platform)}<div style="color:var(--faint);font-size:11px">${s.ramGB?esc(s.ramGB)+" GB RAM"+staticTag(s,'ramGB'):""}</div></td>
     ${s.osOnly ? osMatrixCells(s) : `
     <td class="center">${s.total==null?'<span style="color:var(--faint)">—</span>':
         (s.online===s.total && s.total>0 ? `<span class="badge b-ok">${s.online}/${s.total}</span>` :
          s.total===0 ? '<span class="badge b-idle">0/0</span>' :
          `<span class="badge b-crit">${s.online}/${s.total}</span>`)}</td>
     <td><span class="dot ${s.backup.cov==='No metrics'?'idle':s.backup.status==='CRITICAL'?'crit':s.backup.status==='WARNING'?'warn':s.backup.status==='OK'?'ok':'idle'}"></span>${esc(s.backup.cov)}</td>
-    <td style="font-size:11.5px">${/FCI/.test(s.ha)?'<span class="badge b-info">'+esc(s.ha.split(' · ')[0])+'</span>':'<span style="color:var(--muted)">'+esc(s.ha.split(' · ')[1]||s.ha)+'</span>'}</td>
-    <td class="num-cell"><span class="badge ${pleClass(s.ple)}">${fmt(s.ple)}</span></td>
+    <td style="font-size:11.5px">${/FCI/.test(s.ha)?'<span class="badge b-info">'+esc(s.ha.split(' · ')[0])+'</span>':'<span style="color:var(--muted)">'+esc(s.ha.split(' · ')[1]||s.ha)+'</span>'}${staticTag(s,'ha')}</td>
+    <td class="num-cell"><span class="badge ${pleClass(s)}">${fmt(s.ple)}</span></td>
     <td class="num-cell">${s.sessions==null?'—':(s.sessions>600?'<b style="color:var(--warn)">'+fmt(s.sessions)+'</b>':fmt(s.sessions))}</td>`}
     <td>${lowestDisk(s)}</td>
     <td class="center">${s.cfg.warns?`<span class="badge ${s.cfg.warns>=5?'b-warn':'b-idle'}">${s.cfg.warns}</span>`:'<span style="color:var(--faint)">0</span>'}</td>
-    <td>${statusBadge(s.status)}</td>
+    <td>${statusBadge(s.status)}${freshBadge(s) ? '<div>'+freshBadge(s)+'</div>' : ''}</td>
   </tr>`).join("");
 
 /* ---------- Backup table ---------- */
@@ -431,7 +443,7 @@ const maxMem = mb => mb==null?'—' : mb===2147483647?'<span class="badge b-warn
 document.querySelector("#config tbody").innerHTML = sorted.filter(s=>!s.oracle && !s.cfg.govMissing).map(s=>`
   <tr>
     <td class="srv"><span class="role">${esc(s.role)}</span><span class="ip">${esc(s.ip)}</span></td>
-    <td class="num-cell">${fmt(s.cfg.cpu)}</td>
+    <td class="num-cell">${esc(s.cfg.cpuText||fmt(s.cfg.cpu))}${s.cfg.static?' <span style="color:var(--faint);font-size:10.5px" title="Nothing of this row was collected: the canonical inventory file">static</span>':''}</td>
     <td class="num-cell">${s.cfg.maxdop===s.cfg.cpu&&s.cfg.cpu?'<b style="color:var(--warn)">'+s.cfg.maxdop+'</b>':fmt(s.cfg.maxdop)}</td>
     <td class="num-cell">${s.cfg.cost<30?'<span style="color:var(--warn)">'+s.cfg.cost+'</span>':fmt(s.cfg.cost)}</td>
     <td class="num-cell">${maxMem(s.cfg.maxmemMB)}</td>
@@ -448,22 +460,27 @@ document.querySelector("#config tbody").innerHTML = sorted.filter(s=>!s.oracle &
    or a LOG backup 121 days behind is visible on the row it belongs to. */
 const ageH = h => h==null ? '<span style="color:var(--faint)">—</span>'
   : h < 48 ? Math.round(h)+'h' : Math.round(h/24)+'d';
-const bkAge = (h, warnAt, critAt) => h==null ? '<span style="color:var(--faint)">—</span>'
-  : `<span style="color:${h>=critAt?'var(--crit)':h>=warnAt?'var(--warn)':'inherit'};font-weight:${h>=warnAt?'600':'400'}">${ageH(h)}</span>`;
 /* A blank DIFF column on a database whose policy does not require one is not a gap. Saying
    "n/r" is the difference between "we are not taking this backup" and "we do not need to". */
-const bkTypeCell = (d, type, h, warnAt, critAt) => {
+/* Coloured by the backup policy's verdict on this type, never by hours of the page's own: 26/48 h
+   painted a weekly FULL red at five days while the policy called it in time (audit 2026-11-05, A5). */
+const bkTypeCell = (d, type, h) => {
   const required = d.requiredTypes;
-  if(Array.isArray(required) && !required.includes(type))
+  const state = (d.typeStates || {})[type];
+  if(state === 'NOT_REQUIRED' || (Array.isArray(required) && !required.includes(type)))
     return '<span style="color:var(--faint)" title="Not required by data/backup_policy.json">n/r</span>';
-  return bkAge(h, warnAt, critAt);
+  if(h==null) return '<span style="color:var(--faint)">—</span>';
+  const col = state==='CRITICAL' ? 'var(--crit)' : state==='WARNING' ? 'var(--warn)' : 'inherit';
+  return `<span style="color:${col};font-weight:${state==='CRITICAL'||state==='WARNING'?'600':'400'}">${ageH(h)}</span>`;
 };
 const gb = v => v==null ? '—' : (v>=1024 ? (v/1024).toFixed(2)+' TB' : v.toFixed(v<10?2:0)+' GB');
 const logCell = d => {
   if(d.logGB==null && d.logUsedPct==null) return '—';
   const pct = d.logUsedPct;
-  const col = pct==null ? 'inherit' : pct>=95 ? 'var(--crit)' : pct>=85 ? 'var(--warn)' : 'inherit';
-  return `${gb(d.logGB)}${pct==null?'':` · <span style="color:${col};font-weight:${pct>=85?'600':'400'}">${pct}%</span>`}`;
+  /* LOG_FILE_SPACE's verdict: it grades fullness only when the log cannot grow (A6). */
+  const st = d.logUsedStatus;
+  const col = st==='CRITICAL' ? 'var(--crit)' : st==='WARNING' ? 'var(--warn)' : 'inherit';
+  return `${gb(d.logGB)}${pct==null?'':` · <span style="color:${col};font-weight:${st==='CRITICAL'||st==='WARNING'?'600':'400'}">${pct}%</span>`}`;
 };
 const checkdbCell = v => !v || v==='unknown'
   ? '<span class="badge b-warn" title="No last-known-good CHECKDB reported">unknown</span>'
@@ -510,9 +527,11 @@ const dbTable = s => {
   const rows = s.databases||[];
   if(!rows.length) return '';
   const asOf = rows.map(d=>d.asOf).filter(Boolean).sort().pop();
+  /* A row is as current as its oldest input: a daily size beside a 15-minute log % (A15). */
+  const oldest = rows.map(d=>d.oldestAsOf).filter(Boolean).sort()[0];
   return `<div class="f" style="margin-top:12px">
     <div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">Databases (${rows.length})
-      ${asOf?`<span class="src-tag">live · ${esc(whenStored(asOf))}</span>`:''}</div>
+      ${asOf?`<span class="src-tag">live · ${esc(whenStored(asOf))}${oldest&&oldest!==asOf?' · oldest input '+esc(whenStored(oldest)):''}</span>`:''}</div>
     <div class="tbl-scroll" style="margin-top:5px"><table class="db-tbl">
       <thead><tr><th>Database</th><th>State</th><th>Recovery</th><th class="num-cell">Data</th>
         <th class="num-cell">Log (used)</th><th class="center">Compat</th><th>Page verify</th>
@@ -520,7 +539,7 @@ const dbTable = s => {
         <th class="num-cell">FULL</th><th class="num-cell">DIFF</th><th class="num-cell">LOG</th></tr></thead>
       <tbody>${rows.map(d=>`<tr>
         <td class="mono dbname" style="font-weight:600">${esc(d.name)}</td>
-        <td>${d.state==='ONLINE'?'<span class="badge b-ok">ONLINE</span>':`<span class="badge b-crit">${esc(d.state||'?')}</span>`}</td>
+        <td>${d.online?`<span class="badge b-ok">${esc(d.state)}</span>`:`<span class="badge b-crit">${esc(d.state||'?')}</span>`}</td>
         <td>${esc(d.recovery||'—')}${d.logReuseWait&&d.logReuseWait!=='NOTHING'?`<span class="src-tag" title="log_reuse_wait: why the log cannot truncate">${esc(d.logReuseWait)}</span>`:''}</td>
         <td class="num-cell">${gb(d.dataGB)}${d.staticSize?'<span class="src-tag">static</span>':''}</td>
         <td class="num-cell">${logCell(d)}</td>
@@ -529,9 +548,9 @@ const dbTable = s => {
         <td class="mono wrapcell" style="font-size:11px">${checkdbCell(d.checkdb)}</td>
         <td class="num-cell">${usersCell(d)}</td>
         <td class="center">${qsCell(d)}</td>
-        <td class="num-cell">${bkTypeCell(d,'FULL',d.fullAgeHours,26,48)}</td>
-        <td class="num-cell">${bkTypeCell(d,'DIFF',d.diffAgeHours,26,48)}</td>
-        <td class="num-cell">${bkTypeCell(d,'LOG',d.logAgeHours,4,24)}</td>
+        <td class="num-cell">${bkTypeCell(d,'FULL',d.fullAgeHours)}</td>
+        <td class="num-cell">${bkTypeCell(d,'DIFF',d.diffAgeHours)}</td>
+        <td class="num-cell">${bkTypeCell(d,'LOG',d.logAgeHours)}</td>
       </tr>`).join("")}</tbody>
     </table></div></div>`;
 };
@@ -539,17 +558,18 @@ const dbTable = s => {
 /* ---------- Security ---------- */
 /* Failed logins and password age were collected all along and reported nowhere, so a server
    taking ~10k failed attempts a day on one login looked as healthy as one taking none. */
+const secChip = st => st==='CRITICAL' ? ' style="color:var(--crit);border-color:var(--crit-line)"'
+                    : st==='WARNING' ? ' style="color:var(--warn);border-color:var(--warn-line)"' : '';
 const securityBlock = s => {
   const sec = s.security||{};
   if(!sec.collected) return '';
   const bits = [];
   if(sec.failed24h!=null){
-    const bad = sec.failed24h >= 1000;
-    bits.push(`<span class="dbchip"${bad?' style="color:var(--crit);border-color:var(--crit-line)"':''}>failed logins 24h: ${fmt(sec.failed24h)}</span>`);
+    bits.push(`<span class="dbchip"${secChip(sec.failed24hStatus)}>failed logins 24h: ${fmt(sec.failed24h)}</span>`);
   }
+  /* The collector's verdict on each principal (A11), not a count of the page's own. */
   (sec.principals||[]).slice(0,5).forEach(p=>{
-    const bad = (p.attempts||0) >= 1000;
-    bits.push(`<span class="dbchip"${bad?' style="color:var(--crit);border-color:var(--crit-line)"':''}>${esc(p.login)}: ${fmt(p.attempts)} attempts</span>`);
+    bits.push(`<span class="dbchip"${secChip(p.status)}>${esc(p.login)}: ${fmt(p.attempts)} attempts</span>`);
   });
   const pw = sec.passwordsOld||[];
   if(pw.length){
@@ -565,12 +585,6 @@ const securityBlock = s => {
 /* ---------- Data freshness ---------- */
 /* Static inventory and live metrics used to render identically, so a backup time from June
    sat next to one from an hour ago with nothing to tell them apart. */
-const freshBadge = s => {
-  const f = s.freshness||{};
-  if(f.collectFailed) return `<span class="badge b-crit" title="${esc(f.collectReason||'')}">⚠ collection failed</span>`;
-  if(f.stale) return `<span class="badge b-warn" title="Showing the last values collected, not current ones">⚠ stale${f.lastChecked?' · last '+esc(f.lastChecked):''}</span>`;
-  return '';
-};
 const freshLine = s => {
   /* The reason itself is already spelled out in the inventory line that follows, so this
      says only which kind of data the row above is. */
@@ -701,13 +715,12 @@ const workloadBlock = s => {
 /* ---------- Server detail ---------- */
 /* A host with no database has no PLE, no sessions, no backup and no HA. Showing those keys
    empty reads as "we failed to collect"; these are the fields that actually exist for it. */
-const pctColor = v => v==null ? 'var(--faint)' : v>=90 ? 'var(--crit)' : v>=80 ? 'var(--warn)' : 'var(--text)';
 const osFields = s => {
   const o = s.os_health || {};
   const cpuTxt = o.cpuPct==null ? '—'
-    : `${o.logicalCpus?o.logicalCpus+' vCPU · ':''}<span style="color:${pctColor(o.cpuPct)}">${o.cpuPct}%</span>`;
+    : `${o.logicalCpus?o.logicalCpus+' vCPU · ':''}<span style="color:${stColor(o.cpuStatus)}">${o.cpuPct}%</span>`;
   const memTxt = o.memPct==null ? '—'
-    : `${o.memTotalGB?o.memTotalGB+' GB · ':''}${o.memUsedGB?o.memUsedGB+' GB used · ':''}<span style="color:${pctColor(o.memPct)}">${o.memPct}%</span>`;
+    : `${o.memTotalGB?o.memTotalGB+' GB · ':''}${o.memUsedGB?o.memUsedGB+' GB used · ':''}<span style="color:${stColor(o.memStatus)}">${o.memPct}%</span>`;
   return `
     <div class="f"><div class="k">Hostname</div><div class="v" style="font-weight:500">${esc(o.hostname||'—')}</div></div>
     <div class="f"><div class="k">Uptime</div><div class="v">${esc(o.uptime||'—')}</div></div>

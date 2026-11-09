@@ -72,8 +72,19 @@ def test_the_held_severity_is_the_highest_at_least_half_reached():
     assert held(["CRITICAL", "WARNING", "OK", "OK"]) == "WARNING"
     assert held(["CRITICAL", "CRITICAL", "OK", "OK"]) == "CRITICAL"
     assert held(["CRITICAL", "OK", "OK", "OK"]) == "OK"
-    assert held(["ERROR", "OK"]) == "CRITICAL"
+    assert held(["ERROR", "ERROR", "OK"]) == "CRITICAL"
+    assert held(["CRITICAL"]) == "CRITICAL"
     assert held([]) == "OK"
+
+
+def test_one_hourly_reading_of_two_does_not_hold_the_hour():
+    """CPU is read once an hour, so its hour holds two readings: 90 % an hour ago and 74 % now was
+    a CRITICAL host on the fleet page (2026-11-06). One of several samples is a moment."""
+    held = report_windows.held_severity
+
+    assert held(["CRITICAL", "OK"]) == "OK"
+    assert held(["OK", "CRITICAL"]) == "OK"
+    assert held(["CRITICAL", "CRITICAL"]) == "CRITICAL"
 
 
 def test_a_wait_finding_the_hour_did_not_sustain_is_lowered_and_never_raised():

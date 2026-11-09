@@ -448,6 +448,7 @@ class SlaStore:
                             "burn_rate": result.burn_rate,
                             "burn_rates": result.burn_rates,
                             "burn_alert": result.burn_alert,
+                            "recovery_reach": result.recovery_reach,
                         }, ensure_ascii=False, sort_keys=True),
                         finished_at,
                     )

@@ -666,6 +666,20 @@ ends, or when a log does not start where the one before it ended. Before, the ga
 `RESTORE LOG`, after the FULL and DIFF were applied, as an LSN in an error. A log that ends before
 the FULL is not a break, and an LSN the header did not give is not judged.
 
+**The share-driven workflow holds its chain the same way** (0.36.0, 1.250 share path).
+`restore_database` reaches the target only through `sqlcmd` (WinRM or SSH, often Windows
+authentication), so it cannot use `list-backup-files`' connection. After the chosen files are found
+on the target and before the restore plan, `restore_chain_check` sends one batch that reads
+`RESTORE HEADERONLY` of every chain file into a `#temp` table and prints one
+`DBABRAIN_HEAD|...` line per file. The batch finds the release's column count itself: it starts
+below 2008 R2's and adds a column until the first file fits. The LSNs are judged by the same
+`sqlserver_chain_break`. A broken chain is refused with `errors.Refused` naming the file
+(`restore-db backup-chain refused`), and no restore statement runs. A chain that cannot be judged is
+logged `restore-db backup-chain not-judged` with the reason, and the restore runs as before. That
+covers sqlcmd failing, a header error (`DBABRAIN_HEAD_ERR`), a missing line, and a header whose
+BackupType does not match its place in the chain (columns misread). Checked on a SQL Server 2025
+target on 2026-11-06 (59 columns). A full share-path drill has not run with it yet.
+
 **A PostgreSQL restore's WAL is held to its names the same way** (0.35.0). `list-backup-files` answers
 each base backup's `start_wal` (its `backup_label`'s START WAL LOCATION) and, asked with
 `wal_segments: true`, every segment name under `wal/`. `lib.integrity.postgresql_wal_break` refuses

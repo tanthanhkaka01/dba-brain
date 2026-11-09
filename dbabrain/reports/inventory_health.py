@@ -16,8 +16,6 @@ from dbabrain.reports.server_series import OS_DISK_NOT_A_VOLUME_ITEMS
 from dbabrain.lib import data_sources
 from dbabrain.lib.coerce import as_float
 from dbabrain.lib.inventory_render import (  # moved to common: shared with control
-    DISK_CRIT_PCT,
-    DISK_WARN_PCT,
     _norm_mount,
     is_database_online,  # noqa: F401 - one definition, re-exported for the report builders
     merged_drives,
@@ -395,6 +393,12 @@ def build_database_health(code_map):
                            else (datafile_count if len(names) == 1 else None)),
             "log_files": _to_int_or_none(parse_kv(log_row["message"]).get("log_files")) if log_row else None,
             "log_used_percent": as_float(logspace_row["metric_value"]) if logspace_row else None,
+            # LOG_FILE_SPACE's own verdict, before any severity_map: it grades fullness only when the
+            # log cannot grow (a full log on autogrow is LOGGING by design). The pages coloured the
+            # percentage on thresholds of their own - 95/85 on one, 90/75 on the other (A6 / B2).
+            "log_used_status": ((health_model.downgraded_from(logspace_row["message"])
+                                 or health_model.severity_of(logspace_row["status"]))
+                                if logspace_row and logspace_row["status"] else None),
             # Why the log cannot truncate — LOG_BACKUP here plus a stale log backup age is the
             # broken-chain diagnosis in one row.
             "log_reuse_wait": (reuse_row["metric_value"] if reuse_row else "") or "",
@@ -534,16 +538,22 @@ def build_security_health(code_map) -> dict:
     had a security section, so ~10k failed logins a day against one login was invisible on
     both. Thresholds stay the collector's (they are in its message); this only shapes them.
     """
+    def verdict(row) -> str:
+        # The collector's own, before any severity_map: the pages grade security by it, never by
+        # counts of their own (audit 2026-11-05, A11).
+        return health_model.downgraded_from(row["message"]) or health_model.severity_of(row["status"] or "OK")
+
     failed_total = None
+    failed_total_status = None
     principals: list[dict] = []
     for item, row in items_for(code_map, "SECURITY_FAILED_LOGINS"):
         value = as_float(row["metric_value"])
         if str(item).startswith("failed_logins"):
             failed_total = value
+            failed_total_status = verdict(row)
             continue
         login = str(item).partition("\\")[2] or str(item)
-        principals.append({"login": login, "attempts": value,
-                           "status": (row.get("status") or "OK").upper()})
+        principals.append({"login": login, "attempts": value, "status": verdict(row)})
 
     passwords: list[dict] = []
     summary_kv: dict[str, str] = {}
@@ -557,12 +567,12 @@ def build_security_health(code_map) -> dict:
                 "login": str(item).partition("\\")[2] or str(item),
                 "age_days": _to_int(kv.get("password_age_days")) or as_float(row["metric_value"]),
                 "last_set": kv.get("last_set", ""),
-                "status": (row.get("status") or "OK").upper(),
+                "status": verdict(row),
             })
         elif failed_total is None and str(item).startswith("failed_login"):
             principals.append({"login": str(item).partition("\\")[2] or str(item),
                                "attempts": as_float(row["metric_value"]),
-                               "status": (row.get("status") or "OK").upper()})
+                               "status": verdict(row)})
 
     cert_kv = {}
     for _item, row in items_for(code_map, "SECURITY_CERTIFICATE_EXPIRY"):
@@ -574,6 +584,7 @@ def build_security_health(code_map) -> dict:
             if mc in ("SECURITY_FAILED_LOGINS", "SECURITY_LOGIN_HEALTH", "SECURITY_CERTIFICATE_EXPIRY")]
     return {
         "failed_logins_24h": failed_total,
+        "failed_logins_24h_status": failed_total_status,
         "failed_login_principals": principals[:10],
         "passwords_over_threshold": passwords[:20],
         "password_threshold_days": _to_int((summary_kv or {}).get("threshold")) or 180,
@@ -591,16 +602,15 @@ def build_disk_health(code_map):
         free_gb = as_float(row["metric_value"])
         total_gb = as_float(kv.get("total_gb"))
         free_pct = round(100.0 * free_gb / total_gb, 2) if (free_gb is not None and total_gb) else None
-        if free_pct is None:
-            status = row["status"] or "UNKNOWN"
-        elif free_pct < DISK_CRIT_PCT:
-            status = "CRITICAL"
-        elif free_pct < DISK_WARN_PCT:
-            status = "WARNING"
-        else:
-            status = "OK"
+        # The collector's own verdict (013: CRITICAL under 5% or 5 GB, WARNING under 10% or 10 GB),
+        # as it graded the row before any severity_map lowered it - a remap silences the alert, not
+        # the page, which is where the operator reads the disk. Re-grading here at 10/15% made the
+        # fleet page call a 6.45 % drive the collector graded WARNING "critically low" on 2026-11-05.
+        status = ((health_model.downgraded_from(row["message"]) or health_model.severity_of(row["status"]))
+                  if row["status"] else "UNKNOWN")
         drives[drive] = {"total_gb": total_gb, "free_gb": free_gb,
-                         "free_percent": free_pct, "status": status}
+                         "free_percent": free_pct, "status": status,
+                         "as_of": str(row.get("collected_at") or "")}
 
     data_drives, log_drives, tempdb_drives, backup_paths = set(), set(), set(), set()
     rows_by_db, log_by_db = {}, {}
@@ -703,6 +713,12 @@ def build_backup_by_database(code_map, policy_result=None):
             # database whose policy does not require one is not a gap, and the page must be able
             # to tell the reader that instead of leaving them to guess.
             "required_types": sorted(name for name, slot in types.items() if slot.get("required")),
+            # The policy's verdict on each type's age (OK / WARNING / CRITICAL / NOT_REQUIRED), from
+            # its own warn/critical hours. Both database tables coloured ages at 26/48 h for a FULL
+            # and 4/24 h for a LOG, so a weekly FULL five days old read red while the policy said it
+            # was in time, and a log three hours old - past the policy's two - read plain (audit
+            # 2026-11-05, A5 / B1). None where no policy verdict exists: the page then colours nothing.
+            "type_states": {name: slot.get("state") for name, slot in types.items()} or None,
             "as_of": _latest_collected(age_row, *last_by_db.get(db, [])),
         })
     return out
@@ -755,12 +771,17 @@ def build_database_rows(health_block, backup_block, *, static_sizes=None) -> lis
             "name": name,
             "databaseId": h.get("database_id"),
             "state": h.get("state") or "",
+            # Usable, by the one definition both pages share (lib.inventory_render): Oracle says
+            # READ WRITE, not ONLINE, and the fleet table badged every Oracle database red while its
+            # own header counted it online (audit 2026-11-05, A7).
+            "online": is_database_online(h.get("state")) if h.get("state") else None,
             "recovery": h.get("recovery_model") or b.get("recovery_model") or "",
             "dataGB": data_gb,
             "logGB": as_float(h.get("log_size_gb")),
             "dataFiles": h.get("data_files"),
             "logFiles": h.get("log_files"),
             "logUsedPct": as_float(h.get("log_used_percent")),
+            "logUsedStatus": h.get("log_used_status"),
             "logReuseWait": h.get("log_reuse_wait") or "",
             "compat": h.get("compatibility_level"),
             "pageVerify": h.get("page_verify_option") or "",
@@ -780,6 +801,7 @@ def build_database_rows(health_block, backup_block, *, static_sizes=None) -> lis
             "backupStatus": b.get("status") or "",
             "backupReason": b.get("reason") or "",
             "requiredTypes": b.get("required_types"),
+            "typeStates": b.get("type_states"),
             "staticSize": static_size,
             "asOf": h.get("as_of") or b.get("as_of") or "",
             # A composite row is only as current as its *oldest* input. Stamping it with the
@@ -1428,7 +1450,8 @@ def build_os_health(code_map):
         kv = parse_os_kv(cpu_row["message"])
         cpu = {
             "usage_percent": as_float(cpu_row["metric_value"]),
-            "status": cpu_row["status"] or "",
+            "status": ((health_model.downgraded_from(cpu_row["message"])
+                        or health_model.severity_of(cpu_row["status"])) if cpu_row["status"] else ""),
             "model": kv.get("model", ""),
             "sockets": _to_int(kv.get("sockets")),
             "cores": _to_int(kv.get("cores")),
@@ -1447,7 +1470,8 @@ def build_os_health(code_map):
         kv = parse_os_kv(memory_row["message"])
         memory = {
             "usage_percent": as_float(memory_row["metric_value"]),
-            "status": memory_row["status"] or "",
+            "status": ((health_model.downgraded_from(memory_row["message"])
+                        or health_model.severity_of(memory_row["status"])) if memory_row["status"] else ""),
             "total_gb": as_float(kv.get("total_gb")),
             "used_gb": as_float(kv.get("used_gb")),
             "available_gb": as_float(kv.get("available_gb")),
@@ -1474,7 +1498,10 @@ def build_os_health(code_map):
             "total_gb": as_float(kv.get("total_gb")),
             "free_gb": as_float(kv.get("free_gb")),
             "free_percent": free_pct,
-            "status": row["status"] or "UNKNOWN",
+            "as_of": str(row.get("collected_at") or ""),
+            # Before a severity_map, as for STORAGE_DISK_FREE_SPACE above.
+            "status": ((health_model.downgraded_from(row["message"]) or health_model.severity_of(row["status"]))
+                       if row["status"] else "UNKNOWN"),
             "file_system_type": kv.get("filesystem", ""),
             "logical_volume_name": kv.get("label") or kv.get("device") or "",
         }

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from dbabrain.lib import timezone as timezone_lib
 from dbabrain.lib.rows import row_text
 from dbabrain.sla.models import SlaPolicy, SlaPolicyResult, SlaValidationSummary
 from dbabrain.sla.storage import SlaStore
@@ -510,7 +511,9 @@ def _build_result(
         # Binary, not a share of objects. "Compliant" means nothing in the newest look is wrong;
         # one host pending a reboot out of thirty is not 96.7% compliant with a reboot policy, it
         # is non-compliant with one host to fix — and affected_objects says how many.
-        actual_value = 0.0 if bad_rows else 100.0
+        # None when nothing was measured: "no bad row" over no rows is not compliant, it is unknown,
+        # and the pages printed it "ok / compliant" (audit 2026-11-05, D2).
+        actual_value = None if not latest_rows else (0.0 if bad_rows else 100.0)
     if policy.policy_model == "finding_inventory":
         # The answer is a count of open findings, not a share of rows. Comparing it against a
         # percentage objective is what turned a real backlog into "4.09% maintenance compliance".
@@ -543,9 +546,13 @@ def _build_result(
     else:
         coverage = 100.0 if window_rows else 0.0
 
+    # Freshness is the age of the newest MEASUREMENT. Counted over every row, a stream of failed
+    # attempts kept it young while the last good cycle grew old - and that old cycle was then
+    # reported as the present ("OK now", D2). With nothing measured it falls back to the attempts.
     freshness = None
-    if rows:
-        freshness = max(0.0, (_parse_time(window_end) - max(_parse_time(str(row["collected_at"])) for row in rows)).total_seconds())
+    fresh_rows = window_rows or rows
+    if fresh_rows:
+        freshness = max(0.0, (_parse_time(window_end) - max(_parse_time(str(row["collected_at"])) for row in fresh_rows)).total_seconds())
 
     samples_for_sufficiency = len(window_rows)
     failures_by_status = _count_by_status(bad_rows)
@@ -825,9 +832,10 @@ def _evaluate_backup_rpo_policy(
         window_end=end_text,
         with_message=True,
     )]
+    reach = _recovery_reach_by_server(store)
     if policy.aggregate:
-        return [_build_backup_rpo_result(policy, AGGREGATE_TARGET, rows, start_text, end_text,
-                                         data_dir=data_dir, window_end_dt=window_end)]
+        return [_with_reach(_build_backup_rpo_result(policy, AGGREGATE_TARGET, rows, start_text, end_text,
+                                                     data_dir=data_dir, window_end_dt=window_end), reach)]
 
     grouped: dict[str, list[dict[str, Any]]] = {target_id: [] for target_id in expected}
     for row in rows:
@@ -837,13 +845,54 @@ def _evaluate_backup_rpo_policy(
         grouped.setdefault(target_id, []).append(row)
 
     if not grouped:
-        return [_build_backup_rpo_result(policy, AGGREGATE_TARGET, [], start_text, end_text,
-                                         data_dir=data_dir, window_end_dt=window_end)]
+        return [_with_reach(_build_backup_rpo_result(policy, AGGREGATE_TARGET, [], start_text, end_text,
+                                                     data_dir=data_dir, window_end_dt=window_end), reach)]
     return [
-        _build_backup_rpo_result(policy, target_id, target_rows, start_text, end_text,
-                                 data_dir=data_dir, window_end_dt=window_end)
+        _with_reach(_build_backup_rpo_result(policy, target_id, target_rows, start_text, end_text,
+                                             data_dir=data_dir, window_end_dt=window_end), reach,
+                    server_id=next((str(r.get("server_id") or "") for r in target_rows if r.get("server_id")),
+                                   target_id.split("/", 1)[0]))
         for target_id, target_rows in sorted(grouped.items())
     ]
+
+
+def _recovery_reach_by_server(store: SlaStore) -> dict[str, list[str]]:
+    """Each server's backup entries and how far back a restore can reach with them, from the
+    backup catalog (``retention_rows``: each entry's newest run) - ``{server_id: ["<entry>: <reach>"]}``.
+
+    The backup policy judges how old the newest backup is; it never said how far back one could go,
+    which is what the retention the catalog records answers (1.233). ``{}`` where the catalog was
+    never created: an install without the backup app has nothing to say here, and that is no failure.
+    """
+    from dbabrain.db.backup_catalog import retention_rows
+    from dbabrain.lib import cleanup_retention, store_outage
+
+    try:
+        with store.connect() as conn:
+            rows = retention_rows(conn)
+    except Exception as exc:  # noqa: BLE001 - only a store that is down is the run's failure
+        if store_outage.is_transient(exc):
+            raise
+        return {}
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        seconds = row.get("pitr_reach_seconds")
+        text = "kept, no limit by age" if seconds is None else cleanup_retention.describe(int(seconds))
+        out.setdefault(str(row.get("server_id") or ""), []).append(f"{row.get('backup_id')}: {text}")
+    return out
+
+
+def _with_reach(result: SlaPolicyResult, reach: dict[str, list[str]], *, server_id: str = "") -> SlaPolicyResult:
+    """``result`` carrying its server's recovery reach - every server's for a fleet-wide result."""
+    from dataclasses import replace
+
+    if server_id:
+        parts = reach.get(server_id) or []
+    elif result.target_id == AGGREGATE_TARGET:
+        parts = [f"{server} {part}" for server, items in sorted(reach.items()) for part in items]
+    else:
+        parts = []
+    return replace(result, recovery_reach="; ".join(parts)) if parts else result
 
 
 def _build_backup_rpo_result(
@@ -947,10 +996,16 @@ def _build_backup_rpo_result(
     if not server_id and target_id != AGGREGATE_TARGET:
         server_id = target_id.split("/", 1)[0]
 
-    # Deliberately naive UTC clock matching evaluate_backup_policy arithmetic
-    now_naive = window_end_dt.astimezone(timezone.utc).replace(tzinfo=None)
+    # The window's end on the operator's wall clock, naive - the clock a backup's
+    # `backup_finish_date` is written in, and the one backup_policy reads it against (its
+    # `collect_evidence` default). It was naive UTC here, so on a +07 estate an age taken from the
+    # finish date read seven hours young (audit 2026-11-05, D4).
+    now_naive = timezone_lib.to_display(window_end_dt).replace(tzinfo=None)
+    # Ages as of the window's end, not frozen at collection: a backup row collected 20 h before
+    # still says the LOG was 1 h old (audit 2026-11-05, D1).
     evaluation = backup_policy.evaluate_backup_policy(
-        latest_rows, server_id=server_id, policy=policy_doc, now=now_naive
+        latest_rows, server_id=server_id, policy=policy_doc, now=now_naive,
+        as_of_utc=window_end_dt.astimezone(timezone.utc),
     )
     databases = evaluation.get("databases", [])
     if not databases:
@@ -1113,13 +1168,14 @@ def _evaluate_restore_drill_policy(
 
     # The whole history, not the window: restore_drill.evaluate tells "never drilled" from
     # "drilled too long ago", and a window would make the second read as the first.
-    from dbabrain.db.backup_restore_history import drill_rows
+    from dbabrain.db.backup_restore_history import catalog_drill_rows, drill_rows
     from dbabrain.lib import store_outage
 
     unreadable = ""
     try:
         with store.connect() as conn:
-            rows = drill_rows(conn)
+            # Both records of a drill: the share-driven restore's history and the catalog's runs.
+            rows = drill_rows(conn) + catalog_drill_rows(conn)
     except Exception as exc:  # noqa: BLE001 - a store that is down is the run's failure, not NO_DATA
         if store_outage.is_transient(exc):
             raise
@@ -1155,7 +1211,7 @@ def _evaluate_restore_drill_policy(
                 unit=policy.unit,
                 compliant=None,
                 data_quality_status="NO_DATA",
-                reason=unreadable or "No restore drill has ever been recorded in backup_restore_history.",
+                reason=unreadable or "No restore drill has ever been recorded (backup_restore_history or the backup catalog's restore_runs).",
                 required=policy.required,
             )
         ]
@@ -1165,10 +1221,14 @@ def _evaluate_restore_drill_policy(
     target_rto = policy.rto_target_seconds
 
     for db_eval in eval_results:
-        database = db_eval["database_name"]
+        server = str(db_eval.get("server_id") or "")
+        name = db_eval["database_name"]
+        # Named with its server where the drill row said one (D3).
+        database = f"{server} / {name}" if server else name
         db_success_rows = [
             r for r in rows
-            if str(r.get("database_name") or "").strip() == database
+            if str(r.get("database_name") or "").strip() == name
+            and str(r.get("server_id") or "").strip() == server
             and str(r.get("status") or "").strip().upper() == "SUCCESS"
         ]
         newest_success_duration = None

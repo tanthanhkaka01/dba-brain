@@ -34,7 +34,8 @@ start; Oracle's two variants write them from 2026-10-26.
 read the same way the same day, with one difference that matters: their thresholds are the
 collector's, per metric and per server (``metric_overrides``, ``severity_map``), and a copy of them
 here would drift. So a page does not re-grade their values; it reads the severity **the collector
-gave each stored sample** and keeps the one that held for **at least half of the last hour**. One
+gave each stored sample** and keeps the one that held for **at least half of the last hour** - and
+never on one sample of several (an hourly metric's hour holds two). One
 1-second CPU reading at 95 % is a moment; half an hour of them is the server. The value printed is
 the hour's average, with its peak and the count of samples that were not OK. The wait sample names
 a different top wait in each collection, so it is read per collection, across its items, and can
@@ -313,7 +314,10 @@ def held_severity(statuses: list[Any]) -> str:
     severities = [health_model.severity_of(str(status or "")) for status in statuses]
     if not severities:
         return "OK"
-    need = (len(severities) + 1) // 2
+    # Half, and never one sample of several: CPU is read once an hour, so "the last hour" holds two
+    # readings a few seconds under 60 minutes apart, and one 1-second 90 % from an hour ago made the
+    # host CRITICAL beside a newest reading of 74 % OK (2026-11-06). A lone sample still decides.
+    need = max((len(severities) + 1) // 2, min(2, len(severities)))
     for severity in ("CRITICAL", "WARNING"):
         rank = health_model.SEVERITY_RANK[severity]
         if sum(1 for found in severities if health_model.SEVERITY_RANK.get(found, 0) >= rank) >= need:

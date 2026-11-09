@@ -252,10 +252,12 @@ def test_failed_logins_reach_the_report(secured):
     assert "failed logins 24h" in html
 
 
-def test_a_hammered_login_becomes_a_critical_triage_card(secured):
+def test_a_hammered_login_becomes_a_triage_card_at_the_collectors_severity(secured):
+    """The card is graded as collector 060 graded the principal (WARNING), not by a count of the
+    page's own - which made it critical where the collector never was (audit 2026-11-05, A11)."""
     _model, triage, _html = secured
     card = next(c for c in triage if "failed logins" in c["title"].lower())
-    assert card["sev"] == "crit"
+    assert card["sev"] == "warn"
     assert "aws_admin" in card["body"] and "10,064" in card["body"]
     assert "raise the alert threshold" in card["action"]   # says what NOT to do, too
 

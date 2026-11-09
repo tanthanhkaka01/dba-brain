@@ -71,6 +71,11 @@ def _store(tmp_path, results):
     return store
 
 
+# The moment the rows above were collected: their ages are read as of then (backup_policy reads
+# later moments by adding the time since - audit 2026-11-05, D1).
+COLLECTED = datetime.datetime(2026, 8, 1, 7, 0, tzinfo=datetime.timezone.utc)
+
+
 def _row(code, item, value, *, status="OK", unit="", message="", when="2026-08-01T07:00:00Z"):
     return {"metric_code": code, "metric_item": item, "metric_value": value, "metric_unit": unit,
             "status": status, "message": message, "collected_at": when, "server_id": SERVER,
@@ -242,7 +247,7 @@ def _erp_backup_rows():
 
 
 def test_a_stale_log_backup_is_critical_and_names_every_affected_database():
-    result = backup_policy.evaluate_backup_policy(_erp_backup_rows(), server_id=SERVER, policy=_SHIPPED_POLICY)
+    result = backup_policy.evaluate_backup_policy(_erp_backup_rows(), server_id=SERVER, policy=_SHIPPED_POLICY, as_of_utc=COLLECTED)
 
     summary = result["summary"]
     assert summary["status"] == "CRITICAL"
@@ -265,7 +270,7 @@ def test_a_diff_the_policy_does_not_require_is_not_missing():
                      "backup_finish_date=2026-08-01 06:00:00"),
     ]
 
-    result = backup_policy.evaluate_backup_policy(rows, server_id=SERVER, policy=_SHIPPED_POLICY)
+    result = backup_policy.evaluate_backup_policy(rows, server_id=SERVER, policy=_SHIPPED_POLICY, as_of_utc=COLLECTED)
 
     record = result["databases"][0]
     assert record["status"] == "OK"
@@ -281,7 +286,7 @@ def test_a_simple_recovery_database_is_not_held_to_a_log_rpo():
                  message="database=StagingDB, recovery_model=SIMPLE, backup_type=D, "
                          "backup_finish_date=2026-08-01 00:00:01")]
 
-    record = backup_policy.evaluate_backup_policy(rows, server_id=SERVER, policy=_SHIPPED_POLICY)["databases"][0]
+    record = backup_policy.evaluate_backup_policy(rows, server_id=SERVER, policy=_SHIPPED_POLICY, as_of_utc=COLLECTED)["databases"][0]
 
     assert record["types"]["LOG"]["required"] is False
     assert record["status"] == "OK"
@@ -291,7 +296,7 @@ def test_the_fleet_backup_column_never_claims_the_chain_is_broken():
     """"Broken chain" is an instruction to take a fresh FULL. Nothing collected proves it — that
     needs backup LSNs and recovery-fork ids — and acting on it when the chain was intact discards
     a working restore path."""
-    result = backup_policy.evaluate_backup_policy(_erp_backup_rows(), server_id=SERVER, policy=_SHIPPED_POLICY)
+    result = backup_policy.evaluate_backup_policy(_erp_backup_rows(), server_id=SERVER, policy=_SHIPPED_POLICY, as_of_utc=COLLECTED)
     model = _build_backup({"databases": [{"db_type": "sqlserver"}],
                            "backup_evidence": {"LOG": {"latest_finish": "2026-03-30 12:00:02",
                                                        "latest_age_hours": 2979}},

@@ -110,6 +110,24 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Do not refuse when the target is a read-only standby (not recommended).")
     create.set_defaults(handler=_handle_create_store_database)
 
+    app = subparsers.add_parser(
+        "create-app-login",
+        help="Give another tool its own login and schema in the store's database (idempotent).")
+    _add_secret_args(app)
+    app.add_argument("--role", required=True, help="The login to create, e.g. daily_assists.")
+    app.add_argument("--schema", required=True, help="Its own schema (never the store's or public).")
+    app.add_argument("--role-password-file", required=True,
+                     help="A JSON file holding the login's password - it never goes on a command line.")
+    app.add_argument("--role-password-ref", required=True,
+                     help="The key in that file whose value is the password.")
+    app.add_argument("--reset-password", action="store_true",
+                     help="Set the password of a role that already exists (left alone otherwise).")
+    app.add_argument("--dry-run", action="store_true",
+                     help="Print the statements without running them.")
+    app.add_argument("--allow-standby", action="store_true",
+                     help="Do not refuse when the target is a read-only standby (not recommended).")
+    app.set_defaults(handler=_handle_create_app_login)
+
     mig = subparsers.add_parser(
         "migrate-sqlite-to-postgres",
         help="Copy the SQLite runtime store into the PostgreSQL store database.")
@@ -479,6 +497,35 @@ def _handle_create_store_database(args) -> int:
         # nobody believes it is.
         print("  next: migrate-sqlite-to-postgres, then "
               "'dbabrain db use-store postgresql' to point this node at it")
+    return 0
+
+
+def _handle_create_app_login(args) -> int:
+    import json
+
+    _, postgres, _ = _postgres_target(args)
+    try:
+        document = json.loads(Path(args.role_password_file).read_text(encoding="utf-8-sig"))
+        role_password = str(document[args.role_password_ref])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        # from None: the chained traceback could carry the parsed document, password and all.
+        raise SystemExit(
+            f"Cannot read {args.role_password_ref!r} from {args.role_password_file}: "
+            f"{type(exc).__name__}") from None
+    result = postgres_store.create_app_login(
+        postgres,
+        role=args.role,
+        schema=args.schema,
+        role_password=role_password,
+        reset_password=args.reset_password,
+        key=_resolved_key(args),
+        password=args.password,
+        dry_run=args.dry_run,
+        require_primary=not args.allow_standby,
+    )
+    print(result.summary())
+    for statement in result.statements:
+        print(f"  {statement}")
     return 0
 
 

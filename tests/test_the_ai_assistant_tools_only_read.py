@@ -202,3 +202,24 @@ def test_bot_commands_gives_what_a_one_line_command_needs_without_the_menu_file(
     assert by_name["confirm"]["pattern"] == "yes"
     assert command["asker_may_run_in_private_chat"] is True
 
+
+
+def test_an_installed_package_is_read_where_it_is_installed(tmp_path):
+    """A wheel puts dbabrain/ in site-packages, not in the tool root, and on a new install the
+    assistant could not read the guide it is told to follow (1.267, 2026-11-06)."""
+    context = _context(tmp_path)
+    assert not (tmp_path / "dbabrain").exists()
+    output = T.run_tool(context, "read_file", {"path": "dbabrain/common/agents_guide.md", "find": "instance-add"})
+    assert not output.is_error and "instance-add" in output.content
+    assert output.content.startswith("dbabrain/common/agents_guide.md")
+    listing = json.loads(T.run_tool(context, "list_files", {"path": ""}).content)
+    assert "dbabrain" in [entry["path"] for entry in listing["entries"]]
+    # Nothing beside the package is reached through it.
+    escaped = T.run_tool(context, "read_file", {"path": "dbabrain/../pyproject.toml"})
+    assert escaped.is_error
+
+
+def test_a_search_of_a_path_that_is_not_there_says_so(tmp_path):
+    context = _context(tmp_path)
+    output = T.run_tool(context, "grep_files", {"path": "data/nowhere.md", "pattern": "x"})
+    assert output.is_error and "does not exist" in output.content

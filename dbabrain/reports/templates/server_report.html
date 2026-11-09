@@ -640,8 +640,10 @@ function workloadBlock(w){
     <div class="tbl-wrap"><table class="rpt">
       <thead><tr><th>Wait type</th>${head}</tr></thead><tbody>${waits}</tbody></table></div>` : "";
 
+  /* The windows end at the newest sample, not at now: said, so counters that stopped a day ago do
+     not read as the last hour (audit 2026-11-05, B8). */
   return `<details class="fold" open><summary>Workload — what this instance actually did${
-      wlCpuHead(w.cpu)}</summary><div class="in">
+      wlCpuHead(w.cpu)}${w.asOf ? ` · to ${when(w.asOf)}` : ""}</summary><div class="in">
     ${wlCpuFacts(w)}
     <p class="sec-note">Counters differenced between two collections, so every figure is work done
       <b>during</b> the interval — not a total since the engine started${
@@ -1647,7 +1649,9 @@ function databasesBlock(d){
   const logCell = r => {
     if (r.logGB == null && r.logUsedPct == null) return "—";
     const pct = r.logUsedPct;
-    const cls = pct == null ? "" : pct >= 90 ? "crit" : pct >= 75 ? "warn" : "";
+    /* LOG_FILE_SPACE's verdict, not a percentage of the page's own: it grades fullness only when
+       the log cannot grow (audit 2026-11-05, B2). */
+    const cls = r.logUsedStatus === "CRITICAL" ? "crit" : r.logUsedStatus === "WARNING" ? "warn" : "";
     return `${gb(r.logGB)}${pct == null ? "" :
       ` <span class="${cls}">${pct.toFixed(1)}%</span>`}${files(r.logFiles)}`
       + (r.logReuseWait && r.logReuseWait !== "NOTHING"
@@ -1662,9 +1666,14 @@ function databasesBlock(d){
       return `<span class="sev crit">never</span>`;
     return `<span class="mono">${when(r.checkdb)}</span>`;
   };
-  const ageCell = (hours, warnAt, critAt) => {
+  /* The backup policy's verdict on this type (data/backup_policy.json), not hours of the page's own:
+     26/48 h painted a weekly FULL red at five days while the policy called it in time (B1). A type
+     the policy does not require says so. */
+  const ageCell = (r, type, hours) => {
+    const state = (r.typeStates || {})[type];
+    if (state === "NOT_REQUIRED") return `<span class="muted" title="Not required by data/backup_policy.json">n/r</span>`;
     if (hours == null) return `<span class="muted">—</span>`;
-    const cls = hours >= critAt ? "crit" : hours >= warnAt ? "warn" : "";
+    const cls = state === "CRITICAL" ? "crit" : state === "WARNING" ? "warn" : "";
     const text = hours < 48 ? Math.round(hours) + "h" : Math.round(hours / 24) + "d";
     return `<span class="${cls}">${text}</span>`;
   };
@@ -1682,7 +1691,7 @@ function databasesBlock(d){
        dbabrain.lib.inventory_render.ONLINE_DATABASE_STATES. */
     const down = r.state && ONLINE_STATES.indexOf(r.state.toUpperCase()) < 0;
     const bad = (r.checkdb !== null && (!r.checkdb || r.checkdb === "never")) || down
-             || (r.logUsedPct != null && r.logUsedPct >= 90);
+             || r.logUsedStatus === "CRITICAL";
     return `<tr class="${down ? "crit" : bad ? "warn" : ""}">
       <td class="metric">${esc(r.name)}${system ? `<span class="code">system</span>` : ""}</td>
       <td>${!r.state ? `<span class="sev crit">?</span>`
@@ -1696,9 +1705,9 @@ function databasesBlock(d){
       <td class="nowrap">${checkdbCell(r)}</td>
       <td class="nowrap mono">${r.users == null ? "—" : r.users}</td>
       <td class="nowrap">${qsCell(r)}</td>
-      <td class="nowrap">${ageCell(r.fullAgeHours, 26, 48)}</td>
-      <td class="nowrap">${ageCell(r.diffAgeHours, 26, 48)}</td>
-      <td class="nowrap">${ageCell(r.logAgeHours, 4, 24)}</td>
+      <td class="nowrap">${ageCell(r, "FULL", r.fullAgeHours)}</td>
+      <td class="nowrap">${ageCell(r, "DIFF", r.diffAgeHours)}</td>
+      <td class="nowrap">${ageCell(r, "LOG", r.logAgeHours)}</td>
     </tr>`;
   }).join("");
   /* PostgreSQL's log is one WAL for the cluster, not a file per database: its own line. */
@@ -1709,7 +1718,9 @@ function databasesBlock(d){
           ? (s.wal.maxWalSizeMB / 1024).toFixed(0) + " GB" : s.wal.maxWalSizeMB + " MB"})`) : "";
   const head = `${s.count} database${s.count === 1 ? "" : "s"} · ${s.online} online`
     + (s.neverCheckdb ? ` · ${s.neverCheckdb} never CHECKDB'd` : "") + wal
-    + (s.backupGraded ? ` · ${s.backupOk}/${s.backupGraded} within backup policy` : "");
+    + (s.backupGraded ? ` · ${s.backupOk}/${s.backupGraded} within backup policy` : "")
+    /* When the table was read: its newest input, and its oldest where they differ (B9). */
+    + (s.asOf ? ` · as of ${when(s.asOf)}` + (s.oldestAsOf && s.oldestAsOf !== s.asOf ? ` (oldest input ${when(s.oldestAsOf)})` : "") : "");
   /* Open when something on it needs doing — the same rule the sections around it use. */
   return `<details class="fold"${(s.neverCheckdb || s.online < s.count) ? " open" : ""}>
     <summary>Databases — ${esc(head)}</summary>

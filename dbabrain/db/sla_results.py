@@ -68,6 +68,11 @@ class SlaPolicyResult:
     burn_rate: float | None = None
     burn_rates: dict[str, float | None] = field(default_factory=dict)
     burn_alert: str = ""
+    #: For backup_rpo: how far back a restore can reach on the server today - each backup entry's
+    #: point-in-time reach as its newest run recorded it in the backup catalog. An age within its
+    #: limit said nothing about whether last week can still be restored (1.233). "" where the
+    #: catalog holds no retention for the server.
+    recovery_reach: str = ""
 
 
 @dataclass(frozen=True)

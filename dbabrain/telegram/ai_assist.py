@@ -63,8 +63,9 @@ def _parse_utc(text: Any) -> datetime | None:
         return None
 
 
-def load_settings(data_dir: Path) -> tuple[A.AiAssistSettings | None, str]:
-    """The settings, or ``None`` with what is missing - a node without the file is not configured."""
+def load_settings(data_dir: Path, *, need_chat: bool = True) -> tuple[A.AiAssistSettings | None, str]:
+    """The settings, or ``None`` with what is missing - a node without the file is not configured.
+    ``need_chat=False`` for the command line, which answers in no chat (``ai-ask``)."""
     path = data_dir / A.FILE_NAME
     if not path.is_file():
         return None, f"no {path.as_posix()} - the assistant is not configured on this node."
@@ -74,7 +75,7 @@ def load_settings(data_dir: Path) -> tuple[A.AiAssistSettings | None, str]:
         return None, f"{A.FILE_NAME}: enabled is false."
     if not settings.api_key_ref:
         return None, f"{A.FILE_NAME}: api_key_ref is empty."
-    if not settings.chat_levels and not settings.private_chat_enabled:
+    if need_chat and not settings.chat_levels and not settings.private_chat_enabled:
         return None, (f"{A.FILE_NAME}: telegram_chat names no level and private_chat_enabled is false - "
                       "no chat to answer in.")
     return settings, ""
@@ -283,7 +284,8 @@ class Runner:
     def __init__(self, *, config: Any, config_path: str | Path, settings: A.AiAssistSettings, api_key: str,
                  secrets: dict[str, str], call: ai_agent.ModelCall | None = None,
                  download: Any = None, now: datetime | None = None,
-                 clock: Any = time.monotonic, tool_root: Path | None = None) -> None:
+                 clock: Any = time.monotonic, tool_root: Path | None = None,
+                 deliver: Any = None) -> None:
         self.config = config
         self.config_path = Path(config_path)
         self.data_dir = self.config_path.resolve().parent / "data"
@@ -307,12 +309,20 @@ class Runner:
         # (1.267). Stable for the node's life, so it sits in the cached system prompt.
         self.node["environment"] = node_environment.summary_line(node_environment.describe(self.tool_root))
         self.counts = {"read": 0, "answered": 0, "refused": 0, "errors": 0, "commands": 0, "skipped": 0}
+        #: Where an answer goes instead of the Telegram queue - the command line's printer (``ai-ask``).
+        self.deliver = deliver
+        self.last_request_id: int | None = None
 
     def _now(self) -> datetime:
         return self.now or datetime.now(timezone.utc)
 
     def _queue(self, *, chat_id: str, text: str, reply_to: int | None, request_id: int, message_type: str = "plain",
                note: str = "AI assistant") -> list[int]:
+        if self.deliver is not None:
+            # The command line: printed, never queued; a "working on it" line is the terminal's wait.
+            if message_type != "running":
+                self.deliver(text)
+            return []
         ids = []
         for part in chunks(text, int(self.settings.reply_chunk_chars)):
             ids.append(queue_telegram_message(
@@ -556,6 +566,7 @@ class Runner:
                                               fingerprint=fingerprint)
         if not request_id:
             return
+        self.last_request_id = request_id
         period = A.periods(now, self.zone)
         recent = self.store.recent(
             user_id=user.telegram_user_id, fingerprint=fingerprint, exclude_request_id=request_id,
@@ -591,7 +602,8 @@ class Runner:
 
         from dbabrain.telegram.command_permissions import telegram_user_type
 
-        level = telegram_user_type(self.data_dir / "telegram_users.json", user_id=user.telegram_user_id)
+        level: Any = (telegram_user_type(self.data_dir / "telegram_users.json", user_id=user.telegram_user_id)
+                      if user.telegram_user_id != CLI_CHAT_ID else "the node's operator, at its command line")
         blocks, notes = read_attachments(raw, s, download=self._download)
         context = self.redact(context_block(raw=raw, now=now, zone=self.zone, user_name=base["user_name"],
                                             user_id=user.telegram_user_id, user_level=level, node=self.node,
@@ -666,6 +678,28 @@ class Runner:
         self.store.set_request(request_id, reply_send_ids=json.dumps(ack_ids + ids))
         self.counts["errors" if status == "error" else "answered"] += 1
 
+    def ask(self, text: str, *, asker: str, new_conversation: bool = False) -> dict[str, Any]:
+        """One question typed at this node's command line (``telegram ai-ask``), answered through
+        ``deliver``. The asker is whoever runs the node's CLI - they hold its passphrase already - so
+        no users[] row is needed; the system's limits and the question's own still hold. The same
+        conversation continues within ``conversation_idle_seconds``, as a chat does."""
+        text = self.redact(str(text or "").strip())
+        if not text:
+            return {"ok": False, "error": "no question"}
+        if new_conversation:
+            self.store.close_conversations(chat_id=CLI_CHAT_ID, user_id=CLI_CHAT_ID, reason="new")
+        base = {"chat_id": CLI_CHAT_ID, "message_id": self.store.next_message_id(CLI_CHAT_ID),
+                "telegram_message_id": None, "reply_to_message_id": None, "user_id": CLI_CHAT_ID,
+                "user_name": asker or CLI_CHAT_ID, "node_host": self.node["host"], "app_version": __version__,
+                "model": self.settings.model, "effort": self.settings.effort, "tools_mode": self.settings.tools_mode}
+        user = A.AiUser(telegram_user_id=CLI_CHAT_ID, name=asker or CLI_CHAT_ID, active=True,
+                        budget_usd_month=None, budget_usd_day=None, tokens_month=None, tokens_day=None,
+                        requests_day=None)
+        raw = {"chat": {"title": "the command line of this node (dbabrain telegram ai-ask) - not Telegram",
+                        "id": CLI_CHAT_ID}}
+        self.question(base=base, raw=raw, user=user, text=text)
+        return {"ok": self.counts["errors"] == 0, "ai_request_id": self.last_request_id, "counts": self.counts}
+
     def _download(self, file_id: str, max_bytes: int) -> bytes:
         if self.download is not None:
             return self.download(file_id, max_bytes)
@@ -735,6 +769,48 @@ class Runner:
         priced = "" if result.price_known else " (a served model had no price; priced at the dearest row)"
         return (f"-- {self.settings.model} · {result.usage.tokens:,} tokens · ${result.cost:.4f}{priced}"
                 f"{tools}{budget}")
+
+
+#: The chat a question typed at the node's command line is kept under, and its asker's id.
+CLI_CHAT_ID = "cli"
+
+
+def ask_from_cli(*, config: Any, config_path: str | Path, question: str, asker: str = "",
+                 new_conversation: bool = False, call: ai_agent.ModelCall | None = None,
+                 deliver: Any = None, now: datetime | None = None) -> dict[str, Any]:
+    """``dbabrain telegram ai-ask``: the assistant asked at this node's command line.
+
+    On a new install the assistant was out of reach until Telegram worked - step 6 of the guide's
+    *A new install*, while the questions it is there for come first (1.267, the operator's test of
+    2026-11-06: *install, add the AI key, then ask the CLI what to set up next*). Here it needs only
+    ``ai_assist.json`` (``enabled``, ``api_key_ref``), the key in the secret store and the SDK. Not
+    configured is a state, said and skipped, as for the job.
+    """
+    import getpass
+
+    from dbabrain.lib.secret_text import load_secret_text
+
+    data_dir = Path(config_path).resolve().parent / "data"
+    settings, missing = load_settings(data_dir, need_chat=False)
+    if settings is None:
+        return {"ok": True, "skipped": True, "reason": missing}
+    if call is None and not sdk_installed():
+        from dbabrain.lib.packaging import install_hint
+
+        return {"ok": True, "skipped": True,
+                "reason": f"the anthropic package is not installed on this node ({install_hint('ai')})."}
+    secrets = load_secret_text(data_dir)
+    api_key = secrets.get(settings.api_key_ref, "")
+    if not api_key:
+        return {"ok": True, "skipped": True,
+                "reason": f"secret {settings.api_key_ref} is not in this node's encrypted store."}
+    try:
+        who = asker or getpass.getuser()
+    except Exception:  # noqa: BLE001 - a container may have no name for its user
+        who = ""
+    runner = Runner(config=config, config_path=config_path, settings=settings, api_key=api_key, secrets=secrets,
+                    call=call, now=now, deliver=deliver or print)
+    return runner.ask(question, asker=who, new_conversation=new_conversation)
 
 
 def run_ai_assist(*, config: Any, config_path: str | Path, call: ai_agent.ModelCall | None = None,

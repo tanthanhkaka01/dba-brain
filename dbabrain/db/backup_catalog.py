@@ -709,6 +709,19 @@ def _known(table: str, values: dict[str, Any]) -> dict[str, Any]:
     return values
 
 
+
+def retention_rows(conn: Any, *, server_id: str = "") -> list[dict[str, Any]]:
+    """Each backup entry's retention and point-in-time reach as its newest run recorded it (1.233),
+    on an open connection - ``BackupCatalogStore.retention_by_entry`` and the SLA's backup policy
+    read the same rows (the SLA has the store's connection, not a catalog store)."""
+    clause, params = ("AND r.server_id = ? ", (server_id,)) if server_id else ("", ())
+    return [dict(row) for row in conn.execute(
+        "SELECT r.backup_id, r.server_id, r.engine, r.retention_json, r.pitr_reach_seconds, r.started_at "
+        "FROM backup_runs r WHERE r.retention_json IS NOT NULL " + clause +
+        "AND r.backup_run_id = (SELECT MAX(r2.backup_run_id) FROM backup_runs r2 "
+        "WHERE r2.backup_id = r.backup_id AND r2.retention_json IS NOT NULL) "
+        "ORDER BY r.server_id, r.backup_id", params).fetchall()]
+
 class BackupCatalogStore:
     """The six catalog tables (SQLite or PostgreSQL, per the store declaration).
 
@@ -881,14 +894,8 @@ class BackupCatalogStore:
         """Each backup entry's retention as its newest run recorded it (1.233) - what the pages show,
         read from the store: the reports never read the backup app's configuration."""
         self.initialize()
-        clause, params = ("AND r.server_id = ? ", (server_id,)) if server_id else ("", ())
         with self.connect() as conn:
-            return [dict(row) for row in conn.execute(
-                "SELECT r.backup_id, r.server_id, r.engine, r.retention_json, r.pitr_reach_seconds, r.started_at "
-                "FROM backup_runs r WHERE r.retention_json IS NOT NULL " + clause +
-                "AND r.backup_run_id = (SELECT MAX(r2.backup_run_id) FROM backup_runs r2 "
-                "WHERE r2.backup_id = r.backup_id AND r2.retention_json IS NOT NULL) "
-                "ORDER BY r.server_id, r.backup_id", params).fetchall()]
+            return retention_rows(conn, server_id=server_id)
 
     def backup_run_files(self, backup_run_id: int) -> list[dict[str, Any]]:
         """The files one backup run wrote."""
@@ -1301,16 +1308,33 @@ class BackupCatalogStore:
 
     def coverage(self) -> list[dict[str, Any]]:
         """Per server and database, what its present backups cover (1.252): the newest file of each
-        level, how many are copied off the host, and when one of them was last used by a restore."""
+        level, how many are copied off the host, and when one of them was last **restored** - a
+        proven copy in a ``restore`` run that ended ``done``.
+
+        ``last_restore_at`` is marked for every run that used a file - a copy-only, a failed or a
+        running one - so a database read *complete* with no restore of it ever succeeding (audit
+        2026-11-05, C1). The proven restore is the one ``server_backup_files`` already counts."""
         self.initialize()
+        proven = "(" + ", ".join(f"'{v}'" for v in I.PROVEN_VERDICTS) + ")"
         with self.connect() as conn:
-            return [dict(row) for row in conn.execute(
+            rows = [dict(row) for row in conn.execute(
                 "SELECT server_id, database_name, engine, file_type, COUNT(*) AS files, "
                 "MAX(COALESCE(backup_ended_at, created_at)) AS newest, "
-                "SUM(CASE WHEN offload_state = 'verified' THEN 1 ELSE 0 END) AS offloaded, "
-                "MAX(last_restore_at) AS last_restored "
+                "SUM(CASE WHEN offload_state = 'verified' THEN 1 ELSE 0 END) AS offloaded "
                 "FROM backup_files WHERE state = 'present' "
                 "GROUP BY server_id, database_name, engine, file_type ORDER BY server_id, database_name").fetchall()]
+            restored = {(row["server_id"], row["database_name"], row["file_type"]): row["last_restored"]
+                        for row in conn.execute(
+                "SELECT bf.server_id, bf.database_name, bf.file_type, MAX(rr.ended_at) AS last_restored "
+                "FROM restore_run_files rf JOIN restore_runs rr ON rr.restore_run_id = rf.restore_run_id "
+                "JOIN backup_files bf ON (rf.file_id = bf.file_id OR (rf.file_id IS NULL "
+                "AND rf.source_server_id = bf.server_id AND rf.file_name = bf.file_name)) "
+                f"WHERE bf.state = 'present' AND rf.verdict IN {proven} "
+                "AND rr.action = 'restore' AND rr.phase = 'done' "
+                "GROUP BY bf.server_id, bf.database_name, bf.file_type").fetchall()}
+        for row in rows:
+            row["last_restored"] = restored.get((row["server_id"], row["database_name"], row["file_type"]))
+        return rows
 
     def server_backup_files(self, server_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
         """A server's backup files, newest first - the server page's *Backup & restore files* (1.217).

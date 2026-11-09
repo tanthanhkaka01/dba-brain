@@ -32,6 +32,18 @@ DISK_WARN_PCT = 15.0
 
 DISK_CRIT_PCT = 10.0
 
+
+def drive_is_low(info) -> bool:
+    """Whether a merged drive is worth a line: its collector's verdict when it has one (WARNING /
+    CRITICAL, before any remap - see ``merged_drives``), the page's own ``DISK_WARN_PCT`` only for a
+    drive no collector graded. The Markdown readers listed every drive under 15 % beside the fleet
+    page, which follows the verdict (audit 2026-11-05, 1.273)."""
+    status = str(info.get("status") or "").upper()
+    if status:
+        return status in ("WARNING", "WARN", "CRITICAL", "ERROR")
+    pct = info.get("free_percent")
+    return isinstance(pct, (int, float)) and pct < DISK_WARN_PCT
+
 #: The ``DATABASE_STATUS`` values that mean "this database can be used right now". Every engine
 #: words it differently: SQL Server reports ``sys.databases.state_desc`` and PostgreSQL follows it,
 #: while Oracle reports ``v$database.open_mode``, whose healthy values are ``READ WRITE`` and
@@ -69,8 +81,25 @@ def is_database_online(state) -> bool:
 def _norm_mount(mount):
     """Canonical mount key: 'E:\\' and 'E:' collapse to 'E:' so a drive present in both the
     metrics overlay (disk_health, keyed 'E:\\') and the OS inventory (os_resources, keyed
-    'E:') is one entry, not a duplicate."""
-    return str(mount or "").rstrip("\\/")
+    'E:') is one entry, not a duplicate. A Linux root stays "/": stripped, it was listed with
+    no mount at all (audit 2026-11-05, A15)."""
+    text = str(mount or "")
+    return text.rstrip("\\/") or ("/" if text.strip() == "/" else "")
+
+def _stopped_before(held_at, new_at, *, seconds: int = 2 * 3600) -> bool:
+    """True when ``new_at`` is later than ``held_at`` by more than one collection cycle can explain:
+    the collector behind ``held_at`` has stopped writing (audit 2026-11-05, A13)."""
+    try:
+        held = datetime.datetime.fromisoformat(str(held_at or "").replace("Z", "+00:00"))
+        new = datetime.datetime.fromisoformat(str(new_at or "").replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if held.tzinfo is None:
+        held = held.replace(tzinfo=datetime.timezone.utc)
+    if new.tzinfo is None:
+        new = new.replace(tzinfo=datetime.timezone.utc)
+    return (new - held).total_seconds() > seconds
+
 
 def merged_drives(server):
     """Disks keyed by the normalized mount, merging three sources:
@@ -79,7 +108,15 @@ def merged_drives(server):
     and ``os_resources.disks`` (the static WinRM inventory: volume label + filesystem).
     The SQL overlay wins where present, then the OS metric, then the static inventory. Missing
     fields are still backfilled from the lower-priority source: a SQL 2008 ``xp_fixeddrives``
-    row knows current free GB but not total GB, while the OS inventory knows the volume total.
+    row knows current free GB but not total GB, which the OS metric reads on the same cycle.
+
+    The static inventory is a snapshot (2026-09-26 on the estate) and volumes get resized: on
+    2026-11-05 a SQL Server 2008 host's T: was printed 5.94% free - 29.69 GB read that hour over the
+    499.87 GB the volume had in September; it is 49.87 GB now (59.5% free). So a fresh free
+    figure is never divided by a snapshot total while the OS metric has one, a snapshot total
+    smaller than the free space read now is not used at all, and a drive known *only* from the
+    snapshot keeps its sizes but gets no free % and no status of its own (``NO_DATA``): nothing
+    current was read for it, and a September 0.01% is not a disk that is full today.
     Deduplicated so 'E:\\' and 'E:' never both appear."""
     os_disks = (server.get("os_resources") or {}).get("disks") or []
     os_by_mount = {}
@@ -87,16 +124,23 @@ def merged_drives(server):
         key = _norm_mount(disk.get("mount_point"))
         if key:
             os_by_mount[key] = disk
+    os_metric = {_norm_mount(mount): info
+                 for mount, info in ((server.get("os_health") or {}).get("disks") or {}).items()}
     drives = {}
     for mount, info in ((server.get("disk_health") or {}).get("drives") or {}).items():
         key = _norm_mount(mount)
         od = os_by_mount.get(key) or {}
+        om = os_metric.get(key) or {}
         total = as_float(info.get("total_gb"))
         free = as_float(info.get("free_gb"))
-        if total is None:
-            total = as_float(od.get("total_gb"))
         if free is None:
-            free = as_float(od.get("free_gb"))
+            free = as_float(om.get("free_gb"))
+        if total is None:
+            total = as_float(om.get("total_gb"))
+        if total is None:
+            snapshot_total = as_float(od.get("total_gb"))
+            if snapshot_total and (free is None or free <= snapshot_total):
+                total = snapshot_total
         pct = as_float(info.get("free_percent"))
         if pct is None and free is not None and total:
             pct = round(100.0 * free / total, 2)
@@ -110,6 +154,13 @@ def merged_drives(server):
         }
     for mount, info in ((server.get("os_health") or {}).get("disks") or {}).items():
         key = _norm_mount(mount)
+        if key in drives and _stopped_before(drives[key].get("as_of"), info.get("as_of")):
+            # The SQL metric stopped reading this drive (older than the OS reading by more than two
+            # hours): the newer reading is the drive's figure and verdict. The SQL row always won, so one
+            # switched off three days earlier was still shown and graded (audit 2026-11-05, A13).
+            held = drives.pop(key)
+            info = {**info, "logical_volume_name": info.get("logical_volume_name") or held.get("logical_volume_name"),
+                    "file_system_type": info.get("file_system_type") or held.get("file_system_type")}
         if key in drives:
             current = drives[key]
             if current.get("total_gb") is None:
@@ -136,11 +187,8 @@ def merged_drives(server):
         key = _norm_mount(disk.get("mount_point"))
         if not key or key in drives:
             continue
-        total, free = as_float(disk.get("total_gb")), as_float(disk.get("free_gb"))
-        pct = round(100.0 * free / total, 2) if (free is not None and total) else None
-        status = ("UNKNOWN" if pct is None else "CRITICAL" if pct < DISK_CRIT_PCT
-                  else "WARNING" if pct < DISK_WARN_PCT else "OK")
-        drives[key] = {"total_gb": total, "free_gb": free, "free_percent": pct, "status": status,
+        drives[key] = {"total_gb": as_float(disk.get("total_gb")), "free_gb": as_float(disk.get("free_gb")),
+                       "free_percent": None, "status": "NO_DATA", "snapshot_only": True,
                        "logical_volume_name": disk.get("logical_volume_name"),
                        "file_system_type": disk.get("file_system_type")}
     return drives
@@ -412,8 +460,21 @@ def _remote_user_text(server):
         return "configured" if ru.lower().startswith("configured") else (ru or "not configured")
     return "not configured"
 
+def backup_latest_by_type(server) -> dict:
+    """The newest backup of each type, as the metrics overlay read it - or, for a server the overlay
+    has never reached, the canonical file's static ``backup.latest_by_type``.
+
+    The overlay writes ``backup_evidence: {}`` when the newest collection found no finished backup
+    (a failed collector row, nothing in the window). Read with ``or``, that empty dict fell through to
+    the static block, so the fleet page printed June's last FULL and its frozen age as current
+    (2026-11-05). An empty answer from the overlay is the answer: no backup was read.
+    """
+    if "backup_evidence" in server and server.get("backup_evidence") is not None:
+        return server.get("backup_evidence") or {}
+    return ((server.get("backup") or {}).get("latest_by_type")) or {}
+
 def _backup_evidence(server):
-    lbt = server.get("backup_evidence") or _g(server, "backup", "latest_by_type", default={})
+    lbt = backup_latest_by_type(server)
     parts = []
     for btype in ("FULL", "DIFF", "LOG"):
         entry = lbt.get(btype) if isinstance(lbt, dict) else None
@@ -428,7 +489,7 @@ def _findings(servers):
         sid = s.get("server_id")
         for drive, info in (merged_drives(s) or {}).items():
             pct = info.get("free_percent")
-            if isinstance(pct, (int, float)) and pct < DISK_WARN_PCT:
+            if drive_is_low(info):
                 out.append(f"Low disk: `{sid}` drive `{drive}` at {pct}% free "
                            f"({info.get('free_gb')} / {info.get('total_gb')} GB).")
         bad = [d["database_name"] for d in s.get("database_health", [])
@@ -438,7 +499,7 @@ def _findings(servers):
         nobk = [d["database_name"] for d in s.get("backup_by_database", []) if d.get("status") == "NO_FULL_BACKUP"]
         if nobk:
             out.append(f"No full backup on `{sid}`: {', '.join(nobk)}.")
-        bevd = s.get("backup_evidence") or _g(s, "backup", "latest_by_type", default={})
+        bevd = backup_latest_by_type(s)
         full = bevd.get("FULL") if isinstance(bevd, dict) else {}
         age = full.get("latest_age_hours") if isinstance(full, dict) else None
         if isinstance(age, (int, float)) and age > 48:
@@ -558,8 +619,7 @@ def _render_markdown(data, date_iso, exclude_ip_prefixes=EXCLUDE_IP_PREFIXES):
             continue
         online = sum(1 for d in dh if is_database_online(d.get("state")))
         checkdb_unknown = sum(1 for d in dh if d.get("last_good_checkdb") in ("", "unknown"))
-        disk_warn = sum(1 for info in (merged_drives(s) or {}).values()
-                        if isinstance(info.get("free_percent"), (int, float)) and info["free_percent"] < DISK_WARN_PCT)
+        disk_warn = sum(1 for info in (merged_drives(s) or {}).values() if drive_is_low(info))
         no_backup = sum(1 for d in s.get("backup_by_database", []) if d.get("status") == "NO_FULL_BACKUP")
         ph = s.get("performance_health") or {}
         lines.append(

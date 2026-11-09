@@ -82,11 +82,17 @@ each with a read before moving on:
    PostgreSQL.
 4. The first database: `dbabrain common instance-add @instance.json` (the inventory record, the
    login and the encrypted password in one call), then `dbabrain check-credentials` and
-   `dbabrain metrics collect --dry-run`. A host's OS: `dbabrain common remote-credential-add`.
+   `dbabrain metrics collect --dry-run`. Neither connects: `check-credentials` checks that each
+   target names a credential whose secret is in the store, and `--dry-run` only plans. The first
+   real login is `dbabrain metrics collect --test-run --target-ip <ip>`, which prints the
+   rows and stores nothing. A host's OS: `dbabrain common remote-credential-add`.
 5. The schedule: `dbabrain daemon --config config.json` (the `jobs` app) runs every app in
    `data/app_commands.json`.
 6. Telegram: `secret-set` the bot token, `dbabrain telegram use-bot`, one message in each group, then
    `dbabrain telegram group-level` for alerts (`warning`, `critical`, ...).
 7. Backups and restore drills: `dbabrain backup-restore backup-add` / `restore-add`.
-8. This assistant: the Anthropic key with `secret-set` under `ai_assist.json`'s `api_key_ref`,
-   `enabled: true`, each user in `users[]` with `active: true`, and the group's level `ai_assist`.
+8. This assistant: the Anthropic key with `secret-set` under `ai_assist.json`'s `api_key_ref` and
+   `enabled: true` are enough for `dbabrain telegram ai-ask "<question>"` at the node's command line,
+   with no Telegram (that is how a new install asks). In Telegram it also needs each user in
+   `users[]` with `active: true` and the group's level `ai_assist`. When the context's chat is the
+   command line, the asker is already talking to you: do not tell them to set this step up.

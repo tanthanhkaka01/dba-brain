@@ -420,6 +420,19 @@ python -m dbabrain.reports.cli inventory-workflow --days 7 --beauty 1
 | `build-inventory-health [--days N --output-dir --date]` | Build `<stamp>_database-inventory.json` health overlay from `metric_results`. |
 | `inventory-workflow [--days N --output-dir --inventory --date --dry-run --beauty 0\|1]` | Overlay → merge into the canonical `database-inventory.json` → render `<stamp>_database-inventory-summary.md`. `--beauty 1` additionally renders `<stamp>_database-inventory-report.{html,md}` from the merged inventory (KPIs, auto-derived Priority Attention, fleet/backup/config tables, per-server detail). Default `--beauty 0` = summary only (unchanged behavior). |
 
+**A volume is graded by the collector that read it, from this cycle's figures** (0.36.0). The fleet
+page's drives merge three sources (`lib.inventory_render.merged_drives`): the SQL metric
+(`STORAGE_DISK_FREE_SPACE`), the OS metric (`OS_DISK_USAGE`), and the canonical file's
+`os_resources` - a snapshot, which only lends a label and a filesystem. A free figure with no size
+(`xp_fixeddrives` on SQL Server 2008) takes the OS metric's size, never the snapshot's while the OS
+metric has one, and never a snapshot size smaller than the free space read now; a drive known only
+from the snapshot prints *not collected* and has no verdict. A drive's status is the collector's
+before any `severity_map` (a remap silences the alert, not the page), and the server's status and
+the *Disk critically low* / *Low disk headroom* cards follow it with no percentage of the page's
+own beside it. On 2026-11-05 a SQL Server 2008 host's T: had read 5.94 % free (29.69 GB over the 499.87 GB the
+volume had in September; 49.87 GB now), and a 6.45 % drive the collector called WARNING was listed
+as critically low.
+
 **With no canonical inventory yet, the default location is seeded from `data/db_instances.json`.**
 The canonical file (`<runtime>/reports/database-inventory.json` once a config is loaded) is the
 fleet as the operator describes it, and the merge only ever *updates* the servers it lists. Until
@@ -489,14 +502,17 @@ server's backup files and every restore that used them, on one page, from the ba
 (`docs/08_backup_restore_app.md`).
 
 **Recoverability** (0.35.0, 1.248 / 1.252 / 1.253 - gaps G8, G13, G14), above the files table, from
-the catalog alone (`backup_restore_report.render_recoverability`):
+the catalog, and the configured restore entries read through `lib.data_sources.load_restore_entries`
+(`backup_restore_report.render_recoverability`):
 
-- **Drills**, one row per restore entry over 30 days: its tier (`restore_runs.tier`), its state
+- **Drills**, one row per restore entry over twice the longest deadline (64 days, 0.36.0), and an
+  active tiered entry with no run in it listed OVERDUE rather than left out: its tier (`restore_runs.tier`), its state
   against the tier's deadline - OK, OVERDUE past 26 h / 7.5 days / 32 days since the last success,
   NEVER, or UNTIERED - the last success, the last run and its phase, and the successes of 7 and 30
   days. A success ended `done` with no database failing its check.
 - **Coverage**, one row per server and database: the levels its present backups hold, how many are
-  copied off the host, the last restore that used one, and what is missing - a full, log or WAL
+  copied off the host, its newest full and log, the last restore that succeeded from one (a proven
+  copy in a `restore` run that ended `done` - 0.36.0), and what is missing - a full, log or WAL
   backups, a copy off the host, a drill. *Complete* when nothing is. A repository and a virus scan
   join the list when they exist (1.240, 1.242).
 - **Retention** (1.233), one row per backup entry: its retention per file type and its
@@ -1341,7 +1357,9 @@ collector grades itself, from one sample: `OS_CPU_USAGE[cpu_usage]`, `SYSTEM_CPU
 `OS_DISK_USAGE[disk_queue_length]` and `PERFORMANCE_WAIT_STATS`. Their thresholds are the
 collector's, per metric and per server (`metric_overrides`, `severity_map`), so the pages do not
 re-grade the values: they read the severity the collector **stored on each sample** of the last
-hour and keep the highest one **at least half of the samples reached** (`held_severity`). One CPU
+hour and keep the highest one **at least half of the samples reached** (`held_severity`), and never
+just one sample when there are several. CPU is read once an hour, so its hour holds two readings,
+and until 2026-11-06 one 90 % reading from an hour ago beside a newest 74 % made the host CRITICAL. One CPU
 sample at 96 % among five at 20 % is OK; four at 92 % and two at 30 % are CRITICAL though the
 newest is calm. A remap that lowered the samples lowered the hour too - a page never un-silences
 what a `severity_map` decided. The value shown is the hour's average; the tile's source line and

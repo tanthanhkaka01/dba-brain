@@ -316,3 +316,142 @@ def create_store_database(
         host=postgres.host, port=int(postgres.port or 5432), database=database, schema=schema,
         database_created=needs_database, schema_created=needs_schema, server_version=version,
     )
+
+
+# --------------------------------------------------------------------------- #
+# A login and a schema of its own, for another tool sharing the store's instance
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class AppLoginResult:
+    """What :func:`create_app_login` did, step by step - reported, not guessed at."""
+    host: str
+    port: int
+    database: str
+    role: str
+    schema: str
+    role_created: bool
+    password_set: bool
+    schema_created: bool
+    statements: tuple[str, ...]
+    reaches_store_schema: bool
+    dry_run: bool = False
+
+    def summary(self) -> str:
+        prefix = "[dry-run] would ensure" if self.dry_run else "ensured"
+        bits = [
+            f"role {self.role} {'created' if self.role_created else 'already present'}"
+            + (", password set" if self.password_set else ""),
+            f"schema {self.schema} {'created' if self.schema_created else 'already present'}",
+            f"store schema {'REACHABLE - check its grants' if self.reaches_store_schema else 'not reachable'}",
+        ]
+        return f"{prefix} {self.host}:{self.port}/{self.database}: " + ", ".join(bits)
+
+
+def _sql_literal(value: str) -> str:
+    """A string literal for a utility statement (CREATE/ALTER ROLE take no bind parameters).
+
+    standard_conforming_strings is on by default since PostgreSQL 9.1, so doubling the quote is the
+    whole escape; a NUL cannot be sent at all, and is refused rather than silently cut.
+    """
+    if "\x00" in value:
+        raise PostgresStoreError("A password cannot contain a NUL character.")
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _role(conn, role: str) -> dict[str, Any] | None:
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT rolsuper, rolcanlogin FROM pg_roles WHERE rolname = ?", (role,))
+        row = cursor.fetchone()
+        return None if row is None else {"superuser": bool(row[0]), "login": bool(row[1])}
+    finally:
+        cursor.close()
+
+
+def create_app_login(
+    postgres: PostgresStoreConfig,
+    *,
+    role: str,
+    schema: str,
+    role_password: str,
+    reset_password: bool = False,
+    key: str | None = None,
+    password: str | None = None,
+    dry_run: bool = False,
+    require_primary: bool = True,
+) -> AppLoginResult:
+    """Give another tool its own login and its own schema in the store's database.
+
+    The operator, 2026-11-04: *daily-assists keeps its records in the dbabrain PostgreSQL instance,
+    database `db_ops`, a schema of its own - dbabrain may create a user for it, grant it the database
+    and the schema.* So it is created here rather than by a hand-typed script, and the role gets
+    exactly that: ``CONNECT`` on the store's database, the schema as its owner (so it can create its
+    own tables), its ``search_path`` pointed at it, and nothing on dbabrain's own schema.
+
+    Idempotent. An existing role keeps its password unless ``reset_password`` - the name could
+    belong to something already running, and changing its password would lock that out. A role
+    that is a superuser is refused outright: the point of the login is that it is not one.
+    """
+    database = validate_identifier(postgres.database, kind="database")
+    role = validate_identifier(role, kind="role")
+    schema = validate_identifier(schema, kind="schema")
+    store_schema = validate_identifier(postgres.schema or "public", kind="schema")
+    if schema in {store_schema, "public"}:
+        raise PostgresStoreError(
+            f"Schema {schema!r} is the store's own (or public); an app gets a schema of its own.")
+    if not role_password:
+        raise PostgresStoreError("The new login needs a password.")
+
+    conn = connect(postgres, key=key, password=password, database=database, autocommit=True)
+    try:
+        if require_primary and is_in_recovery(conn):
+            raise PostgresStoreError(
+                f"{postgres.host}:{postgres.port} is a standby; create the login on the primary.")
+        existing = _role(conn, role)
+        if existing and existing["superuser"]:
+            raise PostgresStoreError(f"Role {role!r} is a superuser; refusing to hand it to an app.")
+        needs_schema = not schema_exists(conn, schema)
+
+        q_role, q_schema, q_db = quote_identifier(role), quote_identifier(schema), quote_identifier(database)
+        secret = _sql_literal(role_password)
+        plan: list[tuple[str, str]] = []          # (statement to run, statement to report)
+        if existing is None:
+            text = f"CREATE ROLE {q_role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD "
+            plan.append((text + secret, text + "'***'"))
+        elif reset_password or not existing["login"]:
+            text = f"ALTER ROLE {q_role} LOGIN PASSWORD "
+            plan.append((text + secret, text + "'***'"))
+        if needs_schema:
+            plan.append((f"CREATE SCHEMA {q_schema} AUTHORIZATION {q_role}",) * 2)
+        else:
+            plan.append((f"GRANT USAGE, CREATE ON SCHEMA {q_schema} TO {q_role}",) * 2)
+        plan.append((f"GRANT CONNECT ON DATABASE {q_db} TO {q_role}",) * 2)
+        plan.append((f"ALTER ROLE {q_role} IN DATABASE {q_db} SET search_path = {q_schema}",) * 2)
+
+        if not dry_run:
+            cursor = conn.cursor()
+            try:
+                for statement, _ in plan:
+                    cursor.execute(statement)
+            finally:
+                cursor.close()
+
+        reaches = False
+        if existing is not None or not dry_run:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT has_schema_privilege(?, ?, 'USAGE')", (role, store_schema))
+                row = cursor.fetchone()
+                reaches = bool(row[0]) if row else False
+            finally:
+                cursor.close()
+    finally:
+        conn.close()
+
+    return AppLoginResult(
+        host=postgres.host, port=int(postgres.port or 5432), database=database, role=role,
+        schema=schema, role_created=existing is None,
+        password_set=existing is None or reset_password or not existing["login"],
+        schema_created=needs_schema, statements=tuple(shown for _, shown in plan),
+        reaches_store_schema=reaches, dry_run=dry_run,
+    )

@@ -7,6 +7,7 @@ path shape rather than values invented for the test.
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -47,8 +48,11 @@ def code_map(fixture: dict, *, collected_at: str = "2026-07-13T07:30:00Z") -> di
 
 
 def server(fixture_name: str, *, ip: str, server_id: str, databases: list, role: str = "") -> dict:
+    # Stamped now, as the overlay stamps every server it reaches: an unstamped server is one no
+    # live metric reached, and the fleet page grades that idle (audit 2026-11-05, A4).
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     entry = {"server_id": server_id, "company_code": "ACME", "ip": ip, "databases": databases,
-             "os_health": build_os_health(code_map(load_fixture(fixture_name)))}
+             "os_health": build_os_health(code_map(load_fixture(fixture_name))), "health_as_of": now}
     if role:
         entry["role"] = role
     return entry

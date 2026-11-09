@@ -196,6 +196,8 @@ ON_THE_SERVER_DETAIL = {
     "total",
 }
 ELSEWHERE_ON_THE_PAGE = {
+    "pleSev": "the PLE tile, graded by the same health_model.report_judged_severity",
+    "staticFields": "the 'static' mark on the Server detail facts it names (build_server_detail)",
     "databases": "the Databases section, from the same inventory_health.build_database_rows",
     "workload": "the Workload section, from the same workload builder",
     "role": "the page title", "ip": "the header line",

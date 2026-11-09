@@ -333,6 +333,8 @@ def _restore(tmp_path: Path, monkeypatch, room_answer: str, *, asks: bool = True
         return subprocess.CompletedProcess(cmd, 0, room_answer if measuring else "complete", "")
 
     patch_restore(monkeypatch, "run_sqlcmd_query_command", fake_run_sqlcmd)
+    # The chain check reads the headers first (1.250); these tests count the restore's own calls.
+    patch_restore(monkeypatch, "_read_chain_headers", lambda *_a, **_k: "")
 
     def run():
         return restore_module.run_restore_database(

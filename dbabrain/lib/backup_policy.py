@@ -175,7 +175,26 @@ def _age_hours(finish: str, *, now: datetime.datetime) -> float | None:
     return round((now - parsed).total_seconds() / 3600.0, 1)
 
 
-def collect_evidence(rows: list[dict], *, now: datetime.datetime | None = None) -> dict[str, dict]:
+def _hours_since_collected(collected_at, as_of_utc: datetime.datetime | None) -> float:
+    """How long ago a row was collected, in hours, against ``as_of_utc`` (aware UTC); 0 without one.
+
+    ``metric_value`` is the engine's age at collection. Read at a later moment it has to grow by the
+    time since: a LOG 1 h old in a row collected 20 h ago is 21 h old now, and the SLA called it
+    within policy (audit 2026-11-05, D1). ``collected_at`` is UTC, as metric_results stores it.
+    """
+    if as_of_utc is None or not collected_at:
+        return 0.0
+    try:
+        stamp = datetime.datetime.fromisoformat(str(collected_at).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+    return max(0.0, round((as_of_utc - stamp).total_seconds() / 3600.0, 1))
+
+
+def collect_evidence(rows: list[dict], *, now: datetime.datetime | None = None,
+                     as_of_utc: datetime.datetime | None = None) -> dict[str, dict]:
     """``{database: {recovery_model, types: {FULL: {...}}, as_of}}`` from the backup metric rows.
 
     Any code in :data:`BACKUP_LAST_RESULT_CODES` carries one row per ``(database, type)`` with the
@@ -187,6 +206,10 @@ def collect_evidence(rows: list[dict], *, now: datetime.datetime | None = None) 
     # a database server and carries no zone, so both sides of the subtraction have to be on
     # one clock for the age to mean anything. It used to be the host's - which in the worker
     # container is UTC, hours away from the servers being measured.
+    # The moment the ages are read at. A caller that states neither clock is reading now; a caller
+    # that states `now` alone (a test, a replay) reads the rows as of their collection.
+    if as_of_utc is None and now is None:
+        as_of_utc = datetime.datetime.now(datetime.timezone.utc)
     now = now or timezone_lib.display_now().replace(tzinfo=None)
     evidence: dict[str, dict] = {}
 
@@ -220,7 +243,8 @@ def collect_evidence(rows: list[dict], *, now: datetime.datetime | None = None) 
             # The collector's own DATEDIFF is preferred: it is computed on the engine, against the
             # engine's clock, so it is not affected by the report host's timezone.
             age = as_float(row.get("metric_value"))
-            age = age if (age is not None and age >= 0) else _age_hours(finish, now=now)
+            age = (round(age + _hours_since_collected(row.get("collected_at"), as_of_utc), 1)
+                   if (age is not None and age >= 0) else _age_hours(finish, now=now))
             if finish and (not slot["latest_finish"] or finish > slot["latest_finish"]):
                 slot["latest_finish"] = finish
                 slot["age_hours"] = age
@@ -229,7 +253,9 @@ def collect_evidence(rows: list[dict], *, now: datetime.datetime | None = None) 
         elif code == "BACKUP_AGE" and item:
             record = entry(item)
             record["as_of"] = max(record["as_of"], str(row.get("collected_at") or ""))
-            record["fallback_age_hours"] = as_float(row.get("metric_value"))
+            fallback = as_float(row.get("metric_value"))
+            record["fallback_age_hours"] = (None if fallback is None else
+                                            round(fallback + _hours_since_collected(row.get("collected_at"), as_of_utc), 1))
             record["fallback_status"] = str(row.get("status") or "")
 
     return evidence
@@ -237,10 +263,11 @@ def collect_evidence(rows: list[dict], *, now: datetime.datetime | None = None) 
 
 def evaluate_backup_policy(rows: list[dict], *, server_id: str = "",
                            policy: dict | None = None,
-                           now: datetime.datetime | None = None) -> dict:
+                           now: datetime.datetime | None = None,
+                           as_of_utc: datetime.datetime | None = None) -> dict:
     """Per-database compliance plus the server summary the Backup tile and fleet card render."""
     policy = policy or {}
-    evidence = collect_evidence(rows, now=now)
+    evidence = collect_evidence(rows, now=now, as_of_utc=as_of_utc)
     excluded = {str(name).lower() for name in (policy.get("exclude_databases") or [])}
     if not policy_is_configured(policy):
         return _unconfigured(evidence, excluded)
