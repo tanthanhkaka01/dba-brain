@@ -1186,17 +1186,7 @@ class WinrmSession(RemoteSession):
 
         def _execute() -> None:
             try:
-                client = client_cls(
-                    access.host,
-                    username=self._winrm_username() or None,
-                    password=access.password or None,
-                    ssl=access.ssl,
-                    port=access.port,
-                    auth=access.winrm_auth,
-                    encryption=encryption,
-                    connection_timeout=round_trip,
-                    cert_validation=access.cert_validation,
-                )
+                client = self._pypsrp_client(client_cls, encryption=encryption, connection_timeout=round_trip)
                 outcome["result"] = client.execute_ps(script_text)
             except BaseException as exc:  # noqa: BLE001 - carried across the thread, re-raised below.
                 outcome["error"] = exc
@@ -1291,6 +1281,91 @@ class WinrmSession(RemoteSession):
         return self._result(
             "Invoke-Command", completed.returncode, completed.stdout or "", completed.stderr or "", started
         )
+
+    def _pypsrp_client(self, client_cls, *, encryption: str | None = None, connection_timeout: int | None = None):
+        access = self.access
+        if encryption is None:
+            encryption = "never" if (access.winrm_auth.lower() == "basic" and not access.ssl) else "auto"
+        return client_cls(
+            access.host,
+            username=self._winrm_username() or None,
+            password=access.password or None,
+            ssl=access.ssl,
+            port=access.port,
+            auth=access.winrm_auth,
+            encryption=encryption,
+            connection_timeout=connection_timeout or int(access.timeout_seconds or DEFAULT_SESSION_TIMEOUT_SECONDS),
+            cert_validation=access.cert_validation,
+        )
+
+    # -- files (over WinRM: no SFTP) -------------------------------------- #
+    # `send-file` / `fetch-file` to a host reached by WinRM died with "'WinrmSession' object has
+    # no attribute 'sftp'" (2026-11-10, sending an image build to a Windows build host): every file path here
+    # was SFTP. pypsrp copies a file over the remoting channel itself - base64 in chunks, so slow
+    # for a large file, and a host with OpenSSH is still the faster way - and the local-PowerShell
+    # fallback has no such call, so a host without pypsrp here is refused by name.
+    def sftp(self):
+        raise RemoteExecError(
+            f"{self.access.host} is reached by WinRM, which has no SFTP: this file operation needs an "
+            "ssh access (Windows OpenSSH), or send-file / fetch-file, which copy over WinRM.",
+            method=self.access.method, host=self.access.host)
+
+    def _file_client(self):
+        try:
+            from pypsrp.client import Client  # type: ignore[import-not-found]
+        except ImportError as exc:
+            from dbabrain.lib.packaging import install_hint
+
+            raise RemoteExecError(
+                f"copying a file to or from {self.access.host} over WinRM needs pypsrp "
+                f"(`{install_hint('winrm')}`); the local-PowerShell fallback cannot copy files.",
+                method=self.access.method, host=self.access.host) from exc
+        return self._pypsrp_client(Client)
+
+    def put(self, local_path: str | Path, remote_path: str) -> None:
+        try:
+            self._file_client().copy(str(local_path), str(remote_path))
+        except RemoteExecError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - pypsrp's own errors, named with the host
+            raise RemoteExecError(f"WinRM copy to {self.access.host}:{remote_path} failed: {exc}",
+                                  method=self.access.method, host=self.access.host) from exc
+
+    def get(self, remote_path: str, local_path: str | Path) -> None:
+        try:
+            self._file_client().fetch(str(remote_path), str(local_path))
+        except RemoteExecError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - pypsrp's own errors, named with the host
+            raise RemoteExecError(f"WinRM fetch of {self.access.host}:{remote_path} failed: {exc}",
+                                  method=self.access.method, host=self.access.host) from exc
+
+    def file_facts(self, path: str) -> tuple[int, str] | None:
+        """``(bytes, sha256)`` of a file on the host, or None when it is not there."""
+        literal = quote_powershell(path)
+        result = self.run(
+            f"if (Test-Path -LiteralPath {literal} -PathType Leaf) {{ "
+            f"$i = Get-Item -LiteralPath {literal}; "
+            f"$h = (Get-FileHash -Algorithm SHA256 -LiteralPath {literal}).Hash; "
+            f"\"FACTS $($i.Length) $h\" }} else {{ 'ABSENT' }}", check=True)
+        for line in (result.stdout or "").splitlines():
+            parts = line.split()
+            if parts[:1] == ["FACTS"] and len(parts) == 3:
+                return int(parts[1]), parts[2].lower()
+            if parts[:1] == ["ABSENT"]:
+                return None
+        raise RemoteExecError(f"could not read {path} on {self.access.host}: {result.stdout!r}",
+                              method=self.access.method, host=self.access.host)
+
+    def mkdirs(self, path: str) -> None:
+        self.run(f"New-Item -ItemType Directory -Force -Path {quote_powershell(path)} | Out-Null", check=True)
+
+    def move_onto(self, staged: str, destination: str) -> None:
+        self.run(f"Move-Item -Force -LiteralPath {quote_powershell(staged)} -Destination {quote_powershell(destination)}",
+                 check=True)
+
+    def remove(self, path: str) -> None:
+        self.run(f"Remove-Item -Force -LiteralPath {quote_powershell(path)} -ErrorAction SilentlyContinue")
 
     def _winrm_username(self) -> str:
         """Qualify a bare username with the host, so a local account authenticates as
@@ -1419,6 +1494,57 @@ def open_session(
         return WinrmSession(resolved)
     assert_local_host(getattr(resolved, "host", ""), method=resolved.method)
     return LocalSession(resolved)
+
+
+# --------------------------------------------------------------------------- #
+# A session's connection, for a caller that moves bytes over it itself
+# --------------------------------------------------------------------------- #
+# The file copy (`filecopy`, `repoencrypt`) holds a session and streams through its connection:
+# a `cat` on a channel with a large window, a child process with a connection of its own, an SFTP
+# client per reader. Until 0.38.0 (1.338) it called paramiko for that itself - seven calls in two
+# modules, an executor beside this one (R44). These are those calls, here: the connection is still
+# the session's (`session.client`), and how a channel is opened, timed and tuned is said once.
+
+def stream_on(connection: Any, command: str, *, timeout_seconds: float | None = None, bufsize: int = -1):
+    """:meth:`SshSession.open_stream` for a caller that holds the session's connection: start
+    ``command`` and hand back its ``(stdin, stdout, stderr)``. The caller reads, writes and waits
+    for the exit status."""
+    return connection.exec_command(command, bufsize=bufsize, timeout=timeout_seconds)
+
+
+def channel_on(connection: Any, command: str, *, window_bytes: int, timeout_seconds: float | None = None):
+    """``command`` started on a channel of its own with a ``window_bytes`` window - what a large
+    file streamed by ``cat`` needs: the default window makes the peer wait for an adjust every
+    2 MB (43 MB/s against 25 measured into the repository, 0.37.0). ``timeout_seconds`` is the
+    channel's stall limit. The channel is the caller's to read or write, and to close.
+
+    ``None`` when the connection has no transport to open one on (a stand-in without one): the
+    caller falls back to :func:`stream_on`.
+    """
+    transport = connection.get_transport() if hasattr(connection, "get_transport") else None
+    if transport is None:
+        return None
+    channel = transport.open_session(window_size=window_bytes)
+    if timeout_seconds is not None:
+        channel.settimeout(timeout_seconds)
+    channel.exec_command(command)
+    return channel
+
+
+def sftp_on(connection: Any):
+    """An SFTP client of the caller's own on the session's connection - for a reader that closes
+    it with its file, apart from the session's lazily opened one (:meth:`SshSession.sftp`)."""
+    return connection.open_sftp()
+
+
+def raise_rekey_limits(connection: Any, *, rekey_bytes: int, rekey_packets: int) -> None:
+    """Raise the connection's own re-key thresholds (paramiko re-keys every 512 MB of its own
+    accord). A connection without a transport is left as it is."""
+    transport = connection.get_transport() if hasattr(connection, "get_transport") else None
+    packetizer = getattr(transport, "packetizer", None)
+    if packetizer is not None:
+        packetizer.REKEY_BYTES = rekey_bytes
+        packetizer.REKEY_PACKETS = rekey_packets
 
 
 # Hosts that mean "this machine" — anything else with method=local is a config mistake.

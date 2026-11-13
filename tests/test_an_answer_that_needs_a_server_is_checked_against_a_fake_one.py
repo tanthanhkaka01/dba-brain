@@ -612,9 +612,11 @@ def test_file_checksum(host, monkeypatch, capsys):
 def test_copy_files(host, monkeypatch, capsys):
     host.files["/backup/APPDB/FULL/APPDB_full.bak"] = b"a full backup"
     body = _answer(monkeypatch, capsys, "copy-files", {
-        "source": _LOGIN, "target": _LOGIN,
+        "source": _LOGIN, "target": _LOGIN, "overwrite": False, "transfer": "sftp",
         "files": [{"source": "/backup/APPDB/FULL/APPDB_full.bak",
-                   "target": "/repository/SRV-01/APPDB/FULL/APPDB_full.bak"}]})
+                   "target": "/repository/SRV-01/APPDB/FULL/APPDB_full.bak",
+                   "file_name": "APPDB_full.bak", "size_bytes": len(b"a full backup"),
+                   "sha256": hashlib.sha256(b"a full backup").hexdigest()}]})
     _holds(body, "copy-files")
     assert host.files["/repository/SRV-01/APPDB/FULL/APPDB_full.bak"] == b"a full backup"
 
@@ -652,24 +654,53 @@ def _a_backup_directory(host: _Host) -> None:
                                  "/dev/sda1 104857600 1048576 103809024 1% /\n")
 
 
-def test_backup_chain(host, monkeypatch, capsys):
+def test_prepare_staging(host, monkeypatch, capsys):
+    """0.38.0: what `backup-chain` and `copy-backup-dir` answered between them, with no byte moved -
+    the chain read from the source, the staging made ready, and which files still have to travel."""
     _a_backup_directory(host)
-    _holds(_answer(monkeypatch, capsys, "backup-chain", {
-        "db_type": "postgresql", "source": _LOGIN, "source_dir": _STAGED}), "backup-chain")
-
-
-def test_copy_backup_dir(host, monkeypatch, capsys):
-    _a_backup_directory(host)
-    _holds(_answer(monkeypatch, capsys, "copy-backup-dir", {
+    planned = _answer(monkeypatch, capsys, "prepare-staging", {
+        "source": _LOGIN, "source_dir": _STAGED, "chain": {"db_type": "postgresql"}, "plan_only": True})
+    _holds(planned, "prepare-staging")
+    assert planned["data"]["include"] and planned["data"]["narrowed"] is True
+    body = _answer(monkeypatch, capsys, "prepare-staging", {
         "source": _LOGIN, "source_dir": _STAGED, "target": _LOGIN,
-        "target_dir": "/opt/db_ops/backup/pg_restore_from_a"}), "copy-backup-dir")
+        "target_dir": "/opt/db_ops/backup/pg_restore_from_a", "include": planned["data"]["include"]})
+    _holds(body, "prepare-staging")
+    assert body["data"]["pending"], "a first run has every selected file still to travel"
 
 
-def test_prune_staged_backups(host, monkeypatch, capsys):
+def test_finish_staging(host, monkeypatch, capsys):
     _a_backup_directory(host)
-    _holds(_answer(monkeypatch, capsys, "prune-staged-backups", {
-        "target": _LOGIN, "target_dir": _STAGED, "cleanup_retention": 86400}),
-        "prune-staged-backups")
+    body = _answer(monkeypatch, capsys, "finish-staging", {
+        "target": _LOGIN, "target_dir": _STAGED,
+        "files": [{"path": "wal/000000010000000000000001", "mtime": 1790000000}]})
+    _holds(body, "finish-staging")
+    assert set(body["data"]) == {"timed", "not_timed", "opened_for_engine"}
+
+
+@pytest.mark.parametrize("command, replacement", [("backup-chain", "prepare-staging"),
+                                                  ("copy-backup-dir", "copy-files")])
+def test_the_old_copy_commands_are_refused_and_reach_no_host(host, monkeypatch, capsys, command, replacement):
+    _a_backup_directory(host)
+    body = _answer(monkeypatch, capsys, command, {
+        "db_type": "postgresql", "source": _LOGIN, "source_dir": _STAGED, "target": _LOGIN,
+        "target_dir": "/opt/db_ops/backup/pg_restore_from_a"})
+    assert body["success"] is False and "refused" in body["error"] and replacement in body["error"]
+    assert not body.get("data")
+
+
+def test_prune_staged_backups_is_refused_and_reaches_no_host(host, monkeypatch, capsys):
+    """0.38.0: it deleted a staging's files by age with one `find -delete` and an emptied set with
+    `rm -rf`. It reads its request and refuses it; backup_restore cleans a staging itself, one
+    verified delete per file. Nothing runs on the host."""
+    _a_backup_directory(host)
+    ran_before = list(host.commands) if hasattr(host, "commands") else None
+    body = _answer(monkeypatch, capsys, "prune-staged-backups", {
+        "target": _LOGIN, "target_dir": _STAGED, "cleanup_retention": 86400})
+    assert body["success"] is False and "refused" in body["error"]
+    assert "delete-verified-files" in body["error"] and not body.get("data")
+    if ran_before is not None:
+        assert list(host.commands) == ran_before
 
 
 def test_move_db_docker(host, monkeypatch, capsys):
@@ -762,9 +793,13 @@ def test_smb_list(monkeypatch, capsys, smb_node):
 
 
 def test_smb_delete(monkeypatch, capsys, smb_node):
-    body = _answer(monkeypatch, capsys, "smb-delete", {**_SHARE, "paths": ["SQLBK\\LOG\\APPDB_log.trn"]})
+    # Forced, one file (0.38.0): a share has no host to hash a file on.
+    body = _answer(monkeypatch, capsys, "smb-delete", {**_SHARE, "paths": ["SQLBK\\LOG\\APPDB_log.trn"],
+                                                       "force": True})
     _holds(body, "smb-delete")
     assert body["data"]["deleted"] == 1
+    refused = _answer(monkeypatch, capsys, "smb-delete", {**_SHARE, "paths": ["SQLBK\\LOG\\APPDB_log.trn"]})
+    assert refused["success"] is False and "refused" in refused["error"]
 
 
 def test_smb_credential(monkeypatch, capsys, smb_node):
@@ -823,6 +858,78 @@ def test_rotate_password(monkeypatch, capsys, server, tmp_path):
     assert [item["status"] for item in body["data"]["results"]] == ["READY"]
 
 
+# --------------------------------------------------------------------------- #
+# 0.37.0: a backup encrypted with age at the repository, proven, and decrypted for a restore
+# --------------------------------------------------------------------------- #
+_PLAIN = b"a plain backup, the bytes the catalog proved"
+_PLAIN_SHA = hashlib.sha256(_PLAIN).hexdigest()
+
+
+def _age_pair():
+    """A real age key and the plain bytes encrypted for it - pyrage, as the commands decrypt with."""
+    import pyrage
+
+    identity = pyrage.x25519.Identity.generate()
+    sealed = pyrage.encrypt(_PLAIN, [identity.to_public()])
+    return str(identity), sealed, hashlib.sha256(sealed).hexdigest()
+
+
+def _sftp_client(monkeypatch, host: _Host) -> None:
+    """`session.client.open_sftp()` - the reader's own SFTP - served from the fake host's files."""
+    monkeypatch.setattr(remote_exec.SshSession, "client",
+                        property(lambda session: SimpleNamespace(open_sftp=lambda: _Sftp(host))))
+
+
+def test_encrypt_file(host, monkeypatch, capsys):
+    # The host's one line: the encrypted file's bytes, its sha256, the age version.
+    host.answers["age -r "] = (0, f"OK 512 {'e' * 64} v1.2.1\n")
+    body = _answer(monkeypatch, capsys, "encrypt-file", {
+        "host": {**_LOGIN, "runtime": "linux"}, "path": "/repository/SRV-01/APPDB/FULL/APPDB_full.bak",
+        "file_name": "APPDB_full.bak", "size_bytes": len(_PLAIN), "sha256": _PLAIN_SHA,
+        "recipients": ["age1" + "q" * 58], "key_id": 1, "key_expires_at": "2099-01-01T00:00:00Z",
+        "must_be_under": "/repository"})
+    _holds(body, "encrypt-file")
+    assert body["data"]["encrypted_path"].endswith(".bak.age") and body["data"]["encrypted_size_bytes"] == 512
+
+
+def test_verify_encrypted_file(host, monkeypatch, capsys):
+    identity, sealed, sealed_sha = _age_pair()
+    host.files["/repository/SRV-01/APPDB/FULL/APPDB_full.bak.age"] = sealed
+    _sftp_client(monkeypatch, host)
+    body = _answer(monkeypatch, capsys, "verify-encrypted-file", {
+        "host": _LOGIN, "path": "/repository/SRV-01/APPDB/FULL/APPDB_full.bak.age",
+        "size_bytes": len(sealed), "sha256": sealed_sha, "plain_size_bytes": len(_PLAIN),
+        "plain_sha256": _PLAIN_SHA, "identity": identity, "transfer": "sftp"})
+    _holds(body, "verify-encrypted-file")
+    assert body["data"]["proven"] is True
+
+
+def test_fetch_decrypted_file(host, monkeypatch, capsys):
+    identity, sealed, sealed_sha = _age_pair()
+    host.files["/repository/SRV-01/APPDB/FULL/APPDB_full.bak.age"] = sealed
+    _sftp_client(monkeypatch, host)
+    body = _answer(monkeypatch, capsys, "fetch-decrypted-file", {
+        "source": _LOGIN, "path": "/repository/SRV-01/APPDB/FULL/APPDB_full.bak.age",
+        "size_bytes": len(sealed), "sha256": sealed_sha, "identity": identity,
+        "target": _LOGIN, "target_path": "/restore/APPDB/APPDB_full.bak", "file_name": "APPDB_full.bak",
+        "plain_size_bytes": len(_PLAIN), "plain_sha256": _PLAIN_SHA, "transfer": "sftp", "overwrite": False})
+    _holds(body, "fetch-decrypted-file")
+    assert host.files["/restore/APPDB/APPDB_full.bak"] == _PLAIN, "the plaintext took its name"
+
+
+def test_decrypt_on_host(host, monkeypatch, capsys):
+    identity, sealed, sealed_sha = _age_pair()
+    host.answers["age -d -i"] = (0, "OK\n")
+    body = _answer(monkeypatch, capsys, "decrypt-on-host", {
+        "host": {**_LOGIN, "runtime": "linux"}, "path": "/repository/SRV-01/APPDB/FULL/APPDB_full.bak.age",
+        "size_bytes": len(sealed), "sha256": sealed_sha, "target_path": "/repository/_restore/APPDB_full.bak",
+        "file_name": "APPDB_full.bak", "plain_size_bytes": len(_PLAIN), "plain_sha256": _PLAIN_SHA,
+        "identity": identity, "overwrite": False, "must_be_under": "/repository"})
+    _holds(body, "decrypt-on-host")
+    assert body["data"]["already_there"] is False
+    assert identity not in host.ran[-1], "the key travels on stdin, never in the command"
+
+
 #: Every command a test here answers. The R09 guard's baseline (ANSWER_NOT_YET_SEEN) is what
 #: neither its runs nor these answer - it reads this set.
 ANSWERED_WITH_A_FAKE_SERVER = frozenset({
@@ -831,9 +938,10 @@ ANSWERED_WITH_A_FAKE_SERVER = frozenset({
     "sqlserver-precheck", "sqlserver-apply-cu", "sqlserver-verify-build", "sqlserver-export-instance",
     "sqlserver-verify-instance", "sqlserver-replay-instance", "host-facts", "host-service",
     "host-restart", "fetch-file", "send-file", "relay-file", "pack-files", "pack-backup",
-    "pull-file", "push-file", "backup-chain", "copy-backup-dir", "prune-staged-backups",
+    "pull-file", "push-file", "prepare-staging", "finish-staging",
     "move-db-docker", "run-sqlcmd", "smb-list", "smb-delete", "smb-credential", "copy-schema",
     "rotate-password", "file-checksum", "backup-stop", "copy-files",
+    "encrypt-file", "verify-encrypted-file", "fetch-decrypted-file", "decrypt-on-host",
 })
 
 

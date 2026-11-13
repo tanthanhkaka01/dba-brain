@@ -1,22 +1,19 @@
-"""OBSOLETE — superseded by ``delete-file`` / ``delete-files`` in :mod:`dbabrain.common.deletefiles`.
+"""Retention cleanup of a restore target's import folder - the share-driven restore's DELETE step.
 
-Still wired into ``restore-workflow`` (``backup_restore/cli.py``), which the daemon schedules, so it
-is marked rather than removed: deleting live scheduled behaviour is its own change, not a side
-effect of writing the replacement. Nothing new should call it.
+Wired into ``restore-workflow`` and ``delete-backup`` (``backup_restore/cli.py``). It chooses what is
+past its retention *and* no longer needed by a chain (:func:`obsolete_only`) from a listing of the
+folder - over SSH on a Linux target, through the share on a Windows one, from the filesystem when
+the folder is on this machine.
 
-What the replacement does differently, and why each difference exists:
-
-* **The caller chooses, then deletes.** This module computes the set inside the deleting process
-  from ``cleanup_retention`` and the clock, so "what would this remove" has no answer short of
-  reading the code. ``list-backup-files`` lists, the caller decides, ``delete-files`` takes the
-  explicit paths.
-* **Anywhere, not one UNC share.** This reaches a Windows import folder over SMB or SSH. Backups
-  on this estate also sit on an Ubuntu VM, in a container and on an Oracle Cloud host;
-  :mod:`dbabrain.common.hostcmd` reaches all of them.
-* **No patterns.** ``*.bak``/``*.trn`` under a configured root is one wrong root away from deleting
-  the backup being restored from. The replacement refuses a wildcard outright.
-* **A response, not a returncode.** Per file: deleted / not_found / skipped / failed with a reason,
-  so a partial failure can be retried on exactly the paths that failed.
+**It deletes by verified commands only** (0.38.0, 1.329). Until then each engine removed its files
+its own way - ``rm -f`` over SSH, ``smb-delete`` with a list, ``unlink`` here - with nothing held to
+anything. Now every engine hands its selection to :func:`_delete_selected`: a file a proven copy
+recorded on this target is deleted by ``delete-verified-files`` with the bytes and sha256 that copy
+measured there; **a file no copy recorded is kept and named**; ``force`` (an operator, by hand)
+deletes each of those by its own ``delete-file`` command. A Windows import folder is reached
+through its host (the target's ``cmd_access`` in the inventory, the folder's local path
+``vm_import_local``): a share has nothing to hash a file on, so a target reachable only as a share
+keeps its files and says why.
 """
 
 from __future__ import annotations
@@ -56,6 +53,8 @@ class DeleteBackupResult:
     deleted: int
     file_results: tuple[DeleteBackupFileResult, ...]
     skipped: int = 0
+    #: Files past retention that no proven copy recorded - kept, each named in ``file_results``.
+    kept_unknown: int = 0
 
 
 #: Folder names that say what KIND of backup a file is rather than what it belongs to. A staging
@@ -245,11 +244,103 @@ def list_old_target_backup_files(config: BackupRestoreConfig | None = None, *, n
     return [path for _, path in sorted(files.values(), key=lambda item: (item[0], str(item[1]).lower()))]
 
 
-def delete_target_backup_file(target_file: Path, *, target_root: Path) -> DeleteBackupFileResult:
-    target_file.relative_to(target_root)
-    file_size = target_file.stat().st_size
-    target_file.unlink()
-    return DeleteBackupFileResult(target_file=target_file, status="DELETED", bytes=file_size)
+#: A file past its retention that no proven copy recorded: kept, and named in the result.
+KEPT = "KEPT"
+
+
+def _catalog() -> Any:
+    """The backup catalog, or ``None`` when this node has no store to read - then nothing has facts
+    and every selected file is kept and named."""
+    try:
+        from dbabrain.db.backup_catalog import BackupCatalogStore
+        from dbabrain.lib.config import load_config
+
+        return BackupCatalogStore.from_config(load_config())
+    except Exception:  # noqa: BLE001 - no catalog is "no facts", never a delete without them.
+        return None
+
+
+def _windows_target_host(config: BackupRestoreConfig) -> tuple[dict[str, Any] | None, str]:
+    """``(host block, "")`` for the Windows target's own host, or ``(None, why not)``.
+
+    From the inventory: the target server's ``cmd_access`` (WinRM or SSH) - the same login the
+    metrics collectors use. A share cannot run the script a verified delete is.
+    """
+    target_id = str(config.target_id or "").strip()
+    if not target_id:
+        return None, "the entry names no target_server_id to reach the host by"
+    try:
+        from dbabrain.backup_restore.backup import _load_secrets, resolve_ssh_target
+        from dbabrain.backup_restore.spec_builder import host_block
+
+        target = resolve_ssh_target(target_id, label=f"restore_id={config.restore_id or '?'}",
+                                    require_container=False)
+        return host_block(target, secrets=_load_secrets(data_dir=None, key=None, key_base64=None)), ""
+    except Exception as exc:  # noqa: BLE001 - said as the reason every file is kept.
+        return None, f"{target_id} cannot be reached as a host ({exc})"
+
+
+def _delete_selected(config: BackupRestoreConfig, selected: list[tuple[Any, int]], *,
+                     host: dict[str, Any] | None, why_no_host: str = "", host_path_of: Any,
+                     must_be_under: str, windows: bool, dry_run: bool, force: bool,
+                     catalog: Any = None, logger: logging.Logger | None = None,
+                     ) -> list[DeleteBackupFileResult]:
+    """Delete the selected files - each by a verified command, or not at all (module docstring).
+
+    ``selected`` is ``(the path as this engine lists it, bytes)``; ``host_path_of`` turns one into
+    the path on the target host itself. Without a ``host`` nothing can be held to its facts, so
+    every file is kept with ``why_no_host``.
+    """
+    from dbabrain.backup_restore import verified_cleanup
+
+    _rid = f"restore_id={config.restore_id} " if config.restore_id else ""
+    if not selected:
+        return []
+    if host is None:
+        return [DeleteBackupFileResult(target_file=Path(str(path)), status=KEPT, bytes=size,
+                                       reason=f"kept: {why_no_host}") for path, size in selected]
+    host_paths = {str(path): str(host_path_of(path)) for path, _size in selected}
+    sizes = {host_paths[str(path)]: size for path, size in selected}
+    listed_as = {host_path: Path(listed) for listed, host_path in host_paths.items()}
+    wanted = list(host_paths.values())
+    facts: dict[str, dict[str, Any]] = {}
+    store = catalog if catalog is not None else _catalog()
+    if store is not None:
+        # Recorded under the path the copy wrote to - the host's own, or the engine's listing of it.
+        try:
+            found = store.staged_file_facts(target_server_id=str(config.target_id or ""),
+                                            paths=sorted(set(wanted) | set(host_paths)))
+        except Exception as exc:  # noqa: BLE001 - a store that cannot be read gives no facts: nothing goes.
+            return [DeleteBackupFileResult(target_file=Path(str(path)), status=KEPT, bytes=size,
+                                           reason=f"kept: the catalog could not be read ({exc})")
+                    for path, size in selected]
+        for listed, host_path in host_paths.items():
+            row = found.get(host_path) or found.get(listed)
+            if row:
+                facts[host_path] = row
+    cleanup = verified_cleanup.delete_files(host=host, paths=wanted, facts=facts, must_be_under=must_be_under,
+                                            windows=windows, force=force, dry_run=dry_run)
+    results: list[DeleteBackupFileResult] = []
+
+    def add(host_path: str, status: str, reason: str = "") -> None:
+        results.append(DeleteBackupFileResult(target_file=listed_as[host_path], status=status,
+                                              bytes=sizes.get(host_path, 0), reason=reason))
+        _log_progress(logger, f"{_rid}delete-backup source_id={config.source_id} cleanup_{status.lower()} "
+                              f"file={host_path}" + (f" reason={reason}" if reason else ""))
+
+    for host_path in cleanup["deleted"]:
+        add(host_path, "DELETED")
+    for one in cleanup["forced"]:
+        add(one["path"], "DELETED", f"forced: {one.get('size_bytes')} bytes, sha256 {one.get('sha256')}")
+    for host_path in cleanup["already_gone"]:
+        add(host_path, "NOT_FOUND", "already gone")
+    for host_path in cleanup["would_delete"]:
+        add(host_path, "DRY_RUN", "would be deleted")
+    for one in cleanup["kept"]:
+        add(one["path"], KEPT, one["reason"])
+    for one in cleanup["not_deleted"]:
+        add(one["path"], "FAILED", f"{one['status']} - {one['reason']}")
+    return results
 
 
 def delete_old_target_backup_files_on_share(
@@ -257,13 +348,17 @@ def delete_old_target_backup_files_on_share(
     dry_run: bool = False,
     *,
     now: float | None = None,
+    force: bool = False,
+    logger: logging.Logger | None = None,
 ) -> tuple[DeleteBackupFileResult, ...]:
-    """Clean a Windows target's import share through ``common.cli`` (``smb-list``, ``smb-delete``).
+    """Clean a Windows target's import folder: listed through its share (``smb-list``), deleted
+    through its host.
 
     The two conditions the other engines apply, decided here: aged past the retention (by last
-    write, as the PowerShell scan read it until 0.24.0) and obsolete by the chain. ``common``
-    deletes exactly the files named, never a pattern. ``dry_run`` deletes nothing - the PowerShell
-    engine took the flag and deleted anyway.
+    write, as the PowerShell scan read it until 0.24.0) and obsolete by the chain. Each chosen file
+    is then deleted on the target's own host, by its local path under ``vm_import_local``, held to
+    its recorded facts (:func:`_delete_selected`) - never through the share, which has nothing to
+    hash it on. ``dry_run`` deletes nothing.
     """
     from dbabrain.backup_restore import share
     from dbabrain.backup_restore.copy_backup import resolve_password_ref
@@ -295,18 +390,19 @@ def delete_old_target_backup_files_on_share(
         DeleteBackupFileResult(target_file=path, status="SKIPPED", bytes=0, reason="still_needed")
         for path in held_back
     ]
-    if dry_run:
-        return tuple(results + [DeleteBackupFileResult(target_file=path, status="DRY_RUN", bytes=0,
-                                                       reason="would be deleted") for path in deletable])
     if not deletable:
         return tuple(results)
-    answer = share.delete_files(
-        config.vm_import_unc, [share.share_relative(config.vm_import_unc, path) for path in deletable],
-        username=config.vm_username or "", password=password)
-    for path, outcome in zip(deletable, answer.get("results") or []):
-        results.append(DeleteBackupFileResult(
-            target_file=path, status=str(outcome.get("status") or "FAILED"),
-            bytes=int(outcome.get("bytes") or 0), reason=str(outcome.get("error") or "")))
+    sizes = {str(path): size for path, _modified, size in listed}
+    local_root = str(config.vm_import_local).replace("/", "\\").rstrip("\\")
+
+    def on_the_host(path: Any) -> str:
+        return local_root + "\\" + str(path)[len(root):].lstrip("\\")
+
+    host, why = _windows_target_host(config)
+    results.extend(_delete_selected(
+        config, [(path, sizes.get(str(path), 0)) for path in deletable], host=host, why_no_host=why,
+        host_path_of=on_the_host, must_be_under=local_root, windows=True, dry_run=dry_run, force=force,
+        logger=logger))
     return tuple(results)
 
 
@@ -316,6 +412,7 @@ def delete_old_target_backup_files_via_ssh(
     now: float | None = None,
     logger: logging.Logger | None = None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> tuple[DeleteBackupFileResult, ...]:
     cutoff = _cutoff_timestamp(config.cleanup_retention, now=now)
     linux_import = str(config.vm_import_unc).replace("\\", "/")
@@ -394,21 +491,12 @@ def delete_old_target_backup_files_via_ssh(
                 ),
             )
 
-        for fpath, size, _backup_ts in files_to_delete:
-            if dry_run:
-                results.append(DeleteBackupFileResult(
-                    target_file=Path(fpath), status="DRY_RUN", bytes=size,
-                    reason="would be deleted"))
-                _log_progress(logger, f"{_rid}delete-backup source_id={config.source_id} "
-                                      f"cleanup_would_delete file={fpath} size_bytes={size}")
-                continue
-            err = ssh.run(f"rm -f -- {shlex.quote(fpath)}").stderr.strip()
-            if err:
-                results.append(DeleteBackupFileResult(target_file=Path(fpath), status="FAILED", bytes=size, reason=err))
-                _log_progress(logger, f"{_rid}delete-backup source_id={config.source_id} cleanup_delete_failed file={fpath} reason={err}")
-            else:
-                results.append(DeleteBackupFileResult(target_file=Path(fpath), status="DELETED", bytes=size))
-                _log_progress(logger, f"{_rid}delete-backup source_id={config.source_id} cleanup_deleted file={fpath} size_bytes={size}")
+        # Each by its own verified delete (0.38.0): the listing above chose; this holds every file to
+        # what the copy that staged it measured on this host - `rm -f` held it to nothing.
+        results.extend(_delete_selected(
+            config, [(fpath, size) for fpath, size, _backup_ts in files_to_delete], host=ssh.host_block(),
+            host_path_of=str, must_be_under=linux_import.rstrip("/"), windows=False, dry_run=dry_run,
+            force=force, logger=logger))
 
     return tuple(results)
 
@@ -434,8 +522,12 @@ def run_delete_backup(
     *,
     logger: logging.Logger | None = None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> DeleteBackupResult:
     """Retention cleanup on the restore target.
+
+    ``force`` (an operator, by hand - never a scheduled run): a chosen file no proven copy recorded
+    is deleted too, by its own forced command; without it such a file is kept and named.
 
     ``dry_run`` reaches every engine, and it has to: `restore-workflow --dry-run` passed the flag
     to the copy and the restore and not to this, so a dry run of a real drill deleted 26 files
@@ -476,10 +568,10 @@ def run_delete_backup(
     _log_progress(logger, f"{_rid}delete-backup source_id={restore_config.source_id} scanning engine={delete_engine}")
     if delete_engine == "ssh":
         file_results = delete_old_target_backup_files_via_ssh(
-            restore_config, logger=logger, dry_run=dry_run)
+            restore_config, logger=logger, dry_run=dry_run, force=force)
     elif delete_engine == "share":
         file_results = delete_old_target_backup_files_on_share(
-            restore_config, dry_run=dry_run)
+            restore_config, dry_run=dry_run, force=force, logger=logger)
     else:
         aged_files = [path for path in list_old_target_backup_files(restore_config)
                       if _staged_by_this_entry(restore_config, path)]
@@ -490,21 +582,28 @@ def run_delete_backup(
                                    reason="still_needed")
             for path in held_back
         ]
-        for index, target_file in enumerate(selected_files, start=1):
-            result = (
-                DeleteBackupFileResult(target_file=target_file, status="DRY_RUN", bytes=0,
-                                       reason="would be deleted")
-                if dry_run else
-                delete_target_backup_file(target_file, target_root=restore_config.vm_import_unc)
-            )
-            file_results_list.append(result)
-            _log_progress(
-                logger,
-                (
-                    f"{_rid}delete-backup source_id={restore_config.source_id} file={index}/{len(selected_files)} "
-                    f"status={result.status} bytes={result.bytes} target={result.target_file}"
-                ),
-            )
+        # The folder is on this machine (or a UNC path this node opens): the files are deleted
+        # through the target's own host all the same - this machine when the path is local.
+        root = str(restore_config.vm_import_unc)
+        if root.startswith("\\\\"):
+            host, why = _windows_target_host(restore_config)
+            local_root = str(restore_config.vm_import_local).replace("/", "\\").rstrip("\\")
+
+            def on_the_host(path: Any, _root: str = root.rstrip("\\/"), _local: str = local_root) -> str:
+                return _local + str(path)[len(_root):].replace("/", "\\")
+        else:
+            host, why = {"runtime": "windows" if os.name == "nt" else "linux"}, ""
+            local_root, on_the_host = root.rstrip("\\/"), str
+        sized = []
+        for target_file in selected_files:
+            try:
+                sized.append((target_file, target_file.stat().st_size))
+            except OSError:
+                sized.append((target_file, 0))
+        file_results_list.extend(_delete_selected(
+            restore_config, sized, host=host, why_no_host=why, host_path_of=on_the_host,
+            must_be_under=local_root, windows=os.name == "nt" or root.startswith("\\\\"), dry_run=dry_run,
+            force=force, logger=logger))
         file_results = tuple(file_results_list)
 
     _log_progress(
@@ -524,6 +623,7 @@ def run_delete_backup(
         deleted=sum(1 for item in file_results if item.status == "DELETED"),
         file_results=file_results,
         skipped=sum(1 for item in file_results if item.status == "SKIPPED"),
+        kept_unknown=sum(1 for item in file_results if item.status == KEPT),
     )
 
 

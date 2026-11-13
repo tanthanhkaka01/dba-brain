@@ -1849,6 +1849,61 @@ compared by drive letter: on the host only, it is WARNING with `mount_points_com
 and backup rows stay as they were (status OK), so the inventory's disk block reads them unchanged.
 Read on the estate when it was written: 7 of 12 instances CRITICAL, every one at least WARNING.
 
+## Who can take a database's files - two inventories and a change alert (0.38.0)
+
+The operator, 2026-11-11: *the backups are protected now, but anyone who gets onto the VM can copy
+the database's own data files and open them on their machine.* Encryption at rest protects a copied
+file and a stolen disk, never against an administrator on the running machine - so there are two
+readings, both detection only (nothing is installed or changed on a host), both in the `security`
+category, hourly:
+
+| Metric | Reads | One row per |
+| --- | --- | --- |
+| `SECURITY_DATA_ENCRYPTION` (sql) | SQL Server `sys.dm_database_encryption_keys` with the certificate or key protecting the database key; Oracle `v$encryption_wallet` and `dba_tablespaces.encrypted` (11g without the wallet's type); PostgreSQL `pg_tde` or `provider=none`, per database | user database (Oracle: permanent tablespace, and each keystore) - `metric_value` is the engine's own word: `encrypted`, `not encrypted`, `encrypting`, ... |
+| `SECURITY_HOST_ADMINS` (cmd) | Linux: members of `sudo` / `wheel` / `admin` / `docker` (`HOST_ADMIN_GROUPS` in `collector_env` names others), uid 0 accounts, sshd's `PermitRootLogin` and `PasswordAuthentication` (`sshd -T`, else the config files), the keys in root's `authorized_keys`. Windows: members of local Administrators and Remote Desktop Users (found by SID, read through ADSI), whether Domain Admins (RID 512) is among the administrators, whether Remote Desktop is on | `<section>:<name>` - `group:sudo:alice`, `uid0:root`, `sshd:PermitRootLogin`, `root_key:<fingerprint>` |
+
+Not read: SQL Server before 2008, Oracle before 11g and MySQL (each variant says why); sudoers
+rules; volume encryption under a PostgreSQL data directory, which SQL cannot see.
+
+**Status is always OK.** With TDE off everywhere, or `sudo` holding three people, a graded row
+would be a warning on every host, on every read, for ever. The pages name the finding
+(docs/06, *Protection*); what alerts is a change.
+
+**A section that cannot be read is one row saying why** - `metric_unit` `unreadable`, the section
+as its item (`root_key`, `group:Administrators`), the reason as its message - never a missing row.
+Root's `authorized_keys` needs root: the script uses `sudo -n` and never prompts, so on a host whose
+login has no passwordless sudo the row reads *needs root: dbadmin is not root and sudo without a
+password is not allowed*. `read_as` (unit `summary`) says which account read and whether it had root.
+
+### `change_alert` - a change between two reads is the event (1.324)
+
+A metric may state which kinds of change it reports, and at what status:
+
+```json
+"change_alert": {"added": "ERROR", "changed": "ERROR", "removed": "WARNING"}
+```
+
+After a read is graded and before it is stored, the collector holds it to the read before it
+(`lib.change_alert.changes`, by `metric_item`) and adds one row per change to the same read:
+`metric_item` `change:<kind>:<item>`, `metric_unit` `change`, the stated status, and a message
+naming what changed and the two reads it lies between. The level reports deliver it once, like any
+finding, and a target's `severity_map` reaches it like any row (a lab host maps ERROR down).
+
+- **The first read is the baseline** - nothing to compare, nothing reported.
+- **A read that failed reports nothing and is never a baseline**: its one row has no item and is
+  not OK. The next good read is held to the last good one.
+- **A section unreadable on either read is skipped whole**: losing access to root's keys is not
+  "every key was removed", and regaining it is not "every key is new".
+- **A kind left out is not reported.** `SECURITY_DATA_ENCRYPTION` states `changed` only - a
+  database's encryption turned off is an event, a database created or dropped is not;
+  `SECURITY_HOST_ADMINS` states all three.
+- **A change row is an event, not inventory**: it is left out of the next comparison, so one
+  change is one row.
+
+An unknown kind or status is refused when the catalogue loads. A collector whose items are renamed
+by an upgrade reports each once on the first read after it. `SECURITY_DATA_ENCRYPTION`'s
+`report_policy.edition_rule` is not the collector's: it is the reports' rule for 1.325 (docs/06).
+
 ## `LOCK_SLEEPING_OPEN_TRANSACTION`: sleeping is an instant, not a duration
 
 `sys.dm_exec_sessions.status = 'sleeping'` means only that the session has no request running *at

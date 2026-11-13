@@ -239,7 +239,9 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
                   server_detail: dict | None = None,
                   backup_file_rows: list[dict] | None = None,
                   retention_rows: list[dict] | None = None,
-                  restore_file_rows: list[dict] | None = None) -> dict:
+                  restore_file_rows: list[dict] | None = None,
+                  backup_repository: dict[int, dict] | None = None,
+                  backup_chains: dict[int, dict] | None = None) -> dict:
     """Everything the page renders for one server.
 
     ``backup`` and ``freshness`` are computed from the raw store rows rather than from ``series``
@@ -285,7 +287,8 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
         # newest first, filterable on the page by file type and by whether it was used for a restore.
         # With each entry's retention and point-in-time reach (1.233), read from the catalog.
         "backupFiles": {**backup_catalog_sections.build_files(backup_file_rows or [], restore_file_rows or [],
-                                                              server_id=server_id),
+                                                              server_id=server_id, repository=backup_repository,
+                                                              chains=backup_chains),
                         "retention": backup_catalog_sections.build_retention(retention_rows or [])},
         "databases": _per_engine(build_databases(database_code_map or {}, backup),
                                  database_code_map or {}, freshness),
@@ -531,6 +534,8 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
         backup = backup_policy.evaluate_backup_policy(
             health_model.latest_snapshot(backup_rows.get(server_id, [])), server_id=server_id,
             policy=data_sources.load_backup_policy())
+        catalog_rows = (catalog.server_backup_files(server_id, limit=backup_catalog_sections.ROW_LIMIT)
+                        if catalog else [])
         payload = build_payload(series, omitted, now=now, backup=backup, freshness=freshness,
                                 linked_rows=health_model.latest_snapshot(
                                     linked_rows.get(server_id, [])),
@@ -562,8 +567,11 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
                                 server_detail=None if as_of else build_server_detail(model),
                                 retention_rows=(catalog.retention_by_entry(server_id=server_id)
                                                 if catalog is not None else []),
-                                backup_file_rows=(catalog.server_backup_files(
-                                    server_id, limit=backup_catalog_sections.ROW_LIMIT) if catalog else []),
+                                backup_file_rows=catalog_rows,
+                                backup_repository=(backup_catalog_sections.load_repository(catalog, catalog_rows)
+                                                   if catalog else {}),
+                                backup_chains=(backup_catalog_sections.load_chains(catalog, catalog_rows)
+                                               if catalog else {}),
                                 restore_file_rows=(catalog.server_restore_files(
                                     server_id, limit=backup_catalog_sections.ROW_LIMIT) if catalog else []))
         file_name = series_file_name(server_id)

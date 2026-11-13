@@ -23,9 +23,33 @@ class VerifyError(errors.RequestError):
     """The verification could not be performed. A database that *failed* is a result, not this."""
 
 
+#: The consistency check's own limit when the request states none - what it always was.
+DEFAULT_CONSISTENCY_TIMEOUT_SECONDS = 3600
+#: Seconds the transport waits past the check's own limit: the host stops the check first, so it
+#: never outlives the call (2026-11-10: a check left behind by a timed-out SSH call became an orphan
+#: of the container's PID 1 - postgres - and killing it restarted the instance).
+_GRACE_SECONDS = 60
+
+
+def _consistency_limits(request: dict[str, Any]) -> tuple[int, int]:
+    """``(timeout_seconds, jobs)`` for the consistency check, refused when malformed."""
+    timeout = request.get("consistency_timeout_seconds")
+    jobs = request.get("consistency_jobs")
+    if timeout is None:
+        timeout = DEFAULT_CONSISTENCY_TIMEOUT_SECONDS
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 60 <= timeout <= 86400:
+        raise VerifyError(f"consistency_timeout_seconds must be a whole number from 60 to 86400; got {timeout!r}.")
+    if jobs is None:
+        jobs = 1
+    if isinstance(jobs, bool) or not isinstance(jobs, int) or not 1 <= jobs <= 16:
+        raise VerifyError(f"consistency_jobs must be a whole number from 1 to 16; got {jobs!r}.")
+    return timeout, jobs
+
+
 def verify(request: dict[str, Any]) -> dict[str, Any]:
     """Check restored databases. Returns per-database rows; never raises for a bad verdict."""
     db_type = str(request.get("db_type") or "").strip().lower()
+    _consistency_limits(request)   # a malformed limit is refused before anything is reached
     if db_type == "sqlserver":
         return _sqlserver(request)
     if db_type == "oracle":
@@ -150,7 +174,7 @@ def _oracle(request: dict[str, Any]) -> dict[str, Any]:
     answered = open_mode in {"READ WRITE", "READ ONLY"} and "ORA-" not in text
     detail = _detail(result, text)
     if answered and request.get("consistency"):
-        answered, detail = _oracle_validate(host, prefix, detail, timeout=int(request.get("timeout_seconds") or 3600))
+        answered, detail = _oracle_validate(host, prefix, detail, timeout=_consistency_limits(request)[0])
     return _verdict([{"database_name": str(request.get("database_name") or request.get("database") or sid or "instance"),
                       "state": open_mode, "ok": answered, "detail": detail}])
 
@@ -213,23 +237,40 @@ def _postgresql(request: dict[str, Any]) -> dict[str, Any]:
         state = "ACCEPTING"
     detail = _detail(result, text)
     if answered and request.get("consistency"):
-        answered, detail = _postgresql_amcheck(host, user, port_option, detail,
-                                               timeout=int(request.get("timeout_seconds") or 3600))
+        limit, jobs = _consistency_limits(request)
+        answered, detail = _postgresql_amcheck(host, user, port_option, detail, timeout=limit, jobs=jobs)
     return _verdict([{"database_name": str(request.get("database_name") or request.get("database") or "cluster"),
                       "state": state, "ok": answered, "detail": detail}])
 
 
-def _postgresql_amcheck(host: Any, user: str, port_option: str, detail: str, *, timeout: int) -> tuple[bool, str]:
+def _postgresql_amcheck(host: Any, user: str, port_option: str, detail: str, *, timeout: int,
+                        jobs: int = 1) -> tuple[bool, str]:
     """``pg_amcheck --all`` (PostgreSQL 14+): every table's heap and every B-tree index checked
     (1.251, gap G11). ``--install-missing`` creates the ``amcheck`` extension where a database lacks
     it - this runs on a drill's target, a copy, never on the source. A cluster without the program
     is *not checked*, which fails the check rather than calling it clean."""
-    command = ("command -v pg_amcheck >/dev/null 2>&1 || { echo PG_AMCHECK_MISSING; exit 3; }; "
-               f"pg_amcheck -U {shlex.quote(user)} {port_option}--all --install-missing --heapallindexed 2>&1")
-    result = run(host, command, timeout=timeout)
+    # Found where it is, not only on PATH (0.37.0): the PGDG packages put no /usr/bin wrapper in front
+    # of pg_amcheck, and a login shell's PATH does not reach /usr/lib/postgresql/<major>/bin - the
+    # store's restore drill (2026-11-10) read "not installed" for a pg_amcheck that was there.
+    #
+    # The limit is kept ON THE HOST (0.37.0): `timeout` stops pg_amcheck at the deadline and the call
+    # waits a minute longer. A check that outlived the call on 2026-11-10 was left running in the
+    # container with nobody to read its verdict. --jobs is the entry's checkdb_jobs: the store's 60 GB
+    # copy took over an hour on one connection and 47 minutes on four.
+    jobs_option = f"--jobs {int(jobs)} " if int(jobs) > 1 else ""
+    command = ("AM=$(command -v pg_amcheck || ls -1 /usr/lib/postgresql/*/bin/pg_amcheck /usr/pgsql-*/bin/pg_amcheck "
+               "2>/dev/null | sort -V | tail -1); [ -n \"$AM\" ] || { echo PG_AMCHECK_MISSING; exit 3; }; "
+               "T=$(command -v timeout); "
+               f"${{T:+$T {int(timeout)}}} \"$AM\" -U {shlex.quote(user)} {port_option}{jobs_option}"
+               "--all --install-missing --heapallindexed 2>&1; rc=$?; "
+               "[ $rc -eq 124 ] && echo PG_AMCHECK_TIMED_OUT; exit $rc")
+    result = run(host, command, timeout=int(timeout) + _GRACE_SECONDS)
     text = " ".join(result["stdout"].split())
     if "PG_AMCHECK_MISSING" in text:
         return False, f"{detail}; pg_amcheck is not installed where the cluster runs - not checked"
+    if "PG_AMCHECK_TIMED_OUT" in text:
+        return False, (f"{detail}; pg_amcheck did not finish within {int(timeout)} s and was stopped - not "
+                       "checked (raise the entry's checkdb_timeout_seconds, or its checkdb_jobs)")
     if result["exit_code"] == 0:
         return True, f"{detail}; pg_amcheck clean"
     return False, f"{detail}; pg_amcheck found a problem: {_detail(result, text[-300:])}"

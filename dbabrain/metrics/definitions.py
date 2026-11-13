@@ -6,6 +6,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+from dbabrain.lib import change_alert as change_alert_lib
 from dbabrain.lib import data_sources
 from dbabrain.lib.json_io import load_json_file
 from dbabrain.lib.time_window import parse_time_window_config
@@ -179,6 +180,12 @@ def load_metric_definitions(
             errors.append(f"{metric_code}: target_env may name only {', '.join(TARGET_ENV_NAMES)}, "
                           f"got {', '.join(unknown_env)}.")
 
+        try:
+            change_alert = change_alert_lib.parse_change_alert(item.get("change_alert"), context=metric_code)
+        except change_alert_lib.ChangeAlertConfigError as exc:
+            errors.append(str(exc))
+            change_alert = {}
+
         if default_importance is None or interval_seconds is None or default_timeout is None:
             continue
         definitions.append(
@@ -201,6 +208,7 @@ def load_metric_definitions(
                 target_env=tuple(str(name).strip() for name in (item.get("target_env") or [])
                                  if str(name).strip()),
                 host_fallback=bool(item.get("host_fallback", False)),
+                change_alert=change_alert,
                 report_policy=item.get("report_policy") if isinstance(item.get("report_policy"), dict) else {},
                 path=path,
                 variants=variants,

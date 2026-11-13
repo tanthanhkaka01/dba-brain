@@ -418,7 +418,8 @@ def _write_plan(plan: ProvisionPlan, fs) -> None:
     base = plan.instance_dir.rstrip("/")
     fs.mkdirs(base)
     for sub in plan.data_dirs:
-        fs.mkdirs(f"{base}/{sub}")
+        # An absolute one is a stated host folder (--data-host-dir), made where it is said to be.
+        fs.mkdirs(sub if sub.startswith("/") else f"{base}/{sub}")
     for pf in plan.files:
         # 0600 keeps the password file owner-only; init scripts must be executable in-container.
         mode = 0o600 if pf.secret else (0o755 if pf.relpath.endswith(".sh") else None)

@@ -1,3 +1,4 @@
+import types
 import os
 import dataclasses
 import datetime
@@ -2456,25 +2457,56 @@ def test_linux_delete_backup_quotes_paths_with_dollar(tmp_path, monkeypatch):
         def __exit__(self, *_args):
             return None
 
+        def host_block(self):
+            return {"runtime": "linux", "access": "ssh", "host": "192.0.2.249", "username": "u", "password": "p"}
+
         def run(self, command, **_kwargs):
             commands.append(command)
             if command.startswith("find "):
                 return RemoteRun(0, f"{old_ts} 100 {target}\n{newer_ts} 100 {newer}\n", "")
-            return RemoteRun(0, "", "")
+            raise AssertionError(f"nothing but the listing runs in the session: {command}")
+
+    asked = []
+
+    def run_allowing_failure(command, request, **_kwargs):
+        asked.append((command, request))
+        return True, {"files": [{"path": item["path"], "status": "deleted"} for item in request["files"]]}, ""
 
     monkeypatch.setattr(delete_module, "open_ssh_connection", lambda _config: FakeSsh())
+    monkeypatch.setattr(delete_module, "_catalog", lambda: types.SimpleNamespace(
+        staged_file_facts=lambda **kwargs: {path: {"size_bytes": 100, "sha256": "a" * 64} for path in kwargs["paths"]}))
+    monkeypatch.setattr("dbabrain.backup_restore.verified_cleanup.common_cli.run_allowing_failure", run_allowing_failure)
     now = datetime.datetime(2026, 6, 27, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
 
     result = delete_old_target_backup_files_via_ssh(config, now=now)
 
-    # The newest full is held back; the older one is what gets the `rm`.
+    # The newest full is held back; the older one goes - by a verified delete (0.38.0), not an `rm`
+    # in the session: its path travels as JSON, `$` and all, with the facts it is held to.
     assert sorted(row.status for row in result) == ["DELETED", "SKIPPED"]
-    rm_command = next(command for command in commands if command.startswith("rm "))
-    assert "rm -f -- '" in rm_command
-    assert "$APPDB" in rm_command
+    assert [command for command, _request in asked] == ["delete-verified-files"]
+    item = asked[0][1]["files"][0]
+    assert item["path"] == target and "$APPDB" in item["file_name"]
+    assert (item["size_bytes"], item["must_be_under"]) == (100, "/opt/mssql2025/backup/SQLBK_IMPORT/ACME-192-0-2-250")
+    assert not [command for command in commands if command.startswith("rm ")]
 
 
-def test_run_delete_backup_deletes_only_old_files_from_target(tmp_path):
+def _staged_and_recorded(monkeypatch):
+    """A catalog whose proven copies recorded each staged file exactly as it lies on disk - what a
+    verified delete holds it to (0.38.0). The delete itself is the real command, on this machine."""
+    import hashlib
+
+    import dbabrain.backup_restore.delete_backup as delete_backup
+
+    def staged_file_facts(*, target_server_id, paths):
+        return {path: {"size_bytes": Path(path).stat().st_size,
+                       "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+                for path in paths if Path(path).is_file()}
+
+    monkeypatch.setattr(delete_backup, "_catalog", lambda: types.SimpleNamespace(staged_file_facts=staged_file_facts))
+
+
+def test_run_delete_backup_deletes_only_old_files_from_target(tmp_path, monkeypatch):
+    _staged_and_recorded(monkeypatch)
     config = make_config(tmp_path)
     old_target = config.vm_import_unc / "APPDB_Prod" / "FULL" / "old.bak"
     recent_target = config.vm_import_unc / "APPDB_Prod" / "FULL" / "recent.bak"
@@ -2507,7 +2539,39 @@ def test_run_delete_backup_deletes_only_old_files_from_target(tmp_path):
     assert old_source.exists()
 
 
-def test_run_delete_backup_deletes_nothing_on_a_dry_run(tmp_path):
+def test_a_staged_file_no_copy_recorded_is_kept_and_named_and_force_clears_it(tmp_path, monkeypatch):
+    """0.38.0: an old file in the import folder that no proven copy recorded is not this restore's
+    to delete - it is kept and named. `--force`, by hand, clears it: one forced command, and the
+    result records the bytes and sha256 of what went."""
+    import hashlib
+    import os
+
+    import dbabrain.backup_restore.delete_backup as delete_backup
+
+    monkeypatch.setattr(delete_backup, "_catalog", lambda: types.SimpleNamespace(staged_file_facts=lambda **_k: {}))
+    config = make_config(tmp_path)
+    stray = config.vm_import_unc / "APPDB_Prod" / "FULL" / "old.bak"
+    recent = config.vm_import_unc / "APPDB_Prod" / "FULL" / "recent.bak"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("old", encoding="utf-8")
+    recent.write_text("recent", encoding="utf-8")
+    now = 1_800_000_000
+    os.utime(stray, (now - 90_000, now - 90_000))
+    os.utime(recent, (now - 60, now - 60))
+    monkeypatch.setattr(delete_backup.time, "time", lambda: now)
+
+    kept = run_delete_backup(config)
+    assert (kept.deleted, kept.kept_unknown, kept.returncode) == (0, 1, 0) and stray.exists()
+    row = next(item for item in kept.file_results if item.status == delete_backup.KEPT)
+    assert "not in the catalog" in row.reason
+
+    forced = run_delete_backup(config, force=True)
+    assert (forced.deleted, forced.kept_unknown) == (1, 0) and not stray.exists() and recent.exists()
+    done = next(item for item in forced.file_results if item.status == "DELETED")
+    assert hashlib.sha256(b"old").hexdigest() in done.reason and "forced" in done.reason
+
+
+def test_run_delete_backup_deletes_nothing_on_a_dry_run(tmp_path, monkeypatch):
     """`restore-workflow --dry-run` reported a plan and removed 26 files while doing it.
 
     The workflow passed `dry_run` to the copy step and to the restore step and not to this one —
@@ -2520,6 +2584,7 @@ def test_run_delete_backup_deletes_nothing_on_a_dry_run(tmp_path):
     """
     import os
 
+    _staged_and_recorded(monkeypatch)
     config = make_config(tmp_path)
     old_target = config.vm_import_unc / "APPDB_Prod" / "FULL" / "old.bak"
     recent_target = config.vm_import_unc / "APPDB_Prod" / "FULL" / "recent.bak"
@@ -2662,7 +2727,8 @@ def test_run_delete_backup_rejects_target_overlapping_source(tmp_path):
         run_delete_backup(unsafe)
 
 
-def test_a_zero_retention_deletes_every_target_file(tmp_path):
+def test_a_zero_retention_deletes_every_target_file(tmp_path, monkeypatch):
+    _staged_and_recorded(monkeypatch)
     config = make_config(tmp_path)
     delete_all_config = BackupRestoreConfig(
         prod_backup_share=config.prod_backup_share,

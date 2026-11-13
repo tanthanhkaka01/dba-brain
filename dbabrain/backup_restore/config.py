@@ -24,6 +24,7 @@ from dbabrain.lib import (
 )
 from dbabrain.lib import integrity as restore_integrity
 from dbabrain.lib import drill_tiers
+from dbabrain.lib import consistency_check
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib.time_window import TimeWindow, parse_time_window_config
 from dbabrain.lib.config import DEFAULT_CONFIG_PATH
@@ -31,28 +32,11 @@ from dbabrain.lib.config import DEFAULT_CONFIG_PATH
 
 DEFAULT_RESTORE_CONFIG_PATH = DEFAULT_DATA_DIR / "restore_config.json"
 
-# Restore entries for these engines are driven by a shell script asset, not by the SQL Server
-# engine in restore_database.py. They live in the same ``restores`` list so an operator sees one
-# list of restores with one shape (restore_id + time_window), but they carry none of the SQL
-# Server fields (SMB share, .bak paths, sqlcmd) that parse_restore_config requires - so the
-# SQL Server parser must skip them rather than fail on the missing keys.
-SCRIPT_RESTORE_DB_TYPES = {"oracle", "postgresql", "mysql"}
-
-
-def is_script_restore(item: dict[str, Any]) -> bool:
-    """Whether this entry is driven by a shell script rather than the SQL Server engine.
-
-    Declaring a ``script`` is what makes an entry script-driven — the engine is not the
-    deciding factor. SQL Server can be either: the production flow reads an SMB share and
-    drives sqlcmd through ``restore_database.py``, while a container-to-container drill is the
-    same shape as the Oracle/PostgreSQL ones and reuses their machinery (host-to-host
-    transfer, staging into the target container, env_secrets). Keying off ``db_type`` alone
-    would force every SQL Server entry down one path or the other.
-    """
-    entry = item or {}
-    if str(entry.get("script") or "").strip():
-        return True
-    return str(entry.get("db_type") or "").strip().lower() in SCRIPT_RESTORE_DB_TYPES
+# Which of the two kinds a restore entry is - script-driven, or share-driven - is one rule, in
+# ``lib`` since 0.38.0: the assistant's runbook (lib.backup_runbook) tells a person which command
+# restores an entry, and a second copy of the rule would name the command that refuses it. The
+# names stay importable from here: the loaders, the registrar and the tests name them.
+from dbabrain.lib.restore.kind import SCRIPT_RESTORE_DB_TYPES, is_script_restore  # noqa: E402,F401 - re-exported
 
 
 # backup_restore notifies by default: an entry with no ``notify`` object behaves exactly as
@@ -248,6 +232,9 @@ class BackupRestoreConfig:
     # `checkdb: false` - the check is what proves the restored data is consistent, and turning it
     # off by default would silently weaken every drill on upgrade (the operator, 2026-09-24).
     checkdb: bool = True
+    # How long that check may run and on how many connections (0.37.0, lib.consistency_check).
+    checkdb_timeout_seconds: int = consistency_check.DEFAULT_TIMEOUT_SECONDS
+    checkdb_jobs: int = consistency_check.DEFAULT_JOBS
     # The drill's tier - daily, weekly, monthly, or None (1.248, lib.drill_tiers).
     tier: str | None = None
     # A full restore over a database that is ONLINE on the target is refused unless the entry says
@@ -789,6 +776,10 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         execution_mode=_parse_execution_mode(values.get("execution_mode")),
         active=_parse_bool(values.get("active"), default=True),
         checkdb=_parse_bool(values.get("checkdb"), default=True),
+        checkdb_timeout_seconds=consistency_check.parse_timeout(
+            values.get("checkdb_timeout_seconds"), where=f"restore entry {restore_id_for_label}"),
+        checkdb_jobs=consistency_check.parse_jobs(
+            values.get("checkdb_jobs"), where=f"restore entry {restore_id_for_label}"),
         tier=drill_tiers.parse_tier(values.get("tier"), where="restore entry tier"),
         overwrite_existing=values.get("overwrite_existing") is True,
         allow_production_target=values.get("allow_production_target") is True,

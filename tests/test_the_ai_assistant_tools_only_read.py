@@ -50,6 +50,52 @@ def test_a_blocked_table_is_refused():
         T.read_only_sql("SELECT * FROM web_users", blocked_tables=["web_users"])
 
 
+# What the public demo was asked on 2026-11-12 (1.344). No command reached its machine - the lab
+# logins and the containers' fences saw to that - but four kinds of statement passed THIS check that
+# its own list meant to refuse: a function named inside quotes, a statement handed over as text, an
+# Oracle package's function (the list said `dbms_\w+(`, and a real call is `dbms_x.y(`), and MySQL's
+# functions that wait or read a file.
+@pytest.mark.parametrize("sql", [
+    'SELECT "pg_sleep"(600)',
+    'SELECT "pg_read_file"(\'/etc/passwd\')',
+    'SELECT "pg_terminate_backend"(pid) FROM pg_stat_activity',
+    "SELECT query_to_xml('select pg_sleep(600)', true, false, '')",
+    "SELECT query_to_xml_and_xmlschema('select 1', true, false, '')",
+    "SELECT * FROM ts_stat('select pg_sleep(600)')",
+    "SELECT utl_http.request('http://169.254.169.254/') FROM dual",
+    "SELECT sys.utl_http.request('http://169.254.169.254/') FROM dual",
+    'SELECT "UTL_HTTP"."REQUEST"(\'http://169.254.169.254/\') FROM dual',
+    "SELECT utl_inaddr . get_host_address('example.com') FROM dual",
+    "SELECT httpuritype('http://169.254.169.254/').getclob() FROM dual",
+    "SELECT dbms_xmlgen.getxml('select 1 from dual') FROM dual",
+    "SELECT dbms_java.runjava('-version') FROM dual",
+    "SELECT dbms_pipe.receive_message('p', 600) FROM dual",
+    "SELECT dbms_lock.request(1, 6, 600) FROM dual",
+    "SELECT sleep(600)",
+    "SELECT `sleep`(600)",
+    "SELECT load_file('/etc/passwd')",
+    "SELECT benchmark(1000000000, md5('x'))",
+    "SELECT get_lock('x', 600)",
+])
+def test_a_call_that_acts_is_refused_however_it_is_spelt(sql):
+    with pytest.raises(T.ReadOnlyRefusal):
+        T.read_only_sql(sql)
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT dbms_metadata.get_ddl('TABLE', 'ORDERS') FROM dual",
+    "SELECT dbms_lob.substr(sql_fulltext, 200, 1) FROM v$sql",
+    "SELECT * FROM TABLE(dbms_xplan.display_cursor(NULL, NULL, 'ALLSTATS LAST'))",
+    "SELECT utl_raw.cast_to_varchar2(low_value) FROM dba_tab_columns",
+    "SELECT dbms_rowid.rowid_block_number(rowid) FROM orders",
+    'SELECT "sleep", "benchmark" FROM lab_results',
+    "SELECT 'pg_sleep(600) and utl_http.request(x)' AS what_a_log_line_said",
+    "SELECT table_to_xml('orders', true, false, '')",
+])
+def test_an_oracle_package_that_only_reads_and_a_column_named_like_a_function_still_go(sql):
+    assert T.read_only_sql(sql)
+
+
 def _context(tmp_path: Path, **changes) -> T.ToolContext:
     document = A.shipped_document()
     document.update(changes)

@@ -1,32 +1,37 @@
-"""Move backup files from the host that holds them to the host that will restore them.
+"""Prepare a restore's staging folder for the backup files it needs - and say which ones.
 
 Library tier: SSH clients arrive already open, from values the caller resolved. The CLI face is
-:mod:`dbabrain.common.cli_backup_copy` (``backup-chain``, ``copy-backup-dir``,
-``prune-staged-backups``); until 0.23.0 this was ``common.backup_copy`` and ran inside the
-app, so the copy and the staging cleanup were the two steps of a restore that were not
-``common.cli`` commands of their own.
+:mod:`dbabrain.common.cli_backup_copy` (``prepare-staging``, ``finish-staging``).
 
-The copy goes through the orchestrator (SFTP down from the source, SFTP up to the target) rather
-than having the target pull directly from the source. That is deliberate: the two database hosts
-are not assumed to reach each other - the worker sits inside the internal network and the cloud
-lab host is reachable over the internet, and a direct pull would need an SSH trust between the
-database hosts that does not exist and should not be created just to run a drill. The
-orchestrator already holds credentials for both ends, so it is the one place that can bridge
-them without widening anyone's access.
+**It moves no byte and deletes nothing** (0.38.0, 1.329). Until then this module was the copy
+itself (``copy-backup-dir``): it chose the files, streamed them as one ``tar`` (or file by file
+over SFTP), and mirrored - removing from the staging whatever the source no longer had. Three jobs
+in one command, two of them now somebody else's:
 
-The cost is bandwidth: every byte crosses the orchestrator twice. Files already present on the
-target with the same size are skipped, so a repeated drill re-copies only what changed - which
-for a backup directory that grows by one incremental a day is the difference between minutes and
-hours.
+* **the bytes** travel by ``copy-files``, each file with its name, path, bytes and sha256 stated,
+  written under a partial name and put in place only when they hold - the one way a backup file is
+  copied between hosts;
+* **what the source no longer has** is deleted by the restore, each file by a verified command
+  (:mod:`dbabrain.backup_restore.verified_cleanup`), or the restore does not run.
 
-**One stream, not one transfer per file.** A PostgreSQL backup directory is thousands of tiny
-files (a 362 MB set measured here was 3901 files, 3764 of them under 64 KB). Copying them one
-at a time over SFTP costs several network round trips *each*, and the orchestrator sits between
-two hosts that are each an internet hop away - which measured 10 KB/s, i.e. eight hours for that
-set, while the link itself was never the limit. So the files that need copying are streamed as a
-single ``tar`` from the source into a single ``tar -x`` on the target: latency is paid once
-instead of ~4000 times. Which files to copy is still decided the same way (same-size files are
-skipped), so nothing about the semantics changes - only the number of round trips.
+What stays here is everything a staging needs *besides* its bytes, moved as it was:
+
+* :func:`prepare_staging` - which files the restore needs (``include``'s prefixes, widened by a
+  window; never a certificate, never a partial), the target folder made and proven writable, the
+  marker that says it is this tool's staging (an earlier staging of the same source adopted), every
+  folder recreated **including the empty ones** (a PostgreSQL base backup's ``pg_tblspc`` is empty
+  and required), which files still have to travel (a same-size copy that is not older is skipped,
+  unless ``replace`` names it), and room for them before the first one moves. It answers ``pending``
+  - each file with the source's own time - and what the staging holds that the source does not.
+* :func:`finish_staging` - each copied file given its source's time (the skip rule above reads it on
+  the next run, and PostgreSQL dates a backup by its manifest's), and the folder opened for the
+  engine that restores from it.
+* the chain: which parts of a backup directory a restore needs, per engine.
+
+The cost of the split is round trips: a PostgreSQL base backup is thousands of small files (a
+362 MB set measured here was 3901), and one ``tar`` stream paid the latency once where a copy per
+file pays it per file. That price buys every staged file being held to its bytes and sha256 as it
+lands.
 """
 
 from __future__ import annotations
@@ -36,21 +41,11 @@ import errno
 import posixpath
 import shlex
 import stat
-import threading
 from dataclasses import dataclass, field
 from typing import Any
 
 
-# How the files cross (``copy_mode``): ``auto`` tries one tar stream and steps down to a transfer
-# per file when tar cannot be used on either end; ``tar`` and ``sftp`` pin one of the two, and a
-# pinned mode that cannot do it is an error, not a reason to try the other (owner decision G4).
-# The words are ``lib``'s - the restore entry states them too.
 from dbabrain.lib import restore_space
-from dbabrain.lib.restore.copy_mode import COPY_AUTO, COPY_MODES, COPY_NONE, COPY_SFTP, COPY_TAR
-
-
-class CopyModeError(errors.Refused):
-    """The copy was pinned to a mode that could not do it."""
 
 
 class CopySpaceError(errors.Refused):
@@ -59,27 +54,29 @@ class CopySpaceError(errors.Refused):
 
 @dataclass
 class TransferResult:
-    copied: int = 0
     skipped: int = 0
-    bytes_copied: int = 0
-    removed: int = 0
-    # Which way the files went - ``tar``, ``sftp``, or ``none`` when nothing needed copying - and
-    # whether that was the step down from a tar stream. It was only ever a line on stderr: a drill
-    # that took hours instead of minutes looked, in its answer, like any other (G4).
-    copy_mode: str = COPY_NONE
-    fell_back: bool = False
-    # What the space check measured before the first byte moved - ``None`` when there was nothing
+    # What the staging holds that the source no longer has - files, and folders - as relative paths.
+    # Named, never removed (0.38.0, 1.329): until then this copy MIRRORED, deleting each over SFTP
+    # with nothing held to anything. The restore deletes them by verified commands, or does not run.
+    absent: list[str] = field(default_factory=list)
+    absent_dirs: list[str] = field(default_factory=list)
+    # What the space check measured before the first byte moves - ``None`` when there is nothing
     # to copy, or no rule was given.
     space: dict[str, Any] | None = None
     # Every file the request selected, copied or not, as ``(relative path, size)`` (0.34.0, 1.213b):
     # the caller's checksum gate hashes each one on both hosts, and it cannot hash what it is not told.
     files: list[tuple[str, int]] = field(default_factory=list)
+    # The files that still have to travel, as ``(relative path, size, the source's mtime)`` - what
+    # the caller hands to ``copy-files``, and the times ``finish-staging`` then sets.
+    pending: list[tuple[str, int, int | None]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
-        answer = {"copied": self.copied, "skipped": self.skipped, "bytes_copied": self.bytes_copied,
-                  "removed_absent_at_source": self.removed,
-                  "copy_mode": self.copy_mode, "copy_fell_back": self.fell_back,
-                  "files": [{"path": rel, "size_bytes": size} for rel, size in self.files]}
+        answer = {"skipped": self.skipped,
+                  "absent_at_source": list(self.absent),
+                  "folders_absent_at_source": list(self.absent_dirs),
+                  "files": [{"path": rel, "size_bytes": size} for rel, size in self.files],
+                  "pending": [{"path": rel, "size_bytes": size, "mtime": mtime}
+                              for rel, size, mtime in self.pending]}
         if self.space is not None:
             answer["space_check"] = self.space
         return answer
@@ -194,111 +191,8 @@ def _mkdirs(sftp, directory: str) -> None:
                 pass
 
 
-class _Drained:
-    """A stderr stream being emptied by a background thread, readable once the command ends."""
-
-    def __init__(self, handle) -> None:
-        self._chunks: list[bytes] = []
-        self._thread = threading.Thread(target=self._pump, args=(handle,), daemon=True)
-        self._thread.start()
-
-    def _pump(self, handle) -> None:
-        try:
-            while True:
-                chunk = handle.read(4096)
-                if not chunk:
-                    break
-                self._chunks.append(chunk)
-        except Exception:  # noqa: BLE001 - a closed channel is the normal end of the stream.
-            pass
-
-    def text(self) -> str:
-        self._thread.join(timeout=5)
-        return b"".join(self._chunks).decode("utf-8", "replace")
-
-
-def _drain(handle) -> _Drained:
-    return _Drained(handle)
-
-
-def _stream_files(
-    *,
-    source_session,
-    source_dir: str,
-    target_session,
-    target_dir: str,
-    files: list[tuple[str, int]],
-    log: Any = None,
-    chunk_size: int = 1 << 18,
-) -> bool:
-    """Copy exactly ``files`` as one ``tar`` stream. False when tar is unusable on either end.
-
-    Only the names decided by the caller are sent (``tar -T -`` reads them from stdin), so the
-    "already copied, skip it" rule is unchanged — this collapses the *round trips*, not the
-    decision. One stream instead of one transfer per file is the difference between minutes and
-    hours when the two hosts are each an internet hop from the orchestrator.
-    """
-    names = "\n".join(rel.replace("\\", "/") for rel, _size in files) + "\n"
-    total = sum(size for _rel, size in files)
-    if log:
-        log(f"streaming {len(files)} file(s), {total} bytes, as one tar")
-
-    quoted_src = shlex.quote(source_dir)
-    quoted_dst = shlex.quote(target_dir)
-    src_in, src_out, src_err = source_session.open_stream(
-        f"tar -cf - -C {quoted_src} --ignore-failed-read -T -"
-    )
-    dst_in, dst_out, dst_err = target_session.open_stream(
-        f"mkdir -p {quoted_dst} && tar -xf - -C {quoted_dst}"
-    )
-    # Drain both stderr streams while the copy runs. Nothing read them until after
-    # recv_exit_status(), which cannot be reached while the transfer is still going - so a tar
-    # that complains on every file filled its stderr window, blocked on the write, stopped
-    # reading stdin, and the whole pipeline seized with no error anywhere. Measured: a target
-    # directory owned by root, with the SSH user unable to write, produced exactly that - the
-    # source tar pushed 8.25 GB into a pipe nobody drained, the target extracted zero files,
-    # and the run sat at RUNNING for the full two-hour timeout before anyone learned why.
-    src_errors, dst_errors = _drain(src_err), _drain(dst_err)
-    try:
-        src_in.write(names)
-        src_in.flush()
-        src_in.channel.shutdown_write()
-
-        moved = 0
-        while True:
-            chunk = src_out.read(chunk_size)
-            if not chunk:
-                break
-            dst_in.write(chunk)
-            moved += len(chunk)
-        dst_in.flush()
-        dst_in.channel.shutdown_write()
-
-        src_rc = src_out.channel.recv_exit_status()
-        dst_rc = dst_out.channel.recv_exit_status()
-    except Exception as exc:  # noqa: BLE001 - fall back rather than fail the whole restore.
-        if log:
-            log(f"tar stream failed ({exc}); falling back")
-        return False
-    finally:
-        for handle in (src_in, dst_in):
-            try:
-                handle.close()
-            except Exception:  # noqa: BLE001
-                pass
-
-    if src_rc != 0 or dst_rc != 0:
-        if log:
-            detail = (src_errors.text() + dst_errors.text()).strip()
-            log(f"tar stream exit src={src_rc} dst={dst_rc}: {detail[:300]}")
-        return False
-    if log:
-        log(f"tar stream done: {moved} bytes")
-    return True
-
-
-#: The file a staging directory carries once this module owns it. Mirroring and pruning delete what
-#: they find under the directory, so they act only where this file says the directory is theirs: a
+#: The file a staging directory carries once this module owns it. The cleanup of a staging and the
+#: delete of what its source no longer has act only where this file says the directory is theirs: a
 #: `target_backup_dir` pointed at the target host's own backups, at a shared folder or at another
 #: entry's staging used to be emptied without a word (review 0.25.0, B4.7).
 #:
@@ -336,76 +230,6 @@ def _not_a_staging_dir(target_dir: str, marker: str = STAGING_MARKER) -> Staging
         f"was copied or deleted there. If it is one (a "
         f"staging folder from before 0.25.0), mark it: `touch {path}`. Otherwise give the entry "
         f"its own, empty target_backup_dir.")
-
-
-def prune_target_dir(session, target_dir: str, older_than_seconds: int, *, log: Any = None,
-                     marker: str = STAGING_MARKER) -> dict[str, Any]:
-    """Delete files under ``target_dir`` older than ``older_than_seconds``. 0 disables it.
-
-    The staging directory on the restore target only ever grew: the transfer adds what the source
-    has and never removes what the source dropped, so a target that restores daily fills its disk
-    with backup sets nobody can reach any more.
-
-    Deletion is by age rather than by chain because a single cutoff is safe here by construction -
-    the full backup is weekly, so the newest full is at most 7 days old and an 8-day cutoff keeps
-    it together with every incremental chained to it. And deleting too much is recoverable: the
-    next transfer compares against the source and re-copies whatever is missing. That is the
-    reason this can be a one-line ``find`` rather than something that has to understand each
-    engine's chain format.
-
-    Run as one remote command: the alternative walks the tree over SFTP and issues a round trip
-    per file, which is the cost this module already went to some length to remove.
-    """
-    result: dict[str, Any] = {"pruned": 0, "retention_seconds": int(older_than_seconds)}
-    if not older_than_seconds or not target_dir:
-        result["skipped"] = "retention disabled"
-        return result
-    minutes = max(1, int(older_than_seconds) // 60)
-    quoted = shlex.quote(target_dir)
-    quoted_marker = shlex.quote(marker)
-    # -mmin over -mtime: the threshold is configured in seconds, and -mtime's day granularity
-    # would silently round a 24h setting to something else.
-    prune_files = (
-        f"find {quoted} -mindepth 1 -type f ! -name {quoted_marker} -mmin +{minutes} -print -delete "
-        f"2>/dev/null | wc -l"
-    )
-    # Then remove the husk a fully pruned backup set leaves behind — but NOT a directory that is
-    # empty *by design* inside a live one. `find -type d -empty -delete` deleted both, and a
-    # PostgreSQL piece always carries empty pg_tblspc / pg_replslot / pg_stat_tmp: the transfer
-    # recreated them, this ran seconds later and took them away again, and the restore then died
-    # with `pg_combinebackup: could not open directory ".../pg_tblspc"` for a path nobody deleted
-    # on the source. So a directory goes only when nothing anywhere beneath it is a file, and
-    # only at the top two levels — deep enough to reach a backup set (`base/<stamp>_FULL`),
-    # never deep enough to step inside one.
-    # -depth (post-order): act on a directory only after its children, so find never tries to
-    # descend into one this same command has just removed — which it reports on stderr and
-    # exits 1 for, turning a successful prune into "prune command exited 1".
-    drop_husks = (
-        f"find {quoted} -mindepth 1 -maxdepth 2 -depth -type d -exec sh -c "
-        f"'test -n \"$(find \"$1\" -type f -print -quit 2>/dev/null)\" || rm -rf \"$1\"' "
-        f"_ {{}} \\; 2>/dev/null"
-    )
-    # Only a marked directory is pruned (B4.7); an unmarked one answers -1 and is refused below.
-    command = (f"if [ ! -d {quoted} ]; then echo 0; "
-               f"elif [ ! -f {quoted}/{quoted_marker} ]; then echo -1; "
-               f"else {prune_files}; {drop_husks}; fi")
-    _in, out, _err = session.open_stream(command)
-    text = out.read().decode("utf-8", errors="replace").strip()
-    exit_status = out.channel.recv_exit_status()
-    if exit_status != 0:
-        result["error"] = f"prune command exited {exit_status}"
-        return result
-    try:
-        result["pruned"] = int(text.splitlines()[0]) if text else 0
-    except (ValueError, IndexError):
-        result["pruned"] = 0
-    if result["pruned"] < 0:
-        result["pruned"] = 0
-        result["error"] = str(_not_a_staging_dir(target_dir, marker))
-        return result
-    if log:
-        log(f"pruned {result['pruned']} file(s) older than {older_than_seconds}s from {target_dir}")
-    return result
 
 
 def _target_free_bytes(target_session, directory: str) -> int | None:
@@ -476,7 +300,13 @@ def _selected(files: list[tuple[str, int]], dirs: list[str], mtimes: dict[str, i
     repository it would otherwise be staged beside the real files (0.34.0)."""
     from dbabrain.common.ssh_relay import PARTIAL_SUFFIX
 
+    from dbabrain.lib.integrity import is_certificate_file
+
     files = [(rel, size) for rel, size in files if not rel.endswith(PARTIAL_SUFFIX)]
+    # A backup certificate or key is never copied, whole-directory copy or chain (0.37.0): it is
+    # kept in dbabrain's vault and imported from there - see lib.integrity.is_certificate_file.
+    files = [(rel, size) for rel, size in files if not is_certificate_file(rel)]
+    dirs = [rel for rel in dirs if not _is_cert_dir(rel)]
     if not include:
         return files, dirs
 
@@ -495,9 +325,13 @@ def _selected(files: list[tuple[str, int]], dirs: list[str], mtimes: dict[str, i
     return files, dirs
 
 
+def _is_cert_dir(rel: str) -> bool:
+    return "_cert" in [part.lower() for part in rel.replace("\\", "/").split("/") if part]
+
+
 def plan_backup_dir(*, source_session, source_dir: str, include: tuple[str, ...] = (),
                     window_since: float | None = None) -> TransferResult:
-    """What :func:`sync_backup_dir` would select, read from the source alone - no target is opened.
+    """What :func:`prepare_staging` would select, read from the source alone - no target is opened.
 
     The checksum gate (0.34.0, 1.213b) hashes every file before anything is copied; this is how it
     learns which files those are without the copy moving them first."""
@@ -507,7 +341,7 @@ def plan_backup_dir(*, source_session, source_dir: str, include: tuple[str, ...]
     return TransferResult(files=sorted((rel.replace("\\", "/"), size) for rel, size in files))
 
 
-def sync_backup_dir(
+def prepare_staging(
     *,
     source_session,
     source_dir: str,
@@ -515,13 +349,15 @@ def sync_backup_dir(
     target_dir: str,
     include: tuple[str, ...] = (),
     log: Any = None,
-    copy_mode: str = COPY_AUTO,
     space_check: restore_space.SpaceCheck | None = None,
     window_since: float | None = None,
     marker: str = STAGING_MARKER,
     replace: tuple[str, ...] = (),
 ) -> TransferResult:
-    """Copy ``source_dir`` to ``target_dir`` on another host, skipping identical files.
+    """Make ``target_dir`` ready for ``source_dir``'s files and answer which still have to travel.
+
+    Nothing is copied and nothing is removed here (module docstring): the result's ``pending`` is
+    what the caller hands to ``copy-files``.
 
     ``marker`` is the file that says the target folder is a staging directory of this tool's - the
     name the request states, since a node's existing folders carry the one they were marked with.
@@ -529,14 +365,11 @@ def sync_backup_dir(
     ``include`` limits the copy to relative paths starting with one of the given prefixes, so a
     restore can pull only the parts of a backup directory it needs. ``window_since`` (epoch seconds)
     widens a narrowed copy by every file the source wrote at or after it - ``copy_selection:
-    window``: the chain, and every other restore point of the window. ``copy_mode`` is one of
-    :data:`COPY_MODES`; the result says which way the files went. ``space_check`` is the rule the
+    window``: the chain, and every other restore point of the window. ``space_check`` is the rule the
     files to copy are held to before the first one moves (:func:`check_room`); ``None`` asks nothing.
     ``replace`` names relative paths copied even when the target holds them at the same size and not
     older: a copy the caller's checksum gate found different, which size and time cannot see.
     """
-    if copy_mode not in COPY_MODES:
-        raise ValueError(f"copy_mode must be one of {', '.join(COPY_MODES)}, got: {copy_mode!r}")
     result = TransferResult()
     # The sessions own their SFTP channels and close them with themselves.
     source_sftp = source_session.sftp()
@@ -561,51 +394,34 @@ def sync_backup_dir(
         # it is plainly an earlier staging copy of THIS source - at least one of its files is also
         # at the source, under the same relative path - so a staging folder from before the marker
         # needs no manual step (owner, 2026-10-01: a fix must not make the tool harder to use).
-        # Anything else is refused rather than mirrored: mirroring deletes whatever the source
-        # does not have, and a folder sharing nothing with the source is someone else's (B4.7).
+        # Anything else is refused: what the source does not have is named for deletion, and a
+        # folder sharing nothing with the source is someone else's (B4.7).
         if existing and not any(rel.replace("\\", "/") in at_source for rel in existing):
             raise _not_a_staging_dir(target_dir, marker)
         if existing and log:
             log(f"{target_dir}: adopted as this source's staging directory (marked {marker})")
         with target_sftp.open(posixpath.join(target_dir, marker), "w") as handle:
-            handle.write(b"dbabrain restore staging directory - mirrored and pruned by dbabrain.\n")
-    # A mirror, not an accumulation: what the source no longer has goes here too. The copy
-    # only ever added, so a source rebuilt under the same name left its previous life's pieces
-    # beside the new ones - and a gvenzl Oracle lab has the image's DBID and incarnation in
-    # every life, so RMAN could not tell them apart: a point-in-time duplicate followed the old
-    # life's logs and asked for a sequence the database never reached (RMAN-06054, the
-    # point-in-time drill, 2026-09-25). Judged against the WHOLE source listing, not the
-    # `include`d part - an older point in time may need pieces a newest-chain copy skips.
-    for rel in sorted(existing):
-        if rel.replace("\\", "/") in at_source:
-            continue
-        try:
-            target_sftp.remove(posixpath.join(target_dir, rel.replace("\\", "/")))
-        except OSError:
-            continue
-        existing.pop(rel)
-        result.removed += 1
-    if result.removed and log:
-        log(f"removed {result.removed} staged file(s) the source no longer has")
-    # And the directories the source no longer has - the husk a removed backup set leaves. Only its
-    # files went, so `base/<stamp>_FULL` stayed, empty and dated by the removal itself; a PostgreSQL
-    # listing reads a backup off its directory name, so the husk became the newest full and the
-    # restore combined it with every incremental after it: "pg_combinebackup: could not open file
-    # .../<stamp>_INCR/global/pg_control" in most hours of the 0.26 node (2026-10-03). Judged against
-    # the whole source listing, like the files. Deepest first, so a parent is empty by the time it
-    # is tried; rmdir refuses a directory that is not, so nothing holding a file is touched.
-    removed_dirs = 0
-    for rel in sorted((d.replace("\\", "/").rstrip("/") for d in existing_dirs),
-                      key=lambda d: d.count("/"), reverse=True):
-        if not rel or rel in dirs_at_source:
-            continue
-        try:
-            target_sftp.rmdir(posixpath.join(target_dir, rel))
-        except OSError:
-            continue
-        removed_dirs += 1
-    if removed_dirs and log:
-        log(f"removed {removed_dirs} staged directory(ies) the source no longer has")
+            handle.write(b"dbabrain restore staging directory - filled and cleaned by dbabrain.\n")
+    # What the source no longer has is NAMED here and removed by nobody in this command (0.38.0,
+    # 1.329). It used to be a mirror - each such file removed over SFTP, each such folder by rmdir -
+    # for two reasons that still hold and are now the caller's to keep: a source rebuilt under the
+    # same name left its previous life's pieces beside the new ones, and a gvenzl Oracle lab has the
+    # image's DBID and incarnation in every life, so RMAN could not tell them apart (RMAN-06054, the
+    # point-in-time drill, 2026-09-25); and the husk of a removed PostgreSQL base backup
+    # (`base/<stamp>_FULL`, empty) read as the newest full ("could not open file .../global/pg_control",
+    # the 0.26 node, 2026-10-03). So the restore deletes each named file by a verified command, each
+    # emptied folder by delete-empty-folder, and does not run while one is left. Judged against the
+    # WHOLE source listing, not the `include`d part - an older point in time may need pieces a
+    # newest-chain copy skips. Folders deepest first, the order they have to be removed in.
+    result.absent = sorted(rel.replace("\\", "/") for rel in existing
+                           if rel.replace("\\", "/") not in at_source)
+    result.absent_dirs = sorted(
+        (rel for rel in (d.replace("\\", "/").rstrip("/") for d in existing_dirs)
+         if rel and rel not in dirs_at_source),
+        key=lambda rel: (-rel.count("/"), rel))
+    if (result.absent or result.absent_dirs) and log:
+        log(f"{len(result.absent)} staged file(s) and {len(result.absent_dirs)} folder(s) the source no "
+            "longer has - named, not removed")
     # Every directory is recreated, including the empty ones a file-only copy would drop.
     for rel in sorted(dirs):
         _mkdirs(target_sftp, posixpath.join(target_dir, rel.replace("\\", "/")))
@@ -619,8 +435,8 @@ def sync_backup_dir(
         # rebuilt source cluster starts its WAL names again at ...0001 - 16 MB each, the
         # size of the previous cluster's files still staged here - and skipping them
         # replayed the old cluster's WAL: "WAL file is from different database system",
-        # a target crash-looping (2026-09-24). The tar stream keeps each file's time, so a
-        # repeat run still skips what it sent before.
+        # a target crash-looping (2026-09-24). finish_staging gives each copied file its
+        # source's time, so a repeat run still skips what it sent before.
         if (rel.replace("\\", "/") not in forced and existing.get(rel) == size
                 and not _older(target_mtimes.get(rel), source_mtimes.get(rel))):
             result.skipped += 1
@@ -628,49 +444,39 @@ def sync_backup_dir(
         pending.append((rel, size))
     # Nothing new: the common case for a repeated drill, and it costs two directory walks
     # rather than a transfer.
-    if pending:
-        if space_check is not None:
-            # After the mirror above, which only frees room, and before the first byte.
-            result.space = check_room(target_session, target_dir, pending, space_check, log=log)
-        streamed = copy_mode != COPY_SFTP and _stream_files(
-            source_session=source_session, source_dir=source_dir,
-            target_session=target_session, target_dir=target_dir,
-            files=pending, log=log,
-        )
-        if streamed:
-            result.copy_mode = COPY_TAR
-            result.copied += len(pending)
-            result.bytes_copied += sum(size for _rel, size in pending)
-        elif copy_mode == COPY_TAR:
-            raise CopyModeError(
-                f"copy_mode is tar, and the tar stream from {source_dir} to {target_dir} could not "
-                "be used (the lines above say why). Nothing was copied file by file: the mode is "
-                "pinned. Fix tar on both hosts, or set copy_mode to auto or sftp.")
-        else:
-            # tar missing or refused on either end: fall back to the per-file copy, which
-            # is slow over a high-latency link but always works.
-            result.copy_mode = COPY_SFTP
-            result.fell_back = copy_mode == COPY_AUTO
-            if log and result.fell_back:
-                log("tar stream unavailable; falling back to per-file SFTP copy")
-            for rel, size in pending:
-                rel_posix = rel.replace("\\", "/")
-                remote_path = posixpath.join(target_dir, rel_posix)
-                _mkdirs(target_sftp, posixpath.dirname(remote_path))
-                with source_sftp.open(posixpath.join(source_dir, rel_posix), "rb") as reader:
-                    reader.prefetch(size)
-                    target_sftp.putfo(reader, remote_path, file_size=size)
-                # The piece keeps the source's time, as the tar stream does. Dated by the copy, a
-                # PostgreSQL manifest copied after a newer one read as the newest backup - the
-                # restore plan dates a backup by it - and a point in time found no full before it.
-                mtime = source_mtimes.get(rel)
-                if mtime is not None:
-                    target_sftp.utime(remote_path, (mtime, mtime))
-                result.copied += 1
-                result.bytes_copied += size
-                if log:
-                    log(f"copied {rel_posix} ({size} bytes)")
+    if pending and space_check is not None:
+        # Before the first byte: the files still to travel must fit the target's free space.
+        result.space = check_room(target_session, target_dir, pending, space_check, log=log)
+    result.pending = [(rel.replace("\\", "/"), size, source_mtimes.get(rel)) for rel, size in pending]
     return result
+
+
+def finish_staging(target_session, target_dir: str, times: list[tuple[str, int | None]], *,
+                   log: Any = None) -> dict[str, Any]:
+    """Give each copied file its source's time. ``{"timed": n, "not_timed": [{"path", "reason"}]}``.
+
+    The piece keeps the source's time, as the tar stream it used to travel in kept it. Dated by the
+    copy, a PostgreSQL manifest copied after a newer one read as the newest backup - the restore
+    plan dates a backup by it - and a point in time found no full before it; and the skip rule of
+    the next run (:func:`prepare_staging`) would copy every file again as "older than its source".
+    A file that is not there to be timed is an answer, not an exception: the caller's checksum gate
+    is what says whether the copy stands.
+    """
+    sftp = target_session.sftp()
+    timed = 0
+    not_timed: list[dict[str, str]] = []
+    for rel, mtime in times:
+        if mtime is None:
+            continue
+        path = posixpath.join(target_dir, str(rel).replace("\\", "/"))
+        try:
+            sftp.utime(path, (int(mtime), int(mtime)))
+            timed += 1
+        except OSError as exc:
+            not_timed.append({"path": path, "reason": str(exc) or type(exc).__name__})
+    if log and (timed or not_timed):
+        log(f"{timed} staged file(s) given their source's time" + (f", {len(not_timed)} not" if not_timed else ""))
+    return {"timed": timed, "not_timed": not_timed}
 
 
 # --------------------------------------------------------------------------- #
@@ -745,12 +551,12 @@ class ChainUnknownError(errors.OperationFailed):
 
 
 def sqlserver_chain_include(source_session, *, source_dir: str, log: Any = None) -> tuple[str, ...]:
-    """Each database's restore chain, the certificate folder, as relative paths.
+    """Each database's restore chain, as relative paths.
 
     Read from the layout the backup jobs write - ``<database>/FULL|DIFF|LOG/<file>``, the time in
     the name (or the file's mtime when the name carries none) - with the share copy's own rule, so
-    both ways to a target copy the same backups. ``_cert/`` always travels: an encrypted backup
-    cannot be read on the target without it.
+    both ways to a target copy the same backups. ``_cert/`` never travels (0.37.0): the certificate
+    an encrypted backup needs is imported on the target from dbabrain's vault.
 
     A database with no FULL is copied whole, and a layout with no ``FULL`` / ``DIFF`` / ``LOG``
     folders at all is copied whole - what every SQL Server copy did before: a narrowed copy that
@@ -785,7 +591,7 @@ def sqlserver_chain_include(source_session, *, source_dir: str, log: Any = None)
     if log:
         for line in choice.lines:
             log(line.replace("copied by its window instead", "copied whole"))
-    return tuple(sorted(str(item) for item in choice.selected)) + tuple(whole) + ("_cert/",)
+    return tuple(sorted(str(item) for item in choice.selected)) + tuple(whole)
 
 
 def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None) -> tuple[str, ...]:
@@ -866,7 +672,7 @@ def oracle_chain_include(source_session, *, backup_dir: str, container: str,
     """The basenames of every backup piece from the newest level 0 onward.
 
     An RMAN directory is flat, so a basename *is* the relative path and the prefix filter in
-    :func:`sync_backup_dir` matches it exactly.
+    :func:`prepare_staging` matches it exactly.
 
     Why this exists: the CLOUD lab's backup directory reached 90 GB, of which the pieces a restore
     actually needs were ~5 GB - the rest was seven days of controlfile autobackups, one every 15

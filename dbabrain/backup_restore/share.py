@@ -1,12 +1,17 @@
-"""The backup shares this app reads and cleans - reached through ``common.cli`` (rules R10).
+"""The backup shares this app reads - reached through ``common.cli`` (rules R10).
 
 Until 0.24.0 this app met a Windows share three ways of its own: ``smbclient`` on a Linux worker, a
 local PowerShell over a UNC path on a Windows master, and ``cmdkey`` to store the login first. A
 share is an operation every app that meets one needs the same way, so it is ``common``'s now
-(``smb-list``, ``smb-get``, ``smb-delete``, ``smb-credential``); this module states each request -
+(``smb-list``, ``smb-get``, ``smb-credential``); this module states each request -
 the login resolved by the caller, never read in ``common`` - and hands back the answer.
 
 What stays here is what is this app's: which files, which window, what is obsolete.
+
+**Nothing is deleted through a share** (0.38.0, 1.329). This module carried a list of paths to
+``smb-delete``; a share has no host to hash a file on, so a file could be held to nothing. A staged
+file is deleted through the target's own host, by its facts (``delete_backup._delete_selected``);
+``smb-delete`` itself is the forced delete of ONE stray file, by hand.
 """
 
 from __future__ import annotations
@@ -67,24 +72,13 @@ def get_file(unc_root: object, remote_path: str, local_path: Path, *, username: 
     return _call("smb-get", request)
 
 
-def delete_files(unc_root: object, paths: list[str], *, username: str, password: str) -> dict[str, Any]:
-    """Delete exactly ``paths`` (share-relative). A file that could not go is in the answer, not raised."""
-    host, share, _subpath = unc_parts(unc_root)
-    ok, data, error = common_cli.run_allowing_failure("smb-delete", {
-        "host": host, "share": share, "username": username or "", "password": password or "",
-        "paths": list(paths)})
-    if not ok and not data.get("results"):
-        raise ShareError(error)
-    return data
-
-
 def store_login(*, target: str, username: str, password: str) -> dict[str, Any]:
     """Store the login Windows uses for ``target``'s UNC paths (``cmdkey``); nothing to do elsewhere."""
     return _call("smb-credential", {"target": target, "username": username, "password": password})
 
 
 def share_relative(unc_root: object, full_path: object) -> str:
-    """``full_path`` as a path under the share of ``unc_root`` - what ``smb-get`` / ``smb-delete`` take."""
+    """``full_path`` as a path under the share of ``unc_root`` - what ``smb-get`` takes."""
     _host, _share, subpath = unc_parts(unc_root)
     relative = str(full_path).replace("/", "\\")
     root = str(unc_root).replace("/", "\\").rstrip("\\")

@@ -58,6 +58,8 @@ PUBLIC_PACKAGES: tuple[str, ...] = (
     # Last one in, 2026-08-23. It builds and deploys, bumps the version, and runs the export that
     # produces the public tree - this project's own release process, readable by anyone using it.
     "control",
+    # 0.38.0: dbabrain as an MCP server for Claude on the user's own machine - for users, so it ships.
+    "mcp",
 )
 
 #: Packages that do not ship, each with the reason.
@@ -284,6 +286,7 @@ DOC_FOR_PACKAGE: dict[str, str] = {
     "common": "13_common.md",
     "lib": "14_lib.md",
     "transport": "15_transport.md",
+    "mcp": "16_mcp_app.md",
 }
 
 
@@ -323,4 +326,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.36.0"
+PUBLIC_VERSION = "0.38.0"

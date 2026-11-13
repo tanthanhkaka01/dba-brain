@@ -511,7 +511,7 @@ the catalog, and the configured restore entries read through `lib.data_sources.l
   NEVER, or UNTIERED - the last success, the last run and its phase, and the successes of 7 and 30
   days. A success ended `done` with no database failing its check.
 - **Coverage**, one row per server and database: the levels its present backups hold, how many are
-  copied off the host, its newest full and log, the last restore that succeeded from one (a proven
+  copied off the host, its newest full, differential (or incremental - 1.345) and log, the last restore that succeeded from one (a proven
   copy in a `restore` run that ended `done` - 0.36.0), and what is missing - a full, log or WAL
   backups, a copy off the host, a drill. *Complete* when nothing is. A repository and a virus scan
   join the list when they exist (1.240, 1.242).
@@ -520,9 +520,41 @@ the catalog, and the configured restore entries read through `lib.data_sources.l
   recorded them (`backup_runs.retention_json`, `pitr_reach_seconds`). Each server page prints
   its own entries' in one line above its backup files (`backup_files.js`, `retentionLine`).
 
-- **One table.** Each row is what a backup wrote: its size in bytes, its SHA-256 recorded once, the
-  engine's verification, whether it is still on disk and still the same bytes, the virus scan, and
-  each restore or copy that used it. There is a **Server** column, and filters by server,
+- **One table.** Each row is what a backup wrote and where it is now (0.37.0, the operator
+  2026-11-11: *encrypted or not, with which key, until when; the checksum and bytes before and after
+  encryption; the three files of one FULL as one backup*). The row: when, server, database, type,
+  the file (with "N files" for a base backup directory), its size, its verdict, **Repository** -
+  verified there and when, encrypted n of n with which age key and until when that key encrypts,
+  or not copied / copy failed and why - **On the server** - still there, deleted once its copy was
+  verified (when), only the manifest the next incremental reads, or MISSING - and its restores.
+  **A row opens** (click) to the rest: its path, exact bytes, full SHA-256, engine verify, the
+  engine's own encryption, the last check, the virus scan, the repository folder, and **each file of
+  the backup** from the server (bytes, SHA-256) to the repository (bytes, SHA-256, "= server") to
+  its `.age` (bytes, SHA-256, key, decrypted back to the server's bytes, the plain copy removed) -
+  `backup_catalog_sections.load_repository` / `repository_facts`, from the offload's proofs and the
+  encryption store, read in a few queries for the page. Drawn with Tabler's own datagrid, card table
+  and badges. A file deleted as meant (released, pruned, manifest only) is not "missing" and not a
+  problem row. A drill whose entry is no longer configured reads *no longer configured*, not a
+  failing one.
+  **The opened row also says where the backup has been and what it needs** (0.38.0, 1.345 - the
+  operator, reading one LOG file's row: *has it been deleted on the server_id? when was it written,
+  copied, encrypted, the plain copy gone, deleted? if it is a diff or a log, can its chain be had?*):
+  *On the server now* as a fact and as a column of the file table; a numbered **Timeline** - written
+  on its server, copied (first tried), verified, encrypted, proven, no plain copy left on the
+  repository, expired there, deleted on its server - each with the catalog's moment or the words that
+  the step has not happened (a backup of several files reaches a step when its last file does:
+  `repository_facts` `copiedAt` / `encryptedAt` / `provenAt` / `plainGoneAt`); the repository copy
+  under the name it has there (`<file>.age`); and, on a differential's or a log's row, its **Restore
+  chain**: the newest full of the same database on the same server that ended before it, the
+  differential after that full (SQL Server: the newest - it holds all since the full; another engine:
+  every incremental since), each log after that up to the file - where each is (repository verified /
+  on the server) - and a verdict: *complete*, *INCOMPLETE* naming the files that are neither on the
+  repository nor on the server, or *no longer restorable* when the file itself was swept by its
+  retention (history, not an alarm). `backup_catalog_sections.load_chains` / `build_chains` over
+  `BackupCatalogStore.chain_rows` - **by time, not by the row's recorded `chain_parent_file_id`**,
+  which pointed at an older full for every row written after its full left the server (docs/01). The
+  engine's own check of a chain (LSNs, WAL names) stays the restore's.
+  There is a **Server** column, and filters by server,
   database, file type, "used for a restore" and problems only. The **Database** choices are the
   databases on the page - only the picked server's once a server is picked.
 - **The same table as a server page's section** (1.217), built one way and drawn one way:
@@ -1276,6 +1308,38 @@ operator would stop on, shown as the one kind that is harmless.
 
 Rows are ordered orphaned first, then privileged, then alphabetically, and the section opens
 folded unless something is orphaned.
+
+## Protection — who can take this server's files (both pages, 0.38.0)
+
+One block per server, built once (`reports/protection.py`) from the newest read of
+`SECURITY_DATA_ENCRYPTION` and `SECURITY_HOST_ADMINS` (docs/04) and carried through the inventory's
+overlay (`protection`), so the fleet page and the server page render the same block.
+
+| Part | Shows |
+| --- | --- |
+| Findings | a production instance on an edition not meant for production; databases (Oracle: tablespaces) whose data is not encrypted at rest, as one line with the engine's way to turn it on; a TDE certificate dbabrain's vault does not hold; an Oracle auto-login keystore on the database host |
+| Changed at the last read | the change rows of the newest read (1.324), with their status - they are also in the level reports, once |
+| Data files | each database's state in the engine's own word, the algorithm, what protects the key, its thumbprint - and, for a thumbprint, whether the certificate vault holds it |
+| Administrators on the host | accounts by group, the sshd / Remote Desktop settings, the keys that open root, which account read it - and each section that could not be read, with its reason |
+
+The server page prints every row in a folded section (open when there is a finding or a change);
+the fleet page prints the counts as chips in the server's detail, and two Priority Attention cards:
+*production instance(s) on an edition not meant for production* (warn) and *data files not
+encrypted at rest on N server(s)* (info).
+
+**It shows what was read and says what was not.** A certificate is *in the vault* only when the
+vault was read and holds that thumbprint; when the vault could not be read the cell says so. A
+metric that failed prints the collector's message instead of an empty table - never *not
+encrypted*. A server with neither metric and no finding has no block.
+
+**The edition against the environment (1.325).** The edition is the one `INSTANCE_STATUS` reads;
+the environment is the instance's in `db_instances.json`; which environments are production and
+which editions are not meant for it is `SECURITY_DATA_ENCRYPTION`'s
+`report_policy.edition_rule` (`production_environments`, `non_production_editions` - an edition is
+matched as a whole word). Without the rule nothing is a finding.
+
+Nothing in the block is graded: the rows are OK by design, and turning encryption on is a decision
+per server, outside 0.38.0.
 
 ## Volumes — how large the storage is and how full (on `server-metrics.html`)
 

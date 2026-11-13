@@ -37,6 +37,7 @@ from dbabrain.lib import offload as offload_rules
 from dbabrain.lib import backup_scope
 from dbabrain.lib import cleanup_retention
 from dbabrain.lib import ai_assist as ai_assist_rules
+from dbabrain.lib import mcp_tools as mcp_tools_rules
 from dbabrain.lib.json_io import atomic_write_text, indent_of
 from dbabrain.lib.moved_commands import MOVED_COMMANDS
 from dbabrain.lib.paths import PACKAGED_CATALOGUE
@@ -109,13 +110,18 @@ Steps, in order (each one idempotent - a file already moved plans nothing):
                       switched on by an upgrade - and its old chat_ids list becomes the level
                       (telegram_chat, "ai_assist") on each listed group that has no level yet; a
                       group with another level is a conflict, named. What is stated is left as it
-                      is (dbabrain/lib/ai_assist.py)
+                      is (dbabrain/lib/ai_assist.py). 0.38.0: the assistant's name is one of
+                      those fields (assistant_name, at the shipped name), and so is the switch of
+                      its backup_runbook tool
   retention-per-type  0.35.0: each backup entry states cleanup_retention once, for the folder its
                       jobs write - the jobs' values moved onto the entry. Jobs that agree become
                       the integer (nothing changes); jobs that differ become the per-type object,
                       each job's value on the types it writes, and the change says so: until then
                       the shortest job's window cut every type. An entry it cannot fold is a
                       conflict, named (dbabrain/lib/cleanup_retention.py)
+  stated-mcp-tools    0.38.0: a node with no mcp_tools.json is given the shipped one (every tool on,
+                      each call logged); a node's own file gets every field it does not state at
+                      its shipped value. What is stated is left as it is (dbabrain/lib/mcp_tools.py)
 
 A record whose two spellings DISAGREE is a conflict: its file is not written, and the answer names
 the record. After a write, check-objects and check-references are run and their counts reported -
@@ -129,7 +135,8 @@ Exit code 1 when a conflict left a file unwritten.
 
 STEPS = ("reference-files", "package-rename", "field-names", "restore-machine-ids", "earlier-defaults",
          "telegram-active", "inventory-into-reports", "moved-commands", "console-apps",
-         "unread-report-keys", "stated-integrity", "stated-ai-assist", "retention-per-type")
+         "unread-report-keys", "stated-integrity", "stated-ai-assist", "retention-per-type",
+         "stated-mcp-tools")
 
 
 #: The app command that was a report (0.22.0), and the report it becomes.
@@ -776,6 +783,33 @@ def _stated_ai_assist(root: Path, *, dry_run: bool, before_write: Any) -> dict[s
     return {"files": files}
 
 
+def _stated_mcp_tools(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Every field of ``mcp_tools.json`` stated (0.38.0, R50): the shipped file where a node has none,
+    the missing fields of its own file (and of its example) where it has one."""
+    files: list[dict[str, Any]] = []
+    path = root / mcp_tools_rules.FILE_NAME
+    if not path.is_file():
+        if not dry_run:
+            atomic_write_text(path, json.dumps(mcp_tools_rules.DEFAULTS, ensure_ascii=False, indent=2) + "\n")
+        files.append({"file": path.name, "records_changed": 1, "conflicts": [], "written": not dry_run,
+                      "changes": [{"where": path.name, "field": "(the file)",
+                                   "value": "created from the shipped one: every tool on, each call logged"}]})
+    for name in (mcp_tools_rules.FILE_NAME, "mcp_tools.example.json"):
+        path = root / name
+        if not path.is_file() or (name == mcp_tools_rules.FILE_NAME and files):
+            continue
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        changes = [{"where": name, "field": field, "value": "the shipped value"}
+                   for field in mcp_tools_rules.state_mcp_tools(document)]
+        written = bool(changes) and not dry_run
+        if written:
+            before_write(path)
+            atomic_write_text(path, json.dumps(document, ensure_ascii=False, indent=indent_of(path)) + "\n")
+        files.append({"file": name, "records_changed": 1 if changes else 0, "changes": changes,
+                      "conflicts": [], "written": written})
+    return {"files": files}
+
+
 def upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     root = shared_objects.data_root(request.get("data_dir") or None)
     dry_run = request.get("dry_run", True) is not False
@@ -831,6 +865,8 @@ def upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             files = _retention_per_type(root, dry_run=dry_run, before_write=before_write)["files"]
         elif step == "stated-ai-assist":
             files = _stated_ai_assist(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "stated-mcp-tools":
+            files = _stated_mcp_tools(root, dry_run=dry_run, before_write=before_write)["files"]
         else:
             files = _inventory_into_reports(root, dry_run=dry_run, before_write=before_write)["files"]
         results.append({

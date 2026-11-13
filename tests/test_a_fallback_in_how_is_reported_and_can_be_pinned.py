@@ -9,155 +9,49 @@ that cannot be used is an error, never a reason to try the other.
 Each of these stepped down without a word in its answer:
 
 * a backup directory crossing between two hosts - one tar stream, or one SFTP transfer per file,
-  which across two internet hops is the difference between minutes and hours;
+  which across two internet hops was the difference between minutes and hours;
 * a staged file taking its name - ``posix-rename`` in one step, or remove-then-rename, during which
   the destination does not exist;
 * a command over WinRM - ``pypsrp``, or a local PowerShell driving ``Invoke-Command``, which a
   WORKGROUP host refuses with words that blame the host;
 * a SQL Server connection - ODBC, or pymssql - the one that already reported itself
   (``run-sql``'s ``tool.actual``) and could already be pinned (``sqlserver_driver``).
+
+The first of them has no step down left (0.38.0, 1.329): the bytes travel by ``copy-files``, each
+file with its size and sha256, in the one way the entry's ``copy_mode`` names. The tests of the tar
+stream trying first, of its fall to SFTP being reported, and of a pinned ``tar`` failing instead of
+falling went with the stream. What is held of that case now: the entry's word reaches the command
+as its ``transfer``, the answer still says which way ran, and a way that fails is tried again as
+itself - never swapped for the other. The stream's own word, ``tar``, is refused by name: a pinned
+way that cannot be used is an error, so it is not quietly served by ``cat``.
 """
 
 from __future__ import annotations
 
-import stat
+import hashlib
 import sys
 import types
 
 import pytest
 
-from dbabrain.common import backup_copy, remote_exec, ssh_relay
+from dbabrain.common import remote_exec, ssh_relay
 from dbabrain.lib.integrity import RestoreIntegrity
 from dbabrain.lib.restore import copy_mode
 
 
 # --------------------------------------------------------------------------- #
-# The copy between two hosts: tar, or file by file
+# The copy between two hosts: the way the entry names, and no other
 # --------------------------------------------------------------------------- #
-class _Entry:
-    def __init__(self, name: str, size: int) -> None:
-        self.filename, self.st_size, self.st_mode = name, size, stat.S_IFREG | 0o644
+SOURCE_HOST, TARGET_HOST = "192.0.2.49", "192.0.2.50"
+PIECE = b"one backup piece"
 
 
-class _Sftp:
-    """A directory of files, enough of SFTP for the copy to list, probe and write one."""
+def _staged_copy(monkeypatch, *, mode: str, already_staged: bool = False, lands: bool = True):
+    """One restore entry with ``copy_mode`` = ``mode`` staging one file; returns (the call that
+    runs it, every ``copy-files`` request it sent).
 
-    def __init__(self, files: dict[str, int]) -> None:
-        self.files = dict(files)
-        self.put: list[str] = []
-
-    def listdir_attr(self, path):
-        return [_Entry(name, size) for name, size in self.files.items()]
-
-    def stat(self, path):
-        return object()
-
-    def mkdir(self, path):
-        pass
-
-    def remove(self, path):
-        pass
-
-    def open(self, path, mode="r"):
-        class _File:
-            def write(self, _data):
-                pass
-
-            def prefetch(self, _size):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_exc):
-                return False
-
-        return _File()
-
-    def putfo(self, _reader, remote_path, file_size=0):
-        self.put.append(remote_path)
-
-
-class _Session:
-    def __init__(self, files: dict[str, int]) -> None:
-        self._sftp = _Sftp(files)
-
-    def sftp(self):
-        return self._sftp
-
-
-def _copy(monkeypatch, *, tar_works: bool, mode: str = "auto", target_files=None):
-    """One new file to copy, with the tar stream working or not; returns (result, target, tried)."""
-    source = _Session({"new.bak": 200})
-    target = _Session({backup_copy.STAGING_MARKER: 1, **(target_files or {})})
-    tried: list[int] = []
-    monkeypatch.setattr(backup_copy, "_stream_files",
-                        lambda **kwargs: tried.append(len(kwargs["files"])) or tar_works)
-    result = backup_copy.sync_backup_dir(
-        source_session=source, source_dir="/src", target_session=target, target_dir="/dst",
-        copy_mode=mode)
-    return result, target.sftp(), tried
-
-
-def test_a_copy_that_went_as_one_stream_says_tar(monkeypatch):
-    result, target, _tried = _copy(monkeypatch, tar_works=True)
-
-    assert result.as_dict()["copy_mode"] == "tar"
-    assert result.as_dict()["copy_fell_back"] is False
-    assert target.put == []
-
-
-def test_a_copy_that_stepped_down_to_one_file_at_a_time_says_so(monkeypatch):
-    """It was a line on stderr: a drill that took hours looked, in its answer, like any other."""
-    result, target, tried = _copy(monkeypatch, tar_works=False)
-
-    assert tried == [1], "the stream is still tried first"
-    assert target.put == ["/dst/new.bak"]
-    assert result.as_dict()["copy_mode"] == "sftp"
-    assert result.as_dict()["copy_fell_back"] is True
-
-
-def test_a_copy_pinned_to_tar_does_not_go_file_by_file(monkeypatch):
-    with pytest.raises(backup_copy.CopyModeError) as caught:
-        _copy(monkeypatch, tar_works=False, mode="tar")
-
-    assert "pinned" in str(caught.value) and "copy_mode" in str(caught.value)
-
-
-def test_a_copy_pinned_to_tar_leaves_the_target_untouched_when_tar_fails(monkeypatch):
-    source, target = _Session({"new.bak": 200}), _Session({backup_copy.STAGING_MARKER: 1})
-    monkeypatch.setattr(backup_copy, "_stream_files", lambda **kwargs: False)
-
-    with pytest.raises(backup_copy.CopyModeError):
-        backup_copy.sync_backup_dir(source_session=source, source_dir="/src",
-                                    target_session=target, target_dir="/dst", copy_mode="tar")
-
-    assert target.sftp().put == []
-
-
-def test_a_copy_pinned_to_sftp_never_tries_tar_and_did_not_fall_back(monkeypatch):
-    result, target, tried = _copy(monkeypatch, tar_works=True, mode="sftp")
-
-    assert tried == []
-    assert target.put == ["/dst/new.bak"]
-    assert (result.copy_mode, result.fell_back) == ("sftp", False), "chosen, not stepped down to"
-
-
-def test_a_copy_with_nothing_to_move_says_none(monkeypatch):
-    result, _target, tried = _copy(monkeypatch, tar_works=True, target_files={"new.bak": 200})
-
-    assert tried == [] and result.as_dict()["copy_mode"] == "none"
-
-
-def test_a_misspelled_pin_is_refused_rather_than_read_as_auto():
-    """`"copy_mode": "tarr"` read as auto is a copy that steps down while its entry says it may not."""
-    with pytest.raises(ValueError, match="copy_mode must be one of auto, tar, sftp"):
-        copy_mode.parse_copy_mode("tarr")
-    assert copy_mode.parse_copy_mode(None) == "auto"
-    assert copy_mode.parse_copy_mode(" TAR ") == "tar"
-
-
-def test_the_restore_entry_s_copy_mode_reaches_the_copy_command(monkeypatch):
+    ``already_staged`` puts the file on the target beforehand; ``lands`` false makes ``copy-files``
+    answer its line as not copied, every time."""
     from dbabrain.backup_restore import restore_script
     from dbabrain.lib.time_window import TimeWindow
 
@@ -165,20 +59,109 @@ def test_the_restore_entry_s_copy_mode_reaches_the_copy_command(monkeypatch):
         restore_id="PG_DRILL", db_type="postgresql", server_id="SRC", backup_dir="/backup",
         script="restore.sh", time_window=TimeWindow(), target_server_id="DST",
         target_backup_dir="/opt/db_ops/backup/pg_restore", source_backup_host_dir="/opt/backup/pg",
-        copy_mode="tar", integrity=RestoreIntegrity())
-    sent: dict[str, dict] = {}
+        copy_mode=copy_mode.parse_copy_mode(mode), integrity=RestoreIntegrity(copy_retry_interval_seconds=0))
+    on_target = {"there": already_staged}
+    copies: list[dict] = []
+    selected = [{"path": "new.bak", "size_bytes": len(PIECE)}]
 
     def run(command, request, **_kwargs):
-        sent[command] = request
-        return {"include": []} if command == "backup-chain" else {"copied": 0, "skipped": 0}
+        if command == "prepare-staging":
+            if request.get("plan_only"):
+                return {"files": selected, "include": []}
+            travelling = not on_target["there"] or "new.bak" in request["replace"]
+            return {"files": selected, "pending": [{**selected[0], "mtime": 1_790_000_000}] if travelling else [],
+                    "skipped": 0 if travelling else 1}
+        if command == "file-checksum":
+            held = request["host"]["host"] == SOURCE_HOST or on_target["there"]
+            return {"files": [{"path": path, "sha256": hashlib.sha256(PIECE).hexdigest(),
+                               "size_bytes": len(PIECE)} for path in request["paths"]] if held else []}
+        if command == "copy-files":
+            copies.append(request)
+            on_target["there"] = lands
+            return {"files": [{"target": one["target"], "ok": lands, "bytes_copied": len(PIECE) if lands else 0,
+                               "error": None if lands else "Permission denied"} for one in request["files"]]}
+        if command == "finish-staging":
+            return {"timed": len(request["files"]), "not_timed": [], "opened_for_engine": True}
+        raise AssertionError(f"unexpected command {command}")
 
-    monkeypatch.setattr(restore_script, "_ssh_login", lambda target, **_kwargs: {"host": "192.0.2.49"})
     monkeypatch.setattr(restore_script.common_cli, "run", run)
-    endpoint = types.SimpleNamespace(container_name="")
+    request = {"source": {"host": SOURCE_HOST}, "target": {"host": TARGET_HOST}, "include": []}
+    return (lambda: restore_script._copy_gated_between_hosts(job, request, source=None, target=None)), copies
 
-    restore_script.transfer_backup_to_target(job, source=endpoint, target=endpoint, prune=False)
 
-    assert sent["copy-backup-dir"]["copy_mode"] == "tar"
+@pytest.mark.parametrize("mode, transfer", [("sftp", "sftp"), ("auto", "cat"), ("cat", "cat")])
+def test_the_entry_s_copy_mode_reaches_copy_files_as_its_transfer(monkeypatch, mode, transfer):
+    """``sftp`` pins SFTP, ``cat`` pins one cat stream per file, and ``auto`` is that stream too:
+    the tar stream ``auto`` tried first went with ``copy-backup-dir``."""
+    run, copies = _staged_copy(monkeypatch, mode=mode)
+
+    run()
+
+    assert [request["transfer"] for request in copies] == [transfer]
+
+
+@pytest.mark.parametrize("mode, transfer", [("sftp", "sftp"), ("auto", "cat")])
+def test_a_copy_says_in_its_answer_which_way_ran(monkeypatch, mode, transfer):
+    """It was a line on stderr: a drill that took hours looked, in its answer, like any other."""
+    run, _copies = _staged_copy(monkeypatch, mode=mode)
+
+    assert run()["copy_mode"] == transfer
+
+
+def test_a_copy_with_nothing_to_move_says_none(monkeypatch):
+    run, copies = _staged_copy(monkeypatch, mode="sftp", already_staged=True)
+
+    assert run()["copy_mode"] == "none"
+    assert copies == []
+
+
+@pytest.mark.parametrize("mode, transfer", [("sftp", "sftp"), ("auto", "cat")])
+def test_a_way_that_fails_is_tried_again_as_itself_and_never_as_the_other(monkeypatch, mode, transfer):
+    """The pin's other half, where it still has a home. A file that does not land is an attempt
+    spent and the round is made again - by the same transfer every time, and the restore is refused
+    when none of them lands it."""
+    from dbabrain.backup_restore import restore_script
+
+    run, copies = _staged_copy(monkeypatch, mode=mode, lands=False)
+
+    with pytest.raises(restore_script.CopyNotProvenError):
+        run()
+
+    assert [request["transfer"] for request in copies] == [transfer] * 4, "copy_max_retry 3: four rounds, one way"
+
+
+def test_a_misspelled_pin_is_refused_rather_than_read_as_auto():
+    """`"copy_mode": "tarr"` read as auto is a copy that goes another way than its entry says."""
+    with pytest.raises(ValueError, match="copy_mode must be one of auto, cat, sftp"):
+        copy_mode.parse_copy_mode("tarr")
+    assert copy_mode.parse_copy_mode(None) == "auto"
+    assert copy_mode.parse_copy_mode(" SFTP ") == "sftp"
+
+
+def test_the_tar_streams_word_is_refused_by_name_and_never_served_another_way():
+    """An entry that pinned ``tar`` said: one tar stream, or an error. The stream is gone, so by
+    the same rule the entry is an error - read as ``cat`` it would be a pin served by another way,
+    and its owner would never be told. The sentence names what to write instead."""
+    with pytest.raises(ValueError, match='copy_mode "tar" went with the tar stream in 0.38.0') as refused:
+        copy_mode.parse_copy_mode(" TAR ")
+    assert "auto, cat, sftp" in str(refused.value)
+    assert "tar" not in copy_mode.COPY_MODES
+
+
+def test_an_entry_still_pinning_tar_is_refused_by_its_id(tmp_path):
+    import json
+
+    from dbabrain.backup_restore import restore_script
+
+    config = tmp_path / "restore_config.json"
+    config.write_text(json.dumps({"backup_restore": {"restores": [{
+        "restore_id": "PG_DRILL", "db_type": "postgresql", "server_id": "SRC",
+        "target_server_id": "DST", "backup_dir": "/backup", "script": "restore.sh",
+        "target_backup_dir": "/opt/db_ops/backup/pg_restore/stage",
+        "source_backup_host_dir": "/opt/backup/pg", "copy_mode": "tar"}]}}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match='PG_DRILL: copy_mode "tar" went with the tar stream'):
+        restore_script.load_script_restores(str(config))
 
 
 def test_an_entry_with_a_misspelled_copy_mode_is_refused_by_name(tmp_path):

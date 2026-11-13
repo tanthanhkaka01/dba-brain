@@ -176,8 +176,11 @@ def test_an_entry_that_stages_nowhere_or_names_its_marker_is_left_alone() -> Non
     assert earlier_defaults.state_staging_marker(document) == [], "a second run finds nothing"
 
 
-def test_the_marker_an_entry_states_reaches_the_copy_and_the_prune(monkeypatch, tmp_path) -> None:
-    """Both, or the prune looks for a marker the copy never wrote and refuses the folder."""
+def test_the_marker_an_entry_states_reaches_the_staging_and_the_prune(monkeypatch, tmp_path) -> None:
+    """Both, or the prune looks for a marker the staging never wrote and refuses the folder.
+
+    The staging is ``prepare-staging`` since 0.38.0 (it was ``copy-backup-dir``): the command that
+    marks the folder, adopts it, or refuses one that carries another name."""
     import types
 
     from dbabrain.backup_restore import restore_script
@@ -193,11 +196,22 @@ def test_the_marker_an_entry_states_reaches_the_copy_and_the_prune(monkeypatch, 
                         "retry_interval": 600, "timeout": 7200}}]}}), encoding="utf-8")
     job = restore_script.load_script_restores(path)[0]
     assert job.staging_marker == EARLIER_MARKER
-    sent: dict[str, dict] = {}
+    sent: list[tuple[str, dict]] = []
+    staging = {"marker": EARLIER_MARKER}
 
     def run(command, request, **_kwargs):
-        sent[command] = request
-        return {"include": []} if command == "backup-chain" else {"copied": 0, "skipped": 0, "pruned": 0}
+        sent.append((command, request))
+        if command == "prepare-staging" and request.get("plan_only"):
+            return {"include": [], "files": []}
+        if command == "list-files":
+            # The cleanup reads the staging itself since 0.38.0 and looks for the entry's marker there.
+            folder = request["folder"]
+            return {"folder": folder, "folder_found": True, "listed": 2, "truncated": False, "folders": [],
+                    "files": [{"path": f"{folder}/{staging['marker']}", "type": "file", "size_bytes": 0,
+                               "mtime_utc": "2026-01-01T00:00:00Z"},
+                              {"path": f"{folder}/recent.bak", "type": "file", "size_bytes": 1,
+                               "mtime_utc": "2999-01-01T00:00:00Z"}]}
+        return {}
 
     monkeypatch.setattr(restore_script, "_ssh_login", lambda target, **_kwargs: {"host": "192.0.2.49"})
     monkeypatch.setattr(restore_script.common_cli, "run", run)
@@ -205,11 +219,19 @@ def test_the_marker_an_entry_states_reaches_the_copy_and_the_prune(monkeypatch, 
 
     restore_script.transfer_backup_to_target(job, source=endpoint, target=endpoint, prune=True)
 
-    assert sent["copy-backup-dir"]["staging_marker"] == EARLIER_MARKER
-    assert sent["prune-staged-backups"]["staging_marker"] == EARLIER_MARKER
+    prepared = [request for command, request in sent if command == "prepare-staging"]
+    assert [bool(request.get("plan_only")) for request in prepared] == [True, False], \
+        "the plan, then the round that opens the target folder"
+    assert all(request["staging_marker"] == EARLIER_MARKER for request in prepared)
+    assert dict(sent)["list-files"]["folder"] == "/opt/acme/staging/pg"
+    assert "error" not in restore_script.prune_staged_backups(job, target=endpoint)
+    # A folder carrying another marker is not this entry's staging: named, and nothing deleted.
+    staging["marker"] = ".dbabrain-staging"
+    refused = restore_script.prune_staged_backups(job, target=endpoint)
+    assert f"no {EARLIER_MARKER} marker" in refused["error"] and refused["pruned"] == 0
 
 
-def test_an_entry_that_names_no_marker_sends_none_and_takes_the_copys_default(monkeypatch) -> None:
+def test_an_entry_that_names_no_marker_sends_none_and_takes_the_stagings_default(monkeypatch) -> None:
     import types
 
     from dbabrain.backup_restore import restore_script
@@ -222,11 +244,11 @@ def test_an_entry_that_names_no_marker_sends_none_and_takes_the_copys_default(mo
         script="restore.sh", time_window=TimeWindow(), target_server_id="DST",
         target_backup_dir="/opt/acme/staging/new", source_backup_host_dir="/opt/acme/backup/pg",
         integrity=RestoreIntegrity())
-    sent: dict[str, dict] = {}
+    sent: list[tuple[str, dict]] = []
 
     def run(command, request, **_kwargs):
-        sent[command] = request
-        return {"include": []} if command == "backup-chain" else {"copied": 0, "skipped": 0}
+        sent.append((command, request))
+        return {"include": [], "files": []} if request.get("plan_only") else {}
 
     monkeypatch.setattr(restore_script, "_ssh_login", lambda target, **_kwargs: {"host": "192.0.2.49"})
     monkeypatch.setattr(restore_script.common_cli, "run", run)
@@ -234,8 +256,9 @@ def test_an_entry_that_names_no_marker_sends_none_and_takes_the_copys_default(mo
 
     restore_script.transfer_backup_to_target(job, source=endpoint, target=endpoint, prune=False)
 
-    assert "staging_marker" not in sent["copy-backup-dir"]
-    assert backup_copy.marker_name(sent["copy-backup-dir"].get("staging_marker")) == ".dbabrain-staging"
+    prepared = [request for command, request in sent if command == "prepare-staging"]
+    assert len(prepared) == 2 and all("staging_marker" not in request for request in prepared)
+    assert backup_copy.marker_name(prepared[-1].get("staging_marker")) == ".dbabrain-staging"
 
 
 def _node(tmp_path: Path) -> Path:

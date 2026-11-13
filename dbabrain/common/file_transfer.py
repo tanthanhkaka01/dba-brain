@@ -56,7 +56,7 @@ from typing import Any
 
 from dbabrain.common import filechecksum
 from dbabrain.common import host_ops
-from dbabrain.common.remote_exec import RemoteExecError
+from dbabrain.common.remote_exec import RemoteExecError, WinrmSession
 from dbabrain.common.ssh_relay import PARTIAL_SUFFIX, RelayError, relay
 from dbabrain.common.ssh_relay import atomic_replace as _atomic_replace
 from dbabrain.common.ssh_relay import remote_size as _remote_size
@@ -158,6 +158,9 @@ def fetch_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[
 
     target, session = _open(request, data_dir=data_dir, secrets=secrets,
                             paths={"remote_path": remote_path})
+    if isinstance(session, WinrmSession):
+        return _fetch_over_winrm(target, session, remote_path=remote_path, local_path=local_path,
+                                 overwrite=overwrite, make_dirs=make_dirs, started=started)
     try:
         remote_size = _remote_size(session, remote_path)
         if remote_size is None:
@@ -223,6 +226,9 @@ def send_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[s
 
     target, session = _open(request, data_dir=data_dir, secrets=secrets,
                             paths={"remote_path": remote_path})
+    if isinstance(session, WinrmSession):
+        return _send_over_winrm(target, session, local_path=local_path, remote_path=remote_path,
+                                overwrite=overwrite, make_dirs=make_dirs, started=started)
     try:
         existing = _remote_size(session, remote_path)
         if existing is not None:
@@ -266,6 +272,101 @@ def send_file(request: dict[str, Any], *, data_dir=None, secrets=None) -> dict[s
         raise FileTransferError(f"{target.describe()}: {exc}") from exc
     finally:
         session.close()
+
+
+# --------------------------------------------------------------------------- #
+# Over WinRM - no SFTP
+# --------------------------------------------------------------------------- #
+# A host reached by WinRM has no SFTP, and both commands died on it with "'WinrmSession' object has
+# no attribute 'sftp'" (2026-11-10, an image build sent to a Windows build host). The same contract over the
+# remoting channel: staged under PARTIAL_SUFFIX, moved onto its name, and - since WinRM gives no
+# cheap stat to compare - proven by bytes AND SHA-256 read on the host, not by size alone.
+def _sha256_here(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _windows_parent(path: str) -> str:
+    cut = max(path.rfind("\\"), path.rfind("/"))
+    return path[:cut] if cut > 2 else ""
+
+
+def _send_over_winrm(target, session, *, local_path: Path, remote_path: str, overwrite: bool, make_dirs: bool,
+                     started: float) -> dict[str, Any]:
+    local_size, local_sha = local_path.stat().st_size, _sha256_here(local_path)
+    try:
+        existing = session.file_facts(remote_path)
+        if existing is not None:
+            if existing == (local_size, local_sha):
+                return _result(target=target, status=STATUS_SKIPPED_EXISTS, local_path=local_path,
+                               remote_path=remote_path, size=local_size, started=started, direction="send")
+            if not overwrite:
+                raise FileTransferError(
+                    f"{remote_path} already exists on {target.host} with other content "
+                    f"(remote {existing[0]} bytes, local {local_size} bytes). "
+                    "Pass \"overwrite\": true to replace it.")
+        parent = _windows_parent(remote_path)
+        if make_dirs and parent:
+            session.mkdirs(parent)
+        staged = remote_path + PARTIAL_SUFFIX
+        session.put(local_path, staged)
+        arrived = session.file_facts(staged)
+        if arrived != (local_size, local_sha):
+            session.remove(staged)
+            raise FileTransferError(
+                f"{local_path} is {local_size} bytes, sha256 {local_sha}; what arrived on {target.host} "
+                f"is {arrived}. The partial file was removed.")
+        session.move_onto(staged, remote_path)
+        return _result(target=target, status=STATUS_REPLACED if existing is not None else STATUS_COPIED,
+                       local_path=local_path, remote_path=remote_path, size=local_size, started=started,
+                       direction="send", replace_mode="move-item")
+    except RemoteExecError as exc:
+        raise FileTransferError(f"{target.describe()}: {exc}") from exc
+
+
+def _fetch_over_winrm(target, session, *, remote_path: str, local_path: Path, overwrite: bool, make_dirs: bool,
+                      started: float) -> dict[str, Any]:
+    try:
+        facts = session.file_facts(remote_path)
+        if facts is None:
+            raise FileTransferError(
+                f"{target.describe()}: {remote_path} does not exist or is not readable as "
+                f"{target.access.get('username') or 'the configured user'}.")
+        remote_size, remote_sha = facts
+        if local_path.exists():
+            if (local_path.stat().st_size, _sha256_here(local_path)) == facts:
+                return _result(target=target, status=STATUS_SKIPPED_EXISTS, local_path=local_path,
+                               remote_path=remote_path, size=remote_size, started=started, direction="fetch")
+            if not overwrite:
+                raise FileTransferError(
+                    f"{local_path} already exists with other content "
+                    f"(local {local_path.stat().st_size} bytes, remote {remote_size} bytes). "
+                    "Pass \"overwrite\": true to replace it.")
+        if make_dirs:
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+        staged = local_path.with_name(local_path.name + PARTIAL_SUFFIX)
+        try:
+            session.get(remote_path, staged)
+            got = (staged.stat().st_size, _sha256_here(staged))
+            if got != facts:
+                raise FileTransferError(
+                    f"{remote_path} on {target.host} is {remote_size} bytes, sha256 {remote_sha}; what "
+                    f"arrived is {got}. The partial file was removed.")
+            replaced = local_path.exists()
+            os.replace(staged, local_path)
+        finally:
+            if staged.exists():
+                staged.unlink(missing_ok=True)
+        return _result(target=target, status=STATUS_REPLACED if replaced else STATUS_COPIED,
+                       local_path=local_path, remote_path=remote_path, size=remote_size, started=started,
+                       direction="fetch")
+    except RemoteExecError as exc:
+        raise FileTransferError(f"{target.describe()}: {exc}") from exc
 
 
 # --------------------------------------------------------------------------- #

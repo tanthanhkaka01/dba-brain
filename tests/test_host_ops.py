@@ -616,13 +616,15 @@ def test_a_dollar_name_is_quoted_on_linux():
 
 
 # --------------------------------------------------------------------------- #
-# delete-files: no `..` past the fence (review 0.25.0, B5.2)
+# a delete: no `..` past the fence (review 0.25.0, B5.2) - held by the one delete there is since
+# 0.38.0, the verified one (the forced delete of a stray file goes through the same check)
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("path", ["/backup/../etc/shadow", "/backup/./x.bak", "D:\\\\SQL\\\\..\\\\Windows\\\\x"])
-def test_a_path_with_dot_segments_is_refused(path):
-    from dbabrain.common import deletefiles
+@pytest.mark.parametrize("path, fence", [("/backup/../etc/shadow", "/backup"), ("/backup/./x.bak", "/backup"),
+                                         ("D:\\SQL\\..\\Windows\\x", "D:\\SQL")])
+def test_a_path_with_dot_segments_is_refused(path, fence):
+    from dbabrain.common import deleteverified
     from dbabrain.common.hostcmd import parse_host
 
     host = parse_host({"runtime": "windows" if ":" in path else "linux", "host": "h"})
-    with pytest.raises(deletefiles.DeleteFileError, match="'.' or '..'"):
-        deletefiles._validated_path(path, host=host, must_be_under="/backup")
+    with pytest.raises(deleteverified.DeleteVerifiedError, match="'.' or '..'"):
+        deleteverified._validated_path({"path": path, "must_be_under": fence}, host=host)

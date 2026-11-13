@@ -153,6 +153,14 @@
       "doc": "docs/15_transport.md",
       "summary": "The one client of common.cli and db.cli: lib builds the command and reads the answer, this starts the process between them. Imports only lib, runs nothing of its own.",
       "app_command_ids": []
+    },
+    {
+      "app_code": "mcp",
+      "sort_order": 16,
+      "display_name": "MCP Server",
+      "doc": "docs/16_mcp_app.md",
+      "summary": "dbabrain for Claude Desktop and Claude Code: every common.cli command and the runtime store as MCP tools, started by Claude on the same machine - nothing to schedule.",
+      "app_command_ids": []
     }
   ]
 }

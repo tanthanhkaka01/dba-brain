@@ -1,17 +1,18 @@
-"""Moving a backup set between hosts: one stream, and nothing copied twice.
+"""Making a staging folder ready for a backup set: nothing travels twice, and nothing is removed.
 
-A PostgreSQL backup set is thousands of tiny files. Copying them one at a time over SFTP pays
-several network round trips *each*, and the orchestrator sits an internet hop from both ends —
-measured at 10 KB/s for a 362 MB set, i.e. eight hours, with the link never the limit. The
-files that need copying are therefore streamed as a single tar.
+A drill runs every day against a folder yesterday's run already filled. What makes it usable
+unattended is decided before the first byte moves: a file the target already holds, at the same
+size and not older, does not travel again; a folder the SSH user cannot write is refused in one
+sentence instead of a copy that stalls; and only a folder that carries this tool's marker - or is
+plainly an earlier copy of this source - is treated as a staging at all.
 
-The two properties that make it usable unattended: it never re-copies a file that is already
-there, and it degrades to the old per-file path instead of failing when tar is unusable.
+Until 0.38.0 (1.329) this file also held the copy itself: the one ``tar`` stream the files crossed
+in (a PostgreSQL set is thousands of small files, and one SFTP transfer each was measured at
+10 KB/s), its stderr drained while it ran, and its failure reported so the caller could go file by
+file. Those tests went with the stream: the bytes travel by ``copy-files`` now, each file with its
+size and sha256, and the staging's part is ``prepare_staging`` - which says what still has to
+travel, and names what the source no longer has without removing it.
 """
-
-import os
-import shutil
-import subprocess
 
 import pytest
 
@@ -96,79 +97,45 @@ class _Sftp:
         pass
 
 
-def test_only_the_named_files_are_streamed():
-    """tar -T - takes the caller's list, so the skip decision still governs what moves."""
-    source = _Client(payload=b"TARDATA")
-    target = _Client()
-
-    ok = transfer._stream_files(
-        source_session=source, source_dir="/src", target_session=target, target_dir="/dst",
-        files=[("base/a", 10), ("wal/b", 20)],
-    )
-
-    assert ok is True
-    assert "tar -cf - -C /src" in source.commands[0] and "-T -" in source.commands[0]
-    assert source.stdin.written == b"base/a\nwal/b\n"      # exactly the two names
-    assert "tar -xf - -C /dst" in target.commands[0]
-    assert target.stdin.written == b"TARDATA"              # the stream, untouched
+def _prepare(source_tree, target_sftp, **kwargs):
+    """``prepare_staging`` of ``/src`` into ``/dst`` over the two fakes."""
+    return transfer.prepare_staging(source_session=_Client(sftp=_Sftp(source_tree)), source_dir="/src",
+                                    target_session=_Client(sftp=target_sftp), target_dir="/dst", **kwargs)
 
 
-def test_a_failing_tar_reports_failure_so_the_caller_can_fall_back():
-    source = _Client(payload=b"", rc=2)
-    target = _Client()
-
-    assert transfer._stream_files(
-        source_session=source, source_dir="/src", target_session=target, target_dir="/dst",
-        files=[("a", 1)],
-    ) is False
-
-
-def test_nothing_is_transferred_when_the_target_already_has_it(monkeypatch):
+def test_nothing_is_left_to_travel_when_the_target_already_has_it():
     """The unattended case: a drill that runs daily must not re-send what it sent yesterday."""
     same = {"/src": [("a.bak", 100, False)], "/dst": [("a.bak", 100, False), (".dbabrain-staging", 1, False)]}
-    source = _Client(sftp=_Sftp(same))
-    target = _Client(sftp=_Sftp(same))
-    called = []
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: called.append(kw) or True)
 
-    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
-                                      target_session=target, target_dir="/dst")
+    result = _prepare(same, _Sftp(same))
 
-    assert (result.copied, result.skipped) == (0, 1)
-    assert called == [], "a file already present must not be streamed again"
+    assert result.pending == [], "a file already present must not travel again"
+    assert result.skipped == 1
 
 
-def test_only_the_new_files_are_streamed_on_a_repeat_run(monkeypatch):
+def test_only_the_new_files_travel_on_a_repeat_run():
     tree_src = {"/src": [("old.bak", 100, False), ("new.bak", 200, False)]}
     tree_dst = {"/dst": [("old.bak", 100, False), (".dbabrain-staging", 1, False)]}
-    source = _Client(sftp=_Sftp(tree_src))
-    target = _Client(sftp=_Sftp(tree_dst))
-    seen = {}
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: seen.update(kw) or True)
 
-    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
-                                      target_session=target, target_dir="/dst")
+    result = _prepare(tree_src, _Sftp(tree_dst))
 
-    assert [rel for rel, _ in seen["files"]] == ["new.bak"]
-    assert (result.copied, result.skipped, result.bytes_copied) == (1, 1, 200)
+    assert [(rel, size) for rel, size, _mtime in result.pending] == [("new.bak", 200)]
+    assert result.skipped == 1
+    assert result.as_dict()["pending"] == [{"path": "new.bak", "size_bytes": 200, "mtime": None}], \
+        "what the caller hands to copy-files, and the time finish-staging then sets"
 
 
-def test_a_same_size_file_the_caller_names_in_replace_is_sent_again(monkeypatch):
+def test_a_same_size_file_the_caller_names_in_replace_travels_again():
     """Size and time cannot see a copy with other bytes; the caller's checksum gate can (0.34.0)."""
     same = {"/src": [("a.bak", 100, False), ("b.bak", 100, False)],
             "/dst": [("a.bak", 100, False), ("b.bak", 100, False), (".dbabrain-staging", 1, False)]}
-    source = _Client(sftp=_Sftp(same))
-    target = _Client(sftp=_Sftp(same))
-    seen = {}
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: seen.update(kw) or True)
 
-    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
-                                      target_session=target, target_dir="/dst", replace=("b.bak",))
+    result = _prepare(same, _Sftp(same), replace=("b.bak",))
 
-    assert [rel for rel, _ in seen["files"]] == ["b.bak"]
-    assert (result.copied, result.skipped) == (1, 1)
+    assert [rel for rel, _size, _mtime in result.pending] == ["b.bak"]
+    assert result.skipped == 1
     assert result.as_dict()["files"] == [{"path": "a.bak", "size_bytes": 100}, {"path": "b.bak", "size_bytes": 100}], \
-        "every selected file is answered, copied or not - the gate hashes them all"
+        "every selected file is answered, travelling or not - the gate hashes them all"
 
 
 def test_a_plan_lists_what_the_copy_would_select_and_never_opens_the_target():
@@ -181,280 +148,152 @@ def test_a_plan_lists_what_the_copy_would_select_and_never_opens_the_target():
 
     assert plan.as_dict()["files"] == [{"path": "base/F/backup_manifest", "size_bytes": 7},
                                        {"path": "wal/000000010000000000000001", "size_bytes": 16}]
-    assert plan.copied == 0 and source.commands == [], "nothing streamed, nothing run"
+    assert plan.pending == [], "which of them still travel is the target's to say, and no target was opened"
+    assert source.commands == [], "nothing run"
 
 
-def test_a_changed_size_is_re_sent():
+def test_a_changed_size_travels_again():
     """Same name, different size = not the same file."""
     tree_src = {"/src": [("a.bak", 300, False)]}
     tree_dst = {"/dst": [("a.bak", 100, False), (".dbabrain-staging", 1, False)]}
-    source = _Client(sftp=_Sftp(tree_src), payload=b"X")
-    target = _Client(sftp=_Sftp(tree_dst))
 
-    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
-                                      target_session=target, target_dir="/dst")
+    result = _prepare(tree_src, _Sftp(tree_dst))
 
-    assert (result.copied, result.skipped) == (1, 0)
+    assert [(rel, size) for rel, size, _mtime in result.pending] == [("a.bak", 300)]
+    assert result.skipped == 0
 
 
-def test_a_staging_dir_the_ssh_user_cannot_write_fails_before_anything_is_sent(monkeypatch):
+def test_a_staging_dir_the_ssh_user_cannot_write_fails_before_anything_is_sent():
     """A read-only target is invisible to every other check: it lists fine and refuses every file.
 
-    Left to the stream, `tar -x` complains once per file into a stderr nobody can read until the
-    command ends - which it never does while the copy is still going - so the source pushed 8.25 GB
-    into a stalled pipe, the target wrote nothing, and the run sat at RUNNING for its full two-hour
-    timeout. Measured on CLOUD2 after a staging directory was recreated with sudo and came back
-    root-owned. One probe file up front is the difference between that and a sentence."""
-    tree_src = {"/src": [("a.bak", 100, False)]}
-    source = _Client(sftp=_Sftp(tree_src))
-    target = _Client(sftp=_Sftp({"/dst": []}, writable=False))
-    streamed = []
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: streamed.append(kw) or True)
+    Left to the tar stream this copy once was, `tar -x` complained once per file into a stderr
+    nobody could read until the command ended - which it never did while the copy was still going -
+    so the source pushed 8.25 GB into a stalled pipe, the target wrote nothing, and the run sat at
+    RUNNING for its full two-hour timeout. Measured on CLOUD2 after a staging directory was
+    recreated with sudo and came back root-owned. One probe file up front is the difference between
+    that and a sentence - and it is still asked before a single file is named as travelling."""
+    target_sftp = _Sftp({"/dst": []}, writable=False)
 
     with pytest.raises(PermissionError, match="not writable by the SSH user"):
-        transfer.sync_backup_dir(source_session=source, source_dir="/src",
-                                 target_session=target, target_dir="/dst")
+        _prepare({"/src": [("a.bak", 100, False)]}, target_sftp)
 
-    assert streamed == [], "nothing may be streamed into a directory that refuses it"
+    assert target_sftp.probed == [], "refused at the probe: not even the marker was written"
 
 
-def test_the_probe_file_is_cleaned_up_on_a_writable_target(monkeypatch):
+def test_the_probe_file_is_cleaned_up_on_a_writable_target():
     tree = {"/src": [("a.bak", 100, False)], "/dst": [("a.bak", 100, False), (".dbabrain-staging", 1, False)]}
-    target_sftp = _Sftp(tree)
-    source = _Client(sftp=_Sftp(tree))
-    target = _Client(sftp=target_sftp)
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
+    target_sftp = _RemovingSftp(tree)
 
-    transfer.sync_backup_dir(source_session=source, source_dir="/src",
-                             target_session=target, target_dir="/dst")
+    _prepare(tree, target_sftp)
 
     assert target_sftp.probed == ["/dst/.dbabrain_write_probe"]
+    assert target_sftp.probe_removed == ["/dst/.dbabrain_write_probe"]
 
 
-def test_stderr_is_drained_while_the_stream_runs(monkeypatch):
-    """The deadlock was structural: stderr was only read after recv_exit_status(), which cannot
-    be reached while the copy is still in flight. So the drain must start with the command."""
-    source = _Client(payload=b"TARDATA")
-    target = _Client()
-    drained = []
-    real_drain = transfer._drain
-    monkeypatch.setattr(transfer, "_drain",
-                        lambda handle: drained.append(handle) or real_drain(handle))
-
-    transfer._stream_files(source_session=source, source_dir="/src",
-                           target_session=target, target_dir="/dst", files=[("a", 1)])
-
-    assert len(drained) == 2, "both ends' stderr must be drained, not just the source's"
-
-
-# --------------------------------------------------------------------------- #
-# Pruning the restore-target staging dir must not delete the directories a
-# PostgreSQL backup piece is *supposed* to have empty
-# --------------------------------------------------------------------------- #
-class _CapturingClient:
-    """paramiko-like client that records the command instead of running it."""
-
-    def __init__(self, stdout="0\n", exit_status=0):
-        self.command = None
-        self._stdout, self._exit = stdout, exit_status
-
-    def open_stream(self, command, timeout_seconds=None):  # noqa: ARG002 - signature parity
-        self.command = command
-        channel = type("C", (), {"recv_exit_status": lambda _self: self._exit})()
-        out = type("O", (), {"read": lambda _self: self._stdout.encode(), "channel": channel})()
-        return None, out, out
-
-
-def test_prune_never_deletes_a_directory_that_is_empty_by_design():
-    """`find -type d -empty -delete` took pg_tblspc / pg_replslot / pg_stat_tmp with it.
-
-    The transfer creates them, this ran seconds later and removed them, and the restore then
-    failed with `pg_combinebackup: could not open directory ".../pg_tblspc"` — for a path
-    nobody had deleted at the source. A directory may only go when its whole subtree holds no
-    file at all.
-    """
-    from dbabrain.common.backup_copy import prune_target_dir
-
-    client = _CapturingClient()
-    prune_target_dir(client, "/opt/db_ops/pg_restore_stage", 8 * 86400)
-
-    assert "-type d -empty -delete" not in client.command
-    # A husk is still collected, but only when nothing beneath it is a file.
-    assert "-type f -print -quit" in client.command
-    assert "-maxdepth 2" in client.command          # never steps inside a backup piece
-    assert "-depth" in client.command               # post-order: no descend-into-deleted error
-
-
-def test_prune_still_deletes_files_older_than_the_retention():
-    from dbabrain.common.backup_copy import prune_target_dir
-
-    client = _CapturingClient(stdout="7\n")
-    result = prune_target_dir(client, "/stage", 2 * 86400)
-
-    assert result["pruned"] == 7
-    assert "-type f ! -name .dbabrain-staging -mmin +2880 -print -delete" in client.command
-
-
-def test_prune_is_skipped_when_retention_is_disabled():
-    from dbabrain.common.backup_copy import prune_target_dir
-
-    client = _CapturingClient()
-    result = prune_target_dir(client, "/stage", 0)
-
-    assert result["skipped"] == "retention disabled"
-    assert client.command is None
-
-
-@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
-                    reason="needs a real POSIX /tmp: under MSYS each bash resolves it separately")
-def test_the_prune_shell_command_really_keeps_the_piece_and_drops_the_husk(tmp_path):
-    """Runs the generated command for real — this is where the shell logic is proven.
-
-    Skipped on Windows: the command runs on the Linux restore target, and a Git-Bash harness
-    resolves /tmp per invocation, so a green run here would prove nothing anyway."""
-    from dbabrain.common.backup_copy import prune_target_dir
-
-    root = "/tmp/dbabrain_prune_test"
-    layout = (
-        f"rm -rf {root} && mkdir -p "
-        f"{root}/base/live/pg_tblspc {root}/base/live/pg_replslot "
-        f"{root}/base/husk/base/1 {root}/empty_top {root}/wal && "
-        f"echo x > {root}/base/live/backup_manifest && "
-        f"echo old > {root}/wal/old.wal && touch -t 202001010000 {root}/wal/old.wal && "
-        f"touch -t 202001010000 {root}/.dbabrain-staging"
-    )
-    subprocess.run(["bash", "-lc", layout], check=True, capture_output=True)
-
-    class ShellClient(_CapturingClient):
-        def open_stream(self, command, timeout_seconds=None):
-            self.command = command
-            done = subprocess.run(["bash", "-lc", command], capture_output=True, text=True)
-            channel = type("C", (), {"recv_exit_status": lambda _s: done.returncode})()
-            out = type("O", (), {"read": lambda _s: done.stdout.encode(), "channel": channel})()
-            return None, out, out
-
-    client = ShellClient()
-    result = prune_target_dir(client, root, 8 * 86400)
-    listing = subprocess.run(["bash", "-lc", f"find {root} -mindepth 1 | sort"],
-                             capture_output=True, text=True).stdout.split()
-    rel = {path[len(root):] for path in listing}
-
-    assert "error" not in result, result            # find must not exit non-zero
-    assert "/base/live/pg_tblspc" in rel            # empty by design, and required
-    assert "/base/live/pg_replslot" in rel
-    assert "/base/live/backup_manifest" in rel
-    assert "/base/husk" not in rel                  # no file anywhere beneath it
-    assert "/empty_top" not in rel
-    assert "/wal/old.wal" not in rel                # older than the retention
-    assert "/.dbabrain-staging" in rel                 # the marker is never pruned, however old
+# The staging prune itself (`prune_target_dir`: one `find -delete`, one `rm -rf`) is gone since
+# 0.38.0 - a staged file is deleted by its own verified command. What it held - a folder empty by
+# design inside a live set stays, only a marked folder is cleaned, the marker is never deleted,
+# no retention means no cleanup - is held in test_a_backup_file_is_deleted_only_by_a_verified_command.py.
 
 
 class _RemovingSftp(_Sftp):
+    """Records every delete asked of the target - the write probe's own apart."""
+
     def __init__(self, tree):
         super().__init__(tree)
         self.removed = []
+        self.probe_removed = []
     def remove(self, path):
-        if not path.endswith(".dbabrain_write_probe"):      # the writability probe
+        if path.endswith(".dbabrain_write_probe"):      # the writability probe
+            self.probe_removed.append(path)
+        else:
             self.removed.append(path)
+    def rmdir(self, path):
+        self.removed.append(path)
 
 
-def test_the_staging_copy_mirrors_the_source_and_drops_what_it_no_longer_has(monkeypatch):
+def test_the_staging_names_what_the_source_no_longer_has_and_removes_nothing():
     """A source rebuilt under the same name left its previous life's pieces staged beside the new
     ones; a gvenzl Oracle lab has the same DBID in every life, so RMAN mixed the two and a
-    point-in-time duplicate died on the old life's logs (RMAN-06054, 2026-09-25)."""
+    point-in-time duplicate died on the old life's logs (RMAN-06054, 2026-09-25). The copy mirrored
+    them away until 0.38.0 - a delete held to nothing. It names them now, and the restore deletes
+    each by a verified command or does not run (test_a_backup_file_is_deleted_only_by_...)."""
     tree_src = {"/src": [("new_life.bkp", 100, False)]}
     tree_dst = {"/dst": [("new_life.bkp", 100, False), ("old_life.bkp", 100, False), (".dbabrain-staging", 1, False)]}
     target_sftp = _RemovingSftp(tree_dst)
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    result = transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                                      target_session=_Client(sftp=target_sftp), target_dir="/dst")
+    result = _prepare(tree_src, target_sftp)
 
-    assert target_sftp.removed == ["/dst/old_life.bkp"]
-    assert result.as_dict()["removed_absent_at_source"] == 1
+    assert target_sftp.removed == []
+    assert (result.absent, result.absent_dirs) == (["old_life.bkp"], [])
+    assert result.as_dict()["absent_at_source"] == ["old_life.bkp"]
+    assert result.as_dict()["folders_absent_at_source"] == []
+    assert "removed_absent_at_source" not in result.as_dict()
 
 
-def test_a_file_the_source_still_has_stays_even_when_this_run_does_not_copy_it(monkeypatch):
+def test_a_file_the_source_still_has_is_not_named_even_when_this_run_does_not_copy_it():
     """`include` narrows what one run COPIES, not what the staging folder may hold - an older point
     in time needs pieces a newest-chain copy skipped."""
     tree_src = {"/src": [("full_old.bak", 100, False), ("full_new.bak", 100, False)]}
     tree_dst = {"/dst": [("full_old.bak", 100, False), (".dbabrain-staging", 1, False)]}
     target_sftp = _RemovingSftp(tree_dst)
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                             target_session=_Client(sftp=target_sftp), target_dir="/dst",
-                             include=("full_new",))
+    result = _prepare(tree_src, target_sftp, include=("full_new",))
 
+    assert result.absent == [], "judged against the whole source, not the included part"
+    assert [rel for rel, _size, _mtime in result.pending] == ["full_new.bak"]
     assert target_sftp.removed == []
 
 
 # --------------------------------------------------------------------------- #
-# Only a marked staging directory is mirrored or pruned (review 0.25.0, B4.7)
+# Only a marked staging directory is prepared (review 0.25.0, B4.7)
 # --------------------------------------------------------------------------- #
-def test_an_unmarked_directory_that_holds_files_is_refused_and_nothing_is_deleted(monkeypatch):
+def test_an_unmarked_directory_that_holds_files_is_refused_and_nothing_is_deleted():
     """A target_backup_dir pointed at the target host's own backups used to be emptied by the
-    mirror: every file the source lacked was removed."""
+    mirror: every file the source lacked was removed. Refused, it is not even named for deletion."""
     tree_src = {"/src": [("a.bak", 100, False)]}
     tree_dst = {"/dst": [("the_targets_own_backup.bak", 100, False)]}
     target_sftp = _RemovingSftp(tree_dst)
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
     with pytest.raises(transfer.StagingDirError, match="touch /dst/.dbabrain-staging"):
-        transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                                 target_session=_Client(sftp=target_sftp), target_dir="/dst")
+        _prepare(tree_src, target_sftp)
     assert target_sftp.removed == []
+    assert "/dst/.dbabrain-staging" not in target_sftp.probed, "and it is not marked as this tool's either"
 
 
-def test_an_empty_directory_is_marked_on_the_first_copy(monkeypatch):
-    tree_src = {"/src": [("a.bak", 100, False)]}
+def test_an_empty_directory_is_marked_on_the_first_copy():
     target_sftp = _Sftp({"/dst": []})
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                             target_session=_Client(sftp=target_sftp), target_dir="/dst")
+    _prepare({"/src": [("a.bak", 100, False)]}, target_sftp)
 
     assert "/dst/.dbabrain-staging" in target_sftp.probed
 
 
-def test_the_marker_is_not_mirrored_away(monkeypatch):
+def test_the_marker_is_never_named_as_absent_at_the_source():
+    """The source has no marker, and the folder's own marker is not a file to delete for that."""
     tree_src = {"/src": [("a.bak", 100, False)]}
     target_sftp = _RemovingSftp({"/dst": [("a.bak", 100, False), (".dbabrain-staging", 1, False)]})
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                             target_session=_Client(sftp=target_sftp), target_dir="/dst")
+    result = _prepare(tree_src, target_sftp)
 
+    assert result.absent == []
     assert target_sftp.removed == []
 
 
-def test_prune_refuses_an_unmarked_directory():
-    from dbabrain.common.backup_copy import prune_target_dir
-
-    client = _CapturingClient(stdout="-1\n")
-    result = prune_target_dir(client, "/stage", 2 * 86400)
-
-    assert result["pruned"] == 0
-    assert "no .dbabrain-staging marker" in result["error"]
-    assert "[ ! -f /stage/.dbabrain-staging ]" in client.command
-
-
-def test_an_earlier_staging_copy_of_this_source_is_adopted_without_a_manual_step(monkeypatch):
+def test_an_earlier_staging_copy_of_this_source_is_adopted_without_a_manual_step():
     """A staging folder from before the marker shares files with its source: it is marked and
-    mirrored as usual, no `touch` needed (owner, 2026-10-01: fixes must not add manual steps)."""
+    used as usual, no `touch` needed (owner, 2026-10-01: fixes must not add manual steps)."""
     tree_src = {"/src": [("a.bak", 100, False), ("b.bak", 100, False)]}
     target_sftp = _RemovingSftp({"/dst": [("a.bak", 100, False), ("gone_at_source.bak", 100, False)]})
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
     lines = []
 
-    result = transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                                      target_session=_Client(sftp=target_sftp), target_dir="/dst",
-                                      log=lines.append)
+    result = _prepare(tree_src, target_sftp, log=lines.append)
 
     assert "/dst/.dbabrain-staging" in target_sftp.probed
-    assert target_sftp.removed == ["/dst/gone_at_source.bak"]
-    assert result.as_dict()["removed_absent_at_source"] == 1
+    assert target_sftp.removed == []
+    assert result.as_dict()["absent_at_source"] == ["gone_at_source.bak"]
     assert any("adopted" in line for line in lines)
+    assert any("named, not removed" in line for line in lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -463,52 +302,32 @@ def test_an_earlier_staging_copy_of_this_source_is_adopted_without_a_manual_step
 EARLIER_MARKER = ".dbops-staging"
 
 
-def test_a_folder_emptied_down_to_an_earlier_marker_is_refused_under_the_default(monkeypatch):
+def test_a_folder_emptied_down_to_an_earlier_marker_is_refused_under_the_default():
     """Why the default could not simply take a new name. Retention prunes every staged file and
     never the marker, so between two runs the folder holds the marker alone - nothing that is at
     the source - and a marker under a name this code does not look for is one more unknown file."""
-    tree_src = {"/src": [("a.bak", 100, False)]}
     target_sftp = _RemovingSftp({"/dst": [(EARLIER_MARKER, 1, False)]})
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
     with pytest.raises(transfer.StagingDirError, match="touch /dst/.dbabrain-staging"):
-        transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                                 target_session=_Client(sftp=target_sftp), target_dir="/dst")
+        _prepare({"/src": [("a.bak", 100, False)]}, target_sftp)
     assert target_sftp.removed == []
 
 
-def test_the_same_folder_is_this_tools_when_the_request_names_the_marker_it_carries(monkeypatch):
-    tree_src = {"/src": [("a.bak", 100, False)]}
+def test_the_same_folder_is_this_tools_when_the_request_names_the_marker_it_carries():
     target_sftp = _RemovingSftp({"/dst": [(EARLIER_MARKER, 1, False)]})
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                             target_session=_Client(sftp=target_sftp), target_dir="/dst",
-                             marker=EARLIER_MARKER)
+    result = _prepare({"/src": [("a.bak", 100, False)]}, target_sftp, marker=EARLIER_MARKER)
 
-    assert target_sftp.removed == [], "the marker is the folder's own, not a file the source lacks"
+    assert result.absent == [], "the marker is the folder's own, not a file the source lacks"
+    assert target_sftp.removed == []
     assert "/dst/.dbabrain-staging" not in target_sftp.probed, "no second marker beside the first"
 
 
-def test_a_refusal_names_the_marker_the_request_asked_for(monkeypatch):
-    tree_src = {"/src": [("a.bak", 100, False)]}
+def test_a_refusal_names_the_marker_the_request_asked_for():
     target_sftp = _RemovingSftp({"/dst": [("the_targets_own_backup.bak", 100, False)]})
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
     with pytest.raises(transfer.StagingDirError, match="touch /dst/.dbops-staging"):
-        transfer.sync_backup_dir(source_session=_Client(sftp=_Sftp(tree_src)), source_dir="/src",
-                                 target_session=_Client(sftp=target_sftp), target_dir="/dst",
-                                 marker=EARLIER_MARKER)
-
-
-def test_prune_keeps_and_looks_for_the_marker_the_request_names():
-    client = _CapturingClient(stdout="3\n")
-
-    result = transfer.prune_target_dir(client, "/stage", 2 * 86400, marker=EARLIER_MARKER)
-
-    assert result["pruned"] == 3
-    assert "! -name .dbops-staging -mmin +2880" in client.command
-    assert "[ ! -f /stage/.dbops-staging ]" in client.command
+        _prepare({"/src": [("a.bak", 100, False)]}, target_sftp, marker=EARLIER_MARKER)
 
 
 @pytest.mark.parametrize("stated, name", [
@@ -520,6 +339,6 @@ def test_a_request_that_names_no_marker_takes_the_default(stated, name):
 @pytest.mark.parametrize("stated", ["staging", "a.bak", "../.x", ".x/y", ".", "..", ".a b", r"C:\.x"])
 def test_a_marker_is_one_hidden_file_name_and_never_a_path(stated):
     """It is joined to the staging folder and handed to `find -name`; and a name a backup set could
-    carry would make the marker a file the mirror and the lister treat as a backup."""
+    carry would make the marker a file the staging and the lister treat as a backup."""
     with pytest.raises(ValueError, match="staging_marker"):
         transfer.marker_name(stated)

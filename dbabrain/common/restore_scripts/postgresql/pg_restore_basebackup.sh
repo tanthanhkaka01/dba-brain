@@ -59,7 +59,7 @@ fi
 # arranged by giving the target a bind mount at the same path — which quietly restricts the
 # restore to containers built for the purpose. Any running container can be a target if the
 # staged directory is simply copied in, so when BACKUP_DIR is missing inside the container but
-# present on the host (where sync_backup_dir put it), copy it across. A container that already
+# present on the host (where the staging copy put it), copy it across. A container that already
 # has the path mounted is left alone, so the mounted setup keeps working unchanged.
 # Is backup_dir served by a real mount inside the container? Matching /proc/mounts against
 # backup_dir alone was wrong: the bind mount is usually a PARENT ("/opt/oracle/backup" holding
@@ -156,9 +156,29 @@ printf 'pieces_readable_by=%s\n' "$pg_os_user"
 # PGDATA, so moving the result in later is a rename rather than a copy.
 staging="${RESTORE_STAGING:-/var/lib/postgresql/dbabrain_restore_staging}"
 in_t "rm -rf '${staging}'" || die "could not clear the staging directory."
-if ! in_t "${pg_bin}/pg_combinebackup ${chain} -o '${staging}' 2>&1"; then
+# A TAR backup (0.37.0: base.tar.zst + pg_wal.tar + backup_manifest) is unpacked first, with its
+# manifest, into a work folder beside the staging one: pg_combinebackup reads plain directories
+# only. A plain member is read where it is. The work folder goes once the chain is combined.
+unpacked="${staging}_unpacked"
+in_t "rm -rf '${unpacked}' && mkdir -p '${unpacked}'" || die "could not prepare ${unpacked}."
+inputs=""
+n=0
+for member in $chain; do
+    if in_t "ls '${member}'/base.tar* >/dev/null 2>&1"; then
+        dest="${unpacked}/${n}"
+        in_t "mkdir -p '${dest}' && for f in '${member}'/*.tar '${member}'/*.tar.*; do [ -e \"\$f\" ] || continue; nm=\$(basename \"\$f\"); case \"\$nm\" in base.tar*) to='${dest}' ;; pg_wal.tar*) to='${dest}/pg_wal' ;; *) echo \"\$nm: a tablespace archive - not restored here\" >&2; exit 3 ;; esac; case \"\$nm\" in *.zst) z=zstd ;; *.gz) z=gzip ;; *.lz4) z=lz4 ;; *) z=cat ;; esac; command -v \"\$z\" >/dev/null 2>&1 || { echo \"\$z not found\" >&2; exit 127; }; mkdir -p \"\$to\" && if [ \"\$z\" = cat ]; then tar -xf \"\$f\" -C \"\$to\"; else \"\$z\" -dc \"\$f\" | tar -xf - -C \"\$to\"; fi || exit 4; done && cp '${member}/backup_manifest' '${dest}/backup_manifest' && test -f '${dest}/PG_VERSION'" \
+            || die "could not unpack the tar backup ${member}."
+        inputs="${inputs} '${dest}'"
+        printf 'unpacked=%s into %s\n' "$member" "$dest"
+    else
+        inputs="${inputs} '${member}'"
+    fi
+    n=$((n + 1))
+done
+if ! in_t "${pg_bin}/pg_combinebackup ${inputs} -o '${staging}' 2>&1"; then
     die "pg_combinebackup failed; the chain does not reconstruct."
 fi
+in_t "rm -rf '${unpacked}'" || printf 'warning: could not remove %s\n' "$unpacked" >&2
 in_t "test -f '${staging}/PG_VERSION' && test -d '${staging}/base'" \
     || die "combined output is not a data directory (no PG_VERSION/base)."
 combined_size="$(in_t "du -sh '${staging}' | cut -f1" | tr -d '\r')"
@@ -310,7 +330,10 @@ control_field() { # <pgdata> <exact pg_controldata label>   -> the value, trimme
 # source host is needed, which matters because the two database hosts cannot reach each other.
 chain_full="$(printf '%s\n' $chain | head -1)"
 chain_newest="$(basename "$(printf '%s\n' $chain | tail -1)")"
-backup_sysid="$(control_field "$chain_full" "Database system identifier")"
+# The backup's identifier from its manifest (PostgreSQL 17+, both formats - a TAR backup has no
+# global/pg_control to read in place); pg_controldata on a plain directory before that.
+backup_sysid="$(in_t "grep -o '\"System-Identifier\": *[0-9]*' '${chain_full}/backup_manifest' 2>/dev/null | head -1 | grep -o '[0-9]*\$'" | tr -d '\r[:space:]')"
+[ -n "$backup_sysid" ] || backup_sysid="$(control_field "$chain_full" "Database system identifier")"
 target_sysid="$(control_field "$pgdata" "Database system identifier")"
 printf 'system_identifier backup=%s target=%s\n' "${backup_sysid:-unknown}" "${target_sysid:-unknown}"
 [ -n "$backup_sysid" ] && [ -n "$target_sysid" ] || die \

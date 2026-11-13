@@ -7,8 +7,13 @@ pruned - and left its directories. The listing reads a PostgreSQL backup off its
 and a directory with no ``backup_manifest`` is dated by its own mtime, which was the removal: the
 empty husk read as the newest full, and the restore combined it with every incremental after it.
 
-Two fixes, each enough on its own: the mirror removes the directories the source no longer has,
-and the listing does not count a backup directory that holds no file.
+Two fixes, each enough on its own: the directories the source no longer has leave the staging with
+their files, and the listing does not count a backup directory that holds no file.
+
+The first was the mirror's own ``rmdir`` until 0.38.0 (1.329). The staging removes nothing now: it
+names the pruned set's files and its folders, deepest first, and the restore deletes each file by a
+verified command and each emptied folder by ``delete-empty-folders`` - or does not run. So what is
+held here is the naming, its order, and that the restore asks for exactly what was named.
 """
 
 from __future__ import annotations
@@ -18,19 +23,23 @@ import posixpath
 import shutil
 import stat as st
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
+from dbabrain.backup_restore import restore_script
 from dbabrain.common import backup_copy
 from dbabrain.common.backupfiles import postgresql
 
 
 class _Sftp:
-    """A filesystem as a dict: directories hold names; ``rmdir`` refuses a non-empty one."""
+    """A filesystem as a dict: directories hold names; ``rmdir`` refuses a non-empty one. Every
+    delete asked of it is recorded - the write probe's own apart."""
 
     def __init__(self, files: dict[str, int], dirs: set[str]):
         self.files = dict(files)
         self.dirs = set(dirs)
+        self.deletes: list[str] = []
 
     def _children(self, path):
         path = path.rstrip("/")
@@ -79,9 +88,12 @@ class _Sftp:
         return _F()
 
     def remove(self, path):
+        if not path.endswith(".dbabrain_write_probe"):
+            self.deletes.append(path)
         self.files.pop(path)
 
     def rmdir(self, path):
+        self.deletes.append(path)
         if self._children(path):
             raise OSError(39, "Directory not empty")
         self.dirs.discard(path.rstrip("/"))
@@ -112,26 +124,103 @@ def _tree(root, sets):
     return files, dirs
 
 
-def test_the_mirror_removes_the_folder_of_a_set_the_source_pruned(monkeypatch):
-    live = {"20261003T020031Z_FULL": ["backup_manifest", "global/pg_control", "base/5/1259"]}
-    pruned = {"20261003T000013Z_FULL": ["backup_manifest", "global/pg_control", "base/5/1259"],
-              "20261003T001019Z_INCR": ["backup_manifest", "global/pg_control"]}
-    source = _Sftp(*_tree("/src", live))
-    files, dirs = _tree("/dst", {**live, **pruned})
+LIVE = {"20261003T020031Z_FULL": ["backup_manifest", "global/pg_control", "base/5/1259"]}
+PRUNED = {"20261003T000013Z_FULL": ["backup_manifest", "global/pg_control", "base/5/1259"],
+          "20261003T001019Z_INCR": ["backup_manifest", "global/pg_control"]}
+
+
+def _prepared():
+    """The staging still holds two sets the source has pruned; returns (the answer, the target)."""
+    source = _Sftp(*_tree("/src", LIVE))
+    files, dirs = _tree("/dst", {**LIVE, **PRUNED})
     files["/dst/" + backup_copy.STAGING_MARKER] = 1
     target = _Sftp(files, dirs)
-    monkeypatch.setattr(backup_copy, "_stream_files", lambda **_kw: True)
+    result = backup_copy.prepare_staging(source_session=_Session(source), source_dir="/src",
+                                         target_session=_Session(target), target_dir="/dst")
+    return result, target
 
-    backup_copy.sync_backup_dir(source_session=_Session(source), source_dir="/src",
-                                target_session=_Session(target), target_dir="/dst")
 
-    left = sorted(d for d in target.dirs if d.startswith("/dst/base/"))
-    assert "/dst/base/20261003T000013Z_FULL" not in left
-    assert "/dst/base/20261003T001019Z_INCR" not in left
-    assert not any("000013Z" in d or "001019Z" in d for d in left)
-    # The live set is untouched - its files, and the directory it holds empty by design.
+def test_the_staging_names_the_files_and_the_folders_of_a_set_the_source_pruned():
+    result, _target = _prepared()
+
+    assert result.absent == sorted(f"base/{name}/{member}" for name, members in PRUNED.items()
+                                   for member in members)
+    # Deepest first - the order they have to be removed in: a parent is empty by the time it is tried.
+    assert result.absent_dirs == [
+        "base/20261003T000013Z_FULL/base/5",
+        "base/20261003T000013Z_FULL/base",
+        "base/20261003T000013Z_FULL/global",
+        "base/20261003T001019Z_INCR/global",
+        "base/20261003T000013Z_FULL",
+        "base/20261003T001019Z_INCR"]
+    assert result.as_dict()["folders_absent_at_source"] == result.absent_dirs
+    # The live set is not named - its files, and the directory it holds empty by design.
+    assert not any("020031Z" in rel for rel in result.absent + result.absent_dirs)
+
+
+def test_the_staging_itself_removes_neither_the_files_nor_the_folders():
+    """It was a mirror: each such file removed over SFTP and each folder by ``rmdir``, held to
+    nothing. Naming is all it does now; the deletes are the restore's, each by a verified command."""
+    _result, target = _prepared()
+
+    assert target.deletes == []
+    assert "/dst/base/20261003T000013Z_FULL/global/pg_control" in target.files
+    assert "/dst/base/20261003T001019Z_INCR" in target.dirs
     assert "/dst/base/20261003T020031Z_FULL/global/pg_control" in target.files
     assert "/dst/base/20261003T020031Z_FULL/pg_tblspc" in target.dirs
+
+
+def test_the_restore_deletes_what_was_named_the_files_first_then_each_folder(monkeypatch):
+    """The husk must still never reach a restore. What the staging named goes in two requests on
+    the target: the files by the facts of the copy that staged them, then the folders in the order
+    they were named - every one fenced to the staging folder."""
+    result, _target = _prepared()
+    asked: list[tuple[str, dict]] = []
+
+    def run_allowing_failure(command, request, **_kwargs):
+        asked.append((command, request))
+        key = "files" if command == "delete-verified-files" else "folders"
+        return True, {key: [{"path": one["path"], "status": "deleted"} for one in request[key]]}, ""
+
+    monkeypatch.setattr(restore_script.common_cli, "run_allowing_failure", run_allowing_failure)
+    catalog = SimpleNamespace(staged_file_facts=lambda *, target_server_id, paths: {
+        path: {"size_bytes": 10, "sha256": "a" * 64} for path in paths})
+    job = SimpleNamespace(label="PG_A_TO_B (postgresql)", target_server_id="ACME-PG-B")
+
+    cleared = restore_script._clear_absent_at_source(
+        job, result.as_dict(), target_host={"runtime": "linux", "access": "ssh", "host": "192.0.2.50"},
+        target_dir="/dst", catalog=catalog)
+
+    assert cleared == len(result.absent) == 5
+    assert [command for command, _request in asked] == ["delete-verified-files", "delete-empty-folders"]
+    assert [one["path"] for one in asked[0][1]["files"]] == [f"/dst/{rel}" for rel in result.absent]
+    assert asked[1][1]["folders"] == [{"path": f"/dst/{rel}", "must_be_under": "/dst"}
+                                      for rel in result.absent_dirs]
+
+
+def test_a_husk_that_could_not_be_removed_stops_the_restore_by_name(monkeypatch):
+    """Left in place, the empty ``<stamp>_FULL`` reads as the newest full - the failure this file is
+    about - so a folder that will not go is the restore's refusal, not a line in a log."""
+    result, _target = _prepared()
+
+    def run_allowing_failure(command, request, **_kwargs):
+        if command == "delete-verified-files":
+            return True, {"files": [{"path": one["path"], "status": "deleted"} for one in request["files"]]}, ""
+        return False, {"folders": [{"path": one["path"], "status": "refused",
+                                    "reason": "the folder holds 1 entry"} for one in request["folders"]]}, ""
+
+    monkeypatch.setattr(restore_script.common_cli, "run_allowing_failure", run_allowing_failure)
+    catalog = SimpleNamespace(staged_file_facts=lambda *, target_server_id, paths: {
+        path: {"size_bytes": 10, "sha256": "a" * 64} for path in paths})
+    job = SimpleNamespace(label="PG_A_TO_B (postgresql)", target_server_id="ACME-PG-B")
+
+    with pytest.raises(restore_script.StagingNotClearError) as refused:
+        restore_script._clear_absent_at_source(
+            job, result.as_dict(), target_host={"runtime": "linux", "access": "ssh", "host": "192.0.2.50"},
+            target_dir="/dst", catalog=catalog)
+
+    assert "/dst/base/20261003T000013Z_FULL/base/5 (refused - the folder holds 1 entry)" in str(refused.value)
+    assert "Nothing is restored over them" in str(refused.value)
 
 
 def test_the_listing_does_not_count_a_backup_folder_that_holds_no_file():

@@ -1239,7 +1239,29 @@ def _dispatch(argv: list[str]) -> int:
         from dbabrain.common import cli_delete_files
 
         return cli_delete_files.run(argv[0], argv[1:], read_request=_read_json_request)
-    if argv[0] in {"backup-chain", "copy-backup-dir", "prune-staged-backups"}:
+    if argv[0] in {"delete-verified-file", "delete-empty-folder", "delete-verified-files", "delete-empty-folders"}:
+        # 0.37.0: one file whose every fact is stated and true on the host, or one empty folder - or a
+        # list of them, each item checked and removed by its own script, over one connection.
+        from dbabrain.common import cli_delete_verified
+
+        return cli_delete_verified.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] == "list-files":
+        # 0.37.0: every entry under a folder, its kind and bytes, no hash - the repository check.
+        from dbabrain.common import cli_listfiles
+
+        return cli_listfiles.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] == "read-file":
+        # 0.37.0: one small file's bytes, proven on arrival - a backup certificate for the vault.
+        from dbabrain.common import cli_readfile
+
+        return cli_readfile.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] in {"encrypt-file", "verify-encrypted-file", "fetch-decrypted-file", "decrypt-on-host"}:
+        # 0.37.0: one backup file encrypted with age at the repository, then proven by decrypting it.
+        from dbabrain.common import cli_repoencrypt
+
+        return cli_repoencrypt.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] in {"prepare-staging", "finish-staging", "backup-chain", "copy-backup-dir",
+                   "prune-staged-backups"}:
         from dbabrain.common import cli_backup_copy
 
         return cli_backup_copy.run(argv[0], argv[1:], read_request=_read_json_request)

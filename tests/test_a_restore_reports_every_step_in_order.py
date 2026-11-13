@@ -17,8 +17,11 @@ the SQL Server engine path around the same work:
   warning a "done with a warning" is about.
 
 The copy and the cleanup were also the two steps that were not `common.cli` commands: the app
-opened its own SSH sessions for them. They are `backup-chain`, `copy-backup-dir` and
-`prune-staged-backups` now.
+opened its own SSH sessions for them. They became `backup-chain`, `copy-backup-dir` and
+`prune-staged-backups` that day; since 0.38.0 (1.329) the copy is `prepare-staging` (the plan, then
+the staging made ready), `copy-files` (the bytes, each file with its size and sha256) and
+`finish-staging`, and the delete is a `list-files` followed by verified deletes - each still a
+command of its own, which is what was asked for.
 
 The scenario, success first, then each way it stops:
 
@@ -80,7 +83,7 @@ def drill(monkeypatch):
         def transfer(*a, **k):
             state["calls"].append(("copy", k.get("prune"), k.get("point_in_time")))
             if copy_fails:
-                raise RuntimeError("copy-backup-dir failed: target not writable")
+                raise RuntimeError("prepare-staging failed: target not writable")
             return {"copied": 3, "skipped": 1, "bytes_copied": 99, "include": ["base/x", "wal/"],
                     "removed_absent_at_source": 0}
 
@@ -252,16 +255,35 @@ def test_a_step_event_leads_with_its_own_message():
 # --------------------------------------------------------------------------- #
 # Each step is its own common.cli command
 # --------------------------------------------------------------------------- #
-def test_the_copy_is_a_chain_a_plan_and_a_copy_and_the_delete_a_fourth(monkeypatch):
-    """The plan (0.34.0, 1.213b) is how the checksum gate learns the files before any moves."""
+def test_the_copy_is_a_plan_a_staging_a_copy_and_its_times_and_the_delete_starts_with_a_listing(monkeypatch):
+    """The plan (0.34.0, 1.213b) is how the checksum gate learns the files before any moves; it
+    reads the chain as well since 0.38.0, where `backup-chain` was a command of its own."""
     called = []
+    sha = "a" * 64
+    selected = [{"path": "wal/0001", "size_bytes": 5}]
 
     def run(command, request, **kwargs):
         called.append((command, request))
-        return {"backup-chain": {"include": ["base/F", "wal/"], "narrowed": True},
-                "copy-backup-dir": {"copied": 1, "skipped": 0, "bytes_copied": 5,
-                                    "removed_absent_at_source": 0, "opened_for_engine": True},
-                "prune-staged-backups": {"pruned": 2, "retention_seconds": 60}}[command]
+        if command == "prepare-staging":
+            if request.get("plan_only"):
+                return {"include": ["base/F", "wal/"], "narrowed": True, "files": selected}
+            return {"files": selected, "pending": [{**selected[0], "mtime": 1_790_000_000}], "skipped": 0,
+                    "absent_at_source": [], "folders_absent_at_source": []}
+        if command == "file-checksum":
+            # The source holds the file; the target holds it once it has been copied there.
+            held = request["host"]["host"] == "192.0.2.49" or any(c == "copy-files" for c, _ in called)
+            return {"files": [{"path": path, "sha256": sha, "size_bytes": 5} for path in request["paths"]]
+                    if held else []}
+        if command == "copy-files":
+            return {"files": [{"target": one["target"], "ok": True, "bytes_copied": 5} for one in request["files"]]}
+        if command == "finish-staging":
+            return {"timed": len(request["files"]), "not_timed": [], "opened_for_engine": True}
+        # The delete step reads the staging first (0.38.0); with only its marker there,
+        # nothing is past retention and no delete is asked for.
+        return {"list-files": {"folder": request.get("folder"), "folder_found": True, "listed": 1,
+                               "truncated": False, "folders": [],
+                               "files": [{"path": f"{request.get('folder')}/.dbabrain-staging", "type": "file",
+                                          "size_bytes": 0, "mtime_utc": "2026-09-25T00:00:00Z"}]}}[command]
 
     monkeypatch.setattr(restore_script.common_cli, "run", run)
     monkeypatch.setattr(restore_script, "_ssh_login",
@@ -272,14 +294,30 @@ def test_the_copy_is_a_chain_a_plan_and_a_copy_and_the_delete_a_fourth(monkeypat
 
     out = restore_script.transfer_backup_to_target(job, source=source, target=target, prune=False,
                                                    point_in_time="2026-09-25 08:23:46 +08:00")
-    restore_script.prune_staged_backups(job, target=target)
+    pruned = restore_script.prune_staged_backups(job, target=target)
 
-    assert [c for c, _ in called] == ["backup-chain", "copy-backup-dir", "copy-backup-dir", "prune-staged-backups"]
-    assert called[0][1]["point_in_time"] == "2026-09-25 08:23:46 +08:00"
-    assert called[1][1]["plan_only"] is True and "plan_only" not in called[2][1]
-    assert called[2][1]["include"] == ["base/F", "wal/"]
-    assert called[2][1]["source"]["host"] == "192.0.2.49" and called[2][1]["target"]["host"] == "192.0.2.50"
+    assert [c for c, _ in called] == [
+        "prepare-staging",                      # the plan: the chain and the files, from the source alone
+        "file-checksum", "file-checksum",       # the gate: the source, then what the target holds
+        "prepare-staging", "copy-files", "finish-staging",
+        "file-checksum",                        # the copy proven on the target
+        "list-files"]                           # the delete, asked for after the restore
+    plan, staged, copy, finish, listing = (called[index][1] for index in (0, 3, 4, 5, 7))
+    assert plan["plan_only"] is True and "plan_only" not in staged
+    assert plan["chain"] == {"db_type": "postgresql", "backup_dir": "/b/PG_LAB_A", "container": "PG_LAB_A",
+                             "point_in_time": "2026-09-25 08:23:46 +08:00"}
+    assert staged["include"] == ["base/F", "wal/"] and staged["replace"] == ["wal/0001"]
+    assert staged["source"]["host"] == "192.0.2.49" and staged["target"]["host"] == "192.0.2.50"
+    assert [(one["source"], one["target"], one["size_bytes"], one["sha256"]) for one in copy["files"]] == [
+        ("/b/PG_LAB_A/wal/0001", "/b/pg_restore_from_a/wal/0001", 5, sha)]
+    assert copy["source"]["host"] == "192.0.2.49" and copy["target"]["host"] == "192.0.2.50"
+    assert finish["target_dir"] == "/b/pg_restore_from_a" and finish["open_for_engine"] is True
+    assert finish["files"] == [{"path": "wal/0001", "mtime": 1_790_000_000}]
+    assert listing["host"]["host"] == "192.0.2.50" and listing["with_folders"] is True
+    assert pruned["pruned"] == 0 and "error" not in pruned
     assert out["include"] == ["base/F", "wal/"]
+    # What COPY_DONE says to the operator is read from these three.
+    assert (out["copied"], out["bytes_copied"], out["skipped"]) == (1, 5, 0)
 
 
 def test_a_point_in_time_copies_the_whole_directory_without_asking_the_source():
@@ -403,12 +441,16 @@ def test_a_refused_id_is_named_in_the_refusal(empty_root, monkeypatch, argv, key
 
 def test_what_a_copy_command_says_while_working_never_reaches_its_answer(monkeypatch, capsys):
     """Opening a session prints "Connecting to ..." on stdout; the first lab run's answer arrived
-    behind it and the app could not read it ("backup-chain exited 0 without a JSON response")."""
+    behind it and the app could not read it ("backup-chain exited 0 without a JSON response" - the
+    command that read the chain then; `prepare-staging` reads it now, with the plan)."""
     import json
 
     from dbabrain.common import cli_backup_copy
 
     class _Client:
+        def run(self, _command):      # the chmod that makes the source readable
+            pass
+
         def close(self):
             pass
 
@@ -418,13 +460,18 @@ def test_what_a_copy_command_says_while_working_never_reaches_its_answer(monkeyp
 
     monkeypatch.setattr(cli_backup_copy, "_open", chatty_open)
     monkeypatch.setattr(backup_copy, "chain_include", lambda *a, **k: ("wal/",))
-    request = {"db_type": "postgresql", "source": {"host": "192.0.2.49"}, "source_dir": "/b"}
+    monkeypatch.setattr(backup_copy, "plan_backup_dir",
+                        lambda **k: backup_copy.TransferResult(files=[("wal/000000010000000000000001", 16)]))
+    request = {"source": {"host": "192.0.2.49"}, "source_dir": "/b", "chain": {"db_type": "postgresql"},
+               "plan_only": True}
 
-    code = cli_backup_copy.run("backup-chain", ["-"], read_request=lambda _s, _u: (request, 0))
+    code = cli_backup_copy.run("prepare-staging", ["-"], read_request=lambda _s, _u: (request, 0))
 
     out = capsys.readouterr()
     assert code == 0
-    assert json.loads(out.out)["data"] == {"include": ["wal/"], "narrowed": True}
+    data = json.loads(out.out)["data"]
+    assert (data["include"], data["narrowed"]) == (["wal/"], True)
+    assert data["files"] == [{"path": "wal/000000010000000000000001", "size_bytes": 16}]
     assert "Connecting to" in out.err
 
 

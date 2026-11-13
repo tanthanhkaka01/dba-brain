@@ -274,6 +274,27 @@ if [ "$wal_window" = keep ]; then
     printf 'wal_cleanup: kept (keep)\n'
 elif [ -n "$oldest_base" ]; then
     start_wal="$(run_db "grep -m1 -o '[0-9A-F]\{24\}' '${oldest_base}/backup_label' 2>/dev/null" | tr -d '\r')"
+    # >>> start wal from manifest (tests/test_a_postgresql_backup_is_tar_compressed_and_restores.py runs this block)
+    if [ -z "$start_wal" ]; then
+        # A TAR backup (0.37.0): backup_label is inside base.tar, so the start comes from the
+        # manifest beside it - "WAL-Ranges": [{"Timeline": n, "Start-LSN": "hi/lo"}] - named the way
+        # PostgreSQL names the segment, with the cluster's own segment size (16 MB unless initdb
+        # chose otherwise). The earliest range when there are several.
+        seg_text="$(run_db "psql ${pg_conn:-} -tAc 'show wal_segment_size'" 2>/dev/null | tr -d '[:space:]')"
+        case "$seg_text" in
+            *GB) seg_bytes=$(( ${seg_text%GB} * 1024 * 1024 * 1024 )) ;;
+            *MB) seg_bytes=$(( ${seg_text%MB} * 1024 * 1024 )) ;;
+            *) seg_bytes=16777216 ;;
+        esac
+        ranges="$(run_db "tr -d ' \n\r\t' < '${oldest_base}/backup_manifest' 2>/dev/null" | grep -o '"WAL-Ranges":\[[^]]*\]' | head -1)"
+        start_wal="$(printf '%s' "$ranges" | grep -o '{[^}]*}' | while read -r one; do
+            tl="$(printf '%s' "$one" | grep -o '"Timeline":[0-9]*' | grep -o '[0-9]*$')"
+            lsn="$(printf '%s' "$one" | grep -o '"Start-LSN":"[0-9A-Fa-f]*/[0-9A-Fa-f]*"' | cut -d'"' -f4)"
+            [ -n "$tl" ] && [ -n "$lsn" ] || continue
+            printf '%08X%08X%08X\n' "$tl" "$(( 16#${lsn%/*} ))" "$(( 16#${lsn#*/} / seg_bytes ))"
+        done | sort | head -1)"
+    fi
+    # <<< start wal from manifest
     if [ -n "$start_wal" ]; then
         printf 'wal_cleanup_floor=%s from=%s\n' "$start_wal" "$oldest_base"
         # The backup-history file each base backup leaves (<segment>.<offset>.backup) is removed by
@@ -295,7 +316,7 @@ elif [ -n "$oldest_base" ]; then
         printf 'backup_history_removed=%s backup_history_kept=%s\n' \
             "$(( ${history_before:-0} - ${history_after:-0} ))" "${history_after:-0}"
     else
-        printf 'skipping WAL cleanup: no START WAL in %s/backup_label\n' "$oldest_base"
+        printf 'skipping WAL cleanup: no START WAL in %s (backup_label or backup_manifest)\n' "$oldest_base"
     fi
 else
     # Nothing to protect yet, but do not let the archive grow without bound while the first

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from dbabrain.lib.config import load_config
+from dbabrain.lib.redaction import mask_sensitive_text  # noqa: F401 - re-exported; moved to lib in 0.38.0
 from dbabrain.lib.process_liveness import (  # noqa: F401 - re-exported, see above
     is_pid_alive as _is_pid_alive,
     is_windows_pid_alive as _is_windows_pid_alive,
@@ -165,17 +166,6 @@ def mask_sensitive_value(value: Any) -> Any:
     if isinstance(value, str):
         return mask_sensitive_text(value)
     return value
-
-
-def mask_sensitive_text(text: str) -> str:
-    masked = re.sub(r"(?i)(password|token|secret|pwd)\s*[:=]\s*[^,\s]+", r"\1=***", str(text))
-    masked = re.sub(r"(?i)(-P\s+)(\"[^\"]+\"|'[^']+'|\S+)", r"\1***", masked)
-    masked = re.sub(r"(?i)(--key(?:-base64|_base64)?[=\s]+)(\"[^\"]+\"|'[^']+'|\S+)", r"\1***", masked)
-    # Oracle/SQL shapes a DB tool echoes back on failure, which the key=value rules above
-    # do not cover: `sys/secret@TNS` in a connect string, and `IDENTIFIED BY "secret"`.
-    masked = re.sub(r"(?i)\b([A-Za-z][\w$#]*)/(\"[^\"]+\"|'[^']+'|[^\s@/]+)(@\S+)", r"\1/***\3", masked)
-    masked = re.sub(r"(?i)(identified\s+by\s+)(\"[^\"]+\"|'[^']+'|\S+)", r"\1***", masked)
-    return masked
 
 
 def secret_values(values: dict[str, Any] | None) -> list[str]:

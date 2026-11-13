@@ -52,8 +52,8 @@ def ensure_source_certificate(
             return {"status": "DRY_RUN", "source_id": config.source_id,
                     "certificate_api_url": config.certificate_api_url}
         return {"status": "DRY_RUN", "source_id": config.source_id,
-                "certificate_source": _share_cert_path(config, "cer"),
-                "certificate_source_dir": config.backup_certificate.source_dir or None}
+                "certificate_source": "dbabrain's certificate vault",
+                "certificate_name": config.backup_certificate.name}
 
     validate_restore_target_is_not_source(config)
     certificate = (fetch_backup_certificate(config) if config.certificate_api_url
@@ -87,20 +87,13 @@ def ensure_source_certificate(
     }
 
 
-def _share_cert_path(config: BackupRestoreConfig, suffix: str) -> str:
-    """``<share>\\_cert\\<name>.<suffix>`` - where the backup job exports the pair."""
-    source = config.backup_certificate
-    name = source.name if source is not None else ""
-    return str(config.prod_backup_share).replace("/", "\\").rstrip("\\") + f"\\_cert\\{name}.{suffix}"
-
-
 def read_backup_certificate_pair(config: BackupRestoreConfig, *, logger: object | None = None) -> BackupCertificate:
-    """The pair dbabrain's backup job exported beside the backups, read into memory.
+    """The pair dbabrain's vault holds for the source server, read into memory (0.37.0).
 
-    From the share first, with the same login the backups are copied with. A pair exported before
-    0.24.1 is readable by the SQL Server service account only, and the share refuses it - then
-    ``source_dir`` is read over the SOURCE host's own login (``run-cmd``), where an administrator's
-    session can. The thumbprint is the SHA-1 of the ``.cer``, so it is computed here, not asked for.
+    The vault only: the operator, 2026-11-10 - *the certificate and key are kept in dbabrain and
+    deleted on the server_id; a copy carries the backups, never _cert*. The share and the source
+    host were read until then; a pair still there is taken with ``take-certificate``, never read
+    from beside the backups. The thumbprint is the SHA-1 of the ``.cer``, so it is computed here.
     """
     source = config.backup_certificate
     if source is None:
@@ -108,25 +101,17 @@ def read_backup_certificate_pair(config: BackupRestoreConfig, *, logger: object 
     password = resolve_password_ref(source.password_ref)
     if not password:
         raise errors.NotConfigured(f"Password ref not found in environment or secret_text.json: {source.password_ref}")
-    try:
-        cer, pvk = _pair_from_share(config)
-        where = _share_cert_path(config, "cer")
-    except Exception as share_error:  # noqa: BLE001 - refused, missing, unreachable: all the same next step.
-        if not source.source_dir:
-            raise errors.OperationFailed(
-                f"cannot read the backup certificate from {_share_cert_path(config, 'cer')}: {share_error}. "
-                "A pair exported before 0.24.1 is readable by the SQL Server service account only - run "
-                "the backup once on this version, or name source.backup_certificate.source_dir to read "
-                "it over the source host's login.") from share_error
-        if logger:
-            log_event(logger, level="logging", message=sanitize_text(
-                f"restore_id={config.restore_id} certificate share read refused ({share_error}); "
-                f"reading {source.source_dir} over the source host's login"))
-        cer, pvk = _pair_from_source_host(config)
-        where = source.source_dir
+    from_vault = _pair_from_vault(config, source.name)
+    if from_vault is None:
+        raise errors.NotConfigured(
+            f"restore_id={config.restore_id}: dbabrain's certificate vault holds no proven {source.name} "
+            f"for {config.source_id} - take it first (backup_restore take-certificate --backup-id ID "
+            "--apply). A certificate is never read from beside the backups.")
+    cer, pvk, row = from_vault
     if logger:
         log_event(logger, level="logging", message=sanitize_text(
-            f"restore_id={config.restore_id} certificate {source.name} read from {where}"))
+            f"restore_id={config.restore_id} certificate {source.name} read from dbabrain's vault "
+            f"(row {row['certificate_id']}, thumbprint {row['thumbprint']})"))
     return BackupCertificate(
         certificate_name=source.name,
         thumbprint=hashlib.sha1(cer).hexdigest(),  # noqa: S324 - SQL Server's thumbprint IS the SHA-1.
@@ -136,50 +121,20 @@ def read_backup_certificate_pair(config: BackupRestoreConfig, *, logger: object 
     )
 
 
-def _pair_from_share(config: BackupRestoreConfig) -> tuple[bytes, bytes]:
-    from dbabrain.backup_restore import share
-    from dbabrain.backup_restore.copy_backup import copy_share_login_requests, store_share_logins
+def _pair_from_vault(config: BackupRestoreConfig, name: str):
+    """``(cer, pvk, row)`` from dbabrain's certificate vault for the source server, or ``None``."""
+    try:
+        from dbabrain.backup_restore.certificate_take import vault_pair
+        from dbabrain.lib.config import load_config
+        from dbabrain.lib.secret_text import resolve_key
 
-    if sys.platform.startswith("win"):
-        # A UNC path on Windows opens with the login cmdkey holds - stored first, as the copy does.
-        store_share_logins(copy_share_login_requests(config))
-    password = resolve_password_ref(config.prod_smb_password_env) if config.prod_smb_password_env else ""
-    pair: list[bytes] = []
-    with tempfile.TemporaryDirectory(prefix="dbabrain_cert_") as stage:
-        for suffix in ("cer", "pvk"):
-            local = Path(stage) / f"pair.{suffix}"
-            answer = share.get_file(
-                config.prod_backup_share, share.share_relative(config.prod_backup_share, _share_cert_path(config, suffix)),
-                local, username=config.prod_smb_username, password=password, timeout_seconds=120)
-            if int(answer.get("exit_code") or 0) != 0 or not local.is_file() or local.stat().st_size == 0:
-                raise errors.OperationFailed(str(answer.get("detail") or f"smb-get exit {answer.get('exit_code')}"))
-            pair.append(local.read_bytes())
-    return pair[0], pair[1]
-
-
-def _pair_from_source_host(config: BackupRestoreConfig) -> tuple[bytes, bytes]:
-    from dbabrain.lib.data_sources.request_fill import host_access
-    from dbabrain.transport import common_cli
-
-    source = config.backup_certificate
-    access = host_access(config.source_id)
-    windows = str(access.get("platform") or "").lower() == "windows"
-    pair: list[bytes] = []
-    for suffix in ("cer", "pvk"):
-        if windows:
-            path = source.source_dir.rstrip("\\/") + f"\\{source.name}.{suffix}"
-            command = "[Convert]::ToBase64String([IO.File]::ReadAllBytes(" + _ps_quote(path) + "))"
-        else:
-            path = source.source_dir.rstrip("/") + f"/{source.name}.{suffix}"
-            command = "base64 -w0 " + shlex.quote(path)
-        ok, data, error = common_cli.run_allowing_failure("run-cmd", {
-            "access": access, "target": config.source_id, "command": command,
-            "timeout_seconds": 120, "confirm": True, "assume_yes": True})
-        if not ok or int(data.get("exit_code") or 0) != 0:
-            detail = (str(data.get("stderr") or "") or error).strip()[:300]
-            raise errors.OperationFailed(f"cannot read {path} on {config.source_id}: {detail}")
-        pair.append(base64.b64decode("".join(str(data.get("stdout") or "").split())))
-    return pair[0], pair[1]
+        passphrase = resolve_key()
+        if not passphrase:
+            return None
+        return vault_pair(load_config(), server_id=str(config.source_id), certificate_name=name,
+                          passphrase=passphrase)
+    except Exception:  # noqa: BLE001 - not in the vault, or no vault here: the caller refuses by name
+        return None
 
 
 def fetch_backup_certificate(config: BackupRestoreConfig) -> BackupCertificate:

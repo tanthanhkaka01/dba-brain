@@ -23,6 +23,7 @@ from dbabrain.transport import common_cli
 from dbabrain.lib import sql_instance
 from dbabrain.backup_restore.restore_script import load_script_restores, unusable_reason
 from dbabrain.lib.time_window import weekdays_text
+from dbabrain.lib.backup_runbook import LOG_STREAM_JOBS
 from dbabrain.lib.listing import active_only, hidden_note
 from dbabrain.backup_restore.workflow import run_workflow
 from dbabrain.backup_restore.config import (
@@ -94,6 +95,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     delete.add_argument("--source-id", help="Delete target files for only one configured source/server.")
     delete.add_argument("--restore-id", help="Delete target files only for the restore entry with this restore_id.")
     delete.add_argument(
+        "--force", action="store_true",
+        help="Also delete the chosen files no proven copy recorded (stray files), each by its own "
+             "forced command - measured on the host, deleted, its bytes and sha256 recorded. Without "
+             "it such a file is kept and named. By hand only.",
+    )
+    delete.add_argument(
         "--dry-run", action="store_true",
         help="List what would be deleted and delete nothing. The engine has always accepted "
              "this; the flag was missing here, so 'what would this remove' had no answer "
@@ -121,6 +128,34 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              "level 0 baseline on a day the script would otherwise pick level 1. Repeatable.",
     )
 
+    take_cert = subparsers.add_parser(
+        "take-certificate",
+        parents=[config_parent],
+        help="Take a SQL Server entry's backup certificate pair into dbabrain's vault (encrypted, in the "
+             "runtime store), once; with --delete-at-source, then delete it on the server. Run by hand.",
+    )
+    take_cert.add_argument("--backup-id", required=True, help="The SQL Server backup entry whose pair to take.")
+    take_cert.add_argument("--apply", action="store_true",
+                           help="Keep it in the vault and prove it. Without: read and report only.")
+    take_cert.add_argument("--delete-at-source", action="store_true",
+                           help="After the vault row is proven: delete the .cer, then the .pvk, one file per "
+                                "command with the facts the vault holds, then the empty _cert folder.")
+    subparsers.add_parser("certificates", parents=[config_parent],
+                          help="List the backup certificates dbabrain's vault holds (no secret shown).")
+    cert_files = subparsers.add_parser(
+        "certificate-files", parents=[config_parent],
+        help="Every verified vault row as a sealed file on THIS node (age, for dbabrain and the offline "
+             "recovery key): a file there is proven, never rewritten; --apply writes a missing one.")
+    cert_files.add_argument("--apply", action="store_true", help="Write the missing files. Without: report only.")
+    vault_key = subparsers.add_parser(
+        "vault-key", parents=[config_parent],
+        help="Make a key for the vault's files: --recovery --out FILE (the private half to FILE, to keep "
+             "off every dbabrain machine) or --dbabrain (dbabrain's own, into the secret store, once).")
+    which_key = vault_key.add_mutually_exclusive_group(required=True)
+    which_key.add_argument("--recovery", action="store_true", help="A recovery key.")
+    which_key.add_argument("--dbabrain", action="store_true", help="dbabrain's own identity.")
+    vault_key.add_argument("--out", help="With --recovery: the file the private half is written to (never overwritten).")
+
     prune = subparsers.add_parser(
         "prune-backups",
         parents=[config_parent],
@@ -147,6 +182,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Actually delete. Without it the command reports what is obsolete and removes "
              "nothing - the opposite default from `backup`, because reporting a backup that did "
              "not happen is a wasted run and reporting a deletion that did not happen is not.",
+    )
+    prune.add_argument(
+        "--force", action="store_true",
+        help="With --apply: also delete the obsolete files the catalog does NOT know (stray files), "
+             "each by its own forced command - measured on the host, deleted, its bytes and sha256 "
+             "recorded in the answer. Without it such a file is kept and named. By hand only.",
     )
     prune.add_argument(
         "--allow-mass-delete", action="store_true",
@@ -211,7 +252,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     offload.add_argument("--backup-id", help="Only this backup entry.")
     offload.add_argument("--dry-run", action="store_true", help="Say what each entry would copy and release.")
-    offload.add_argument("--limit", type=int, default=100, help="At most this many files per entry (100).")
+    # No default of its own (0.38.0, 1.340): a stated 100 replaced every entry's
+    # `offload_files_per_pass` on each run started by hand, so the same entry took 5 files from the
+    # scheduler and 100 from a terminal.
+    offload.add_argument("--limit", type=_files_per_run, default=None,
+                         help="At most this many files per entry, for this run only "
+                              "(default: each entry's offload_files_per_pass).")
 
     # 0.34.0 (1.215): the backups taken before the catalog, hashed where they lie and recorded as
     # `baseline=backfill` - so a restore's gate has a checksum to hold each one to.
@@ -467,6 +513,59 @@ def _entry_active_command(args) -> int:
         data=outcome))
 
 
+def _vault_files_command(args, app_config) -> int:
+    """``certificate-files`` and ``vault-key`` (0.37.0) - one JSON answer each."""
+    from dbabrain.backup_restore import certificate_files
+    from dbabrain.backup_restore.backup import _load_secrets
+    from dbabrain.lib.secret_text import resolve_cli_key, resolve_key
+
+    key, key_base64 = getattr(args, "key", None), getattr(args, "key_base64", None)
+    try:
+        if args.command == "vault-key" and args.recovery:
+            if not args.out:
+                raise ValueError("--recovery needs --out FILE: where the private half is written.")
+            from dbabrain.db.store import utc_now_text
+
+            answer = certificate_files.new_recovery_key(args.out, created_at=utc_now_text())
+        else:
+            secrets = _load_secrets(data_dir=None, key=key, key_base64=key_base64)
+            if args.command == "vault-key":
+                answer = certificate_files.new_dbabrain_identity(app_config, secrets=secrets)
+            else:
+                passphrase = resolve_cli_key(key, key_base64) or resolve_key()
+                answer = certificate_files.seal_all(app_config, passphrase=passphrase, secrets=secrets,
+                                                    apply=bool(args.apply))
+    except Exception as exc:  # noqa: BLE001 - one answer, said
+        sys.stdout.write(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                                    ensure_ascii=False, indent=2) + "\n")
+        return 1
+    sys.stdout.write(json.dumps({"ok": True, **answer}, ensure_ascii=False, indent=2, default=str) + "\n")
+    return 0 if answer.get("ok", True) else 1
+
+
+def _files_per_run(text: str) -> int:
+    """``offload --limit``, read by argparse: 1 or more. Zero or less is refused at the command
+    line, not read as "no limit" - a pass of zero files would end ``done`` having copied nothing."""
+    try:
+        limit = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"a number of files, got {text!r}") from None
+    if limit < 1:
+        raise argparse.ArgumentTypeError(
+            f"1 or more, got {limit}; leave --limit out for each entry's offload_files_per_pass")
+    return limit
+
+
+def _request_is_dry_run(request_text: str) -> bool:
+    """Whether a ``restore-by-id`` request asks for a dry run - read before the run is announced.
+    A request that does not parse is not a dry run: the run fails on it and says so."""
+    try:
+        request = json.loads(request_text)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(request, dict) and bool(request.get("dry_run"))
+
+
 def _emit(result: dict) -> int:
     """The response envelope on stdout, the way ``restore-by-id`` already writes it here."""
     from dbabrain.lib import response
@@ -517,8 +616,9 @@ def _format_backup_list(jobs: list) -> str:
         if window.weekdays is not None:
             when = f"{when} on {weekdays_text(window.weekdays)}"
         # A log/archive job has no full-vs-diff choice, so naming a derived level there would
-        # invite --backup-type on a job that cannot take one.
-        if job.job in ("archivelog", "wal", "log"):
+        # invite --backup-type on a job that cannot take one. The names are lib's: the assistant's
+        # runbook (lib.backup_runbook) withholds the same flag from the same jobs.
+        if job.job in LOG_STREAM_JOBS:
             level = f"{job.job} (no full/diff level)"
         else:
             # No BACKUP_LEVEL is a level the SCRIPT picks, and it no longer picks it by the day:
@@ -601,8 +701,13 @@ def _run_script_restore_on_demand(args, app_config, config_path: str, restore_id
         force=True, on_demand=True, key=getattr(args, "key", None),
         key_base64=getattr(args, "key_base64", None),
         point_in_time=str(getattr(args, "point_in_time", "") or ""),
-        copy_only=bool(getattr(args, "copy_only", False)))
+        copy_only=bool(getattr(args, "copy_only", False)),
+        # It was not passed (found 2026-11-10): `--dry-run` on a script-driven entry ran the restore
+        # for real - stopped that day only because the target's cmd_access was not enabled yet.
+        dry_run=bool(getattr(args, "dry_run", False)))
     sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
+    if getattr(args, "dry_run", False):
+        return 0
     if summary.get("failed") or not summary.get("succeeded"):
         return 1
     # The line /spbot_restore's success_output_contains looks for, as the SQL Server path prints.
@@ -717,7 +822,14 @@ def main(argv: list[str]) -> int:
                     notify=_rbid_notify,
                 )
 
-            _rbid_event("START", f"Restore {_rbid_id} started.")
+            # A dry run is bracketed like a run - whoever starts one reports it - but in its own
+            # words (0.38.0, 1.341): it used to say "started" and "finished: done" to the entry's
+            # group, which reads as a database restored when nothing was touched.
+            _rbid_dry = _request_is_dry_run(args.request)
+            _rbid_noun = f"Restore {_rbid_id} dry run" if _rbid_dry else f"Restore {_rbid_id}"
+            if _rbid_dry:
+                _rbid_meta["dry_run"] = True
+            _rbid_event("START", f"{_rbid_noun} started." + (" Nothing will be restored." if _rbid_dry else ""))
             try:
                 payload = _json.loads(args.request)
                 data = restore_by_id(payload, key=getattr(args, "key", None),
@@ -725,16 +837,19 @@ def main(argv: list[str]) -> int:
                                      on_phase=lambda p, m, e=None: _rbid_event(p, m, e),
                                      catalog=None if payload.get("dry_run") else _open_catalog(_rbid_app_config, None))
                 result = _response.ok("restore-by-id",
-                                      message=f"{data['restore_id']} restored ({data['db_type']}).",
+                                      message=(f"{data['restore_id']} dry run: the plan was read, nothing restored "
+                                               f"({data['db_type']})." if _rbid_dry
+                                               else f"{data['restore_id']} restored ({data['db_type']})."),
                                       data=data)
                 _rbid_warnings = [str(w) for w in (data.get("warnings") or [])]
-                _rbid_event("END", f"Restore {_rbid_id} finished: done."
+                _rbid_event("END", (f"{_rbid_noun} finished: the plan was read, nothing restored." if _rbid_dry
+                                    else f"{_rbid_noun} finished: done.")
                             + (f" With a warning - {'; '.join(_rbid_warnings)}" if _rbid_warnings else ""),
                             {"warnings": _rbid_warnings} if _rbid_warnings else None,
                             level="warning" if _rbid_warnings else "logging")
             except Exception as exc:  # noqa: BLE001 - reported as JSON, like the common commands.
                 result = _response.fail("restore-by-id", str(exc))
-                _rbid_event("ERROR", f"Restore {_rbid_id} FAILED.", level="error",
+                _rbid_event("ERROR", f"{_rbid_noun} FAILED.", level="error",
                             error_text=str(exc)[-2000:])
             sys.stdout.write(_json.dumps(result, ensure_ascii=False, default=str) + chr(10))
             return _response.exit_code(result)
@@ -794,7 +909,7 @@ def main(argv: list[str]) -> int:
             summary = run_offloads(
                 app_config=app_config, config_path=resolved_config_path, logger=logger,
                 backup_id=getattr(args, "backup_id", None), dry_run=bool(args.dry_run),
-                limit=int(args.limit or 100), key=getattr(args, "key", None),
+                limit=args.limit, key=getattr(args, "key", None),
                 key_base64=getattr(args, "key_base64", None))
             sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
             return 1 if summary["failed"] else 0
@@ -862,6 +977,35 @@ def main(argv: list[str]) -> int:
             )
             sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
             return 1 if summary.get("failed") else 0
+        if args.command in ("certificate-files", "vault-key"):
+            return _vault_files_command(args, app_config)
+        if args.command in ("take-certificate", "certificates"):
+            from dbabrain.lib.secret_text import resolve_cli_key
+
+            if args.command == "certificates":
+                from dbabrain.db.certificate_vault import CertificateVault
+
+                rows = CertificateVault.from_config(app_config).listing()
+                sys.stdout.write(json.dumps({"certificates": rows}, ensure_ascii=False, indent=2, default=str) + "\n")
+                return 0
+            from dbabrain.backup_restore.certificate_take import take_certificate
+
+            passphrase = resolve_cli_key(getattr(args, "key", None), getattr(args, "key_base64", None)) or ""
+            if not passphrase:
+                from dbabrain.lib.secret_text import resolve_key
+
+                passphrase = resolve_key()
+            try:
+                answer = take_certificate(
+                    app_config=app_config, config_path=resolved_config_path, backup_id=args.backup_id,
+                    passphrase=passphrase, key=getattr(args, "key", None), key_base64=getattr(args, "key_base64", None),
+                    apply=bool(args.apply), delete_at_source=bool(args.delete_at_source), by="take-certificate")
+            except Exception as exc:  # noqa: BLE001 - one answer, said
+                sys.stdout.write(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                                            ensure_ascii=False, indent=2) + "\n")
+                return 1
+            sys.stdout.write(json.dumps({"ok": True, **answer}, ensure_ascii=False, indent=2, default=str) + "\n")
+            return 0
         if args.command == "prune-backups":
             from dbabrain.backup_restore.prune import run_prune
 
@@ -882,6 +1026,7 @@ def main(argv: list[str]) -> int:
                 key_base64=getattr(args, "key_base64", None),
                 apply=bool(getattr(args, "apply", False)),
                 allow_mass_delete=bool(getattr(args, "allow_mass_delete", False)),
+                force=bool(getattr(args, "force", False)),
             )
             sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
             return 1 if summary.get("failed") else 0
@@ -1058,7 +1203,8 @@ def main(argv: list[str]) -> int:
                 if override is not None:
                     config = dataclasses.replace(config, cleanup_retention=override)
                 result = run_delete_backup(config, logger=logger,
-                                           dry_run=bool(getattr(args, "dry_run", False)))
+                                           dry_run=bool(getattr(args, "dry_run", False)),
+                                           force=bool(getattr(args, "force", False)))
                 source_outputs.append(
                     {
                         "source_id": config.source_id,

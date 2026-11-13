@@ -438,15 +438,33 @@ def _shell(*, prefix: str, session: dict[str, Any], nav: list[dict[str, Any]],
     body = f"""
 {_top_bar(prefix, session)}
 <div class="shell">
-  {_sidebar(prefix, nav, active, report_links, can_admin=bool(session.get("can_admin")))}
+  {_sidebar(prefix, nav, active, report_links, can_admin=bool(session.get("can_admin")),
+            assistant=assistant_label(session))}
   <section class="detail">{detail}</section>
 </div>
 """
     return _document(title, body)
 
 
+#: What the assistant's page is: said beside its name, and alone on a node that states none.
+AI_PAGE_KIND = "AI assistant"
+
+
+def assistant_label(session: dict[str, Any]) -> str:
+    """The assistant's page and link, by name (0.38.0, 1.326).
+
+    The name is ``data/ai_assist.json`` ``assistant_name``, which the app reads into the session on
+    each request (``WebApp.assistant_name``) - the field the Telegram job answers under, so the
+    console and the chat call it the same thing. A node that states none has not configured its
+    assistant: the page then says only what it is. No name is written in this module.
+    """
+    name = str(session.get("assistant_name") or "").strip()
+    return f"{name} · {AI_PAGE_KIND}" if name else AI_PAGE_KIND
+
+
 def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str,
-             report_links: list[tuple[str, str]] | tuple = (), *, can_admin: bool = False) -> str:
+             report_links: list[tuple[str, str]] | tuple = (), *, can_admin: bool = False,
+             assistant: str = AI_PAGE_KIND) -> str:
     """The fourteen apps, top to bottom, with a dot for how each is doing.
 
     The dot carries the whole estate at a glance, which is the one thing the card grid was good
@@ -489,7 +507,7 @@ def _sidebar(prefix: str, nav: list[dict[str, Any]], active: str,
                  f'<span class="name">Users</span></a>'
                  f'<a class="item{ai_active}" href="{escape(prefix)}/ai">'
                  f'<span class="dot idle"></span><span class="ord"></span>'
-                 f'<span class="name">AI assistant</span></a>')
+                 f'<span class="name">{escape(assistant)}</span></a>')
     return f"""
 <nav class="apps">
   <a class="item{overview}" href="{escape(prefix)}/"><span class="dot idle"></span>
@@ -702,7 +720,10 @@ def ai_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]
     then the questions newest first - refusals included, since a refusal is the row an operator
     most often comes looking for - each opening its whole transcript.
     """
-    head = ('<h2>AI assistant</h2><p class="lede">What the Telegram AI assistant was asked, what it '
+    label = assistant_label(session)
+    name = str(session.get("assistant_name") or "").strip()
+    who = f"{escape(name)}, the Telegram AI assistant," if name else "the Telegram AI assistant"
+    head = (f'<h2>{escape(label)}</h2><p class="lede">What {who} was asked, what it '
             'answered and what it cost, from the store (<code>ai_requests</code> and the four tables '
             'beside it). Read-only.</p>')
     if usage is None:
@@ -711,7 +732,7 @@ def ai_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]
                   'assistant because of it; <code>python -m dbabrain.telegram.cli ai-usage</code> reads '
                   'the same rows.</div>')
         return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active=ADMIN_AI,
-                      detail=detail, title="AI assistant — dbabrain", report_links=report_links)
+                      detail=detail, title=f"{label} — dbabrain", report_links=report_links)
     rows = usage.get("rows") or []
     questions = sum(int(row.get("questions") or 0) for row in rows)
     refused = sum(int(row.get("refused") or 0) for row in rows)
@@ -776,7 +797,7 @@ def ai_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]
 <p class="hint">The same figures on the command line: <code>python -m dbabrain.telegram.cli ai-usage --days {days} --by {by}</code>.</p>
 """
     return _shell(prefix=prefix, session=session, nav=nav_items(blocks), active=ADMIN_AI,
-                  detail=detail, title="AI assistant — dbabrain", report_links=report_links)
+                  detail=detail, title=f"{label} — dbabrain", report_links=report_links)
 
 
 def ai_request_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[str, Any]],
@@ -826,7 +847,7 @@ def ai_request_page(*, prefix: str, session: dict[str, Any], blocks: list[dict[s
   <div class="sub">input</div>{_ai_text(tool_input)}<div class="sub">output (redacted, as kept)</div>{_ai_text(run.get("output_text") or "")}
 </details>""")
     detail = f"""
-<p class="crumbs"><a href="{escape(prefix)}/ai">&larr; AI assistant</a></p>
+<p class="crumbs"><a href="{escape(prefix)}/ai">&larr; {escape(assistant_label(session))}</a></p>
 <h2>AI request {rid}</h2>
 <div class="card"><table class="fields">{fact_rows}</table></div>
 <h3 class="block">Question</h3>{_ai_text(request.get("question") or "")}

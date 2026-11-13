@@ -38,8 +38,9 @@ from dbabrain.lib.integrity import ALGORITHMS, SHA256  # noqa: E402,F401 - re-ex
 #: stdout and one failure's blast radius small.
 MAX_COMMAND_CHARS = {WINDOWS: 2400, "posix": 60000}
 
-#: Seconds one batch may take. A 60 GB FULL hashes at disk speed - minutes, not seconds.
-DEFAULT_TIMEOUT_SECONDS = 3600
+#: Seconds one batch may take. A 60 GB FULL hashes at disk speed - minutes, not seconds. Named for
+#: what it limits: a verified delete hashes the file first and takes this same limit.
+HASH_TIMEOUT_SECONDS = 3600
 #: The most files one ``folder`` request hashes; more is said (``truncated``), never silently cut.
 DEFAULT_MAX_FILES = 5000
 
@@ -307,7 +308,7 @@ def checksum(request: dict[str, Any]) -> dict[str, Any]:
     algorithm = str(request.get("algorithm") or SHA256).strip().lower()
     if algorithm not in ALGORITHMS:
         raise FileChecksumError(f"algorithm must be one of {', '.join(ALGORITHMS)}; got {algorithm!r}.")
-    timeout = int(request.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
+    timeout = int(request.get("timeout_seconds") or HASH_TIMEOUT_SECONDS)
     raw_host = request.get("host")
     host = parse_host(raw_host) if raw_host else None
     raw_paths = request.get("paths")

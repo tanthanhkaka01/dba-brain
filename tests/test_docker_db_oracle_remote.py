@@ -395,7 +395,7 @@ def test_a_container_that_was_never_created_is_reported_as_missing(monkeypatch):
         ["ora-primary"], "oracle", timeout=1800, runner=_runner_for({}),
     )
 
-    assert statuses["ora-primary"] == healthcheck.MISSING
+    assert statuses["ora-primary"] == healthcheck.STATUS_MISSING
 
 
 def test_a_running_but_unready_container_still_gets_its_full_wait(monkeypatch):

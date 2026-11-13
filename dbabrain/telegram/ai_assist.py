@@ -146,9 +146,19 @@ def language_rule(settings: A.AiAssistSettings) -> str:
     return f"Language: always answer in {language}, whatever language the question is in."
 
 
+def name_rule(settings: A.AiAssistSettings) -> str:
+    """Who the model is told it is (0.38.0, 1.326): the name ``ai_assist.json`` states, and nothing
+    it may do by it. Read from the settings on every question - a node renames its assistant by
+    editing the field."""
+    name = settings.assistant_name
+    return (f"Your name is {name}. You are dbabrain's AI assistant: users call you {name}, and you answer "
+            f"as {name} when you introduce yourself or are asked who you are. The name changes nothing "
+            "about what you may read or do.")
+
+
 def system_prompt(settings: A.AiAssistSettings, *, node: dict[str, str]) -> str:
     """The same for every question of a node (no time in it), so it is read from the cache."""
-    parts = [RULES, language_rule(settings)]
+    parts = [name_rule(settings), RULES, language_rule(settings)]
     if GUIDE_PATH.is_file():
         parts.append(GUIDE_PATH.read_text(encoding="utf-8").strip())
     parts.append(
@@ -290,6 +300,8 @@ class Runner:
         self.config_path = Path(config_path)
         self.data_dir = self.config_path.resolve().parent / "data"
         self.settings = settings
+        #: What the assistant is called in every reply - the settings' field, never a word of this file.
+        self.name = settings.assistant_name
         self.api_key = api_key
         self.call = call or sdk_call(settings, api_key)
         self.download = download
@@ -307,7 +319,8 @@ class Runner:
         self.tool_root = (tool_root or self.config_path.resolve().parent).resolve()
         # How this node runs, so a proposed command line is written for its shell and its install
         # (1.267). Stable for the node's life, so it sits in the cached system prompt.
-        self.node["environment"] = node_environment.summary_line(node_environment.describe(self.tool_root))
+        self.environment = node_environment.describe(self.tool_root)
+        self.node["environment"] = node_environment.summary_line(self.environment)
         self.counts = {"read": 0, "answered": 0, "refused": 0, "errors": 0, "commands": 0, "skipped": 0}
         #: Where an answer goes instead of the Telegram queue - the command line's printer (``ai-ask``).
         self.deliver = deliver
@@ -317,7 +330,8 @@ class Runner:
         return self.now or datetime.now(timezone.utc)
 
     def _queue(self, *, chat_id: str, text: str, reply_to: int | None, request_id: int, message_type: str = "plain",
-               note: str = "AI assistant") -> list[int]:
+               note: str = "") -> list[int]:
+        note = f"{self.name} (AI assistant){' - ' + note if note else ''}"
         if self.deliver is not None:
             # The command line: printed, never queued; a "working on it" line is the terminal's wait.
             if message_type != "running":
@@ -409,7 +423,7 @@ class Runner:
                 return
             if request_id:
                 self._queue(chat_id=str(row["chat_id"]), reply_to=int(row["message_id"]), request_id=request_id,
-                            text=f"The assistant failed: {error}", message_type="failed")
+                            text=f"{self.name} failed: {error}", message_type="failed")
         except Exception:  # noqa: BLE001 - the run goes on; the stale sweep is the last line.
             pass
 
@@ -452,7 +466,8 @@ class Runner:
             # People talking to each other. Not answered, and its text is not kept - only that it
             # was read and why it was left (the operator, 2026-10-31: answer only when @mentioned).
             self.store.claim_request(**base, kind="command", status="stopped",
-                                     reason="not addressed to the assistant (no @mention, not a reply to it)",
+                                     reason="not addressed to the assistant (no @mention, not called by its "
+                                            "name, not a reply to it)",
                                      finished_at=_utc_text(self._now()))
             self.counts["skipped"] += 1
             return
@@ -465,7 +480,8 @@ class Runner:
                                                   finished_at=_utc_text(self._now()))
             if request_id:
                 self._queue(chat_id=chat_id, reply_to=message_id, request_id=request_id, text=(
-                    f"{user_name}, you are not switched on for the assistant (telegram_user_id {user_id}). "
+                    f"{user_name}, you are not switched on for {self.name}, dbabrain's AI assistant "
+                    f"(telegram_user_id {user_id}). "
                     "An administrator adds you to data/ai_assist.json users[] with \"active\": true."))
                 self.counts["refused"] += 1
             return
@@ -478,17 +494,20 @@ class Runner:
         """Is this message for the assistant - and its text without the @mention.
 
         A group word (``/usage``) is; an @mention of the bot is (the ``@username`` in the text, or a
-        ``text_mention`` entity naming the bot's id); a reply to one of the bot's own messages is,
-        when ``reply_to_assistant_is_mention``. ``require_mention`` off, or a private chat (nobody
-        else is in it): every message is."""
+        ``text_mention`` entity naming the bot's id); a message that calls the assistant by its name
+        is (``assistant_name`` at its start, or ``@<name>`` anywhere - ``lib.ai_assist.called_by_name``,
+        0.38.0); a reply to one of the bot's own messages is, when ``reply_to_assistant_is_mention``.
+        ``require_mention`` off, or a private chat (nobody else is in it): every message is."""
         username = str(getattr(self.config.telegram, "telegram_bot_username", "") or "").lstrip("@")
         bot_id = str(getattr(self.config.telegram, "telegram_bot_id", "") or "")
         mention = re.compile(rf"@{re.escape(username)}\b", re.IGNORECASE) if username else None
         stripped = mention.sub(" ", text).strip() if mention else text
         stripped = re.sub(r"\s{2,}", " ", stripped)
+        # The name is taken out of the question as the @mention is: it addresses, it is not asked.
+        named, stripped = A.called_by_name(stripped, self.name)
         if private or not self.settings.require_mention or word in GROUP_WORDS:
             return True, stripped
-        if mention and mention.search(text):
+        if named or (mention and mention.search(text)):
             return True, stripped
         for entity in [*(raw.get("entities") or []), *(raw.get("caption_entities") or [])]:
             if entity.get("type") == "text_mention" and bot_id and str((entity.get("user") or {}).get("id")) == bot_id:
@@ -538,14 +557,16 @@ class Runner:
             answer = "New conversation. The next question starts fresh." + (
                 f" ({closed} closed.)" if closed else "")
         elif word == "/usage":
-            answer = "AI assistant usage\n" + "\n".join(self._usage_lines(user))
+            answer = f"{self.name} (AI assistant) - usage\n" + "\n".join(self._usage_lines(user))
         else:
             tools = [tool["name"] for tool in ai_tools.tool_definitions(self.settings)]
+            who = f"{self.name}, dbabrain's AI assistant"
             answer = "\n".join([
-                ("AI assistant - write a question here; reply to an answer to continue it." if private
-                 else "AI assistant - @mention the bot with a question; reply to an answer to continue it."
+                (f"{who} - write a question here; reply to an answer to continue it." if private
+                 else f"{who} - @mention the bot with a question, or start the message with {self.name}; "
+                      "reply to an answer to continue it."
                  if self.settings.require_mention
-                 else "AI assistant - write a question in this group; reply to an answer to continue it."),
+                 else f"{who} - write a question in this group; reply to an answer to continue it."),
                 "/new - start a new conversation",
                 "/usage - what was used today and this month, against every limit",
                 "/help - this text",
@@ -615,14 +636,19 @@ class Runner:
 
         ack_ids: list[int] = []
         if s.ack_message:
-            ack_ids = self._queue(chat_id=base["chat_id"], text=f"Working on it ({s.model})...",
+            ack_ids = self._queue(chat_id=base["chat_id"], text=f"{self.name} is working on it ({s.model})...",
                                   reply_to=base["message_id"], request_id=request_id, message_type="running",
-                                  note="AI assistant - started")
+                                  note="started")
         tool_context = ai_tools.ToolContext(
             settings=s, store_target=self.target, tool_root=self.tool_root,
             commands_path=self.data_dir / "telegram_support_commands.json",
             users_path=self.data_dir / "telegram_users.json", asker_user_id=user.telegram_user_id,
-            redact=self.redact, data_dir=self.data_dir)
+            redact=self.redact, data_dir=self.data_dir,
+            # What the runbook tool writes its lines for and holds them to (1.327 / 1.328): this
+            # node's install and role, its clock, and whether the asker is the node's own operator
+            # at its command line - who holds the passphrase already, and has no Telegram level.
+            environment=self.environment, node_role=self.node["role"], now_local=now.astimezone(self.zone),
+            asker_is_operator=user.telegram_user_id == CLI_CHAT_ID)
 
         def record_call(turn: int, meta: dict[str, Any], response: dict[str, Any] | None, usage: A.Usage,
                         cost: float, known: bool, duration: int, error: str) -> int | None:
@@ -730,8 +756,7 @@ class Runner:
                                                   user_name=base["user_name"], title=text, model=s.model)
         return chosen
 
-    @staticmethod
-    def _answer_text(result: ai_agent.AgentResult) -> str:
+    def _answer_text(self, result: ai_agent.AgentResult) -> str:
         text = result.text
         notes = {
             "tokens": "Stopped: the question's tokens ran out.",
@@ -740,7 +765,7 @@ class Runner:
             "time": "Stopped: the job's run time ran out.",
             "tool_calls": "Stopped: the question's tool calls ran out.",
             "max_tokens": "Stopped: the answer reached its length limit.",
-            "error": f"The assistant failed: {result.error}",
+            "error": f"{self.name} failed: {result.error}",
         }
         if result.stopped == "refusal":
             # Answered as the model declined - the operator's word: no fallback, no rewording.
@@ -767,8 +792,8 @@ class Runner:
         budget = (f" · month ${mine['month_cost']:.4f}/${user.budget_usd_month:.2f}"
                   if user.budget_usd_month is not None else "")
         priced = "" if result.price_known else " (a served model had no price; priced at the dearest row)"
-        return (f"-- {self.settings.model} · {result.usage.tokens:,} tokens · ${result.cost:.4f}{priced}"
-                f"{tools}{budget}")
+        return (f"-- {self.name} · {self.settings.model} · {result.usage.tokens:,} tokens · ${result.cost:.4f}"
+                f"{priced}{tools}{budget}")
 
 
 #: The chat a question typed at the node's command line is kept under, and its asker's id.

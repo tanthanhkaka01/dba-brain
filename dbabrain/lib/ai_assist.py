@@ -41,6 +41,9 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 #: the user runs it (later: the user confirms and it runs)*. A mode that runs a command after a
 #: confirmation is added with the code that does it, never before.
 TOOLS_MODES = ("off", "read_only")
+#: The longest name the assistant can be given: it opens its replies and ends their footer, and a
+#: Telegram notification shows only a message's first forty-odd characters.
+NAME_MAX_CHARS = 40
 
 
 class AiAssistConfigError(errors.InvalidConfig):
@@ -53,7 +56,7 @@ class AiAssistConfigError(errors.InvalidConfig):
 @dataclass(frozen=True)
 class FieldSpec:
     name: str
-    kind: str  # bool | str | str_list | level_or_levels | int | int_or_null | number | number_or_null | enum
+    kind: str  # bool | str | name | str_list | level_or_levels | int | int_or_null | number | number_or_null | enum
     shipped: Any
     minimum: float | None = None
     maximum: float | None = None
@@ -68,6 +71,14 @@ def _f(name: str, kind: str, shipped: Any, purpose: str, *, minimum: float | Non
 
 SETTINGS_FIELDS: tuple[FieldSpec, ...] = (
     _f("enabled", "bool", False, "Whether the assistant answers at all; off, the job says not configured and skips."),
+    # 0.38.0 (1.326), the operator, 2026-11-11: *dbabrain's AI has no name yet; name it, set in the
+    # config json.* The value below is what `upgrade-config` writes into a node's file that states
+    # none - the one place the shipped name is written in code; nothing reads it as a fallback.
+    _f("assistant_name", "name", "Phanes",
+       "The assistant's name: what it calls itself in its system prompt and in every Telegram reply, what "
+       "the console titles its page, and the word a message may address it by - at the start of the "
+       "message, or as @<name> anywhere - beside the bot's own @mention. One line, 1 to 40 characters, "
+       "not starting with / or @."),
     _f("api_key_ref", "str", "", "The name of the Anthropic API key in the encrypted secret store; empty = not configured."),
     _f("telegram_chat", "level_or_levels", AI_ASSIST_LEVEL,
        "The notify level - or a list of them - whose chats the assistant answers in: each the active group "
@@ -157,6 +168,10 @@ SETTINGS_FIELDS: tuple[FieldSpec, ...] = (
     _f("run_sql_timeout_seconds", "int", 60, "run_sql's connect and statement timeout.", minimum=1),
     _f("bot_commands_enabled", "bool", True,
        "The bot_commands tool: the Telegram commands the asker may run, so an answer can propose one."),
+    _f("backup_runbook_enabled", "bool", True,
+       "The backup_runbook tool: how to run one backup or restore entry by hand - the exact command "
+       "lines, the worker form and the Telegram command, built from the entry's own configuration; a "
+       "line that changes something only for an asker whose Telegram level may run it."),
 )
 
 PRICE_FIELDS: tuple[FieldSpec, ...] = (
@@ -212,6 +227,41 @@ def shipped_user(telegram_user_id: str, name: str, *, active: bool) -> dict[str,
 
 def _copy(value: Any) -> Any:
     return list(value) if isinstance(value, list) else value
+
+
+def stated_name(document: Any) -> str:
+    """The name an ``ai_assist.json`` document states, or ``""`` - for a reader that shows the name
+    and decides nothing by it (the console's page and its link). A file that states none, or no
+    file at all, is *not configured*: that reader then says what the page is, with no name."""
+    if not isinstance(document, dict):
+        return ""
+    spec = next(item for item in SETTINGS_FIELDS if item.name == "assistant_name")
+    try:
+        return str(_check(spec, document.get(spec.name), ""))
+    except AiAssistConfigError:
+        return ""
+
+
+def called_by_name(text: str, name: str) -> tuple[bool, str]:
+    """Whether ``text`` calls the assistant by its name, and the text without that call (1.326).
+
+    Called is: the message **starts** with the name as a whole word (``<name>, ...``, the name
+    followed by a vocative particle as Vietnamese adds one,
+    ``@<name> ...``), or carries ``@<name>`` anywhere - the way a person is addressed in a chat.
+    The name in the middle of a sentence is people talking *about* the assistant, and is neither
+    answered nor kept, like the rest of the chat. Case does not matter.
+    """
+    name = str(name or "").strip()
+    if not name:
+        return False, text
+    escaped = re.escape(name)
+    at_start = re.match(rf"\s*@?{escaped}(?![\w@])[\s,:;.!?-]*", text, re.IGNORECASE)
+    if at_start:
+        return True, text[at_start.end():].strip()
+    tagged = re.compile(rf"(?<![\w@])@{escaped}(?!\w)", re.IGNORECASE)
+    if tagged.search(text):
+        return True, re.sub(r"\s{2,}", " ", tagged.sub(" ", text)).strip()
+    return False, text
 
 
 def state_ai_assist(document: Any) -> list[str]:
@@ -325,6 +375,17 @@ def _check(spec: FieldSpec, value: Any, where: str) -> Any:
         if not isinstance(value, str):
             raise AiAssistConfigError(f"{where}{spec.name} must be a string; got {value!r}.")
         return value
+    if kind == "name":
+        # Said in a prompt, a reply's first line and a regular expression: one line, and never
+        # empty - there is no name in code to say instead. A leading "/" would read as a bot
+        # command, and the "@" of a mention is the writer's, not part of the name.
+        text = value.strip() if isinstance(value, str) else ""
+        if (not text or len(text) > NAME_MAX_CHARS or text[0] in "/@"
+                or any(ord(char) < 32 for char in text)):
+            raise AiAssistConfigError(
+                f"{where}{spec.name} must be a name: one line of 1 to {NAME_MAX_CHARS} characters, not "
+                f"starting with / or @; got {value!r}.")
+        return text
     if kind == "enum":
         if value not in spec.choices:
             raise AiAssistConfigError(f"{where}{spec.name} must be one of {', '.join(spec.choices)}; got {value!r}.")

@@ -417,3 +417,13 @@ def test_an_explicit_binary_path_wins_over_the_search():
 
     assert "/opt/pg/bin/pg_combinebackup" in combine
     assert "command -v" not in combine
+
+
+def test_a_cluster_with_no_wal_archive_still_restores_from_the_wal_its_backup_carries():
+    """The runtime store archives no WAL (archive_command off): its restore drill (2026-11-10) unpacked
+    65 GB and then failed "cp: cannot stat .../wal/." - the copy of an archive that does not exist.
+    The copy is now empty when there is none, and recovery replays the WAL inside the base backup."""
+    plan = _pg("full", backup_path="/b/base/a_FULL", wal_dir="/b/wal")["plan"]
+
+    assert "if [ -d /b/wal ]; then cp -a /b/wal/. " in plan["combine"]
+    assert "recovery replays the WAL inside the base backup" in plan["combine"]

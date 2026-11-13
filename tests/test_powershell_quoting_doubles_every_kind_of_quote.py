@@ -12,7 +12,7 @@ import subprocess
 import pytest
 
 from dbabrain.backup_restore import preflight, shell_quoting
-from dbabrain.common import deletefiles
+from dbabrain.common import deleteverified
 from dbabrain.lib.powershell import quote_powershell
 
 QUOTES = ["'", "\u2018", "\u2019", "\u201a", "\u201b"]
@@ -25,7 +25,7 @@ def test_each_quote_is_doubled(quote):
 
 def test_the_private_copies_are_the_same_function():
     value = "x\u2019; Remove-Item C:\\ -Recurse; \u2019"
-    assert shell_quoting._ps_quote(value) == preflight._ps_quote(value) == deletefiles._ps_quote(value) \
+    assert shell_quoting._ps_quote(value) == preflight._ps_quote(value) == deleteverified._ps_quote(value) \
         == quote_powershell(value)
 
 

@@ -1,6 +1,6 @@
 # Architecture
 
-Fifteen components - ten apps and five shared layers - with the rules about who may call whom numbered in
+Sixteen components - eleven apps and five shared layers - with the rules about who may call whom numbered in
 [`rules.md`](./rules.md). Every rule has
 a test beside it, which is the only reason a stated architecture is worth reading — a diagram
 describes what someone intended, a guard test describes what is true this morning.

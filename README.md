@@ -173,7 +173,7 @@ Every command answers in the same envelope, whether the work succeeded or not:
 
 Ordered to match the reference docs; the **ORD** number links to each one.
 
-**Fifteen components of two kinds.** An **app** (10: `jobs` - run as `dbabrain daemon` -, `metrics`, `sql_tasks`, `reports`, `telegram`, `backup_restore`, `sla`, `sre`, `control`, `webhost`) does one job, has its own `cli.py`, and never imports another app. A **shared layer** (5: `db`, `logging_ops`, `common`, `lib`, `transport`) is what every app stands on, and never imports an app. The root package `dbabrain` is neither: it is the `dbabrain` entry point and only dispatches. The same table, and who may import or run whom, is in [`docs/rules.md`](./docs/rules.md#the-components).
+**Sixteen components of two kinds.** An **app** (11: `jobs` - run as `dbabrain daemon` -, `metrics`, `sql_tasks`, `reports`, `telegram`, `backup_restore`, `sla`, `sre`, `control`, `webhost`, `mcp`) does one job, has its own `cli.py`, and never imports another app. A **shared layer** (5: `db`, `logging_ops`, `common`, `lib`, `transport`) is what every app stands on, and never imports an app. The root package `dbabrain` is neither: it is the `dbabrain` entry point and only dispatches. The same table, and who may import or run whom, is in [`docs/rules.md`](./docs/rules.md#the-components).
 
 | ORD | Component | Kind | Package / config | Responsibility |
 | :---: | --- | --- | --- | --- |
@@ -191,10 +191,11 @@ Ordered to match the reference docs; the **ORD** number links to each one.
 | [12](./docs/12_webhost_app.md) | Web host | app | `dbabrain/webhost`, `data/webhost_config.json` | Serves the rendered reports over HTTP and hosts the console. Publishes files; never generates them. |
 | [13](./docs/13_common.md) | **Common** — shared operations | shared layer | `dbabrain/common` | Reaching a host, running SQL, moving a file, rotating a password, confirming something dangerous. Every command takes one JSON object. **Invoked as a CLI, never imported.** |
 | [14](./docs/14_lib.md) | **Lib** — shared rules | shared layer | `dbabrain/lib` | Values and rules that are pure functions of their arguments: time windows, notify routing, severity, formatting. Imports nothing from the rest of the project. **Only ever imported, never run as a CLI.** |
+| [16](./docs/16_mcp_app.md) | MCP server | app | `dbabrain/mcp`, `data/mcp_tools.json` | dbabrain for Claude Desktop and Claude Code on your own machine: every `common.cli` command and the runtime store as MCP tools, each command's own gate kept, every answer redacted and capped. |
 | [15](./docs/15_transport.md) | **Transport** — the one client | shared layer | `dbabrain/transport` | Starts `common.cli` and `db.cli` for every component: `lib` builds the command and reads the answer, this runs the process between them. Imports only `lib`. |
 
-**Fifteen components, and the list is closed.** Ten apps and five shared layers, as the Kind column
-says; anything new is one of them or a sixteenth ORD with its own directory and its own doc.
+**Sixteen components, and the list is closed.** Eleven apps and five shared layers, as the Kind column
+says; anything new is one of them or a seventeenth ORD with its own directory and its own doc.
 
 > **Every component has a doc, and every doc has a component.** One `docs/NN_*.md` per package,
 > both directions, enforced by `tests/test_docs_cover_every_component.py`. A component is not
@@ -541,7 +542,7 @@ toolkit needs on each engine, the audit trail, and running with no outbound netw
 
 ## How it is put together
 
-Fifteen components - ten apps and five shared layers - and rules about who may call whom, four
+Sixteen components - eleven apps and five shared layers - and rules about who may call whom, four
 of them below - with a guard test beside each rule, because a diagram describes what someone
 intended and a test describes what is true this morning.
 
@@ -550,7 +551,7 @@ intended and a test describes what is true this morning.
 > No app imports another app.
 > No shared layer imports an app.
 
-![Who may call whom: the ten apps import transport, db, logging_ops and lib; transport starts common.cli as a process; common and transport import lib](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/who-may-call-whom.svg)
+![Who may call whom: the eleven apps import transport, db, logging_ops and lib; transport starts common.cli as a process; common and transport import lib](https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/docs/img/who-may-call-whom.svg)
 
 See **[`docs/architecture.md`](./docs/architecture.md)**.
 
@@ -585,6 +586,7 @@ See **[`docs/architecture.md`](./docs/architecture.md)**.
 | [`docs/13_common.md`](./docs/13_common.md) | The shared operations layer, command by command |
 | [`docs/14_lib.md`](./docs/14_lib.md) | The pure rules layer, the purity guarantee, and the module index |
 | [`docs/15_transport.md`](./docs/15_transport.md) | The one client of `common.cli` and `db.cli`, and why the launch has a layer of its own |
+| [`docs/16_mcp_app.md`](./docs/16_mcp_app.md) | dbabrain as an MCP server for Claude Desktop and Claude Code |
 | [`docs/rules.md`](./docs/rules.md) | Every rule the project keeps, numbered, with the test that guards it |
 
 | Project | |

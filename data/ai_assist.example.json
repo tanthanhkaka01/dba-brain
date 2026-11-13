@@ -1,5 +1,6 @@
 {
     "enabled": false,
+    "assistant_name": "Phanes",
     "api_key_ref": "",
     "telegram_chat": "ai_assist",
     "private_chat_enabled": false,
@@ -81,6 +82,7 @@
     "run_sql_max_rows": 200,
     "run_sql_timeout_seconds": 60,
     "bot_commands_enabled": true,
+    "backup_runbook_enabled": true,
     "prices": [
         {
             "model": "claude-sonnet-5-5",

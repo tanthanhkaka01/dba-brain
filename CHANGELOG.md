@@ -15,6 +15,249 @@ do about it. Not the internal refactor that made it possible.
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-11-13
+
+### Changed
+
+- **A backup file is deleted one at a time, and only when its name, path, bytes and sha256 are all
+  true on the host** (0.37.0). New `common.cli delete-verified-file`: one file per command (a list,
+  or any unknown field, is refused), every fact stated, fenced by a required `must_be_under`; on the
+  host one script refuses a link, a folder or a device, holds the size and the sha256 to the request,
+  reads size and time again, then removes that one file non-recursively and looks again. New
+  `delete-empty-folder`: one folder, refused when it holds even one entry (hidden ones included),
+  removed non-recursively. Windows (PowerShell 2.0+) and Ubuntu (POSIX sh), over SSH and WinRM. The
+  offload's release at the source now uses it, one call per file, with the facts its backup recorded.
+- **`copy-files` takes a file only with its facts, and `overwrite` is required.** Each line states
+  `file_name`, `size_bytes` and `sha256`; the bytes are hashed as they stream and a file lands
+  only when they match. `overwrite: false` leaves a file already at the name as it is; the offload
+  passes the new entry field `offload_copy_overwrite` (written `false` in every entry).
+- **The repository tells server_id and database apart.** A copy goes to
+  `<offload_folder>/<server_id>/<db_name>/<the engine's own folders>/<file>` (PostgreSQL's base and
+  WAL under `cluster`, the name its receipts give). A certificate or key is never copied to the repository.
+- **The old delete commands refuse to run; a stray file is deleted by force, one at a time**
+  (0.38.0). `delete-files` and `prune-staged-backups` read their request and refuse it, naming what
+  replaces them; `prune-backup-files` answers its plan and refuses `delete`. `delete-file` is now
+  the forced delete of ONE file nobody recorded (`"force": true`; a list, a folder or a pattern is
+  refused; its bytes and sha256 are measured by the script that deletes it, and answered), and
+  `smb-delete` is forced and one path. Every cleanup dbabrain does itself - `prune-backups
+  --apply`, a restore's staging, `delete-backup` - deletes by `delete-verified-files` with each
+  file's recorded facts, and `delete-empty-folders` for an emptied folder; **a file the catalog does
+  not know is kept and named**, never swept. **To do on upgrade:** a script of your own that calls
+  `delete-files`, or `delete-file` without `force`, is now refused - call `delete-verified-file`
+  with the file's facts, or `delete-file` with `"force": true`, once per file.
+- **A restore's staging copy travels by `copy-files`, each file held to its sha256** (0.38.0).
+  `copy-backup-dir` and `backup-chain` read their request and refuse it; a staging is
+  `prepare-staging` (the chain read at the source, the folder made and proven writable, the room
+  checked) -> one `copy-files` per round -> `finish-staging`. The one `tar` stream and the copy it
+  fell back to are gone, and nothing steps down from one way to another: an entry's `copy_mode` is
+  `auto` | `cat` | `sftp` (`auto` is `cat`). The staging no longer mirrors by deleting: a staged
+  file its source no longer has is deleted by `delete-verified-files` with the facts its copy
+  recorded, and one left behind stops the restore by name. A file written at the source after the
+  plan (a WAL archived meanwhile) stays there and is named (`written_after_the_plan`). A plain
+  PostgreSQL base backup - thousands of small files - stages slower than it did through one stream;
+  the TAR base backup below is a few files. **To do on upgrade:** a restore entry stating
+  `copy_mode: "tar"` is refused by name - state `auto`, `cat` or `sftp`.
+
+### Added
+
+- **`dbabrain mcp` - Claude works on your estate through a local MCP server** (0.38.0).
+  `pip install "dbabrain[mcp]"`, then `dbabrain mcp serve` (stdio) added to Claude Code
+  (`claude mcp add dbabrain --env DBABRAIN_HOME=<root> -- dbabrain mcp serve`) or to Claude
+  Desktop's config; the secret key comes from the environment (`DBABRAIN_SECRET_KEY`), never from
+  Claude's config file. One tool per `common.cli` command (`dbabrain mcp tools` lists them) plus
+  `store_schema` / `store_query` on the runtime store; a request is completed from a `server_id`,
+  so Claude never sees or writes a password. Each command keeps its own gate - a destructive one
+  still refuses without its `confirm` / `reason` - and every tool carries MCP's read-only or
+  destructive hint; the `run-sql` tool only reads and never commits, `run-sql-write` keeps a change
+  only when the request says `commit`. Every answer is redacted of every value in the secret store
+  and capped (`max_chars`); every call is a `job_runs` row `mcp.<tool>`. Settings in
+  `data/mcp_tools.json` (`enabled`, `disabled_tools`, the caps): written by `init`, and by
+  `upgrade-config` (step `stated-mcp-tools`) on a node that lacks it. **Limits:** Claude Code and
+  Claude Desktop only - claude.ai on the web cannot start a local process - and what a tool answers
+  passes through Anthropic like the rest of the conversation. `docs/16_mcp_app.md`.
+- **`dbabrain mcp connect` and `serve --http`** (0.38.0) - the same tools reached from claude.ai
+  through a connector: `connect` links this machine as your own node (a code approved after signing
+  in, then one outbound connection - nothing listens), `serve --http` is Streamable HTTP on `/mcp`
+  behind a bearer token of 32 characters or more read from the environment. `docs/16_mcp_app.md`,
+  *Way 2*.
+- **Who can take a database's files - read and shown, nothing changed on a host** (0.38.0). Two
+  hourly metrics in the `security` category: `SECURITY_DATA_ENCRYPTION` (SQL Server 2008+ TDE per
+  database, with the certificate protecting it held against dbabrain's vault; Oracle 11g+ keystore
+  and tablespaces; PostgreSQL `pg_tde` or `provider=none`) and `SECURITY_HOST_ADMINS` (Linux:
+  members of `sudo` / `wheel` / `admin` / `docker`, uid 0 accounts, sshd's root and password
+  logins, root's keys; Windows: local Administrators and Remote Desktop Users, whether Domain
+  Admins is among them). Their rows are OK by design - the server page and the fleet page name the
+  findings in a Protection block, and **a change is the alert**: an account added to an admin group
+  or a database's encryption changed is one event to the target's notify group (added / changed
+  ERROR, removed WARNING; the first read is the baseline). A production instance on a Developer,
+  Express or Evaluation edition is named as a finding. A section that cannot be read says why.
+- **A backup is encrypted while it is copied to the repository** (0.38.0). With `offload_encrypt`,
+  the copy itself encrypts: the bytes are read at the source, held to the backup's size and sha256
+  as they stream, and land only as `<file>.age` - the plain file never reaches the repository. The
+  copy counts as verified only once the `.age` decrypts back to the backup, and only then is the
+  source released. A large FULL is read four times on its way to release instead of about eight. A
+  key that cannot be had at copy time leaves the copy plain, encrypted afterwards as before.
+- **An offload cut midway picks itself up** (0.38.0). An `.age` left by a killed encryption is
+  adopted once it decrypts back to the catalog's file (before, every later pass answered `EXISTS`
+  until a hand fix); a file an earlier pass is still encrypting makes its row wait (`⏳ 3. Encrypt:
+  waiting`) instead of being encrypted a second time; a partial of a dead run is named by the
+  repository check and left for the operator.
+
+- **The AI assistant has a name, and the name is a field** (0.38.0). `data/ai_assist.json` states
+  `assistant_name` (required; shipped `Phanes`): the model is told it, every reply the job writes
+  carries it (*`<name>` is working on it*, the footer, `/help`, `/usage`, a failure), the console's
+  page and link are titled by it, and a message that starts with the name - or carries `@<name>` -
+  is addressed to the assistant, beside the bot's `@mention`. Rename it by editing the field.
+  **To do on upgrade:** run `upgrade-config` (step `stated-ai-assist` writes `assistant_name` and
+  `backup_runbook_enabled`); until then a 0.37 file is refused by the name of the missing field and
+  the assistant's job does not answer.
+- **The assistant answers how to run a backup or a restore by hand** (0.38.0). Asked for a
+  `backup_id`, a `restore_id` or a `server_id`, its new read-only tool `backup_runbook`
+  (`backup_runbook_enabled`, shipped on) gives the entry's jobs, schedule and repository, what each
+  step of its flow does for that entry (backup, copy to the repository, verify, encrypt, verify,
+  delete at the source), and the exact lines - the dry run first: `backup_restore` on this node, the
+  master's `control worker-run -- ...`, and the Telegram command - built from the entry's own
+  configuration, with what a run touches and where to watch it. Everything it answered before is
+  unchanged. **A line that changes something is given only to a user whose Telegram level may run
+  the bot command that does the same** (`/spbot_backup`, `/spbot_restore`, `/spbot_copy_backup` -
+  their `command_type` on that node); anyone below it is told the level it takes and keeps the dry
+  runs. At the node's own command line (`telegram ai-ask`) every line is given.
+- **The certificate vault** - `backup_restore take-certificate --backup-id ID [--apply]
+  [--delete-at-source]` and `backup_restore certificates`. A SQL Server backup certificate pair is
+  read twice (hashed on its server, read by the new `common.cli read-file` and proven on arrival),
+  kept ENCRYPTED in the runtime store (`backup_certificates`, never deleted or rewritten), proven by
+  reading it back, and only then - when asked, never during a lockdown - deleted on its server one
+  file per command. The backup scripts stop exporting a certificate the vault holds
+  (`BACKUP_CERT_HELD_THUMBPRINTS`).
+- **The vault also stands as files a recovery key opens.** Each proven certificate row is written as
+  one age file (`.cer`, `.pvk`, the `.pvk` password, every fact) sealed for dbabrain AND an offline
+  recovery key - `backup_restore vault-key --recovery|--dbabrain`, `certificate-files [--apply]`,
+  configured in `store_config.json` `certificate_vault`. Never rewritten; `take-certificate
+  --delete-at-source` refuses until the file stands and proves. New core dependency: `pyrage`.
+- **PostgreSQL base backups are TAR, compressed on the server** (`pg_basebackup -Ft
+  --compress=server-zstd`, PostgreSQL 15+): a few files instead of the whole data directory, about
+  a sixth of the bytes. The start WAL comes from `backup_manifest`; `pg_verifybackup` (18+) checks a
+  tar backup; a restore unpacks tar members before laying them down or combining them, and still
+  reads a plain one.
+- **Encrypted at the repository** (`offload_encrypt`, `offload_encrypt_key_days`, both required,
+  written `false` / `90`). Each proven copy is encrypted with age on the repository for a key's
+  public half (`common.cli encrypt-file`), proven by decrypting it back (`verify-encrypted-file`),
+  and only then is the plain file deleted there, one verified file per command. One key ring per
+  server_id; a key encrypts for its lifetime only and decrypts for ever; each key is also sealed as a
+  file for the recovery key. Once a row's copy is wholly encrypted and proven, its source is released
+  like a plain copy's (with `offload_delete_source`), each `.age` file hashed again first; a row
+  encrypted only in part stays at its source. An encrypted copy expires on the repository by its
+  `.age` files.
+- **The repository's retention is seconds per file type** - `offload_retention`, required:
+  `{"FULL": 4320000, "LOG": 8640000, "default": "keep"}`; a type not named takes `default`, and
+  without one is kept for good (`{}`, the value written, deletes nothing). It replaces
+  `offload_retention_full` / `_diff` / `_log`: an entry still on them is refused, and
+  `upgrade-config` writes the same windows per type and drops them. A type the engine never writes,
+  `CERT` / `MANIFEST` / `CONTROLFILE` / `SPFILE`, `0`, and an incremental that needs its chain kept
+  other than its base are refused by name.
+- **The source is released file by file, a base backup folder only once empty.** With
+  `offload_delete_source`, a PostgreSQL base backup directory is deleted at the server by each of its
+  files (the path, bytes and sha256 its offload measured), then its empty folder; before, it was
+  never released and the script swept whole chains with `rm -rf`. An entry that releases states
+  `cleanup_retention: {"default": "keep"}` so its scripts delete nothing.
+- **`offload_source_keeps_newest_chain`** (required, written `true`): `false` releases the newest chain
+  too, once verified (and encrypted) on the repository - the server keeps only the newest base
+  backup's `backup_manifest`, which the next incremental chains onto.
+- **The backup page shows each backup's repository copy.** `backup-restore.html` (and a server page's
+  files) has Repository and On-the-server columns - verified, encrypted n of n with which age key and
+  until when, deleted at the source or manifest only - and a row opens to each of its files: bytes
+  and SHA-256 on the server, on the repository, and of its `.age`, proven and the plain copy removed.
+  Fits 1366 px without a sideways scroll; drawn with Tabler's datagrid, card table and badges. A
+  file deleted as meant is no longer counted missing; a drill no longer configured says so; Coverage
+  counts a backup released at its source while its repository copy is verified.
+- **The backup page says where a backup has been, and what it needs** (0.38.0). The coverage table
+  has a *Newest diff / incr.* column beside the newest full and log. A backup's opened row has a
+  **timeline** - written on its server, copied to the repository, verified, encrypted, proven, no
+  plain copy left there, deleted on its server - each with the moment the catalog recorded, a step
+  not reached saying so; *On the server now* is a fact of its own and a column of the file table
+  (it said only that the plain copy was gone from the repository); the repository copy is shown
+  under the name it has there (`<file>.age`). A differential's or a log's row lists its **restore
+  chain**: the newest full before it, the differential or incrementals after that full, the logs
+  since, where each is, and whether every one can still be had - *complete*, *INCOMPLETE* with the
+  files that are nowhere, or *no longer restorable* for a file its retention already swept.
+- **A Windows server reached over SSH is offloaded over SFTP** - hashed in PowerShell, copied over SFTP
+  (a drive path served as `/D:/...`), deleted there; no share needed on the host. Such an entry
+  states `offload_transfer: sftp`.
+- **`offload_files_since`** (required, written `""`): no file of the entry written before this UTC
+  moment is copied - the new flow starts at a FULL, the older backups keep their old retention.
+- **A backup's messages follow its flow** (1.306): named by the `backup_id`, step 1 the backup and
+  steps 2-5 the repository (copy, encrypt, delete at the source, check) in one pass and one message,
+  each step a line; a long step (a FULL, a large copy) a start and a done; a failed step named with
+  why and the steps it stopped *not run*; no JSON in the message. An offload no longer reads
+  `restore_id=<unknown>`; a file already found missing is not re-reported on every later run.
+- **Fixed: a WAL or LOG entry beside its full entry released nothing.** The newest chain was read per
+  entry, and a log stream's entry has no full; it is now the database's on its server.
+- **An expired repository copy is deleted one verified file per item** (`delete-verified-files`,
+  one list per copy): a plain copy by its backup's facts, a base backup directory by its offload's
+  proofs and then its emptied folder, an encrypted copy by its `.age` files' facts. `delete-files`
+  is no longer used by the offload.
+- **A certificate is never copied with the backups.** A restore's staging copy (chain or whole
+  directory) drops `_cert/`, `.cer` and `.pvk`; a restore reads the certificate from the vault only, places it on
+  the target for the import and deletes it there one verified file at a time. The share and the
+  source host are no longer read for it.
+- **A restore from an encrypted repository copy.** A script restore whose files are proven `.age`
+  copies decrypts them on the way: on the repository host itself when the target is that host
+  (`common.cli decrypt-on-host`, the identity on stdin), otherwise streamed through dbabrain to the
+  target (`fetch-decrypted-file`); both the encrypted and the plain facts are held. Proven on the
+  db_ops store's 60 GB cluster restored on the repository VM (2026-11-10).
+- **Copies are faster, still through dbabrain**: `offload_transfer` (`cat` | `sftp`, required) and a
+  reader in its own process; a backup inside a container's volume is read from inside the container.
+- **A list delete** - `common.cli delete-verified-files` and `delete-empty-folders` (the operator,
+  2026-11-10: "by an array of files"). Each item states its own facts and is checked and removed by
+  its own script, over one connection; one bad item refuses the whole list before the host is
+  reached, and the first item not deleted stops it.
+- **The repository check** (`offload_repository_check`, required, written `true`): each offload pass
+  lists `<offload_folder>/<server_id>/` without hashing (new `common.cli list-files`) and fails the run
+  - to the entry's backup/restore group - when it holds a file the catalog does not know, lacks a
+  proven copy, holds one of other bytes, or holds a link.
+- **The consistency check's limits are the entry's** - `checkdb_timeout_seconds` (default 3600) and
+  `checkdb_jobs` (default 1, `pg_amcheck --jobs`). The limit is kept on the host, so a check never
+  outlives its call. `create-db-docker` takes `data_host_dir` and `run_as` (PostgreSQL single).
+
+### Fixed
+
+- `db-status` said UNKNOWN for every Oracle instance, and at database depth for every PDB: Oracle
+  upper-cases unquoted column names and names a PDB's state `open_mode`. Both are read now.
+- `trace-session` on a target that is not SQL Server failed with a syntax error; it now answers a
+  sentence naming the engine and what to read there instead (`pg_stat_activity`, `v$session`).
+- A restore's copy that could not start said the wrong thing: "will not fit" was retried
+  `copy_max_retry` times and then reported as *is not on the target after the copy*. A refused
+  round now ends the run with its own sentence, and a round that failed gives its error to each
+  file's attempt.
+- **The read-only SQL check let four kinds of call through** (the assistant's and MCP's `run-sql`,
+  `store_query`): a function named inside quotes (`"pg_sleep"(600)`, `` `sleep`(600) ``), a statement
+  handed over as text (`query_to_xml('...')`, `ts_stat`), an Oracle package's function
+  (`utl_http.request(...)`, `dbms_xmlgen.getxml(...)`, `httpuritype(...)` - the list named `dbms_*(`,
+  and a real call is `dbms_x.y(`), and MySQL's `sleep`, `benchmark`, `load_file`, `get_lock`. Each is
+  refused now. The Oracle packages that only read - `dbms_metadata`, `dbms_lob`, `dbms_xplan`,
+  `utl_raw` and their like - still go. What such a call could do was always the database login's to
+  decide; give the assistant's login no more than it needs.
+- A differential or a log written after its full had been released to the repository was linked in
+  the catalog (`chain_parent_file_id`) to an older full still on the server, or to none: the link
+  asked for a full still *present* there. New rows link to the newest full whatever its state; the
+  rows already written keep their link (it is under their `row_hash`), and the page reads a chain
+  by time, not by the link.
+- **A SQL Server Express instance could not be backed up**: both SQL Server backup scripts wrote
+  `WITH COMPRESSION`, which Express refuses (error 1844). They now ask the instance its edition and
+  leave compression out for Express alone.
+- `restore-on-demand --dry-run` of a script restore ran the restore - it now restores nothing.
+- `restore-by-id` with `"dry_run": true` announced *started* and *finished: done* to the entry's
+  group, as a real restore does. A dry run now says it is one, at its start and at its end.
+- `backup_restore offload` started by hand took 100 files per entry whatever the entry's
+  `offload_files_per_pass` said (the flag's default replaced it). Without `--limit` a hand run now
+  takes the entry's own number; `--limit N` still overrides it for that run, and below 1 is refused.
+- A PostgreSQL restore of a cluster with no WAL archive no longer fails copying one; recovery replays
+  the WAL inside the base backup.
+- `pg_amcheck` and `pg_verifybackup` are found in `/usr/lib/postgresql/<major>/bin`, not only on PATH:
+  the check read "not installed" for a program that was there.
+- Every lab database container runs under Docker's init (`init: true`): a command left behind in it
+  is no longer re-parented to the database, whose end made postgres restart the instance.
+
 ## [0.36.0] - 2026-11-09
 
 ### Added

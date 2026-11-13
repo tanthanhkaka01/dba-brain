@@ -501,6 +501,8 @@ PACKAGED_DEFAULTS: dict[str, str] = {
     # this estate's to state - and every limit and price in force, so `upgrade-config` and a
     # fresh `init` give the same file.
     "data/ai_assist.json": "telegram/catalogue/ai_assist.json",
+    # 0.38.0: the MCP server's terms - every tool on, each call logged, answers capped.
+    "data/mcp_tools.json": "mcp/catalogue/mcp_tools.json",
     "data/network_reservations.json": "control/catalogue/network_reservations.json",
     # What each dangerous operation costs to authorize. Without it every confirmed command is
     # priced at the STRICTEST level - two answers, the second the target's id typed out - while

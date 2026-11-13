@@ -215,7 +215,22 @@ IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = '${esc_cert}')
 
     # Export once. Without the .cer/.pvk pair beside the backups, an encrypted backup is
     # restorable only on the instance that wrote it — which defeats the point of taking it.
-    if ! exec_here test -f "${cert_dir}/${cert_name}.cer"; then
+    # 0.37.0: a certificate dbabrain's vault holds (BACKUP_CERT_HELD_THUMBPRINTS, by thumbprint) was
+    # taken off this server on purpose - it is not exported again. A thumbprint the vault does not
+    # hold (a new certificate) is exported as before, and said, so it is taken too.
+    held_by_vault=""
+    if [ -n "${BACKUP_CERT_HELD_THUMBPRINTS:-}" ]; then
+        thumb="$(query_sql "SELECT LOWER(CONVERT(varchar(40), thumbprint, 2)) FROM sys.certificates WHERE name = N'${esc_cert}';" | head -n 1 | tr -d '[:space:]')"
+        case ",$(printf '%s' "$BACKUP_CERT_HELD_THUMBPRINTS" | tr -d '[:space:]' | tr 'A-F' 'a-f')," in
+            *",${thumb},"*) [ -n "$thumb" ] && held_by_vault=1 ;;
+        esac
+        if [ -n "$held_by_vault" ]; then
+            printf 'backup certificate %s (thumbprint %s) is kept by dbabrain - not exported\n' "$cert_name" "$thumb"
+        else
+            printf 'warning: backup certificate %s has thumbprint %s, which dbabrain'"'"'s vault does not hold - exported; take it with take-certificate\n' "$cert_name" "$thumb"
+        fi
+    fi
+    if [ -z "$held_by_vault" ] && ! exec_here test -f "${cert_dir}/${cert_name}.cer"; then
         run_sql_secret "
 BACKUP CERTIFICATE [${cert_name}]
     TO FILE = '${cert_dir}/${cert_name}.cer'
@@ -306,6 +321,16 @@ emit_file() {
 # --------------------------------------------------------------------------- #
 # Back up.
 # --------------------------------------------------------------------------- #
+# Express has no backup compression (0.38.0, 1.346): `WITH COMPRESSION` is refused there (error 1844).
+# Asked of the instance itself - EngineEdition 4 is Express - never assumed from a name.
+engine_edition="$(query_sql "SELECT CAST(SERVERPROPERTY('EngineEdition') AS int);" | head -n 1 | tr -d '[:space:]')"
+if [ "$engine_edition" = "4" ]; then
+    compress_clause=""
+    printf -- '-- Express edition: backups are written without compression\n'
+else
+    compress_clause=", COMPRESSION"
+fi
+
 # UTC, and marked: without the Z the name read as local time on a node that runs on +07.
 stamp="$(date -u +%Y%m%d_%H%M%SZ)"
 failed=0
@@ -322,9 +347,9 @@ for db in $databases; do
         || { printf 'ERROR mkdir failed: %s\n' "$target_dir" >&2; failed=1; continue; }
 
     if [ "$level" = "log" ]; then
-        statement="BACKUP LOG [${db}] TO DISK = '${target_file}' WITH INIT, CHECKSUM, COMPRESSION${encrypt_clause};"
+        statement="BACKUP LOG [${db}] TO DISK = '${target_file}' WITH INIT, CHECKSUM${compress_clause}${encrypt_clause};"
     else
-        statement="BACKUP DATABASE [${db}] TO DISK = '${target_file}' WITH INIT, CHECKSUM, COMPRESSION${clause}${encrypt_clause};"
+        statement="BACKUP DATABASE [${db}] TO DISK = '${target_file}' WITH INIT, CHECKSUM${compress_clause}${clause}${encrypt_clause};"
     fi
 
     printf -- '-- %s %s -> %s\n' "$db" "$level" "$target_file"

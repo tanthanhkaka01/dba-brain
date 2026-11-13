@@ -216,7 +216,21 @@ IF NOT EXISTS (SELECT 1 FROM sys.certificates WHERE name = '$escCert')
     # Asked through xp_fileexist rather than Test-Path: the file was written by the SQL Server
     # service account and may sit on a share this WinRM session cannot read, in which case
     # Test-Path says "no" and the certificate is exported again over the top of itself.
-    $certExists = (Get-SqlRows "DECLARE @e int; EXEC master.dbo.xp_fileexist '$(Get-SqlEscaped "$certDir\$certName.cer")', @e OUTPUT; SELECT @e;")
+    # 0.37.0: a certificate dbabrain's vault holds (BACKUP_CERT_HELD_THUMBPRINTS, by thumbprint) was
+    # taken off this server on purpose - it is not exported beside the backups again. A thumbprint the
+    # vault does not hold (a new certificate) is exported as before, and said, so it is taken too.
+    $held = @("$env:BACKUP_CERT_HELD_THUMBPRINTS".Split(',') | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
+    $thumb = "$(@(Get-SqlRows "SELECT LOWER(CONVERT(varchar(40), thumbprint, 2)) FROM sys.certificates WHERE name = N'$escCert';")[0])".Trim().ToLower()
+    $heldByVault = $thumb -and ($held -contains $thumb)
+    if ($heldByVault) {
+        "backup certificate $certName (thumbprint $thumb) is kept by dbabrain - not exported"
+    } elseif ($held.Count -gt 0) {
+        "warning: backup certificate $certName has thumbprint $thumb, which dbabrain's vault does not hold - exported; take it with take-certificate"
+    }
+    $certExists = @('1')
+    if (-not $heldByVault) {
+        $certExists = (Get-SqlRows "DECLARE @e int; EXEC master.dbo.xp_fileexist '$(Get-SqlEscaped "$certDir\$certName.cer")', @e OUTPUT; SELECT @e;")
+    }
     if (@($certExists)[0] -ne '1') {
         $result = Invoke-SqlSecret @"
 BACKUP CERTIFICATE [$certName]
@@ -234,7 +248,9 @@ BACKUP CERTIFICATE [$certName]
     # the source's share login read every .bak and .trn and got "access denied" on _cert). Given the
     # folder's own permissions - the backups' - on every run, so a pair exported by an older
     # version is opened too. The .pvk stays encrypted by the backup passphrase either way.
-    foreach ($part in @("$certDir\$certName.cer", "$certDir\$certName.pvk")) {
+    $certParts = @()
+    if (-not $heldByVault) { $certParts = @("$certDir\$certName.cer", "$certDir\$certName.pvk") }
+    foreach ($part in $certParts) {
         $out = & icacls $part /reset /Q 2>&1
         if ($LASTEXITCODE -ne 0) {
             "warning: could not give $part the backups' own permissions ($(@($out) -join ' ')); a restore " +
@@ -305,6 +321,14 @@ function Write-FileReceipt([string]$db, [string]$type, [string]$path, [string]$v
 # --------------------------------------------------------------------------- #
 # Back up.
 # --------------------------------------------------------------------------- #
+# Express has no backup compression (0.38.0, 1.346): `WITH COMPRESSION` is refused there (error 1844),
+# so the first Express instance given to this script would have failed every backup of every level.
+# Asked of the instance itself - EngineEdition 4 is Express, whatever its year - never assumed from
+# the instance's name: an instance named SQLEXPRESS can be a Developer edition.
+$engineEdition = "$(@(Get-SqlRows "SELECT CAST(SERVERPROPERTY('EngineEdition') AS int);")[0])".Trim()
+$compressClause = if ($engineEdition -eq '4') { '' } else { ', COMPRESSION' }
+if (-not $compressClause) { "-- Express edition: backups are written without compression" }
+
 # UTC, and marked: without the Z the name read as local time on a node that runs on +07.
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd_HHmmss') + 'Z'
 $failed = 0
@@ -326,9 +350,9 @@ foreach ($db in $databases) {
 
     $escFile = Get-SqlEscaped $targetFile
     if ($level -eq 'log') {
-        $statement = "BACKUP LOG [$db] TO DISK = '$escFile' WITH INIT, CHECKSUM, COMPRESSION$encryptClause;"
+        $statement = "BACKUP LOG [$db] TO DISK = '$escFile' WITH INIT, CHECKSUM$compressClause$encryptClause;"
     } else {
-        $statement = "BACKUP DATABASE [$db] TO DISK = '$escFile' WITH INIT, CHECKSUM, COMPRESSION$clause$encryptClause;"
+        $statement = "BACKUP DATABASE [$db] TO DISK = '$escFile' WITH INIT, CHECKSUM$compressClause$clause$encryptClause;"
     }
 
     "-- $db $level -> $targetFile"

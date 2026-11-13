@@ -375,7 +375,7 @@ def add_backup(request: dict[str, Any] | None = None, *,
     # Every offload field stated (0.34.0): what was given, the rest as "off", read back through the
     # one parser so a misspelled or contradictory value is refused here.
     for name, value in offload_rules.OFFLOAD_FIELDS.items():
-        entry.setdefault(name, value)
+        entry.setdefault(name, json.loads(json.dumps(value)))   # its own copy, never the shared one
     # Every job names its databases, as a list (0.34.0). A whole-cluster engine takes them all - the
     # only answer it has; a SQL Server job states which, or all_databases true.
     for job in entry.get("jobs") or []:

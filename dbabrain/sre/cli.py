@@ -337,6 +337,14 @@ def build_parser() -> argparse.ArgumentParser:
                           "/24 derived from --name inside 172.30.0.0/16. Never left to Docker's own "
                           "address pool, which spans 172.17-172.31 and has twice taken a production "
                           "database off the map by claiming a range the estate routes.")
+    cdd.add_argument("--data-host-dir", dest="data_host_dir", default="",
+                     help="PostgreSQL single only (0.37.0): keep the data in this HOST folder (bound at "
+                          "/var/lib/postgresql) instead of a Docker named volume - e.g. on a share. "
+                          "Recorded with the connection.")
+    cdd.add_argument("--run-as", dest="run_as", default="",
+                     help="uid:gid the container runs as (0.37.0) - for a host folder whose files only one "
+                          "uid can own, such as an NFS share mapping every user to one uid. Recorded "
+                          "with the connection.")
     cdd.add_argument("--worker-host", default="", help="DB host/IP to record in the connection entry.")
     cdd.add_argument("--data-dir", default=None, help="Override the data dir for the connection registry.")
     cdd.add_argument("--registry", default=None, help="Override the connection registry file path.")
@@ -766,6 +774,8 @@ def _handle_create_db_docker(args: argparse.Namespace, logger, *, sre_config=Non
         # default — not "no subnet", because an unpinned network is the thing we are preventing.
         network_subnet=("" if str(getattr(args, "network_subnet", "") or "").strip() == SKIP_SENTINEL
                         else str(getattr(args, "network_subnet", "") or "").strip()),
+        data_host_dir=str(getattr(args, "data_host_dir", "") or "").strip(),
+        run_as=str(getattr(args, "run_as", "") or "").strip(),
     )
     try:
         # Validated here too, not only in `common`: a bad spec must fail before a password is
@@ -800,6 +810,10 @@ def _handle_create_db_docker(args: argparse.Namespace, logger, *, sre_config=Non
             request["replicas"] = spec.replicas
         if spec.backup_mount is not None:
             request["backup_mount"] = spec.backup_mount
+        if spec.data_host_dir:
+            request["data_host_dir"] = spec.data_host_dir
+        if spec.run_as:
+            request["run_as"] = spec.run_as
         # --remote-host: every docker/file operation runs on that Ubuntu machine over SSH, from
         # `common`. The CLI and the registry write stay on this node — typically the master — so
         # no intermediate hop is involved.

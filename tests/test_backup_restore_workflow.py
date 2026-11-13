@@ -106,37 +106,63 @@ def test_job_code_namespaces_do_not_collide():
     assert schedule.backup_job_code("A", "database").startswith(schedule.BACKUP_JOB_PREFIX)
 
 
+def _stub_the_passes(monkeypatch, failed=None):
+    """Each pass of a workflow replaced by a mark in the order it ran; returns that order.
+
+    Three since 0.34.0 (1.240): the backups, the restores, and the repository copy - which opens a
+    store from the config, so a test that leaves it in runs against an estate it does not have."""
+    from dbabrain.backup_restore import offload
+
+    failed = failed or {}
+    order: list[str] = []
+
+    def a_pass(name):
+        return lambda **_: order.append(name) or {"failed": failed.get(name, 0)}
+
+    monkeypatch.setattr(workflow, "run_backup", a_pass("backup"))
+    monkeypatch.setattr(workflow, "run_scheduled_restores", a_pass("restore"))
+    monkeypatch.setattr(offload, "run_offloads", a_pass("offload"))
+    return order
+
+
 def test_workflow_runs_backup_before_restore(monkeypatch):
-    """A restore drill validates the backups, so the set it validates must be the fresh one."""
-    order = []
-    monkeypatch.setattr(workflow, "run_backup", lambda **_: order.append("backup") or {"failed": 0})
-    monkeypatch.setattr(workflow, "run_scheduled_restores", lambda **_: order.append("restore") or {"failed": 0})
+    """A restore drill validates the backups, so the set it validates must be the fresh one. The
+    repository copy is last: a long copy never delays a restore that is due in the same pass."""
+    order = _stub_the_passes(monkeypatch)
 
     result = workflow.run_workflow(app_config=object(), config_path="c.json")
 
-    assert order == ["backup", "restore"]
+    assert order == ["backup", "restore", "offload"]
     assert result["failed"] == 0
 
 
-def test_workflow_reports_failure_from_either_half(monkeypatch):
-    monkeypatch.setattr(workflow, "run_backup", lambda **_: {"failed": 0})
-    monkeypatch.setattr(workflow, "run_scheduled_restores", lambda **_: {"failed": 2})
+@pytest.mark.parametrize("failing", ["backup", "restore", "offload"])
+def test_workflow_reports_failure_from_any_of_its_passes(monkeypatch, failing):
+    _stub_the_passes(monkeypatch, failed={failing: 2})
 
     assert workflow.run_workflow(app_config=object(), config_path="c.json")["failed"] == 2
 
 
+def test_workflow_adds_up_the_failures_of_all_its_passes(monkeypatch):
+    _stub_the_passes(monkeypatch, failed={"backup": 1, "restore": 2, "offload": 4})
+
+    assert workflow.run_workflow(app_config=object(), config_path="c.json")["failed"] == 7
+
+
 @pytest.mark.parametrize("skip,expected", [
+    # The repository copy is the backup half's last step: skipped with it, and on its own word.
     ({"skip_backup": True}, ["restore"]),
-    ({"skip_restore": True}, ["backup"]),
+    ({"skip_restore": True}, ["backup", "offload"]),
+    ({"skip_offload": True}, ["backup", "restore"]),
 ])
 def test_workflow_halves_can_be_skipped(monkeypatch, skip, expected):
-    order = []
-    monkeypatch.setattr(workflow, "run_backup", lambda **_: order.append("backup") or {"failed": 0})
-    monkeypatch.setattr(workflow, "run_scheduled_restores", lambda **_: order.append("restore") or {"failed": 0})
+    order = _stub_the_passes(monkeypatch)
 
-    workflow.run_workflow(app_config=object(), config_path="c.json", **skip)
+    result = workflow.run_workflow(app_config=object(), config_path="c.json", **skip)
 
     assert order == expected
+    assert [name for name in ("backup", "restore", "offload") if result[name] is not None] == expected, \
+        "a pass that did not run answers nothing"
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +510,8 @@ def test_a_remote_restore_hides_the_source_container_from_the_script(tmp_path, m
 
 def test_the_transfer_recreates_empty_directories(monkeypatch):
     """A PostgreSQL backup needs its empty dirs (pg_tblspc, pg_replslot). Copying only files
-    yields a directory that looks complete and that pg_combinebackup refuses."""
+    yields a directory that looks complete and that pg_combinebackup refuses. ``copy-files`` moves
+    files and nothing else, so the folders are the staging step's to make (0.38.0)."""
     import stat as stat_mod
     from dbabrain.common import backup_copy as transfer
 
@@ -509,12 +536,12 @@ def test_the_transfer_recreates_empty_directories(monkeypatch):
                 raise IOError("missing")
         def mkdir(self, path): made.append(path)
         def open(self, path, *a, **k):
-            # The writability probe is expected; a real file copy in this fixture is not.
+            # The writability probe and the marker are expected; any other write is a file copied,
+            # which the staging step never does.
             if path.endswith((".dbabrain_write_probe", ".dbabrain-staging")):
                 return _Probe()
-            raise AssertionError("no files to copy in this fixture")
+            raise AssertionError("the staging step writes no backup file")
         def remove(self, path): pass
-        def putfo(self, *a, **k): raise AssertionError("no files to copy in this fixture")
         def close(self): pass
 
     source = _Sftp({"/src": [_Attr("pg_tblspc", True)], "/src/pg_tblspc": []})
@@ -525,12 +552,12 @@ def test_the_transfer_recreates_empty_directories(monkeypatch):
         def __init__(self, sftp): self._sftp = sftp
         def sftp(self): return self._sftp
 
-    result = transfer.sync_backup_dir(
+    result = transfer.prepare_staging(
         source_session=_Client(source), source_dir="/src",
         target_session=_Client(target), target_dir="/dst",
     )
 
-    assert result.copied == 0
+    assert result.pending == [], "an empty folder is no file to travel"
     assert any(p.endswith("/dst/pg_tblspc") for p in made), f"empty dir not recreated: {made}"
 
 

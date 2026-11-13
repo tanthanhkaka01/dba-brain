@@ -27,6 +27,10 @@ from dbabrain.lib import errors
 
 SHA256 = "sha256"
 ALGORITHMS = (SHA256,)
+#: A SHA-256 and a SHA-1 as lowercase hex - what a request, a catalog row and a script's answer are
+#: each held to. One spelling of each: they were written in five modules and in two (0.38.0, 1.339).
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+SHA1_HEX = re.compile(r"^[0-9a-f]{40}$")
 
 
 def sha256_of_file(path) -> str:
@@ -53,6 +57,25 @@ FILE_TYPES = (
     "RMAN_L0", "RMAN_L1", "ARCHIVELOG", "CONTROLFILE", "SPFILE",  # Oracle
     "CERT",                                                 # a backup certificate a restore stages
 )
+
+#: File types never copied to the repository (0.37.0, the operator 2026-11-10): *certificates and
+#: keys are not kept where the backups are* - a stolen repository must not hold both the encrypted
+#: backups and what decrypts them. They are kept apart, encrypted, by dbabrain.
+NEVER_ON_REPOSITORY = ("CERT",)
+#: The database level of a repository path for a row that names no database. A PostgreSQL row is
+#: not one: its receipts name it ``cluster`` (a base backup and its WAL are the whole cluster's), and
+#: ``<server_id>/cluster/`` is where those copies live.
+INSTANCE_LEVEL = "_instance"
+
+
+def is_certificate_file(relative_path: str) -> bool:
+    """A backup certificate or its key - never copied anywhere (the operator, 2026-11-10: *keep them
+    in dbabrain and delete them on the server_id; copy the backups to the repository, never _cert*).
+
+    The pair the SQL Server script exports (``_cert/<name>.cer`` + ``.pvk``) goes to dbabrain's
+    vault with ``take-certificate``; a restore imports it from there. A copy that carried it - to a
+    share, a restore target or the repository - would leave what decrypts the backups beside them."""
+    return sqlserver_file_type(relative_path) == "CERT"
 
 BACKUP_RUN_STATUSES = ("RUNNING", "DONE", "ERROR")
 ENGINE_VERIFY_RESULTS = ("passed", "failed", "not_run")
@@ -505,6 +528,40 @@ def sqlserver_chain_break(full: dict[str, Any], diff: dict[str, Any] | None,
     return ""
 
 
+DEFAULT_WAL_SEGMENT_BYTES = 16 * 1024 * 1024
+
+
+def postgresql_start_wal_from_manifest(wal_ranges: str, *, segment_bytes: int = DEFAULT_WAL_SEGMENT_BYTES) -> str:
+    """The WAL segment a base backup starts from, read off its ``backup_manifest`` (0.37.0).
+
+    A TAR backup's ``backup_label`` is inside ``base.tar``; its manifest beside it carries
+    ``"WAL-Ranges": [{"Timeline": 1, "Start-LSN": "0/2000028", "End-LSN": ...}]``. The segment is
+    ``TTTTTTTT`` + the LSN's high word + its low word divided by the segment size, each eight
+    hexadecimal digits - the name PostgreSQL itself gives it. The earliest range's start when there
+    are several (a timeline switch during the backup). ``""`` when nothing can be read."""
+    import json as _json
+
+    text = str(wal_ranges or "").strip()
+    if not text:
+        return ""
+    if text.startswith('"WAL-Ranges"'):
+        text = "{" + text + "}"
+    try:
+        data = _json.loads(text)
+    except ValueError:
+        return ""
+    ranges = data.get("WAL-Ranges") if isinstance(data, dict) else data
+    names = []
+    for item in ranges if isinstance(ranges, list) else []:
+        try:
+            timeline = int(item["Timeline"])
+            high, low = str(item["Start-LSN"]).split("/")
+            names.append(f"{timeline:08X}{int(high, 16):08X}{int(low, 16) // int(segment_bytes):08X}")
+        except (KeyError, TypeError, ValueError):
+            continue
+    return min(names) if names else ""
+
+
 def postgresql_wal_break(start_wal: str, segments: list[str], *, to_latest: bool = True) -> str:
     """The first hole in the WAL a PostgreSQL restore replays from its base backup's start segment;
     ``""`` when it holds or cannot be judged (0.35.0, 1.250 - gap G10).
@@ -512,7 +569,7 @@ def postgresql_wal_break(start_wal: str, segments: list[str], *, to_latest: bool
     A recovery to *latest* replays segment after segment and stops at the first one missing - and then
     opens, as if that were the end: the drill reports done and has restored an older state. So:
 
-    * the start segment (``backup_label``'s START WAL) must be archived;
+    * the start segment (``backup_label``'s START WAL, or the manifest's for a tar backup) must be archived;
     * with ``to_latest``, every segment from it to the newest archived one, without a hole. A
       point-in-time restore is only held to the start: a hole after its target does not matter, and
       which segment holds the target cannot be read from a name.

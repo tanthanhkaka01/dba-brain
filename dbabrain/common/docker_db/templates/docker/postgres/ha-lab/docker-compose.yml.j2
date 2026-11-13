@@ -15,6 +15,10 @@ services:
     image: postgres:{{ version }}
     container_name: {{ node.service }}
     restart: unless-stopped
+    # PID 1 is Docker's init, not the database (0.37.0): a command dbabrain runs in the container and
+    # leaves behind is reaped by it. With postgres as PID 1 such an orphan became postgres's child,
+    # and its abnormal end made postgres restart the whole instance (the store drill, 2026-11-10).
+    init: true
     environment:
       POSTGRES_USER: {{ username }}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
@@ -50,6 +54,10 @@ services:
     image: postgres:{{ version }}
     container_name: {{ node.service }}
     restart: unless-stopped
+    # PID 1 is Docker's init, not the database (0.37.0): a command dbabrain runs in the container and
+    # leaves behind is reaped by it. With postgres as PID 1 such an orphan became postgres's child,
+    # and its abnormal end made postgres restart the whole instance (the store drill, 2026-11-10).
+    init: true
     depends_on:
       {{ node.primary_host }}:
         condition: service_healthy

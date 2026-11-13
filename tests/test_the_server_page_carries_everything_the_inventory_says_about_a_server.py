@@ -200,6 +200,7 @@ ELSEWHERE_ON_THE_PAGE = {
     "staticFields": "the 'static' mark on the Server detail facts it names (build_server_detail)",
     "databases": "the Databases section, from the same inventory_health.build_database_rows",
     "workload": "the Workload section, from the same workload builder",
+    "protection": "the Protection section - the same block, whole (build_server_detail carries it)",
     "role": "the page title", "ip": "the header line",
     "reportUrl": "the page itself", "indexUrl": "the header's index usage link",
     "dbType": "the engine's own sections", "oracle": "the Oracle sections", "osOnly": "the host-only picker group",

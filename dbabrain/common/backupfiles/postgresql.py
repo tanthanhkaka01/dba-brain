@@ -74,6 +74,10 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
         # The WAL segment the base backup starts from (1.250): `START WAL LOCATION: 0/2000028 (file
         # 000000010000000000000002)` in its backup_label - empty for wal/ and an older layout.
         f"s=$(sed -n 's/^START WAL LOCATION: .*(file \\([0-9A-F]*\\)).*/\\1/p' \"$d/backup_label\" 2>/dev/null | head -1); "
+        # A TAR backup (0.37.0) has its backup_label inside base.tar: its manifest's WAL-Ranges instead,
+        # turned into the segment name here (lib.integrity.postgresql_start_wal_from_manifest).
+        f"[ -n \"$s\" ] || [ ! -f \"$d/backup_manifest\" ] || s=\"M:$(tr -d ' \\n\\r\\t' < \"$d/backup_manifest\" "
+        f"2>/dev/null | grep -o '\"WAL-Ranges\":\\[[^]]*\\]' | head -1)\"; "
         f"printf '%s|%s|%s|%s\\n' \"$d\" \"$(stat -c %s \"$d\")\" \"$(stat -c %y \"$m\")\" \"$s\"; "
         f"done 2>/dev/null; printf '{HOST_NOW}|%s\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\""
     )
@@ -105,8 +109,13 @@ def list_files(request: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             continue
         extra: dict[str, Any] = {}
-        if kind != LOG and start_wal.strip():
-            extra["start_wal"] = start_wal.strip().upper()
+        start_wal = start_wal.strip()
+        if start_wal.startswith("M:"):
+            from dbabrain.lib.integrity import postgresql_start_wal_from_manifest
+
+            start_wal = postgresql_start_wal_from_manifest(start_wal[2:])
+        if kind != LOG and start_wal:
+            extra["start_wal"] = start_wal.upper()
         rows.append(row(path=path, kind=kind, database=None,
                         size=int(size) if size.isdigit() else None,
                         finished_at=modified.strip() or None,

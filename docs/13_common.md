@@ -478,6 +478,12 @@ retention rule, same `RESULT=ok`. `tests/test_mssql_backup_scripts.py` pins the 
 contract, because the restore side reads a set without being told which script wrote it — the
 moment they disagree there are two backup formats and one of them has never been restored from.
 
+**Express is written without compression** (0.38.0, 1.346). Every backup is `WITH INIT, CHECKSUM,
+COMPRESSION` - except on SQL Server Express, which refuses the word (error 1844): both scripts ask
+the instance `SERVERPROPERTY('EngineEdition')` and leave it out for 4. Asked, never read off a
+name: the estate's one instance called `SQLEXPRESS` is a Developer edition
+(`tests/test_an_express_instance_is_backed_up_without_compression.py`).
+
 Four things about it that are specific to Windows and each cost something to learn:
 
 - **`??`, `?:` and `?.` are PowerShell 7+.** These hosts run 5.1, where they are *parser* errors —
@@ -563,7 +569,7 @@ The app's face is `backup_restore.cli backup-stop --backup-id <id>` (`docs/08_ba
 
 The piece between listing and deleting: which files are obsolete. It lists through the same code
 path `list-backup-files` uses — so a caller cannot be shown one set by `list` and have a different
-set judged by `prune` — then applies a rule, then optionally hands the paths to `delete-files`.
+set judged by `prune` — then applies a rule and answers the plan. **It deletes nothing** (0.38.0).
 
 **`cleanup_retention` is seconds**, the one name both halves of `backup_restore` read
 (`docs/08_backup_restore_app.md`), and it **defaults to 8 days** here — this command is also run by
@@ -598,75 +604,190 @@ the answer states. Before, the cutoff was this node's wall clock: a node at +08 
 UTC read a backup one minute old as eight hours old, which fourteen days hid and two hours did not.
 A listing that states no age is judged on the node's clock, as it always was.
 
-**`delete: true` is refused for PostgreSQL**, by name, with the plan still in `data`. A base backup
-is a directory in a chain and `delete-files` takes files only: it planned, then failed on every
-path, and had never removed one. The backup script removes whole chains itself (`RETENTION_DAYS`,
-`RETENTION_SECONDS`), and `pg_archivecleanup` trims the WAL archive behind them.
+**`delete: true` is refused** (0.38.0, 1.329), for every engine, with the plan still in `data`. It
+handed `obsolete_paths` to the old path-list delete - many files in one command, none held to
+anything. One command never deletes two files: each obsolete file is deleted on its own, by
+`delete-verified-file` when the catalog recorded it and by `delete-file` with `"force": true` when it
+did not. A configured backup entry does both through `backup_restore prune-backups --apply`
+(docs/08). (PostgreSQL was refused by name before: a base backup is a directory in a chain, and the
+backup script removes whole chains itself.)
 
 **The scripts take `RETENTION_SECONDS` for a window under a day** - SQL Server and PostgreSQL apply
 it as their own rule on a nearer cutoff, Oracle through RMAN's `DELETE BACKUP COMPLETED BEFORE`
 after a successful level 0 (`docs/08_backup_restore_app.md`, *How the window reaches the engine*).
 
-**Reporting is the default; `delete: true` is deliberate.** Without it the command only answers, and
-`obsolete_paths` is exactly the array `delete-files` takes as `paths`, so deciding and deleting stay
-two steps. With it, removal goes through `delete-files` — one file at a time, with all its refusals —
-fenced to the directory being pruned. `dry_run` goes through the motions and removes nothing.
+**It only answers.** `obsolete_paths` is the list to act on, one file at a time; deciding and
+deleting are two steps, and the second is never this command's.
 
 `reclaimable_bytes` is **only as good as the listing**. Oracle's comes from RMAN, which carries no
 file size, so it is `0` for a directory of gigabyte pieces; the message says "size not reported by
 this engine's listing" rather than printing a zero somebody might size a disk against.
-`delete-files` stats each file as it goes and reports the bytes actually freed.
+A verified delete answers the bytes it actually removed.
 
 Measured on 2026-08-07 against `/opt/oracle/backup/dbops` (364 files): nothing obsolete at 14 days,
 55 obsolete at 4 — and with `delete: true, dry_run: true` all 55 came back `skipped`, 0 deleted,
 0 failed, every file still on the host.
 
-### `delete-file` / `delete-files` — the caller chooses, the command only removes
+### `delete-verified-file` / `delete-empty-folder` — one thing, every fact true (0.37.0)
 
-The other half of `list-backup-files`, and deliberately the *dumber* half. It takes full paths and
-deletes them; it works out nothing for itself.
+```jsonc
+// delete-verified-file
+{"host": {"runtime": "linux", "access": "ssh", "host": "192.0.2.20", "username": "u", "key_file": "/keys/id"},
+ "path": "/var/opt/mssql/backup/APPDB/FULL/APPDB_FULL_20261101.bak",
+ "file_name": "APPDB_FULL_20261101.bak",          // the last part of path
+ "size_bytes": 104857600,                         // what it must measure now
+ "sha256": "<64 hex>",                            // what it must hash to now
+ "must_be_under": "/var/opt/mssql/backup",        // required; never itself deleted
+ "dry_run": false, "timeout_seconds": 3600}
+// data: {"file": {"path", "file_name", "must_be_under", "size_bytes", "sha256",
+//        "size_bytes_found", "sha256_found", "status", "reason"}, "deleted", "dry_run"}
 
-That split is the whole design, because the thing it replaced did both.
-`backup_restore/delete_backup.py` (now marked obsolete, still wired into `restore-workflow`) read
-`restore_config.json`, globbed `*.bak`/`*.trn` under the configured import share, worked out which
-were older than `copy_recent_hours`, and removed them — so "what would this delete" had no answer
-short of reading the code and trusting the clock. Now the caller lists, decides, and passes back
-the paths it was given. The decision is visible before it happens, and it can come from a person.
+// delete-empty-folder
+{"host": {...}, "path": "/var/opt/mssql/backup/APPDB/FULL", "must_be_under": "/var/opt/mssql/backup"}
+// data: {"folder": {"path", "must_be_under", "entries", "status", "reason"}, "deleted", "dry_run"}
+```
 
-| Refusal | Why it is not a nuisance |
+The operator, 2026-11-10 (translated): *deleting this file is very dangerous - the code must be very
+careful and very well tested*. Six rules: never one command that deletes two files or more; never
+one that deletes a folder still holding a file (one file is enough to fail); each command deletes one
+file or one empty folder; a file delete carries the file's name, path, bytes and checksum and
+deletes only when all are right; the tests catch every case, the forbidden ones included; Windows
+and Ubuntu, over SSH and over WinRM.
+
+- **Refused before the host is reached**: a list (`paths`, `files`) or any field the command does
+  not know (a misspelt `sha_256` must not be a check silently not made); a missing or ill-formed fact
+  (the size a whole number, the sha256 64 hex characters, the name the path's last part); a pattern,
+  a relative path, a `.` or `..` segment, a control character, a Windows `:` past the drive; a path
+  not strictly inside `must_be_under`.
+- **On the host, one script** (POSIX `sh` for linux / docker / k8s, PowerShell 2.0+ for windows; the
+  same transport as every host command - `-EncodedCommand` locally and over SSH, the script itself
+  over WinRM): a link is refused before it is judged by its target, then a folder, a device; the
+  size is held to `size_bytes`; the bytes are hashed (from stdin on POSIX, .NET on Windows) and held
+  to `sha256`; size and modification time are read again - nothing wrote to it while it was hashed;
+  then ONE non-recursive removal (`rm --` with one operand, no `-r`/`-f`; .NET `File.Delete`) and a
+  look to prove it is gone.
+- **The empty folder**: its entries are counted on the host, hidden ones included, and one refuses;
+  the removal is the platform's non-recursive one (`rmdir`, `Directory.Delete(path, $false)`), which
+  refuses a non-empty folder on its own - a file that lands between the count and the removal still
+  stops it.
+- **Statuses**: `deleted`, `not_found`, `skipped` (dry run) are success; `refused` (the thing there
+  is not what the request says - nothing removed) and `failed` (it matched and the removal did not
+  take) are a failed response with what the host found in `data`.
+- **Read strictly**: exactly one line from the host. Two lines, an unknown word, or a `DELETED` with
+  other facts than the ones stated is `failed` - never read as success.
+
+The offload's release at the source uses it, one call per file (see `docs/08_backup_restore_app.md`).
+Since 0.38.0 it is the only way a backup file dbabrain recorded is deleted: the old `delete-file` /
+`delete-files` are gone (below), and every cleanup that used them is on this (1.329).
+
+
+### `delete-verified-files` / `delete-empty-folders` — the same delete, for a list (0.37.0)
+
+```jsonc
+// delete-verified-files
+{"host": {...},
+ "files": [{"path": "/mnt/nas/_test/pgdata/base/1/1247", "file_name": "1247", "size_bytes": 106496,
+            "sha256": "<64 hex>", "must_be_under": "/mnt/nas/_test"}, ...],   // at most 20000
+ "dry_run": false, "timeout_seconds": 3600}                                    // per item
+// data: {"files": [<the delete-verified-file row>, ...], "deleted", "not_found", "skipped",
+//        "not_attempted", "complete", "stopped_at", "dry_run"}
+
+// delete-empty-folders - in the order given, deepest first
+{"host": {...}, "folders": [{"path": "/mnt/nas/_test/pgdata/base/1", "must_be_under": "/mnt/nas/_test"}, ...]}
+```
+
+The operator, 2026-11-10 (translated): *delete it, but by an array of files* - a restored test
+cluster is thousands of files, and one process and one SSH login per file is hours. The list changes
+the transport and nothing else: every item states its own name, path, bytes, sha256 and fence (an
+item carrying `host` or `dry_run`, or missing a fact, is refused); every item is checked and removed
+by **its own script**, the one `delete-verified-file` sends - one non-recursive delete of one file -
+over **one connection**. The whole list is validated before the host is reached (one bad or repeated
+item refuses all of them), and **the first item that is not deleted stops the list**: the rest are
+`not_attempted` and never sent, and the response fails naming where it stopped. `not_found` does not
+stop it - the file is gone, which is what was asked. The single-item commands still refuse a list.
+
+### `encrypt-file` / `verify-encrypted-file` — age at the repository (0.37.0)
+
+`encrypt-file` `{host, path, file_name, size_bytes, sha256, must_be_under, recipients, key_id,
+key_expires_at}` → `{path, encrypted_path, size_bytes, sha256, encrypted_size_bytes, encrypted_sha256,
+key_id, age_version}`. ONE file, on a Linux host with the `age` tool: the plain file held to its
+stated name, bytes and sha256 before anything is written; a key at or past `key_expires_at` refused
+(an expired key only decrypts); `<path>.age` written through a partial with `mv -n`, never replacing
+one; the plain file left - it goes only after the proof. A link, a missing file, no `age`, a pattern,
+a relative or `..` path, a list or an unknown field is refused.
+
+`verify-encrypted-file` (stdin: it carries a private key) `{host, path, size_bytes, sha256,
+plain_size_bytes, plain_sha256, identity}` → `{..., proven: true}`. The `.age` streamed over SFTP,
+measured as it passes and decrypted on the way (never written anywhere); a wrong key, a damaged
+file, or bytes that differ from either set of facts are refused.
+
+### `list-files` — every entry under a folder, its kind and bytes, no hash (0.37.0)
+
+```jsonc
+{"host": {...}, "folder": "/mnt/nas/SRV-01", "max_files": 200000, "timeout_seconds": 600,
+ "with_folders": false}
+// data: {"folder", "folder_found", "files": [{"path", "type", "size_bytes", "mtime_utc"}], "listed", "truncated",
+//        "folders": [path, ...]}   // folders only when with_folders was asked (0.38.0)
+```
+
+What the repository check reads on every offload pass: `file-checksum`'s folder form would hash
+terabytes each time. GNU `find -printf` on POSIX (each entry NUL-terminated, so a name with a newline
+is one entry; a `find` that could not read part of the tree fails the call - a listing with a hole is
+not a listing), `Get-ChildItem -Recurse -Force` on Windows, `os.walk` + `lstat` here. Every entry that
+is not a folder is listed with its kind - `file`, `link` (never followed), `other`. A folder that is
+not there is `folder_found: false`; more than `max_files` is `truncated`, never cut silently.
+`with_folders: true` (0.38.0) also answers every folder under it, as `folders` - `files` stays what it
+was, so the repository check reads the same answer - which is how a restore's staging cleanup names
+the folders an emptied backup set left behind (a linked folder is a link in `files`, never walked).
+
+### `read-file` — one small file's bytes, proven on arrival (0.37.0)
+
+`{"host": {...}, "path": "D:\\SQLBK\\_cert\\dbabrain_backup_cert.cer", "max_bytes": 1048576}` →
+`{"path", "file_name", "size_bytes", "sha256", "base64"}`. For the certificate vault. Runs where
+`hostcmd` reaches - inside a container for a containerised SQL Server. The host prints the size and
+sha256 beside the bytes and the bytes are held to both here. A link, a missing file, a pattern, a
+relative or `..` path, a file over `max_bytes` (at most 16 MiB) or an unknown field is refused. A
+backup is never read this way - `copy-files` streams those.
+
+### `delete-file` — ONE stray file, forced; `delete-files` — refused (0.38.0)
+
+Until 0.38.0 these two deleted backup files by full path: a path, or a list of paths, one `rm` each,
+with nothing on the host held to anything. A backup file dbabrain wrote or copied is now deleted only
+by `delete-verified-file` (above). What that cannot remove is a file nobody recorded - a partial of a
+killed copy, a file the catalog never knew - because there are no stored facts to hold it to. The
+operator, 2026-11-11 (translated): *the old delete commands refuse to run; but with force a file can
+still be deleted, to clear junk too - one file at a time: two files or more fail outright, a folder
+that still holds a file fails, and to delete many, make an array and call the delete once per file.*
+
+```jsonc
+{"path": "/mnt/nas/SRV-01/APPDB/FULL/APPDB_FULL_20261101.bak.age.4411.partial",
+ "must_be_under": "/mnt/nas/SRV-01",      // required; the fence itself is never deleted
+ "force": true,                           // required - without it the request is refused
+ "host": {...}, "dry_run": false, "timeout_seconds": 3600}
+// data: {"file": {"path", "file_name", "must_be_under", "size_bytes_found", "sha256_found", "status", "reason"},
+//        "deleted", "dry_run", "forced": true}
+```
+
+| Request | Answer |
 | --- | --- |
-| a wildcard (`*`, `?`, `[`) | expanding one deletes files nobody looked at; `*.bak` under the wrong root is one typo from the full backup being restored from |
-| a relative path | resolves against whatever directory the shell started in — a different file on every runtime |
-| a directory | a caller that meant one file and passed its parent would lose the whole set |
-| outside `must_be_under` | optional fence for a caller that already knows the one directory it may clean |
+| `delete-file` without `"force": true` | refused, naming `delete-verified-file` - nothing reaches the host |
+| `delete-file` with it | exactly one regular file deleted, in the one script that measures it; the answer carries its bytes and sha256 - the removal of a file nobody recorded is itself on record |
+| `paths`, `files`, or any field it does not know | refused before the host is reached: one command, one file |
+| a folder (empty or not), a link, a device | refused by the script; an emptied folder is `delete-empty-folder`'s |
+| a pattern, a relative path, `.` / `..`, outside `must_be_under` | refused, as the verified delete refuses them |
+| `delete-files`, whatever it carries | read, then refused: one command never deletes two files. A caller with a list calls `delete-file` once for each |
 
-Every path in a batch is validated **before the first delete**, so a bad path stops the request
-while nothing has happened yet.
+It is `deleteverified`'s script with the two comparisons left out and nothing else: not a link, not
+a folder, the bytes hashed, the size and modification time read again around the hash (nothing wrote
+to it meanwhile), one non-recursive delete (`rm --` with one operand, .NET `File.Delete`), and a look
+to prove it is gone. A file already gone is `not_found` - success.
 
-**A file that is already gone is a success** (`not_found`). Delete states an end condition, not an
-act, so re-running after a partial failure is safe rather than something a caller has to
-special-case. It stays a separate status from `deleted` because "there was nothing there" and
-"there was, and now there is not" are different facts about what the run did.
+**Oracle: this removes the file, not RMAN's record of it.** Use `DELETE BACKUPPIECE` / `DELETE
+OBSOLETE` for a piece RMAN owns.
 
-One file per command, and one connection for the batch: the per-file answer is only possible
-because each file gets its own command — `rm a b c` returns one exit code for three files and
-cannot say which is still there — while reconnecting per file is the 10 KB/s mistake described
-below. `hostcmd.run` takes an already-open `remote_exec` session (`hostcmd.open_session`) for
-exactly this.
-
-Checking and deleting happen in **one** command. Statting first and deleting second is a race with
-whatever else writes to a backup directory, and on a slow link it is twice the latency per file.
-
-**Oracle: this removes the file, not RMAN's record of it.** A backup piece deleted from disk leaves
-RMAN still listing it and the next `RESTORE` picking it. Use `DELETE BACKUPPIECE` / `DELETE
-OBSOLETE` for those.
-
-Windows commands go over `-EncodedCommand`, not `-Command`. The command passes through cmd.exe
-(locally, `shell=True`) or through whatever shell the Windows OpenSSH server runs, and neither
-understands `shlex.quote`'s POSIX single quotes: a PowerShell literal `'C:\bak\a.bkp'` arrived as
-`'''C:\bak\a.bkp'''` and PowerShell refused the whole script with "Unexpected token". Base64 has
-nothing either shell treats specially. This fixed every `runtime: windows` caller, not just this
-one.
+The app's cleanups use it only when an operator says so: `backup_restore prune-backups --apply
+--force` and `delete-backup --force` delete each file the catalog does not know by its own forced
+command; without `--force` such a file is kept and named, and a scheduled run never forces (docs/08).
 
 ### `pack-backup` / `pull-file` / `push-file` — one archive, moved and proven
 
@@ -738,17 +859,25 @@ a catalog backfill needs.
 {"source": {"host": "192.0.2.20", "port": 22, "username": "u", "key_file": "/keys/id"},
  // or, for a Windows source: "source_share": {"host", "share", "username", "password", "domain"?}
  "target": {"host": "192.0.2.40", "port": 22, "username": "u", "key_file": "/keys/id"},
+ "overwrite": false,                                // required: false leaves an existing target as it is
  "files": [{"source": "/opt/backup/APPDB/FULL/APPDB_FULL_20261029.bak",
-            "target": "/repository/SRV-01/APPDB/FULL/APPDB_FULL_20261029.bak"}],
+            "target": "/repository/SRV-01/APPDB/FULL/APPDB_FULL_20261029.bak",
+            "file_name": "APPDB_FULL_20261029.bak",  // required: the last part of source and target
+            "size_bytes": 104857600,                 // required
+            "sha256": "<64 hex>"}],                  // required
+ "encrypt": {"recipients": ["age1..."], "key_id": 2,          // optional (0.38.0, 1.330)
+             "key_expires_at": "2027-02-09T04:00:00Z"},
  "timeout_seconds": 21600}
-// data: {"source_kind": "sftp|smbclient|unc", "files": [{"source", "target", "ok", "bytes_copied",
-//        "error", "warning"?}], "copied", "failed", "bytes_copied"}
+// data: {"source_kind": "sftp|smbclient|unc", "files": [{"source", "target", "file_name",
+//        "size_bytes", "sha256", "ok", "bytes_copied", "sha256_streamed", "error", "exists"?,
+//        "warning"?}], "copied", "failed", "bytes_copied"}
 ```
 
-**The transport of the repository copy.** It is not `copy-backup-dir`, because that command
-**mirrors**: it deletes from the target whatever the source no longer has. That is right for a
-restore's staging. Pointed at a repository, it would delete the only copy left on the day the server
-is wiped. This command copies exactly the files it is named, and removes nothing on either side.
+**The transport of the repository copy.** It was not `copy-backup-dir`, because that command
+**mirrored** until 0.38.0: it deleted from the target whatever the source no longer had. Pointed at
+a repository, it would have deleted the only copy left on the day the server is wiped. This command
+copies exactly the files it is named, and removes nothing on either side. Since 0.38.0 it is also
+how a restore's staging is filled: `copy-backup-dir` is refused (1.329).
 `copy-backup-dir` in turn never selects a `<name>.dbabrain_partial` - this tool's name for a file not
 yet whole - so a copy that died half way is never staged as a backup.
 
@@ -766,8 +895,31 @@ yet whole - so a copy that died half way is never staged as a backup.
 - **The exit is asked before the rename.** A FIFO has no size of its own, so a `smbclient` that died
   half way ends the stream like a whole file. Its exit is read first, and a failed read never takes
   the file's name.
-- **Nothing is hashed here.** The caller proves each copy with `file-checksum` on both hosts. A
-  copier that judged its own copy would be the one witness the copy gate exists not to trust.
+- **Every line carries its file's facts, and lands only when they hold** (0.37.0, the operator
+  2026-11-10: *a list is fine, but like the delete, each file's full facts, and only when they are
+  right is it copied*). A line missing `file_name`, `size_bytes` or `sha256`, with an unknown field,
+  or with a name that is not the last part of both paths refuses the whole request before a byte
+  moves. A source of another size than stated is not read; the bytes are hashed as they stream (no
+  second read) and the partial takes the real name only when the count and the hash are the stated
+  ones.
+- **`overwrite` is required** (0.37.0, the operator: *required, and 0 - do not overwrite - is the
+  default*). `false`: a name that already holds a file is left exactly as it is, the source is not
+  read, the line fails with `exists: true`; the copy lands only by SFTP's plain `rename`, which
+  refuses an existing name, so a file that appears meanwhile is not replaced either. `true`: the name
+  is replaced in one step (posix-rename).
+- **The copy's proof is still the caller's.** The streamed hash is the copier refusing to land a file
+  that is not the one asked for; the caller proves each copy with `file-checksum` on the repository.
+  A copier that certified its own copy would be the one witness the copy gate exists not to trust.
+
+**Encrypted on the way** (0.38.0, 1.330). With `encrypt`, each file lands as `<target>.age` and its
+plain bytes never reach the target: hashed as they stream (held to the line's facts, as always),
+encrypted by pyrage in the same stream for the public key only (`encrypt_io`, 8 KB reads - measured
+at 370 MB/s through hash + age + hash, far above the network), the ciphertext hashed as it is written.
+The line answers `encrypted_path`, `encrypted_size_bytes`, `encrypted_sha256`, `key_id`,
+`age_version`. A key at or past `key_expires_at` is refused before anything is read. `overwrite`
+applies to the `.age` name. An age stream cannot resume in the middle: a cut copy leaves only its
+partial (removed) and starts again from its first byte. The proof that the `.age` decrypts back to
+the backup stays the caller's (`verify-encrypted-file`).
 
 ### A remote path is stated whole (0.29.0)
 
@@ -777,6 +929,19 @@ relative path is resolved by the SSH server against the login's home, so it alwa
 place and the copy succeeds: on 2026-10-09 Git Bash rewrote `/opt/...` into
 `C:/Program Files/Git/opt/...`, and `send-file` created that tree under the login's home and
 answered `COPIED`. The refusal says when a path carries that shell's mark.
+
+### Over WinRM (0.37.0)
+
+`fetch-file` and `send-file` work to a host whose `access` is `winrm`. Every path here was SFTP, and
+a WinRM session has none: sending an image build to a Windows build host on 2026-11-10 died with
+`'WinrmSession' object has no attribute 'sftp'`. Over WinRM the file crosses the remoting channel
+(pypsrp's copy / fetch - base64 in chunks, so a host with OpenSSH is still the faster way for a
+large file; the local-PowerShell fallback cannot copy, and says so); it is staged under the
+partial name and moved onto its own (`replace_mode` `move-item`), and since WinRM gives no cheap
+stat it is proven by **bytes and SHA-256 read on the host**, not by size alone - a same-content
+destination is skipped, a different one refused without `overwrite`. Any other SFTP use against a
+WinRM session (`WinrmSession.sftp`) raises a message naming what it needs. Proven live 2026-11-11:
+300,000 bytes to that host and back, the same SHA-256.
 
 ### `relay-file` — one file, from one host straight to another
 
@@ -849,6 +1014,17 @@ non-ASCII character in an answer arrived as U+FFFD until the labs showed it (0.2
  "install_docker": false, "force": false, "dry_run": false}
 ```
 
+**Every service runs under Docker's init (`init: true`, 0.37.0)** - in every template, guarded by
+`tests/test_docker_db_templates.py`. With the database as PID 1, a command run in the container that
+outlives its caller (a `docker exec` whose SSH call timed out) is re-parented to the database; on
+2026-11-10 that orphan was a `pg_amcheck` in the store's restore drill, and stopping it made postgres
+treat it as a crashed child and restart the whole instance. The init reaps such a process instead.
+Containers built before 0.37.0 keep their own PID 1 until they are recreated.
+
+**`data_host_dir` / `run_as`** (0.37.0, PostgreSQL single only): the data in a stated host folder
+instead of a named volume, the container run as `uid:gid` - an NFS share that squashes every client to
+one owner (the backup repository's `/mnt/nas`) is writable only as that owner.
+
 An `ssh_login` (`remote`, and `source`/`destination` for a move) is `host`, `port`, `username` and
 a resolved `password` or an absolute `key_file` - never a ref. A **dry run connects to nothing**
 for `create-db-docker` and never installs Docker; `move-db-docker`'s reads the source to say what it
@@ -901,7 +1077,7 @@ login first: three ways in one app, and the next app to meet a share would have 
 | --- | --- |
 | `smb-list` | every file under a folder of the share, recursively unless `recurse` is false; `suffixes` keeps only some. `data.files`: `{path, name, size_bytes, modified_epoch}`, `path` relative to the folder listed and backslash-separated |
 | `smb-get` | one file to `local_path`; `bytes` is what arrived. A non-zero `exit_code` is an answer - with a file still being written the code says nothing reliable, so the caller compares `bytes` with the listing |
-| `smb-delete` | exactly the `paths` named - never a pattern, never a folder. Each is `DELETED` or `FAILED` in `results`; the command fails when any did |
+| `smb-delete` | **forced, one file** (0.38.0): refused without `"force": true`, refused for two paths or more, never a pattern. A share has no host to hash a file on, so a file dbabrain recorded is deleted through its host (`delete-verified-file` over WinRM or SSH); this clears ONE stray file. `DELETED` or `FAILED` in `results` |
 | `smb-credential` | stores the login Windows uses for a host's UNC paths (`cmdkey`). Off Windows it answers `registered: false` - `smbclient` takes the login with every call - and that is not a failure |
 
 **One answer shape, two ways in.** `backend` is `unc` on Windows (the share's own path, after the
@@ -914,28 +1090,43 @@ line - `smbclient` reads it from an auth file this module writes 0600 and delete
 except `cmdkey`'s `/pass:`, the only form Windows offers, as it was when the app ran it. The fields
 are `input_smb` and `output_smb_list` / `_get` / `_delete` / `_credential`.
 
-### `backup-chain`, `copy-backup-dir`, `prune-staged-backups` — a restore's copy, step by step
+### `prepare-staging`, `finish-staging` — a restore's staging, step by step (0.38.0)
 
-A cross-machine restore stages its backups on the target, and those two steps are commands of
-their own since 0.23.0 (1.48). They used to run inside the `backup_restore` app, over SSH sessions
-the app opened itself. That made the restore one long call with two steps nobody could run, test or
-watch alone. (The operator, 2026-09-25: "not one long command - common cli copy, common cli verify,
-common cli metadata ...".) The app now resolves the two logins and calls, in order:
+A cross-machine restore stages its backups on the target. Those steps have been commands of their
+own since 0.23.0 (1.48) - they used to run inside the `backup_restore` app, over SSH sessions the
+app opened itself, one long call nobody could run, test or watch in parts (the operator, 2026-09-25:
+"not one long command - common cli copy, common cli verify, common cli metadata ..."). Until
+0.38.0 the commands were `backup-chain`, `copy-backup-dir` and `prune-staged-backups`; since 1.329
+**no command of this module copies a byte or deletes a file**. The app resolves the two logins and
+calls, in order:
 
 | Step | Command |
 | --- | --- |
-| which files | `backup-chain` - PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), and - since 2026-10-03 - SQL Server's chain from `<database>/FULL|DIFF|LOG/` and the time in each name, with `_cert/` (a database with no FULL, or another layout, whole). **A point in time copies everything**: every narrowing takes the NEWEST chain, and a moment before the newest full needs an older one |
-| the copy | `copy-backup-dir` - `include` (the chain) and, for `copy_selection: window`, `window_hours`: every other file the source wrote in that many hours travels too, so a window is never less than the chain. One `tar` stream through the orchestrator, file by file where tar cannot be used, and the answer says which (`copy_mode`, below). It skips a file the target already has at the same size and no older, and removes a staged file the source no longer has - **and, since 2026-10-03, the directories the source no longer has**, deepest first and only once empty: removing only the files left the husk of a pruned PostgreSQL set, dated by the removal, and the listing took it for the newest full (*pg_combinebackup: could not open file .../global/pg_control*, most hours of the 0.26 node). `list-backup-files` also skips a PostgreSQL backup directory holding no file. **Every piece keeps its source time, by either way** - tar always did; the file-by-file fallback dated each piece by the copy until 2026-10-03, so with several chains staged (a point in time copies them all) the chain copied last read as the newest. A latest restore moves the newest chain plus `wal/`, a point in time everything not already staged - `tests/test_a_staging_folder_holding_several_chains_restores_the_right_one.py` names the files. It refuses a source it cannot list completely, and says which way: the folder does not exist (no backup yet), a folder vanished while listed, or the SSH user cannot read one. **Before the first file moves it checks the room** (0.26.0): `space_check` in the request - a restore entry's own, `{enabled, factor, on_unknown}`, on at x2 when absent - holds the files still to copy to `free on the target >= bytes x factor` (`df` at the staging folder), and a shortfall or an unreadable target fails the command with *No file was copied*. The answer carries what was measured (`space_check`); the restore script that follows checks nothing itself **Since 0.34.0 (1.213b) it serves the caller's checksum gate:** `plan_only: true` answers the files the request selects, read from the source alone (the target is not opened, nothing moves); `replace` names relative paths copied even at the same size and no older (a copy whose checksum differs, which size and time cannot see); and every answer lists `files` - each selected file, copied or not, `{path, size_bytes}`. The command still hashes nothing and writes no catalog (R09): the gate is the app's |
+| which files, and the staging made ready | **`prepare-staging`** - with `chain` it reads the chain from the source itself: PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), SQL Server's from `<database>/FULL|DIFF|LOG/` and the time in each name (a database with no FULL, or another layout, whole); for `copy_selection: window`, `window_hours` adds every other file the source wrote in that many hours, so a window is never less than the chain. **A certificate or key (`_cert/`, `.cer`, `.pvk`) is never selected** (0.37.0) - a restore imports it from dbabrain's vault. It makes the target folder, proves it writable, marks it (below), recreates every folder including the empty ones, and answers `files` (everything selected), `pending` (what still has to travel: a file the target holds at the same size and no older is skipped, unless `replace` names it), the room it measured for them, and `absent_at_source` / `folders_absent_at_source`. `plan_only` answers the selection and opens no target |
+| the bytes | **`copy-files`** (above) - each pending file with the size and sha256 its source was just hashed to, written under a partial name and put in place only when they hold; `overwrite: true`, since `prepare-staging` decided each must travel |
+| the files' times, the engine's access | **`finish-staging`** - each landed file given its source's time (the skip rule of the next run reads it, and PostgreSQL dates a backup by its manifest's), and `chmod -R a+rX` on the staging for the engine's own uid |
+| what the source no longer has | `delete-verified-files` / `delete-empty-folders`, by the restore, with the staged copy's recorded facts - one left behind stops the restore (`docs/08`) |
 | the listing | `list-backup-files` (unchanged) |
 | instance metadata | `sqlserver-replay-instance` (unchanged), before the databases and after them |
 | the restore | `restore-full` / `restore-diff` / `restore-log`. Since 0.26.0 a SQL Server full with `replace` starts its batch with a guard: a database ONLINE on the target raises before anything runs unless the request says `overwrite_existing: true` (G2.10) |
 | the check | `verify-restore` (unchanged) |
-| the cleanup | `prune-staged-backups` - the staging folder past the entry's retention, **after** the verify |
+| the cleanup | `backup_restore` itself: `list-files` on the staging, then one verified delete per file a proven copy recorded (`delete-verified-files`) and `delete-empty-folders` for an emptied set - **after** the verify |
 
-All three new ones are **stdin only**: their requests carry SSH passwords. A login is `host`, `port`,
-`username` and a resolved `password` or an absolute `key_file` - never a ref. The work is
-`dbabrain/common/backup_copy.py`, which was `backup_restore/transfer.py` until 0.23.0. The fields are
-`input_`/`output_backup_chain`, `_copy_backup_dir` and `_prune_staged_backups`.
+**The three old names are refused.** `backup-chain`, `copy-backup-dir` and `prune-staged-backups`
+read their request - a malformed one is still said to be malformed - and answer a failure naming
+what replaces them; no host is reached. `copy-backup-dir` chose the files, streamed them as one
+`tar` and mirrored the source, removing over SFTP whatever the source no longer had; the stream
+held no file to anything and the mirror was a delete held to nothing.
+
+**What the split costs.** A PostgreSQL base backup is thousands of small files (a 362 MB set
+measured here was 3901), and one `tar` stream paid the latency once where a copy per file pays it
+per file. That is the price of every staged file being held to its bytes and sha256 as it lands.
+
+Both are **stdin only**: their requests carry SSH passwords. A login is `host`, `port`, `username`
+and a resolved `password` or an absolute `key_file` - never a ref. The work is
+`dbabrain/common/backup_copy.py`, which was `backup_restore/transfer.py` until 0.23.0. The fields
+are `input_`/`output_prepare_staging` and `_finish_staging`; the refused ones keep their input
+entries and answer `output_refused_command`.
 
 ### A fallback in *how* is reported, and can be pinned (0.26.0, owner decision G4)
 
@@ -948,14 +1139,16 @@ never a reason to try the other.
 | What steps down | The answer says | To pin it |
 | --- | --- | --- |
 | a SQL Server connection: ODBC, then pymssql | `run-sql` -> `tool.actual`: `driver`, `encryption`, `fell_back`, every attempt | `sqlserver_driver` on the instance - a named ODBC driver that fails is an error; `pymssql` goes straight there |
-| the copy between two hosts: one `tar` stream, then one SFTP transfer per file | `copy-backup-dir` -> `copy_mode` (`tar` / `sftp` / `none`) and `copy_fell_back`; the message and the restore's `COPY_DONE` say *file by file over SFTP* | `copy_mode` in the request, and on a script-driven restore entry: `auto` (default), `tar`, `sftp`. Pinned to `tar`, a stream that cannot be used fails the copy and nothing goes file by file |
+| ~~the copy between two hosts: one `tar` stream, then one SFTP transfer per file~~ - **no step down since 0.38.0**: the bytes travel by `copy-files` in the one `transfer` the entry's `copy_mode` names | the restore's copy answer -> `copy_mode` (`cat` / `sftp` / `none`) | `copy_mode` on a script-driven restore entry: `cat` or `sftp` pinned, `auto` (default) the cat stream; `tar` is refused by name |
 | a staged file taking its name: `posix-rename`, then remove + rename | `relay-file` and `send-file` -> `replace_mode` (`posix-rename` / `remove+rename`) | none - a server without the extension has no first way. The second is not atomic: between its two steps the destination does not exist |
 | a command over WinRM: `pypsrp`, else a local PowerShell driving `Invoke-Command` | `run-cmd` -> `backend` (`pypsrp` / `powershell`), over WinRM only | the install: `pypsrp` is used whenever the `[winrm]` extra is there. The second cannot authenticate to a WORKGROUP host and says so (`_name_the_missing_backend`) |
 | `docker`, then `sudo docker` | **not reported yet** - the host's own shell decides, at the moment of use (`lib.shell.docker_cli`), and no answer reads it back | `"sudo": false` on the host block: plain `docker` only |
 
-The copy's words - `auto`, `tar`, `sftp` - are `dbabrain/lib/restore/copy_mode.py`, shared by the
-restore entry and the command. Until this, the per-file copy was a line on stderr: across two
-internet hops it is 10 KB/s (measured), and a drill that took eight hours answered like any other.
+The copy's words - `auto`, `cat`, `sftp` - are `dbabrain/lib/restore/copy_mode.py`, a restore
+entry's field. Since 0.38.0 they name `copy-files`' transfer and nothing steps down: `cat` and
+`sftp` are pinned, `auto` is the cat stream, and a way that fails is tried again as itself. The tar
+stream went with `copy-backup-dir` and its word with it: an entry still saying `tar` is refused by
+name, because a pinned way that cannot be used is an error and never a reason to try another.
 
 ### `metric-batch` — one target's metrics, run one after another (0.24.0)
 
@@ -1015,7 +1208,7 @@ into this module's error type.
 | `data_sources.py` | **Single entry point** for loading connection inputs from `data/` (`users.json` = `database_credentials` + `remote_credentials` + `monitor_users`, plus `db_instances.json` and the encrypted secret file), **and for choosing which credential a target runs as** — required, never inferred (see [Credentials](#which-login-a-target-runs-as-credentials)). Apps import loaders here instead of reaching to the repo root. | `load_secret_text`, `load_credentials(db_type)`, `load_all_credentials`, `load_remote_credentials`, `load_db_instances`, `group_credentials_by_type`, `find_database_credential`; `CredentialNotFound`; path helpers `users_path` / `db_instances_path` / `secret_text_path` |
 | `db_connect.py` | **Single source of truth** for *opening a connection to one database*, on every engine dbabrain supports (sqlserver / postgresql / mysql / oracle) — what `remote_exec` is for reaching a VM. Owns driver import (lazy, per engine), default port and database per engine, and the in-server statement timeout each engine spells differently (`statement_timeout` / `call_timeout` / `read_timeout` / `command_timeout`). This code used to live inside the metrics app, so `sql_run` could not reuse it and supported SQL Server only — which is why `/spbot_sql_to_xlsx` refused a PostgreSQL target. Running the SQL is separate and already shared (`sql_run.execute_capture`). | `connect_engine`, `normalize_db_type`, `default_database`, `parameter_style`; `DbConnectError`; `SUPPORTED_DB_TYPES` |
 | `ssh.py` | **Single source of truth** for the SSH *connection*: opening a paramiko client (key or password, no silent agent/interactive fallback unless asked). Connect failures are classified where the paramiko exception type is still available, so callers never pattern-match a message to tell "wrong password" from "host unreachable". Auth **resolution** left on 2026-08-15 — `resolve_ssh_key` (a bare name resolves inside **`data/ssh_keys/`**) and `resolve_ssh_password` (value > env var > encrypted-secret ref) are `data_sources.ssh_auth`, and the four exception names are `lib.ssh_errors`, because four app modules were importing this transport for a key path or one word. All of it is re-exported here. | `open_ssh_client`; re-exported: `resolve_ssh_password`, `resolve_ssh_key`, `ssh_keys_dir`, `SSH_KEYS_DIRNAME`, `SshError` + `SshAuthError` / `SshConnectError` / `SshTimeoutError` |
-| `remote_exec.py` | **The one executor** (rules R44, 0.25.0): *everything run on a host* - a command, a script, a stream piped between two hosts, a file over SFTP - over `ssh` (paramiko), `winrm` (pypsrp, or a local `Invoke-Command` wrapper) or `local` (subprocess). A script is placed as a file and run with stdin closed; output can be handed on line by line. **Input is a JSON object** — the same `cmd_access` shape stored in `db_instances.json`, optionally plus a `remote_credentials` entry — so config travels into the API untranslated; output is a `RemoteResult` that is JSON-shaped too. Also owns the `Invoke-Command` *builder* for callers that compose a remote script and run it through their own runner. See [the section below](#reaching-a-vm-remote_exec). | `open_session`, `run_command`, `run_script`, `SshSession.open_stream` / `.sftp`, `RemoteAccess.from_json`, `RemoteResult`, `shell_prelude`, `script_file_command`, `windows_path`, `build_invoke_command_script` / `build_invoke_command_argv`, `resolve_secret_value`; `RemoteExecError` and its subclasses `RemoteAuthError` / `RemoteConnectError` / `RemoteTimeoutError` (and its `RemoteCommandTimeoutError`) |
+| `remote_exec.py` | **The one executor** (rules R44, 0.25.0): *everything run on a host* - a command, a script, a stream piped between two hosts, a file over SFTP - over `ssh` (paramiko), `winrm` (pypsrp, or a local `Invoke-Command` wrapper) or `local` (subprocess). A script is placed as a file and run with stdin closed; output can be handed on line by line. **Input is a JSON object** — the same `cmd_access` shape stored in `db_instances.json`, optionally plus a `remote_credentials` entry — so config travels into the API untranslated; output is a `RemoteResult` that is JSON-shaped too. Also owns the `Invoke-Command` *builder* for callers that compose a remote script and run it through their own runner. See [the section below](#reaching-a-vm-remote_exec). | `open_session`, `run_command`, `run_script`, `SshSession.open_stream` / `.sftp`, `stream_on` / `channel_on` / `sftp_on` / `raise_rekey_limits` (a session's connection, for the file copy - 0.38.0), `RemoteAccess.from_json`, `RemoteResult`, `shell_prelude`, `script_file_command`, `windows_path`, `build_invoke_command_script` / `build_invoke_command_argv`, `resolve_secret_value`; `RemoteExecError` and its subclasses `RemoteAuthError` / `RemoteConnectError` / `RemoteTimeoutError` (and its `RemoteCommandTimeoutError`) |
 | `time_window.py` | **Single source of truth** for the scheduling convention shared by the daemon, sql_tasks, metrics, and reports: allowed time windows, `repeat_interval`, retry/recover, and the `RUN_ONCE` (0) / `MANUAL_ONLY` (-1) semantics. Bounds are hours in the configured `timezone` — callers pass `dbabrain.lib.timezone.display_now()`, never the host clock — run-once still runs the first time, manual never runs unless forced. `from_* > to_*` is a **wrapping range** on every dimension (month/day/hour/minute): `from_hour=22, to_hour=6` = 22:00 through 06:00 the next morning; `from_day=25, to_day=5` = 25th through the 5th of the next month. No app may parse, evaluate, or explain a time window with its own comparisons — always these functions. | `parse_time_window_config`, `is_time_window_open`, `time_window_closed_reason` (human-readable skip reason), `repeat_due`, `job_due`; constants `RUN_ONCE = 0`, `MANUAL_ONLY = -1`, `ERROR_STATUSES` |
 | `listing.py` | **Single source of truth** for what a `/spbot_list_*` reply shows: the entries an operator can act on. A disabled entry is dropped (it cannot be run, and offering it invites someone to type an id that will be refused), and the listing then says **how many** it dropped — hiding without accounting is indistinguishable from losing. Five commands implement this rule (backups, restores, server targets, sql_tasks, metrics); before this module they spelled "off" four different ways and two of them showed disabled entries as if they were runnable. | `active_only(items, key=...) -> (kept, hidden)`, `hidden_note(hidden, noun=...)`, `is_active(item)` |
 | `policy_engine.py` | Report/severity policy: normalize a metric row's status, apply per-metric and per-instance severity overrides, and render policy events. Drives how reports and alerts classify a row. | `apply_report_policy`, `render_policy_event`, `normalize_status`, `row_status`; `STATUS_ORDER` (SUPPRESS<OK/LOGGING<NO_DATA<WARNING/ERROR<CRITICAL) |
@@ -1200,7 +1393,8 @@ Rules worth knowing:
 | `backup_restore.restore_database` / `certificate` | `build_invoke_command_argv` to compose the SQL a `run-sqlcmd` request carries; the running is `common.cli run-sqlcmd`'s, which is this module's |
 | `common.hostcmd` (`run`, `run_script`, `open_session`) | `run` / `run_script` on a session from the host block (`access_for`); `hostcmd` keeps naming the host and stepping into its runtime (`wrap`) |
 | `common.sqlcmd_run` (`run-sqlcmd`) | `run(on_output=...)` for `local` / `ssh`; `run_script` over WinRM |
-| `common.backup_copy` / `cli_backup_copy`, `common.ssh_relay` | `open_stream` for the tar / `cat` pipes between two sessions, `sftp()` for walking a tree, `run` for one-line commands |
+| `common.backup_copy` / `cli_backup_copy`, `common.ssh_relay` | `open_stream` for the `cat` pipes between two sessions, `sftp()` for walking a tree, `run` for one-line commands |
+| `common.filecopy` (`copy-files`), `common.filecopy_source`, `common.repoencrypt` | the session's connection handed to `channel_on` (a `cat` on a channel with a large window, its stall limit set before the command starts; `None` on a connection with no transport, and the caller uses `stream_on`), `stream_on` (the `stat` before a `cat`), `sftp_on` (a reader's own SFTP client) and `raise_rekey_limits` - they called paramiko themselves from 0.37.0 until 0.38.0 (1.338), which the R44 guard names |
 | `control._support.ssh_connect` | none since 0.24.0 - a `lib.remote_host.RemoteHost` as well; the deploy's output now arrives when a command ends, not as it streams |
 
 ---
@@ -2985,11 +3179,13 @@ python -m dbabrain.common.cli relay-file '<json>'     # file_transfer: copy one 
 <request> | python -m dbabrain.common.cli run-sqlcmd -        # sqlcmd_run: one batch, local / ssh / winrm
 <request> | python -m dbabrain.common.cli smb-list -          # smb: the files under a folder of a Windows share
 <request> | python -m dbabrain.common.cli smb-get -           # smb: one file from a share to here
-<request> | python -m dbabrain.common.cli smb-delete -        # smb: exactly the files named, on a share
+<request> | python -m dbabrain.common.cli smb-delete -        # smb: FORCED - one stray file on a share
 <request> | python -m dbabrain.common.cli smb-credential -    # smb: store a share login for Windows (cmdkey)
-<request> | python -m dbabrain.common.cli backup-chain -      # backup_copy: which files a restore needs
-<request> | python -m dbabrain.common.cli copy-backup-dir -   # backup_copy: host to host, one tar stream, mirrored
-<request> | python -m dbabrain.common.cli prune-staged-backups -  # backup_copy: a restore's staging past retention
+<request> | python -m dbabrain.common.cli prepare-staging -   # backup_copy: a restore's staging made ready - which files, what still travels
+<request> | python -m dbabrain.common.cli finish-staging -    # backup_copy: after copy-files - the files' times, the engine's access
+<request> | python -m dbabrain.common.cli backup-chain -      # REFUSED since 0.38.0 - prepare-staging reads the chain
+<request> | python -m dbabrain.common.cli copy-backup-dir -   # REFUSED since 0.38.0 - prepare-staging, copy-files, finish-staging
+<request> | python -m dbabrain.common.cli prune-staged-backups -  # REFUSED since 0.38.0 - backup_restore cleans a staging itself
 python -m dbabrain.common.cli rotate-password '<json>'  # password_rotation: change a login's password
 python -m dbabrain.common.cli check-secret '<json>'     # secret_check: prove each secret still logs in
 <request> | python -m dbabrain.common.cli secret-set -  # lib.secret_text: one secret into the encrypted store
@@ -3006,23 +3202,34 @@ python -m dbabrain.common.cli sqlserver-verify-instance '<json>'  # sqlserver_in
 python -m dbabrain.common.cli backup-database '<json>'    # backup: run ONE backup, script + host + env
 python -m dbabrain.common.cli backup-stop '<json>'        # backup: stop ONE running backup - its tree, then its sessions
 python -m dbabrain.common.cli list-backup-files '<json>'  # backupfiles: an engine's backups as full/diff/log
-python -m dbabrain.common.cli prune-backup-files '<json>' # retention: which are obsolete (default 14 days)
-python -m dbabrain.common.cli delete-file '<json>'        # deletefiles: remove ONE file by full path
-python -m dbabrain.common.cli delete-files '<json>'       # deletefiles: remove each named file, one connection
+python -m dbabrain.common.cli prune-backup-files '<json>' # retention: which are obsolete (default 14 days) - answers, deletes nothing
+python -m dbabrain.common.cli delete-file '<json>'        # deleteverified: FORCED - one stray file, measured, deleted, recorded
+python -m dbabrain.common.cli delete-files '<json>'       # REFUSED since 0.38.0 - one command never deletes two files
+python -m dbabrain.common.cli delete-verified-file '<json>'  # deleteverified: ONE file, its name/path/bytes/sha256 all true
+python -m dbabrain.common.cli delete-empty-folder '<json>'   # deleteverified: ONE folder that holds nothing
+python -m dbabrain.common.cli delete-verified-files '<json>' # deleteverified: a list, each item as delete-verified-file, one connection
+python -m dbabrain.common.cli delete-empty-folders '<json>'  # deleteverified: a list of empty folders, deepest first
+python -m dbabrain.common.cli read-file '<json>'             # readfile: ONE small file's bytes, proven on arrival
+python -m dbabrain.common.cli list-files '<json>'        # listfiles: every entry under a folder, kind + bytes, no hash
+python -m dbabrain.common.cli encrypt-file '<json>'          # repoencrypt: ONE file encrypted with age at the repository
+python -m dbabrain.common.cli verify-encrypted-file -        # repoencrypt: ONE .age file proven by decrypting it back
 ```
 
-Listing and deleting are one workflow — list, decide, delete the paths you were given:
+Listing and deleting are two steps — list or let prune decide, then delete each file on its own:
 
 ```bash
 python -m dbabrain.common.cli list-backup-files '{"db_type": "oracle", "path": "/opt/oracle/backup/dbops",
   "kinds": ["log"], "before": "2026-08-01 00:00:00", "host": {...}}'
-# or let prune decide, and delete in the same step:
+# or let prune decide - it answers obsolete_paths and deletes nothing:
 python -m dbabrain.common.cli prune-backup-files '{"db_type": "oracle", "path": "/opt/oracle/backup/dbops",
-  "cleanup_retention": 691200, "delete": true, "dry_run": true, "host": {...}}'
+  "cleanup_retention": 691200, "host": {...}}'
 
-# then, with the paths that came back:
-python -m dbabrain.common.cli delete-files '{"paths": ["/opt/oracle/backup/dbops/x.bkp"],
-  "must_be_under": "/opt/oracle/backup", "dry_run": true, "host": {...}}'
+# a file the catalog recorded: its name, path, bytes and sha256, all held
+python -m dbabrain.common.cli delete-verified-file '{"path": "/opt/oracle/backup/dbops/x.bkp", "file_name": "x.bkp",
+  "size_bytes": 104857600, "sha256": "<64 hex>", "must_be_under": "/opt/oracle/backup", "host": {...}}'
+# one stray file nobody recorded: forced, measured on the host, its bytes and sha256 answered
+python -m dbabrain.common.cli delete-file '{"path": "/opt/oracle/backup/dbops/stray.tmp",
+  "must_be_under": "/opt/oracle/backup", "force": true, "dry_run": true, "host": {...}}'
 ```
 
 The six host/patch commands share one handler and therefore one contract: a JSON object in

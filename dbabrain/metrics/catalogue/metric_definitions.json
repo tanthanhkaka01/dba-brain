@@ -6398,6 +6398,170 @@
       "max_rows": 20,
       "default_importance": 4,
       "note": "The PostgreSQL server log (1.165): a container's through docker logs, a host install's log_directory files through the host login (host_fallback; PG_LOG_FILE / PG_LOG_DIRECTORY in collector_env, else the packagings' places, two clusters named and not guessed between). A day read; PANIC / corrupt pages / disk full / out of memory / a backend killed by a signal CRITICAL within 120 minutes and WARNING after; other FATALs, connection exhaustion and PostgreSQL's own 'checkpoints are occurring too frequently' (1.145) WARNING; failed logins counted. A server logging to syslog or journald is not read."
+    },
+    {
+      "metric_id": 108,
+      "metric_code": "SECURITY_DATA_ENCRYPTION",
+      "db_type": "multi",
+      "category": "security",
+      "default_importance": 1,
+      "empty_result_is_ok": true,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 60
+      },
+      "collector_type": "sql",
+      "variants": [
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 10,
+          "name": "sqlserver_2008_plus",
+          "file": "sqlserver/082_sqlserver_data_encryption.sql"
+        },
+        {
+          "db_type": "sqlserver",
+          "min_major_version": 0,
+          "max_major_version": 9,
+          "name": "sqlserver_2005",
+          "supported": false,
+          "unsupported_reason": "Transparent data encryption and sys.dm_database_encryption_keys start with SQL Server 2008."
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 12,
+          "name": "oracle_12c_plus",
+          "file": "oracle/082_oracle_data_encryption.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 11,
+          "max_major_version": 11,
+          "name": "oracle_11g",
+          "file": "oracle/082_oracle_data_encryption_11g.sql"
+        },
+        {
+          "db_type": "oracle",
+          "min_major_version": 0,
+          "max_major_version": 10,
+          "name": "oracle_before_11g",
+          "supported": false,
+          "unsupported_reason": "Tablespace encryption starts with Oracle 11g; an older release has no encrypted tablespace to read."
+        },
+        {
+          "db_type": "postgresql",
+          "min_major_version": 10,
+          "name": "postgresql_10_plus",
+          "file": "postgresql/076_postgresql_data_encryption.sql",
+          "per_database": true
+        },
+        {
+          "db_type": "mysql",
+          "name": "mysql_todo",
+          "supported": false,
+          "unsupported_reason": "MySQL tablespace encryption (keyring, INNODB_TABLESPACES.ENCRYPTION) variant not authored yet."
+        }
+      ],
+      "change_alert": {
+        "changed": "ERROR"
+      },
+      "report_policy": {
+        "edition_rule": {
+          "_note": "1.325: an instance in one of these environments running one of these editions is named as a finding on the server page and in the inventory. An edition is matched as a word of what the engine reports (INSTANCE_STATUS).",
+          "production_environments": [
+            "prod"
+          ],
+          "non_production_editions": [
+            "Developer",
+            "Express",
+            "Evaluation"
+          ]
+        }
+      },
+      "max_rows": 500,
+      "note": "Who can take a database's files (0.38.0, 1.322): is each database's data encrypted at rest, read where the engine says it - SQL Server sys.dm_database_encryption_keys with the certificate protecting the key, Oracle v$encryption_wallet and the tablespaces' encrypted flag, PostgreSQL pg_tde or none. Status is always OK on purpose - a reading, shown as a finding on the pages; change_alert raises one ERROR when a database's state changes between two reads (encryption turned off). A database created or dropped is not reported. Detection only: nothing is turned on by dbabrain."
+    },
+    {
+      "metric_id": 109,
+      "metric_code": "SECURITY_HOST_ADMINS",
+      "db_type": "multi",
+      "category": "security",
+      "default_importance": 1,
+      "empty_result_is_ok": false,
+      "active": true,
+      "connection_error_severity": "WARNING",
+      "execution_error_severity": "WARNING",
+      "time_window": {
+        "from_year": null,
+        "to_year": null,
+        "from_month": null,
+        "to_month": null,
+        "from_day": null,
+        "to_day": null,
+        "from_hour": null,
+        "to_hour": null,
+        "from_minute": null,
+        "to_minute": null,
+        "repeat_interval": 3600,
+        "timeout": 60
+      },
+      "collector_type": "cmd",
+      "variants": [
+        {
+          "platform": "windows",
+          "name": "windows_powershell",
+          "file": "os/windows/017_security_host_admins.ps1"
+        },
+        {
+          "platform": "linux",
+          "name": "linux_bash",
+          "file": "os/linux/016_security_host_admins.sh"
+        }
+      ],
+      "change_alert": {
+        "added": "ERROR",
+        "changed": "ERROR",
+        "removed": "WARNING"
+      },
+      "report_policy": {
+        "collapse": {
+          "enabled": true,
+          "event_code": "MONITORING_CMD_UNAVAILABLE",
+          "key_fields": [
+            "instance",
+            "collector_type",
+            "error_type",
+            "normalized_error_signature"
+          ],
+          "max_sample_metrics": 3,
+          "max_sample_items": 5
+        },
+        "severity": {
+          "default": "WARNING",
+          "prod": "WARNING",
+          "dev": "LOGGING",
+          "lab": "LOGGING",
+          "sandbox": "LOGGING"
+        },
+        "thresholds": {},
+        "suppress": {
+          "enabled": false
+        }
+      },
+      "max_rows": 500,
+      "note": "Who can be an administrator on the host (0.38.0, 1.323), read with the login dbabrain already has and changing nothing: Linux - members of sudo / wheel / admin / docker (HOST_ADMIN_GROUPS in collector_env names others), uid 0 accounts, sshd's PermitRootLogin and PasswordAuthentication, the keys in root's authorized_keys; Windows - members of local Administrators and Remote Desktop Users, whether Domain Admins is among the administrators, whether Remote Desktop is on. A section that cannot be read is one row saying why (metric_unit unreadable). Status is always OK; change_alert (1.324) raises an event when an account, a key or a setting is added or changed (ERROR) or removed (WARNING) between two reads - the first read is the baseline."
     }
   ]
 }

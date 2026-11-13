@@ -53,6 +53,26 @@ def test_templates_render_valid_yaml(name, engine, version, mode, replicas, port
 
 
 @pytest.mark.parametrize("name,engine,version,mode,replicas,port", ALL_CASES)
+def test_every_database_container_runs_under_an_init_not_as_pid_1(name, engine, version, mode, replicas, port):
+    """0.37.0: a command dbabrain ran in the store drill's container outlived its SSH call; with
+    postgres as PID 1 it became postgres's child, and when it was stopped postgres restarted the whole
+    instance. Docker's init as PID 1 reaps such a process instead."""
+    spec = _spec(name, engine, version, mode, replicas, port)
+    doc = yaml.safe_load(templates.render(templates.load_template(engine, mode), templates.build_context(spec)))
+    assert all(service.get("init") is True for service in doc["services"].values()), doc["services"].keys()
+
+
+def test_every_template_on_disk_states_init_for_every_service():
+    """Every template file, not only the ones rendered above: each `restart:` line is a service."""
+    from pathlib import Path
+
+    folder = Path(templates.__file__).parent / "templates" / "docker"
+    for path in folder.glob("*/*/docker-compose.yml.j2"):
+        text = path.read_text(encoding="utf-8")
+        assert text.count("restart: unless-stopped") == text.count("init: true") > 0, path
+
+
+@pytest.mark.parametrize("name,engine,version,mode,replicas,port", ALL_CASES)
 def test_password_never_inlined(name, engine, version, mode, replicas, port):
     spec = _spec(name, engine, version, mode, replicas, port)
     text = templates.render(templates.load_template(engine, mode), templates.build_context(spec))

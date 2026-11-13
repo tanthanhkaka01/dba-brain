@@ -183,7 +183,8 @@ def _cases(work: Path) -> dict[str, tuple[str, dict, str]]:
         "smb-list": ("smb-list", {**_NO_SHARE, "path": "SQLBK"}, "reached:cannot be reached"),
         "smb-get": ("smb-get", {**_NO_SHARE, "remote_path": "SQLBK/x.bak",
                                 "local_path": str(work / "fetched" / "x.bak")}, "ok"),
-        "smb-delete": ("smb-delete", {**_NO_SHARE, "paths": ["SQLBK/old.trn"]}, "reached:1 failed"),
+        # Forced, one file (0.38.0): the forced delete of a stray file is all a share's delete is.
+        "smb-delete": ("smb-delete", {**_NO_SHARE, "paths": ["SQLBK/old.trn"], "force": True}, "reached:1 failed"),
         # The file transfers (0.24.0): the host login is `access`, per side for a relay. Until then
         # a bare server_id was resolved against db_instances.json and users.json here.
         "fetch-file": ("fetch-file", {"target": "LAB", "access": _SSH, "remote_path": "/tmp/x.bkp",
@@ -211,12 +212,50 @@ def _finished_offline(work: Path) -> dict[str, tuple[str, dict, str]]:
     return {
         "run-cmd-here": ("run-cmd", {"access": {"method": "local"}, "command": "echo guard",
                                      **_CONFIRMED}, "ok"),
-        "prune-backup-files": ("prune-backup-files", {"db_type": "postgresql", "path": str(work / "backups"),
-                                                      "dry_run": True}, "ok"),
+        "prune-backup-files": ("prune-backup-files", {"db_type": "postgresql", "path": str(work / "backups")},
+                               "ok"),
+        # 0.38.0: the forced delete of ONE stray file - measured here, and as a dry run, not removed.
         "delete-file": ("delete-file", {"host": _HERE, "path": junk, "must_be_under": str(work),
-                                        "dry_run": True}, "ok"),
+                                        "force": True, "dry_run": True}, "ok"),
+        # ... and a list is refused whatever it carries: its refusal is all the work it has.
         "delete-files": ("delete-files", {"host": _HERE, "paths": [junk], "must_be_under": str(work),
-                                          "dry_run": True}, "ok"),
+                                          "force": True}, "reached:one command never deletes two files"),
+        # 0.37.0: a file not there is not_found (success) - every fact still stated.
+        "delete-verified-file": ("delete-verified-file", {
+            "host": _HERE, "path": str(work / "absent.bak"), "file_name": "absent.bak", "size_bytes": 1,
+            "sha256": "0" * 64, "must_be_under": str(work), "dry_run": True}, "ok"),
+        "delete-empty-folder": ("delete-empty-folder", {"host": _HERE, "path": str(work / "absent"),
+                                                        "must_be_under": str(work), "dry_run": True}, "ok"),
+        # The list forms: an item not there is not_found, and the list is complete.
+        "delete-verified-files": ("delete-verified-files", {"host": _HERE, "files": [{
+            "path": str(work / "absent.bak"), "file_name": "absent.bak", "size_bytes": 1, "sha256": "0" * 64,
+            "must_be_under": str(work)}], "dry_run": True}, "ok"),
+        "delete-empty-folders": ("delete-empty-folders", {"host": _HERE, "folders": [{
+            "path": str(work / "absent"), "must_be_under": str(work)}], "dry_run": True}, "ok"),
+        "read-file": ("read-file", {"host": _HERE, "path": str(work / "junk.txt")}, "ok"),
+        "list-files": ("list-files", {"host": _HERE, "folder": str(work)}, "ok"),
+        # Refused before any host is reached: an expired key never encrypts, whatever the root holds.
+        "encrypt-file": ("encrypt-file", {"host": {"runtime": "linux", "host": "192.0.2.1"},
+                                          "path": "/r/S/F/a.bak", "file_name": "a.bak", "size_bytes": 1,
+                                          "sha256": "0" * 64, "must_be_under": "/r",
+                                          "recipients": ["age1" + "q" * 58], "key_id": 1,
+                                          "key_expires_at": "2000-01-01T00:00:00Z"}, "fail"),
+        "fetch-decrypted-file": ("fetch-decrypted-file", {"source": {"host": "192.0.2.1"}, "path": "/r/a.bak.age",
+                                                          "size_bytes": 1, "sha256": "0" * 64,
+                                                          "target": {"host": "192.0.2.2"}, "target_path": "/t/a.bak",
+                                                          "file_name": "a.bak", "plain_size_bytes": 1,
+                                                          "plain_sha256": "0" * 64, "identity": "x",
+                                                          "transfer": "cat", "overwrite": False}, "fail"),
+        # Refused before the host is reached: no identity, nothing to decrypt with.
+        "decrypt-on-host": ("decrypt-on-host", {"host": {"runtime": "linux", "host": "192.0.2.1"},
+                                                "path": "/r/a.bak.age", "size_bytes": 1, "sha256": "0" * 64,
+                                                "target_path": "/r/_t/a.bak", "file_name": "a.bak",
+                                                "plain_size_bytes": 1, "plain_sha256": "0" * 64, "identity": "",
+                                                "overwrite": False, "must_be_under": "/r"}, "fail"),
+        "verify-encrypted-file": ("verify-encrypted-file", {"host": {"host": "192.0.2.1"}, "path": "/r/a.bak",
+                                                            "size_bytes": 1, "sha256": "0" * 64,
+                                                            "plain_size_bytes": 1, "plain_sha256": "0" * 64,
+                                                            "identity": "x"}, "fail"),
         "backup-database": ("backup-database", {"db_type": "postgresql", "host": _HERE, "label": "guard",
                                                 "script": "echo backed-up", "dry_run": True}, "ok"),
         "restore-key": ("restore-key", {"cer_path": "/c.cer", "pvk_path": "/c.pvk", "password": "pw",
@@ -533,6 +572,11 @@ def test_an_empty_configuration_is_said_in_words_not_as_a_raw_error(answers, com
 #: that stops succeeding fails here. Held equal to what the runs show; it may only stay empty.
 ANSWER_NOT_YET_SEEN: frozenset[str] = frozenset()
 
+#: Commands that read their request and refuse it, whatever it carries (0.38.0, 1.329): they have no
+#: successful answer for a run to show, and the reference describes that as an output with no field.
+REFUSED_COMMANDS: frozenset[str] = frozenset({"delete-files", "prune-staged-backups", "backup-chain",
+                                              "copy-backup-dir"})
+
 
 def _answered_with_a_fake_server() -> frozenset[str]:
     """What `test_an_answer_that_needs_a_server_is_checked_against_a_fake_one.py` answers - in its
@@ -578,7 +622,7 @@ def test_every_key_a_successful_answer_carries_is_described(answers, tmp_path):
         if extra:
             undescribed.setdefault(command, set()).update(extra)
     assert not undescribed, f"answer keys the reference does not describe: {undescribed}"
-    unseen = set(COMMANDS) - checked - _answered_with_a_fake_server()
+    unseen = set(COMMANDS) - checked - _answered_with_a_fake_server() - REFUSED_COMMANDS
     assert not unseen - ANSWER_NOT_YET_SEEN, (
         "no run here answers these, so nothing checks their keys - add a case: "
         f"{sorted(unseen - ANSWER_NOT_YET_SEEN)}")

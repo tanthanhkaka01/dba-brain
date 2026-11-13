@@ -288,43 +288,6 @@ def test_a_negative_or_unparsable_retention_is_refused():
             parse_cleanup_retention({"cleanup_retention": bad}, context="entry")
 
 
-def test_pruning_is_skipped_when_retention_is_zero():
-    """0 must not be read as "delete everything older than 0 seconds" - that would wipe the
-    staging directory on the first run."""
-    from dbabrain.common.backup_copy import prune_target_dir
-
-    class _Client:
-        def open_stream(self, *a, **k):
-            raise AssertionError("no command should be sent when retention is disabled")
-
-    assert prune_target_dir(_Client(), "/stage", 0)["pruned"] == 0
-
-
-def test_pruning_deletes_by_age_and_reports_the_count():
-    from dbabrain.common.backup_copy import prune_target_dir
-
-    sent = {}
-
-    class _Chan:
-        def recv_exit_status(self): return 0
-
-    class _Out:
-        channel = _Chan()
-        def read(self): return b"7\n"
-
-    class _Client:
-        def open_stream(self, command, **k):
-            sent["command"] = command
-            return None, _Out(), None
-
-    result = prune_target_dir(_Client(), "/stage dir", 24 * 3600)
-
-    assert result["pruned"] == 7
-    assert "-mmin +1440" in sent["command"]        # seconds -> minutes, not rounded to days
-    assert "'/stage dir'" in sent["command"]       # the path is quoted, spaces and all
-    assert "-type f" in sent["command"]
-
-
 # --------------------------------------------------------------------------------------------
 # What a run stores of its own output.
 

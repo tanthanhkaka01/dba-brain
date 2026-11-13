@@ -37,6 +37,7 @@ from typing import Any
 
 from dbabrain.lib import errors, stated_facts
 from dbabrain.lib import drill_tiers
+from dbabrain.lib import consistency_check
 from dbabrain.backup_restore.events import announce
 from dbabrain.backup_restore import schedule
 from dbabrain.backup_restore.backup import (
@@ -67,7 +68,7 @@ from dbabrain.lib import integrity as restore_integrity
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib.shell import docker_cli
 from dbabrain.lib.notify import NotifyConfig
-from dbabrain.lib.restore.copy_mode import parse_copy_mode
+from dbabrain.lib.restore.copy_mode import parse_copy_mode, transfer_of
 from dbabrain.lib.time_window import TimeWindow, parse_time_window_config
 
 
@@ -116,12 +117,16 @@ class ScriptRestore:
     # The engine's own consistency check after the restore (1.251): CHECKDB on a SQL Server
     # container, pg_amcheck, RMAN VALIDATE. The share-driven entry's `checkdb`, read here too.
     checkdb: bool = True
+    # How long that check may run and on how many connections (0.37.0, lib.consistency_check): the
+    # store's 60 GB drill ran a single-job pg_amcheck past the old fixed hour.
+    checkdb_timeout_seconds: int = consistency_check.DEFAULT_TIMEOUT_SECONDS
+    checkdb_jobs: int = consistency_check.DEFAULT_JOBS
     # How often this drill must succeed - daily, weekly, monthly, or None (1.248); recorded on
     # each run so the reports judge it by its own deadline (lib.drill_tiers).
     tier: str | None = None
-    # How the backup crosses to a target on another machine: `auto` (one tar stream, file by file
-    # when tar cannot be used - and the answer says which), or `tar` / `sftp` pinned, where the
-    # other way is never tried (owner decision G4). See dbabrain.lib.restore.copy_mode.
+    # How the backup's files cross to a target on another machine - copy-files' transfer: `cat`
+    # or `sftp` pinned, `auto` the cat stream; nothing steps down, the other way is never tried
+    # (owner decision G4). See dbabrain.lib.restore.copy_mode.
     copy_mode: str = "auto"
     # The room the copy to another machine must find before it starts - the entry's `space_check`,
     # absent meaning on at x2. The tool checks it before the script runs; the script checks nothing
@@ -379,6 +384,10 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
         overwrite_existing=entry.get("overwrite_existing") is True,
         allow_production_target=entry.get("allow_production_target") is True,
         checkdb=entry.get("checkdb") is not False,
+        checkdb_timeout_seconds=consistency_check.parse_timeout(
+            entry.get("checkdb_timeout_seconds"), where=f"backup_restore.restores[{index}] ({restore_id})"),
+        checkdb_jobs=consistency_check.parse_jobs(
+            entry.get("checkdb_jobs"), where=f"backup_restore.restores[{index}] ({restore_id})"),
         tier=drill_tiers.parse_tier(entry.get("tier"), where=f"backup_restore.restores[{index}].tier"),
         copy_mode=copy_mode,
         space_check=space_check,
@@ -550,12 +559,15 @@ def transfer_backup_to_target(
     the pieces genuinely have to travel, which is the whole difference between a drill and a
     recovery onto new hardware.
 
-    Two ``common.cli`` commands since 0.23.0, each a step of its own: ``backup-chain`` says which
-    parts of the source directory the restore needs (PostgreSQL's newest chain, RMAN's own answer
-    for Oracle, everything for SQL Server and for a point in time), ``copy-backup-dir`` moves them
-    as one tar stream and mirrors the source. The app resolves the two logins; ``common`` opens the
-    sessions. Their progress streams on stderr as it happens (``log`` is kept for callers and no
-    longer used).
+    ``common.cli`` commands, each a step of its own (0.23.0; these since 0.38.0, 1.329):
+    ``prepare-staging`` says which parts of the source directory the restore needs (PostgreSQL's
+    newest chain, RMAN's own answer for Oracle, SQL Server's chain, everything for a point in time),
+    makes the staging folder ready and answers which files still have to travel; ``copy-files``
+    carries them, each with its bytes and sha256 stated; ``finish-staging`` gives each its source's
+    time and opens the folder for the engine. Nothing in the copy removes anything: what the source
+    no longer has is deleted by verified commands (:func:`_clear_absent_at_source`). The app resolves
+    the two logins; ``common`` opens the sessions. Progress streams on stderr as it happens (``log``
+    is kept for callers and no longer used).
 
     ``prune=False`` leaves the retention cleanup to the caller: ``restore_by_id`` runs it after the
     restored databases are verified (its DELETE step), as the engine path does.
@@ -572,26 +584,42 @@ def transfer_backup_to_target(
     source_login = _ssh_login(source, data_dir=data_dir, key=key, key_base64=key_base64)
     target_login = _ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64)
     window = job.copy_selection == "window"
-    if window and job.copy_recent_hours <= 0:
-        # A window with no limit is the whole directory; there is no chain to narrow it to.
-        include: list[str] = []
-    else:
-        include = list(common_cli.run("backup-chain", {
-            "db_type": job.db_type, "source": source_login,
-            "source_dir": source_dir, "backup_dir": job.backup_dir,
-            "container": source.container_name, "point_in_time": point_in_time,
-        }, stream_stderr=True).get("include") or [])
     request = {
         "source": source_login, "source_dir": source_dir,
         "target": target_login, "target_dir": job.target_backup_dir,
-        "include": include, "make_readable": True, "open_for_engine": True,
-        "copy_mode": job.copy_mode,
+        "make_readable": True,
         "space_check": restore_space.as_request(job.space_check),
         # The chain AND every file of the window: never fewer backups than `chain` copies.
         **({"window_hours": job.copy_recent_hours} if window and job.copy_recent_hours > 0 else {}),
         **_staging_marker(job),
     }
-    out = _copy_gated_between_hosts(job, request, source=source, target=target, catalog=catalog, proofs=proofs)
+    if window and job.copy_recent_hours <= 0:
+        # A window with no limit is the whole directory; there is no chain to narrow it to.
+        plan = common_cli.run("prepare-staging", {**request, "include": [], "plan_only": True}, stream_stderr=True)
+    else:
+        # The chain is read once, with the plan (RMAN's preview is not cheap), and stated from then on.
+        plan = common_cli.run("prepare-staging", {**request, "plan_only": True, "chain": {
+            "db_type": job.db_type, "backup_dir": job.backup_dir,
+            "container": source.container_name, "point_in_time": point_in_time}}, stream_stderr=True)
+    include = list(plan.get("include") or [])
+    request["include"] = include
+    if proofs is not None:
+        # 0.37.0: a repository copy kept ENCRYPTED (offload_encrypt) is decrypted on its way here.
+        decrypted = _stage_decrypted(job, request, source=source, source_login=source_login,
+                                     target_login=target_login, key=key, key_base64=key_base64,
+                                     catalog=catalog, plan=plan)
+        if decrypted is not None:
+            decrypted["include"] = include
+            decrypted["copy_selection"] = job.copy_selection
+            pruned = (prune_staged_backups(job, target=target, data_dir=data_dir, key=key, key_base64=key_base64,
+                                           catalog=catalog)
+                      if prune else {"pruned": 0, "retention_seconds": int(job.cleanup_retention or 0),
+                                     "skipped": "left to the caller"})
+            decrypted["pruned"] = pruned.get("pruned", 0)
+            decrypted["retention_seconds"] = pruned.get("retention_seconds", 0)
+            return decrypted
+    out = _copy_gated_between_hosts(job, request, source=source, target=target, catalog=catalog, proofs=proofs,
+                                    plan=plan)
     if proofs is not None:
         out["restore_from"] = "repository"
         out["repository_server_id"] = source.server_id
@@ -599,7 +627,7 @@ def transfer_backup_to_target(
     out["include"] = include
     out["copy_selection"] = job.copy_selection
     pruned = (prune_staged_backups(job, target=target, data_dir=data_dir, key=key,
-                                   key_base64=key_base64)
+                                   key_base64=key_base64, catalog=catalog)
               if prune else {"pruned": 0, "retention_seconds": int(job.cleanup_retention or 0),
                              "skipped": "left to the caller"})
     out["pruned"] = pruned.get("pruned", 0)
@@ -607,8 +635,152 @@ def transfer_backup_to_target(
     return out
 
 
+#: The whole-command limit handed to ``copy-files`` for one round of a staging copy: a day. One read
+#: or write that stops moving still fails its file after ``copy-files``' own ``stall_seconds``.
+STAGING_COPY_TIMEOUT_SECONDS = 24 * 3600
+
+
 class CopyNotProvenError(errors.Refused):
     """A host-to-host copy the checksum gate could not prove; the restore is not run on it."""
+
+
+def _record_decrypted(job: Any, catalog: Any, *, source_server_id: str, source_dir: str, target_dir: str,
+                      files: list[dict[str, Any]]) -> int | None:
+    """One restore run and one proven run file per decrypted file - what the staging cleanup deletes by.
+
+    Until 0.38.0 a decrypted staging left no record: its files were on the target with nothing in the
+    catalog saying what they were, and the cleanup's ``find -delete`` did not ask. A verified delete
+    does (1.329) - a staged file with no recorded facts is kept and named - so each file is recorded
+    here with the bytes and sha256 ``fetch-decrypted-file`` / ``decrypt-on-host`` proved on arrival.
+    ``None`` without a catalog (a call made by hand): the files are then the operator's to clear.
+    """
+    if catalog is None or not files:
+        return None
+    import socket
+
+    from dbabrain.lib.version import __version__
+
+    integrity = restore_integrity.require_restore_integrity(
+        {"integrity": job.integrity.as_record()} if job.integrity else {}, label=f"restore_id={job.label}")
+    run_id = catalog.start_restore_run(
+        action=restore_integrity.ACTION_COPY_ONLY if getattr(job, "action", None) == restore_integrity.ACTION_COPY_ONLY
+        else restore_integrity.ACTION_RESTORE, restore_id=job.restore_id, source_server_id=job.server_id,
+        target_server_id=job.target_server_id, target_folder=target_dir,
+        copy_max_retry=integrity.copy_max_retry, phase="copying", tier=getattr(job, "tier", None),
+        node_host=socket.gethostname(), app_version=__version__)
+    for position, one in enumerate(files, start=1):
+        target_path = str(one["path"])
+        relative = target_path[len(target_dir) + 1:] if target_path.startswith(target_dir + "/") else posixpath.basename(target_path)
+        catalog.add_run_file(
+            restore_run_id=run_id, source_server_id=source_server_id, target_server_id=job.target_server_id,
+            engine=str(job.db_type or "").lower(), file_name=posixpath.basename(target_path),
+            file_type=_script_file_type(job.db_type, relative),
+            # The source is the encrypted copy on the repository; what is held is the PLAIN file's hash,
+            # which is what both ends were proven against.
+            source_path=f"{source_dir}/{relative}", target_path=target_path,
+            source_host_path=f"{source_dir}/{relative}", target_host_path=target_path,
+            chain_position=position, copy_max_retry=integrity.copy_max_retry,
+            size_source_bytes=int(one["size_bytes"]), size_target_bytes=int(one["size_bytes"]),
+            checksum_source_before_copy=str(one["sha256"]), checksum_target_after_copy=str(one["sha256"]),
+            target_on_disk=1, target_checksum_matches=1, verdict="match")
+    catalog.set_restore_run(run_id, phase="verified", chain_files=len(files), files_matched=len(files))
+    return run_id
+
+
+def _stage_decrypted(job: Any, request: dict[str, Any], *, source: BackupTarget, source_login: dict[str, Any],
+                     target_login: dict[str, Any], key: Any, key_base64: Any,
+                     catalog: Any = None, plan: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """The chain's ``.age`` files, decrypted on their way from the repository to the target (0.37.0).
+
+    ``None`` when the chain on the repository holds no ``.age`` file - an unencrypted copy goes the
+    usual way (prepare-staging, copy-files, the checksum gate). Otherwise EVERY file of the chain must be a
+    proven encrypted file the store recorded (``repository_encrypted_files``): one that is not - a
+    file nobody encrypted, a copy cut short, a stray - refuses the restore by name, as an
+    uncatalogued file on the repository always has. Each goes through ``fetch-decrypted-file``: the
+    ``.age`` held to the bytes and sha256 measured when it was encrypted, decrypted with the key it
+    was encrypted for (an expired key still decrypts), the plaintext held to the plain file's bytes
+    and sha256, and laid down under its plain name in the same layout - so the restore script reads
+    the staging folder exactly as it reads one copied from the server.
+    """
+    from dbabrain.db.repository_encryption_store import RepositoryEncryptionStore
+    from dbabrain.lib.config import load_config
+    from dbabrain.lib.repository_keys import SUFFIX
+    from dbabrain.lib.secret_text import resolve_cli_key, resolve_key
+
+    if plan is None:
+        plan = common_cli.run("prepare-staging", {**request, "plan_only": True}, stream_stderr=True)
+    selected = [str(item["path"]) for item in plan.get("files") or []]
+    if not any(rel.endswith(SUFFIX) for rel in selected):
+        return None
+    source_dir = str(request.get("source_dir") or "").rstrip("/")
+    target_dir = job.target_backup_dir.rstrip("/")
+    store = RepositoryEncryptionStore.from_config(load_config())
+    proven = store.proven_under(repository_server_id=source.server_id, folder=source_dir)
+    unknown = [rel for rel in selected if f"{source_dir}/{rel}" not in proven]
+    if unknown:
+        raise CopyNotProvenError(
+            f"{job.label}: on the repository, {len(unknown)} file(s) of the chain are not proven encrypted "
+            f"copies - {', '.join(unknown[:5])} - nothing is restored from a file no offload recorded.")
+    passphrase = resolve_cli_key(key, key_base64) or resolve_key()
+    transfer = _transfer_of(job)
+    # The target is the repository host itself (a drill there): decrypted where it lies, the bytes
+    # never leave the machine (0.37.0, the operator: *why copy to my PC - restore directly*).
+    on_host = str(getattr(job, "target_server_id", "")) == str(source.server_id) or (
+        str(target_login.get("host") or "") == str(source_login.get("host") or ""))
+    identities: dict[int, str] = {}
+    files, plain_bytes = [], 0
+    for rel in selected:
+        row = proven[f"{source_dir}/{rel}"]
+        key_id = int(row["key_id"])
+        if key_id not in identities:
+            identities[key_id] = store.identity(key_id, passphrase=passphrase)
+        plain_rel = rel[: -len(SUFFIX)]
+        if on_host:
+            answer = common_cli.run("decrypt-on-host", {
+                "host": {"runtime": "linux", "access": "ssh", **source_login},
+                "path": f"{source_dir}/{rel}",
+                "size_bytes": int(row["encrypted_size_bytes"]), "sha256": str(row["encrypted_sha256"]),
+                "target_path": f"{target_dir}/{plain_rel}", "file_name": posixpath.basename(plain_rel),
+                "must_be_under": target_dir,
+                "plain_size_bytes": int(row["plain_size_bytes"]), "plain_sha256": str(row["plain_sha256"]),
+                "identity": identities[key_id], "overwrite": True}, stream_stderr=True)
+            files.append({"path": answer["target_path"], "size_bytes": answer["plain_size_bytes"],
+                          "sha256": answer["plain_sha256"], "key_id": key_id, "decrypted_on": "the repository host"})
+            plain_bytes += int(answer["plain_size_bytes"])
+            continue
+        answer = common_cli.run("fetch-decrypted-file", {
+            "source": source_login, "path": f"{source_dir}/{rel}",
+            "size_bytes": int(row["encrypted_size_bytes"]), "sha256": str(row["encrypted_sha256"]),
+            "target": target_login, "target_path": f"{target_dir}/{plain_rel}",
+            "file_name": posixpath.basename(plain_rel),
+            "plain_size_bytes": int(row["plain_size_bytes"]), "plain_sha256": str(row["plain_sha256"]),
+            "identity": identities[key_id], "transfer": transfer,
+            # The staging folder is the restore's own: a file a previous drill left there is replaced.
+            "overwrite": True}, stream_stderr=True)
+        files.append({"path": answer["target_path"], "size_bytes": answer["plain_size_bytes"],
+                      "sha256": answer["plain_sha256"], "key_id": key_id})
+        plain_bytes += int(answer["plain_size_bytes"])
+    # Recorded (0.38.0): the staging cleanup deletes a staged file only by facts the catalog holds.
+    restore_run_id = _record_decrypted(job, catalog, source_server_id=source.server_id, source_dir=source_dir,
+                                       target_dir=target_dir, files=files)
+    # The keys every copy answers with (copied, bytes_copied, skipped) - the restore's own phases read
+    # them; without them the drill of 2026-11-10 failed "'copied'" after a decryption that worked.
+    return {"restore_from": "repository", "repository_server_id": source.server_id, "repository_dir": source_dir,
+            "copied": len(files), "bytes_copied": plain_bytes, "skipped": 0,
+            "encrypted": True, "files": files, "files_decrypted": len(files), "bytes": plain_bytes,
+            "transfer": "on the repository host" if on_host else transfer, "restore_run_id": restore_run_id}
+
+
+def _transfer_of(job: Any) -> str:
+    """The transfer the source's backup entry states for its repository (offload_transfer)."""
+    from dbabrain.backup_restore.backup import load_backup_jobs
+
+    for backup in load_backup_jobs(getattr(job, "config_path", None) or None):
+        offload = getattr(backup, "offload", None)
+        if backup.server_id == job.server_id and offload is not None and offload.enabled:
+            return offload.transfer
+    raise CopyNotProvenError(f"{job.label}: no backup entry of {job.server_id} offloads to a repository - "
+                             "its offload_transfer says how a repository copy travels.")
 
 
 #: The engines a restore can read from the repository: their chain is read from the folder's own
@@ -639,7 +811,7 @@ def _repository_source(job: Any, *, catalog: Any, data_dir: Any) -> tuple[Backup
 
 
 def _ssh_host_block(login: dict[str, Any]) -> dict[str, Any]:
-    """``file-checksum``'s ``host`` for a machine reached over SSH - the login ``copy-backup-dir`` uses."""
+    """``file-checksum``'s ``host`` for a machine reached over SSH - the login the staging copy uses."""
     return {"runtime": "linux", "access": "ssh", **login}
 
 
@@ -650,19 +822,37 @@ _script_file_type = restore_integrity.script_file_type
 
 def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, source: BackupTarget,
                               target: BackupTarget, catalog: Any = None,
-                              proofs: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
-    """``copy-backup-dir`` held to the checksum gate (0.34.0, 1.213b) - the same rule as every other copy.
+                              proofs: dict[str, dict[str, Any]] | None = None,
+                              plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A staging filled by ``copy-files`` and held to the checksum gate (0.34.0, 1.213b; 0.38.0, 1.329).
 
-    1. ``plan_only``: the files the request selects, read from the source.
+    1. ``prepare-staging`` with ``plan_only``: the files the request selects, read from the source.
     2. :func:`copy_gate.copy_verified_batch` over them: the sources hashed on the source host, the
        targets on the target, in one ``file-checksum`` call each per round.
-    3. Each round's copies are ONE ``copy-backup-dir`` - the request as asked, plus ``replace`` naming
-       the files still to copy, so a same-size copy with other bytes is copied over. The copy is lazy:
-       the gate asks for files one by one, and they travel together when it hashes the round.
+    3. Each round is ``prepare-staging`` (the request as asked, plus ``replace`` naming the files the
+       gate wants copied again, so a same-size copy with other bytes travels), then ONE ``copy-files``
+       for what it answers as pending - every file with the size and sha256 the source was just
+       hashed to, written over the staged name only when they hold - then ``finish-staging`` (the
+       files' times, the engine's access). The copy is lazy: the gate asks for files one by one, and
+       they travel together when it hashes the round. A file ``copy-files`` could not land is that
+       file's attempt spent - the gate finds its target not proven - never the round's failure, and
+       what the round said about it is the attempt's text. A round that could not run at all is an
+       attempt spent for each of its files, with its error; a round that was REFUSED ("will not
+       fit", a folder that is not dbabrain's) ends the run with that sentence - the next round
+       would be refused the same way, one retry interval later.
 
-    A run whose files are all on the target already still makes one copy call, for what the command
-    does besides copying: the mirror (removing what the source no longer has), the marker, opening
-    the folder for the engine. Anything not proven raises :class:`CopyNotProvenError`.
+    Only the plan's files travel: ``prepare-staging`` reads the source again each round, and the
+    request's patterns may match a file written since (a WAL segment archived meanwhile). The gate
+    holds the plan's files, so that one stays at the source - never staged unproven - and the answer
+    names it (``written_after_the_plan``).
+
+    A run whose files are all on the target already still makes one round, for what it does besides
+    copying: the marker, opening the folder for the engine, and naming what the staging holds that
+    the source no longer has. Anything not proven raises :class:`CopyNotProvenError`.
+
+    4. What the source no longer has (0.38.0, 1.329): the copy used to remove it, as a mirror - now
+       it names it, and :func:`_clear_absent_at_source` deletes each file by a verified command and
+       each emptied folder by ``delete-empty-folder``. One left behind stops the restore.
     """
     from dbabrain.backup_restore import copy_gate
 
@@ -677,7 +867,8 @@ def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, so
         from dataclasses import replace as _replace
 
         integrity = _replace(integrity, uncatalogued="refuse")
-    plan = common_cli.run("copy-backup-dir", {**request, "plan_only": True}, stream_stderr=True)
+    if plan is None:
+        plan = common_cli.run("prepare-staging", {**request, "plan_only": True}, stream_stderr=True)
     selected = [(str(item["path"]), int(item.get("size_bytes") or 0)) for item in plan.get("files") or []]
 
     stored: dict[str, dict[str, Any]] = dict(proofs or {})
@@ -720,12 +911,93 @@ def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, so
 
     copies: list[dict[str, Any]] = []
     pending: list[str] = []
+    source_host = _ssh_host_block(request["source"])
+    target_host = _ssh_host_block(request["target"])
+    # What each source file was hashed to on its host - the facts copy-files holds the file to.
+    source_facts: dict[str, tuple[str, int | None]] = {}
+    # The entry's copy_mode names the way the bytes cross - copy-files' transfer, the one way of
+    # every round: a way that fails is tried again as itself, never as the other (G4).
+    transfer = transfer_of(job.copy_mode)
+    planned = set(relative_of.values())
+    # What a round said about a file that did not arrive, by its target path: the gate writes it
+    # into that file's attempt, or the reason ("no space left", the link's error) is on no screen.
+    round_said: dict[str, str] = {}
+    written_after_the_plan: list[str] = []
+
+    def checksums(host: dict[str, Any], paths: list[str]) -> dict[str, tuple[str, int | None]]:
+        answer = common_cli.run("file-checksum", {"host": host, "paths": list(paths)})
+        return {f["path"]: (f["sha256"], f.get("size_bytes")) for f in answer.get("files") or []}
+
+    def facts_of(paths: list[str]) -> dict[str, tuple[str, int | None]]:
+        """Each source file's sha256 and bytes: what the gate hashed, else what its backup or its
+        offload recorded for that path, else hashed now - a file never travels without them."""
+        for path in paths:
+            row = stored.get(path) or {}
+            sha = str(row.get("checksum_after_backup") or "").strip().lower()
+            if path not in source_facts and len(sha) == 64 and isinstance(row.get("size_bytes"), int):
+                source_facts[path] = (sha, int(row["size_bytes"]))
+        missing = [path for path in paths if path not in source_facts]
+        if missing:
+            source_facts.update(checksums(source_host, missing))
+        return {path: source_facts[path] for path in paths if path in source_facts}
 
     def flush(replace: list[str]) -> None:
-        answer = dict(common_cli.run("copy-backup-dir", {**request, "replace": replace}, stream_stderr=True))
-        copies.append(answer)
+        for rel in replace:
+            round_said.pop(f"{target_dir}/{rel}", None)
+        prepared = dict(common_cli.run("prepare-staging", {**request, "replace": replace}, stream_stderr=True))
+        travelling: list[dict[str, Any]] = []
+        for one in prepared.get("pending") or []:
+            if one["path"] in planned:
+                travelling.append(one)
+            elif one["path"] not in written_after_the_plan:
+                # Not in the plan, so not in the gate: copied now it would be staged with nothing
+                # proving it. It stays at the source and is named.
+                written_after_the_plan.append(one["path"])
+        landed: list[dict[str, Any]] = []
+        bytes_copied = 0
+        if travelling:
+            facts = facts_of([f"{source_dir}/{one['path']}" for one in travelling])
+            files = []
+            for one in travelling:
+                source_path = f"{source_dir}/{one['path']}"
+                if source_path not in facts or facts[source_path][1] is None:
+                    round_said[f"{target_dir}/{one['path']}"] = "its source could not be hashed, so it did not travel"
+                    continue
+                files.append({"source": source_path, "target": f"{target_dir}/{one['path']}",
+                              "file_name": posixpath.basename(one["path"]),
+                              "size_bytes": int(facts[source_path][1]), "sha256": facts[source_path][0]})
+            if files:
+                sent = common_cli.run("copy-files", {
+                    "source": request["source"], "target": request["target"], "files": files,
+                    # prepare-staging decided each of these must travel: absent, another size, older
+                    # than its source, or named by the gate as not proven.
+                    "overwrite": True, "transfer": transfer,
+                    # A staging copy was never bounded by a clock of its own (a 17 GB RMAN set
+                    # across two internet hops is hours); copy-files' default is six.
+                    "timeout_seconds": STAGING_COPY_TIMEOUT_SECONDS}, stream_stderr=True)
+                by_target = {str(line.get("target")): line for line in sent.get("files") or []}
+                for sending in files:
+                    line = by_target.get(sending["target"])
+                    if line is not None and line.get("ok"):
+                        bytes_copied += int(line.get("bytes_copied") or 0)
+                    else:
+                        round_said[sending["target"]] = str(
+                            (line or {}).get("error") or "copy-files gave no answer for it")[:1000]
+                landed = [one for one in travelling
+                          if (by_target.get(f"{target_dir}/{one['path']}") or {}).get("ok")]
+        finished = common_cli.run("finish-staging", {
+            "target": request["target"], "target_dir": target_dir,
+            "files": [{"path": one["path"], "mtime": one.get("mtime")} for one in landed],
+            "open_for_engine": True}, stream_stderr=True)
+        copies.append({
+            "copied": len(landed), "bytes_copied": bytes_copied, "skipped": int(prepared.get("skipped") or 0),
+            "absent_at_source": list(prepared.get("absent_at_source") or []),
+            "folders_absent_at_source": list(prepared.get("folders_absent_at_source") or []),
+            "opened_for_engine": bool(finished.get("opened_for_engine")),
+            "copy_mode": transfer if travelling else "none",
+            **({"space_check": prepared["space_check"]} if prepared.get("space_check") is not None else {})})
 
-    def hasher(host: dict[str, Any], *, copies_first: bool = False):
+    def hasher(host: dict[str, Any], *, copies_first: bool = False, remember: bool = False):
         def batch(paths: list[str]) -> dict[str, tuple[str, int | None]]:
             if pending and copies_first:
                 # The round's copies travel now, together, before the round is hashed.
@@ -733,15 +1005,23 @@ def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, so
                 try:
                     flush(round_files)
                 except Exception as exc:  # noqa: BLE001 - a failed round is an attempt spent, per file
-                    copies.append({"error": f"{type(exc).__name__}: {exc}"[:2000]})
+                    if getattr(exc, "kind", None) == errors.KIND_REFUSED:
+                        # "Will not fit", a staging that is not dbabrain's: the next round would be
+                        # refused the same way, so the run ends here, with that sentence.
+                        raise
+                    said = f"{type(exc).__name__}: {exc}"[:1000]
+                    copies.append({"error": said})
+                    for rel in round_files:
+                        # Its own reason, when the round got as far as that file, says more.
+                        round_said.setdefault(f"{target_dir}/{rel}", said)
             if not paths:
                 return {}
-            answer = common_cli.run("file-checksum", {"host": host, "paths": list(paths)})
-            return {f["path"]: (f["sha256"], f.get("size_bytes")) for f in answer.get("files") or []}
+            found = checksums(host, paths)
+            if remember:
+                source_facts.update(found)
+            return found
         return batch
 
-    source_host = _ssh_host_block(request["source"])
-    target_host = _ssh_host_block(request["target"])
 
     def copy(item: Any) -> int:
         pending.append(relative_of[item.target_path])
@@ -749,12 +1029,14 @@ def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, so
 
     try:
         outcomes = copy_gate.copy_verified_batch(
-            items, integrity=integrity, hash_sources=hasher(source_host), hash_targets=hasher(target_host, copies_first=True),
-            copy=copy, catalog=catalog, restore_run_id=restore_run_id, copy_engine="copy-backup-dir")
+            items, integrity=integrity, hash_sources=hasher(source_host, remember=True),
+            hash_targets=hasher(target_host, copies_first=True),
+            copy=copy, catalog=catalog, restore_run_id=restore_run_id, copy_engine="copy-files",
+            copy_said=lambda item: round_said.get(item.target_path))
         if not copies:
-            # Nothing needed copying: the mirror, the marker and the engine's read access are still
-            # this run's, and a failure here is the run's own error. (A round that failed is already
-            # an attempt spent, and its file says so.)
+            # Nothing needed copying: the marker, the engine's read access and the word on what the
+            # source no longer has are still this run's, and a failure here is the run's own error.
+            # (A round that failed is already an attempt spent, and its file says so.)
             flush([])
     except Exception as exc:
         if catalog is not None and restore_run_id is not None:
@@ -777,14 +1059,69 @@ def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, so
             f"restored - {'; '.join(summary['unproven'][:5])}")
 
     done = [answer for answer in copies if "error" not in answer]
+    # The newest answer's word on what the staging holds that the source no longer has.
+    cleared = _clear_absent_at_source(job, done[-1] if done else {}, target_host=target_host,
+                                      target_dir=target_dir, catalog=catalog)
     out = dict(done[0]) if done else {}
+    out["removed_absent_at_source"] = cleared
+    out.pop("absent_at_source", None)
+    out.pop("folders_absent_at_source", None)
     out["copied"] = sum(int(answer.get("copied") or 0) for answer in done)
     out["bytes_copied"] = sum(int(answer.get("bytes_copied") or 0) for answer in done)
     out["skipped"] = int(done[0].get("skipped") or 0) if done else 0
+    if any(answer.get("copy_mode") not in (None, "none") for answer in done):
+        # The way the bytes crossed, when any did - the first round may have had nothing to send.
+        out["copy_mode"] = transfer
+    if written_after_the_plan:
+        out["written_after_the_plan"] = sorted(written_after_the_plan)
     out.pop("files", None)
     out["integrity"] = {**summary, "restore_run_id": restore_run_id}
     out["restore_run_id"] = restore_run_id
     return out
+
+
+class StagingNotClearError(errors.Refused):
+    """The staging still holds a file or folder the source no longer has - no restore runs on it."""
+
+
+def _clear_absent_at_source(job: Any, answer: dict[str, Any], *, target_host: dict[str, Any], target_dir: str,
+                            catalog: Any) -> int:
+    """Delete what the staging holds that the source no longer has; the number of files deleted.
+
+    The copy named them (``absent_at_source``, ``folders_absent_at_source``). Each file goes by
+    ``delete-verified-files`` with the bytes and sha256 the copy that staged it measured on this
+    target; each folder by ``delete-empty-folders``, deepest first. A file no proven copy recorded
+    is not this restore's to delete - and is not restored over either: an old life's RMAN pieces or
+    the husk of a removed base backup reaching the restore is what the mirror existed to prevent.
+    So anything left raises :class:`StagingNotClearError`, by name, with the command that clears it.
+    """
+    from dbabrain.backup_restore import verified_cleanup
+
+    files = [f"{target_dir}/{rel}" for rel in answer.get("absent_at_source") or []]
+    folders = [f"{target_dir}/{rel}" for rel in answer.get("folders_absent_at_source") or []]
+    if not files and not folders:
+        return 0
+    facts = (catalog.staged_file_facts(target_server_id=job.target_server_id, paths=files)
+             if catalog is not None and files else {})
+    cleanup = verified_cleanup.delete_files(host=target_host, paths=files, facts=facts, must_be_under=target_dir)
+    left = ([f"{one['path']} (not in the catalog)" for one in cleanup["kept"]]
+            + [f"{one['path']} ({one['status']} - {one['reason']})" for one in cleanup["not_deleted"]])
+    if not left and folders:
+        # Deepest first, as the copy listed them: a parent is empty by the time it is tried.
+        items = [{"path": folder, "must_be_under": target_dir} for folder in folders]
+        _ok, folder_answer, error = common_cli.run_allowing_failure(
+            "delete-empty-folders", {"host": target_host, "folders": items})
+        from dbabrain.lib import verified_cleanup as rules
+
+        left = [f"{one['path']} ({one['status']} - {one['reason']})"
+                for one in rules.read_answer(folder_answer, items, error=error)["not_deleted"]]
+    if left:
+        raise StagingNotClearError(
+            f"{job.label}: the staging {target_dir} on {job.target_server_id} holds {len(left)} item(s) the "
+            f"source no longer has, and they could not be deleted by their recorded facts - "
+            f"{'; '.join(left[:5])}{' ...' if len(left) > 5 else ''}. Nothing is restored over them. Clear "
+            "each stray file by hand (common.cli delete-file with \"force\": true), then run the restore again.")
+    return len(cleanup["deleted"])
 
 
 def _staging_marker(job: Any) -> dict[str, str]:
@@ -792,6 +1129,11 @@ def _staging_marker(job: Any) -> dict[str, str]:
     the copy its own default. One place, so the copy and the prune cannot be handed two names."""
     marker = str(job.staging_marker or "").strip()
     return {"staging_marker": marker} if marker else {}
+
+
+#: The staging marker's default name - the copy's own (``common.backup_copy.STAGING_MARKER``); an
+#: entry that states ``staging_marker`` names another.
+DEFAULT_STAGING_MARKER = ".dbabrain-staging"
 
 
 def prune_staged_backups(
@@ -802,21 +1144,77 @@ def prune_staged_backups(
     key=None,
     key_base64=None,
     log=None,
+    catalog: Any = None,
+    now: float | None = None,
 ) -> dict[str, Any]:
-    """The DELETE step of a remote restore: ``common.cli prune-staged-backups`` on its staging.
+    """The DELETE step of a remote restore: its staging folder cleared past its retention.
 
     After the verify, not inside the copy: a drill that failed keeps what it staged for the next
     attempt - the rule the engine path has followed since 2026-09-11 ("the retention cleanup must
     not prune the backups when the drill that proves them restorable has just failed").
+
+    **Each file by its own verified delete** (0.38.0, 1.329). Until then this was one command on the
+    target - ``find -delete`` for the files, ``rm -rf`` for an emptied set - with nothing held to
+    anything. Now the folder is listed (``list-files``), the regular files last written before the
+    retention window are chosen, and each is deleted by ``delete-verified-files`` with the bytes and
+    sha256 the copy that staged it measured on this target (the catalog's run files). **A file no
+    proven copy recorded is kept and named** - it is not this restore's to delete; an operator
+    clears one with ``common.cli delete-file`` and ``"force": true``. An emptied set's folders go by
+    ``delete-empty-folders``; a folder that still holds a file is refused by the command itself.
+
+    Only a folder carrying the staging marker is cleaned, as before: a ``target_backup_dir`` pointed
+    one level too high must not have its host's own files judged by age.
     """
     del log
-    return common_cli.run("prune-staged-backups", {
-        "target": _ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64),
-        "target_dir": job.target_backup_dir,
-        "cleanup_retention": int(job.cleanup_retention or 0),
-        # The same marker the copy looked for: a prune that asks for another refuses the folder.
-        **_staging_marker(job),
-    }, stream_stderr=True)
+    import time as _time
+
+    from dbabrain.backup_restore import verified_cleanup
+    from dbabrain.lib import verified_cleanup as rules
+
+    retention = int(job.cleanup_retention or 0)
+    target_dir = str(job.target_backup_dir or "").rstrip("/")
+    result: dict[str, Any] = {"pruned": 0, "retention_seconds": retention}
+    if not retention or not target_dir:
+        result["skipped"] = "retention disabled"
+        return result
+    host = _ssh_host_block(_ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64))
+    listing = common_cli.run("list-files", {"host": host, "folder": target_dir, "with_folders": True})
+    if not listing.get("folder_found"):
+        return result
+    if listing.get("truncated"):
+        # A partial listing cannot say which sets are empty: nothing is deleted on half an answer.
+        result["error"] = (f"{target_dir} holds more than {len(listing.get('files') or [])} entries - listed "
+                           "in part, so nothing was deleted")
+        return result
+    marker = str(job.staging_marker or "").strip() or DEFAULT_STAGING_MARKER
+    entries = list(listing.get("files") or [])
+    if not any(str(entry.get("path")) == f"{target_dir}/{marker}" for entry in entries):
+        if entries:
+            result["error"] = (
+                f"{target_dir} holds files and has no {marker} marker, so it is not known to be a dbabrain "
+                f"staging directory - nothing was deleted there. If it is one, mark it: `touch {target_dir}/{marker}`.")
+        return result
+    old = rules.past_retention(entries, retention_seconds=retention,
+                               now=_time.time() if now is None else float(now), keep_names=[marker])
+    facts = (catalog.staged_file_facts(target_server_id=job.target_server_id, paths=old)
+             if catalog is not None and old else {})
+    cleanup = verified_cleanup.delete_files(host=host, paths=old, facts=facts, must_be_under=target_dir)
+    gone = set(cleanup["deleted"]) | set(cleanup["already_gone"])
+    husks = verified_cleanup.delete_husks(
+        host=host, root=target_dir, folders=list(listing.get("folders") or []),
+        entries_left=[str(entry.get("path")) for entry in entries if str(entry.get("path")) not in gone])
+    result["pruned"] = len(cleanup["deleted"])
+    result["folders_removed"] = len(husks["removed"])
+    if cleanup["kept"]:
+        # By name: a staged file the catalog does not know is somebody's to decide about.
+        result["kept_unknown"] = cleanup["kept"]
+    problems = cleanup["not_deleted"] + husks["not_removed"]
+    if problems:
+        first = problems[0]
+        result["not_deleted"] = problems
+        result["error"] = (f"{len(problems)} staged item(s) past retention could not be deleted - "
+                           f"{first['path']}: {first['status']} - {first['reason']}")
+    return result
 
 
 # `_announce` is `dbabrain.backup_restore.events.announce` since 2026-08-16 — it was four

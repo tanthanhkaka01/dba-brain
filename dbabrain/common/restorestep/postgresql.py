@@ -228,15 +228,63 @@ def _wait_for_recovery(on_host: Host, host: Host, *, run_as: str, timeout: int) 
         f"{answer or 'no answer'}); read its log: docker logs {host.container}")
 
 
+def extract_command(source: str, dest: str, *, with_manifest: bool) -> str:
+    """A TAR base backup laid out as a data directory at ``dest`` (0.37.0).
+
+    The backup script writes the tar format, compressed on the server: ``base.tar.zst`` (the data
+    directory), ``pg_wal.tar`` (the WAL streamed during it) and ``backup_manifest``. A restore - and
+    ``pg_combinebackup``, which reads plain directories only - needs the directory, so each archive
+    is unpacked where it belongs: ``base`` into ``dest``, ``pg_wal`` into ``dest/pg_wal``. An extra
+    tablespace's ``<oid>.tar`` is refused by name rather than laid down in the wrong place.
+    ``with_manifest`` copies the manifest in too - what ``pg_combinebackup`` reads each input by.
+    """
+    s, d = shlex.quote(source.rstrip("/")), shlex.quote(dest.rstrip("/"))
+    return (
+        f"mkdir -p {d} && for f in {s}/*.tar {s}/*.tar.*; do [ -e \"$f\" ] || continue; n=${{f##*/}}; "
+        f"case \"$n\" in base.tar*) to={d} ;; pg_wal.tar*) to={d}/pg_wal ;; "
+        f"*) echo \"$n: a tablespace archive - not restored by this step\" >&2; exit 3 ;; esac; "
+        f"case \"$n\" in *.zst) z=zstd ;; *.gz) z=gzip ;; *.lz4) z=lz4 ;; *) z=cat ;; esac; "
+        f"type \"$z\" >/dev/null 2>&1 || {{ echo \"$z not found - cannot unpack $n\" >&2; exit 127; }}; "
+        # Tested whole first (sh has no pipefail): a damaged archive stops here, before a half unpack.
+        f"mkdir -p \"$to\" && if [ \"$z\" = cat ]; then tar -xf \"$f\" -C \"$to\"; "
+        f"else \"$z\" -t -q \"$f\" 2>/dev/null || {{ echo \"$n is damaged ($z -t)\" >&2; exit 6; }}; "
+        f"\"$z\" -dc \"$f\" | tar -xf - -C \"$to\"; fi || exit 4; done && "
+        f"[ -f {d}/PG_VERSION ] || {{ echo 'no PG_VERSION after unpacking {source}' >&2; exit 5; }}"
+        + (f" && cp {s}/backup_manifest {d}/backup_manifest" if with_manifest else "")
+    )
+
+
+def _is_tar(path: str) -> str:
+    return f"ls {shlex.quote(path.rstrip('/'))}/base.tar* >/dev/null 2>&1"
+
+
+def _full_command(path: str, staging: str) -> str:
+    """One base backup into ``staging``: unpacked when it is tar, copied when it is plain."""
+    src, dst = shlex.quote(path.rstrip("/")), shlex.quote(staging)
+    return (f"rm -rf {dst} && mkdir -p {dst} && if {_is_tar(path)}; then "
+            f"{extract_command(path, staging, with_manifest=False)}; "
+            f"else cp -a {src}/. {dst}/; fi")
+
+
 def _combine_command(paths: list[str], staging: str, bin_dir: str) -> str:
     binary = (f"{bin_dir.rstrip('/')}/pg_combinebackup" if bin_dir else
               "$(command -v pg_combinebackup "
               "|| ls -1 /usr/lib/postgresql/*/bin/pg_combinebackup 2>/dev/null | tail -1)")
-    sources = " ".join(shlex.quote(p.rstrip("/")) for p in paths)
+    # pg_combinebackup reads plain directories only: a tar member of the chain is unpacked first,
+    # with its manifest, into a work folder beside the staging one - removed once combined.
+    work = staging.rstrip("/") + "_unpacked"
+    work_q = shlex.quote(work)
+    members = []
+    prepare = [f"rm -rf {work_q} && mkdir -p {work_q}"]
+    for index, path in enumerate(paths):
+        unpacked = f"{work}/{index}"
+        prepare.append(f"if {_is_tar(path)}; then {extract_command(path, unpacked, with_manifest=True)} "
+                       f"&& m{index}={shlex.quote(unpacked)}; else m{index}={shlex.quote(path.rstrip('/'))}; fi")
+        members.append(f'"$m{index}"')
     return (f"BIN={binary if bin_dir else binary}; "
             f'[ -x "$BIN" ] || {{ echo "pg_combinebackup not found" >&2; exit 127; }}; '
-            f"rm -rf {shlex.quote(staging)} && "
-            f'"$BIN" -o {shlex.quote(staging)} {sources}')
+            f"rm -rf {shlex.quote(staging)} && " + " && ".join(prepare) + " && "
+            f'"$BIN" -o {shlex.quote(staging)} {" ".join(members)} && rm -rf {work_q}')
 
 
 def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, Any]:
@@ -289,12 +337,11 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
         )
 
     staging = str(request.get("staging_dir") or (data_dir.rstrip("/") + "_dbabrain_staging"))
-    action = ("base backup copied into the data directory" if level == FULL
-              else "chain combined with pg_combinebackup")
+    action = ("base backup laid into the data directory (unpacked when tar)" if level == FULL
+              else "chain combined with pg_combinebackup (tar members unpacked first)")
 
     if level == FULL:
-        build = (f"rm -rf {shlex.quote(staging)} && mkdir -p {shlex.quote(staging)} && "
-                 f"cp -a {shlex.quote(paths[0].rstrip('/'))}/. {shlex.quote(staging)}/")
+        build = _full_command(paths[0], staging)
     else:
         build = _combine_command(paths, staging, bin_dir)
     # The recovery configuration goes into the combined directory BEFORE the first start. Written
@@ -365,7 +412,12 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
     wal_q = shlex.quote(wal_copy)
     rebuild = build
     if wal_dir:
-        rebuild += (f" && rm -rf {wal_q} && mkdir -p {wal_q} && cp -a {shlex.quote(wal_dir.rstrip('/'))}/. {wal_q}/"
+        # A cluster with no WAL archive (archive_command off - the store's, 2026-11-10) has no wal/ to
+        # copy: the copy is then empty and recovery replays only the WAL the base backup carries
+        # (-X stream). It used to fail the whole restore after a 65 GB unpack: "cp: cannot stat".
+        src_q = shlex.quote(wal_dir.rstrip('/'))
+        rebuild += (f" && rm -rf {wal_q} && mkdir -p {wal_q} && if [ -d {src_q} ]; then cp -a {src_q}/. {wal_q}/; "
+                    f"else echo 'no WAL archive at '{src_q}' - recovery replays the WAL inside the base backup' >&2; fi"
                     f" && {_recovery_config(staging, wal_copy, target_time)}")
     data_q, staging_q = shlex.quote(data_dir.rstrip("/")), shlex.quote(staging.rstrip("/"))
     # `find -exec`, not a glob: the helper's shell is sh, which has no dotglob. The database user

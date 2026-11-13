@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from dbabrain.lib import change_alert
 from dbabrain.lib import data_sources
 from dbabrain.lib.shell import SHELL_BASH, SHELL_POWERSHELL, powershell_executable
 from dbabrain.lib.event_policy import (
@@ -273,8 +274,13 @@ def _flush(
     pending.clear()
     # No store is a test run (`collect --test-run`): the rows are printed, never inserted.
     assert store is None or run_id is not None
-    for (metric, _importance), results in zip(
+    for (metric, importance), results in zip(
             planned, _collect_metric_batch(target=target, planned=planned, secrets=secrets)):
+        if store is not None and metric.change_alert:
+            # After the rows are graded and before they are stored: a change is one more row of
+            # this same read, so the level reports deliver it once, like any finding.
+            results = results + _change_results(metric=metric, target=target, importance=importance,
+                                                results=results, store=store)
         inserted = len(results) if store is None else store.insert_results(run_id=run_id, results=results)
         tally.result_count += inserted
         tally.ok_count += sum(1 for item in results if item.status.upper() in {"OK", "LOGGING"})
@@ -508,6 +514,50 @@ def collect_metrics(
         # no index on run_id - unbounded, the read was a scan of ~15 million rows every pass.
         store.rebuild_target_health(run_id=run_id, since=started_at)
     return summary(run_id, finished, message)
+
+
+def _change_results(
+    *,
+    metric: MetricDefinition,
+    target: MetricTarget,
+    importance: int,
+    results: list[MetricResult],
+    store: MetricStore,
+) -> list[MetricResult]:
+    """One row per change between this read of an inventory metric and the read before it (1.324).
+
+    The first read is the baseline: with no earlier read there is nothing to hold it to. A read
+    that **failed** - its one row has no item and is not OK - reports nothing and is never a
+    baseline: "could not read the host" is the collector's own failure row, not "every
+    administrator was removed". A change of a kind the metric does not state is not reported.
+    """
+    if any(item.metric_item is None and item.status.upper() not in {"OK", "LOGGING"} for item in results):
+        return []
+    collected_at = results[0].collected_at if results else ""
+    try:
+        previous = store.fetch_previous_read(target_id=target.target_id, metric_code=metric.metric_code,
+                                             before=collected_at)
+    except Exception as exc:  # noqa: BLE001 - the read itself is good; a store hiccup must not lose it.
+        _print_line(f"[METRIC][CHANGE] {target.target_id} {metric.metric_code}: the read before this one "
+                    f"could not be fetched, so no change is reported this time: {exc}")
+        return []
+    if not previous:
+        return []
+    previous_at = as_text(previous[0]["collected_at"])
+    rows: list[MetricResult] = []
+    for found in change_alert.changes(previous, results):
+        status = metric.change_alert.get(found["kind"])
+        if not status:
+            continue
+        item = change_alert.change_item(found)
+        status, message = _apply_metric_result_overrides(
+            metric=metric, target=target, metric_item=item,
+            metric_value=found["after"] or found["before"], status=status,
+            message=change_alert.change_message(found, previous_at=previous_at, current_at=collected_at))
+        rows.append(_metric_result(metric, target, importance, collected_at, metric_item=item,
+                                   metric_value=found["after"] or found["before"],
+                                   metric_unit=change_alert.CHANGE_UNIT, status=status, message=message))
+    return rows
 
 
 def _target_failed(target: MetricTarget, exc: Exception, tally: _Tally) -> None:

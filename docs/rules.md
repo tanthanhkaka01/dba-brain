@@ -28,7 +28,7 @@ be on that file's list of rules still owed one - which may only shrink.
 
 ## The components
 
-**Fifteen components, of two kinds.** Every rule that says *app* or *shared layer* means exactly
+**Sixteen components, of two kinds.** Every rule that says *app* or *shared layer* means exactly
 these, and the guards hold the same lists (`APPS` and `SHARED_LAYERS` in
 `tests/test_import_boundaries.py`).
 
@@ -50,6 +50,7 @@ these, and the guards hold the same lists (`APPS` and `SHARED_LAYERS` in
 | **app** | 10 | SRE | `sre` | |
 | **app** | 11 | Control | `control` | The deploy tool - an app like the others, no exemption (R03) |
 | **app** | 12 | Web host | `webhost` | |
+| **app** | 16 | MCP server | `mcp` | `common.cli` commands and the store as tools for Claude; reaches `common` through `transport` like every app |
 | **shared layer** | 01 | Runtime store | `db` | The store and its row shapes (R08); `db.cli` is started through `transport` |
 | **shared layer** | 02 | Logging engine | `logging_ops` | Imported; no CLI |
 | **shared layer** | 13 | Common - operations | `common` | Run as a CLI, never imported by an app (R03); imports only `lib` (R04) |
@@ -391,6 +392,7 @@ Inside `transport`, one function starts a process: `transport/process.py::execut
 
 - **Five executors measured 2026-09-28, one left the same day:** `hostcmd` (its own paramiko client, a stdin-fed `bash -s`, a local `subprocess`, its own Windows file upload), `sqlcmd_run` (a local `Popen`, its own SSH channel, a local PowerShell `Invoke-Command`), `backup_copy` / `cli_backup_copy` (paramiko clients of their own), `ssh_relay` (a session's client reached through). `hostcmd` now names the host and steps into its runtime (`parse_host`, `wrap`); `sqlcmd_run` builds the `sqlcmd`; the copy and the relay pipe their bytes through `open_stream`.
 - **What the one executor learned from them:** a script travels as a **file** - private to the login, run with stdin closed, removed - never the shell's stdin, where a `docker compose exec` in it swallowed the rest of the script (1.65); output can be handed on line by line (`run(on_output=...)`, a restore's `NN percent processed`); a command cut off at its deadline is `RemoteCommandTimeoutError`, not a connect that never happened; WinRM with no login runs as the node's own identity.
+- **The file copy had grown an executor of its own again (found 2026-11-11, 1.338):** `common/filecopy.py` opened its `cat` channels, ran its `stat` and raised the re-key limit through paramiko itself (seven calls, from 0.37.0), and `common/repoencrypt.py` opened an SFTP client the same way - the guard was not among the files run when that code landed. The calls are `remote_exec`'s now (`stream_on`, `channel_on`, `sftp_on`, `raise_rekey_limits`, each given the session's own connection); held by `tests/test_a_copy_moves_its_bytes_through_the_executor.py`.
 - A **local tool** is not a host reach and not this rule's: `smbclient` / `cmdkey` (`common/smb.py`), a metric's own script (`metric_batch`), the 8i bridge (`oracle_bridge`).
 
 ### R45

@@ -286,6 +286,16 @@ class DockerDbSpec:
     #: The compose network's subnet. Empty takes :func:`lab_network_subnet`; an explicit value is
     #: how an operator settles a collision, or keeps a lab off a range their site already routes.
     network_subnet: str = ""
+    #: Where the data lives on the HOST (0.37.0, PostgreSQL single only): bound at
+    #: /var/lib/postgresql instead of a Docker named volume - for a lab whose data must sit on a
+    #: given disk, as the repository VM's restore drill on its NAS share (the operator 2026-11-10:
+    #: *put PostgreSQL on /mnt/nas; nothing hard-coded, a config field says it*). Empty: the named
+    #: volume, as every lab before it.
+    data_host_dir: str = ""
+    #: The ``uid:gid`` the container runs as (0.37.0). A host folder whose files can only belong to
+    #: one uid - an NFS share that maps every user to 1024 - needs the database to run as that uid,
+    #: or PostgreSQL refuses a data directory it does not own. Empty: the image's own user.
+    run_as: str = ""
 
     @property
     def meta(self) -> EngineMeta:
@@ -345,6 +355,16 @@ class DockerDbSpec:
             )
         if not str(self.version).strip():
             raise ValueError("--version is required (e.g. 16, 8.4, 2022-latest).")
+        if self.data_host_dir or self.run_as:
+            if self.engine != "postgres" or self.is_ha:
+                raise ValueError("--data-host-dir and --run-as are built for a PostgreSQL single instance only.")
+        if self.data_host_dir:
+            folder = str(self.data_host_dir)
+            if not folder.startswith("/") or any(part in (".", "..") for part in folder.split("/")) \
+                    or folder.rstrip("/") in ("", "/"):
+                raise ValueError(f"--data-host-dir must be an absolute folder on the host, not /; got {folder!r}.")
+        if self.run_as and not re.match(r"^[0-9]+:[0-9]+$", str(self.run_as)):
+            raise ValueError(f"--run-as must be uid:gid in numbers (e.g. 1024:100); got {self.run_as!r}.")
         # Rule 4: --replicas is only meaningful for ha-lab.
         if not self.is_ha and replicas_explicit:
             raise ValueError("--replicas is only valid with --mode ha-lab.")

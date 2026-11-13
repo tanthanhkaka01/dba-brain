@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "log_calls": true,
+  "max_chars": 60000,
+  "timeout_seconds": 600,
+  "store_query_max_rows": 500,
+  "store_query_timeout_seconds": 60,
+  "store_blocked_tables": [
+    "web_users",
+    "web_sessions",
+    "web_login_attempts"
+  ],
+  "disabled_tools": []
+}

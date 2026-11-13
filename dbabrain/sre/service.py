@@ -34,6 +34,11 @@ SSH_DID_NOT_RUN = 255
 RemoteOutcome = subprocess.CompletedProcess[str] | dict
 
 
+
+#: How an SSH hop run ON the bastion treats a node's host key: pinned on first use in the bastion's
+#: ~/.ssh/known_hosts, refused when it changes (OpenSSH 7.6+). Shared with the lab AG helper.
+HOP_HOST_KEY_OPTIONS = "-o StrictHostKeyChecking=accept-new"
+
 def run_ssh_command(
     sre_config: SreOperationalConfig,
     *,
@@ -382,8 +387,11 @@ def _remote_request(sre_config: SreOperationalConfig, remote_command: str, *,
     # Route through bastion when the target is a non-bastion node.
     # Wrap the remote_command in a second ssh hop executed ON bastion so that
     # this machine only needs its key on bastion; bastion's key reaches all other nodes.
-    hop = ("ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
-           " -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+    # The hop's host key (1.223, the operator 2026-11-11: *do it*): pinned in the bastion's own
+    # known_hosts on first use and held to it after - a node whose key changes is refused, never
+    # taken. It was StrictHostKeyChecking=no with /dev/null as the known hosts: any key, every time.
+    # A lab node rebuilt on the same address gets a new key: `ssh-keygen -R <ip>` on the bastion.
+    hop = (f"ssh -o BatchMode=yes {HOP_HOST_KEY_OPTIONS} -o ConnectTimeout=10"
            f" {shlex.quote(user)}@{shlex.quote(target_host)}")
     if target_host != bastion:
         if script:

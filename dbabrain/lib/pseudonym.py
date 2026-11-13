@@ -120,14 +120,19 @@ def server_id(term: str, *, address_of=None) -> str:
     return "-".join(rebuilt)
 
 
-def database(term: str) -> str:
-    """A database name, keeping an environment suffix when the original carried one."""
-    subject = _pick(_SUBJECTS, term, "db")
+def database(term: str, *, attempt: int = 0) -> str:
+    """A database name, keeping an environment suffix when the original carried one.
+
+    ``attempt`` is the next pick for a term whose first one another database already holds - see
+    :meth:`Mapping.add`. Past the pool, the subject carries the attempt as a number."""
+    subject = _pick(_SUBJECTS, term, "db" if not attempt else f"db{attempt}").upper()
+    if attempt >= len(_SUBJECTS):
+        subject = f"{subject}{attempt - len(_SUBJECTS) + 2}"
     for suffix in _ENV_SUFFIXES:
         if term.casefold().endswith(suffix.casefold()):
             separator = "_" if "_" in term else ""
-            return f"{subject.upper()}{separator}{suffix}"
-    return subject.upper()
+            return f"{subject}{separator}{suffix}"
+    return subject
 
 
 def schema(term: str) -> str:
@@ -272,7 +277,12 @@ class Mapping:
         #: Configured values the caller judged ordinary words rather than
         #: identifiers, recorded so the decision is visible in the result.
         self.skipped_as_ordinary: list[str] = []
-        for term, kind in (terms or {}).items():
+        #: Each database fake (casefolded) -> the real database (casefolded) that holds it. See
+        #: :meth:`add`: no fake database name is given to two databases (1.280).
+        self._database_fakes: dict[str, str] = {}
+        # Sorted, so a collision between two databases resolves the same way on every run over the
+        # same estate, whatever order the caller discovered them in.
+        for term, kind in sorted((terms or {}).items(), key=lambda pair: (pair[0].casefold(), pair[0])):
             self.add(term, kind)
 
     def add(self, term: str, kind: str, *, loose: bool = False) -> str:
@@ -297,9 +307,29 @@ class Mapping:
         if text not in self._map:
             if str(kind or "").strip().lower() not in BY_KIND:
                 self.unmapped_kinds.add(str(kind or "?"))
-            self._map[text] = replacement(text, kind)
+            self._map[text] = (self._unique_database(text)
+                               if BY_KIND.get(str(kind or "").strip().lower()) is database
+                               else replacement(text, kind))
             self._compiled = None
         return self._map[text]
+
+    def _unique_database(self, text: str) -> str:
+        """A database's fake that no other database in this mapping holds (1.280).
+
+        Found on 0.36.0's showcase: two databases of one server, 16 and 10 characters, hashed to
+        the one fake `PAYROLL`, and the coverage table read as one database backed up twice. The
+        operator, 2026-11-09: one fake name on two *different* servers is acceptable, never within
+        one server. A database name reaches the scrub as text, with no server beside it, so it is
+        kept unique across the whole mapping - which is that, and more. The same database spelt in
+        another case is the same database and keeps one fake."""
+        real = text.casefold()
+        attempt = 0
+        while True:
+            fake = database(text, attempt=attempt)
+            holder = self._database_fakes.setdefault(fake.casefold(), real)
+            if holder == real:
+                return fake
+            attempt += 1
 
     def add_pair(self, term: str, fake: str, *, bounded: bool = False) -> str:
         """Record a replacement the caller has already worked out.

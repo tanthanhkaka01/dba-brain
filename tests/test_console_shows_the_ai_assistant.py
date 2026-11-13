@@ -11,11 +11,15 @@
 * a refused question is listed, with why: it is the row an operator most often comes looking for;
 * one request opens in full - the messages as the model took them, every call, every tool run;
 * a console started without the assistant's store says so instead of failing - not configured is a
-  state.
+  state;
+* the page and its link carry the assistant's name (0.38.0, 1.326) - the ``assistant_name`` the node's
+  ``ai_assist.json`` states, the field the Telegram job answers under, so the console and the chat
+  call it the same thing; a node that states none is shown what the page is, without a name.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 from datetime import datetime, timezone
@@ -30,6 +34,7 @@ from dbabrain.db import config_sync
 from dbabrain.db.ai_assist_store import AiAssistStore
 from dbabrain.db.config_store import ConfigStore
 from dbabrain.db.web_auth_store import WebAuthStore
+from dbabrain.lib import ai_assist as ai_assist_rules
 from dbabrain.lib import web_auth
 from dbabrain.webhost.app import Request, WebApp, WebSettings
 
@@ -186,3 +191,63 @@ def test_without_the_store_the_page_says_so(tmp_path, _template):
     page = _get(console, "/dbabrain/ai", _sign_in(console, "admin"))
     assert page.status == 200
     assert "not open here" in page.body.decode("utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# The name (0.38.0, 1.326)
+# --------------------------------------------------------------------------- #
+def _name_the_assistant(tmp_path: Path, name: str) -> None:
+    document = {**ai_assist_rules.shipped_document(), "assistant_name": name}
+    (tmp_path / "data" / "ai_assist.json").write_text(json.dumps(document), encoding="utf-8")
+
+
+def test_the_page_and_its_link_carry_the_name_the_node_states(tmp_path, _template):
+    console = _console(tmp_path, _template)
+    cookie = _sign_in(console, "admin")
+    _name_the_assistant(tmp_path, "Ada")
+    page = _get(console, "/dbabrain/ai", cookie).body.decode("utf-8")
+    assert "<title>Ada · AI assistant — dbabrain</title>" in page
+    assert "<h2>Ada · AI assistant</h2>" in page
+    assert "What Ada, the Telegram AI assistant, was asked" in page
+    link = '<a class="item active" href="/dbabrain/ai">'
+    assert link in page and '<span class="name">Ada · AI assistant</span>' in page[page.index(link):]
+    # Every page's sidebar names it, and one request's page leads back to it by name.
+    assert '<span class="name">Ada · AI assistant</span>' in _get(console, "/dbabrain/", cookie).body.decode("utf-8")
+    request = _get(console, f"/dbabrain/ai/{_template[2]}", cookie).body.decode("utf-8")
+    assert "&larr; Ada · AI assistant</a>" in request
+
+
+def test_renaming_the_assistant_is_an_edit_of_the_field_and_nothing_else(tmp_path, _template):
+    """No restart and no code: the console reads the field on each request."""
+    console = _console(tmp_path, _template)
+    cookie = _sign_in(console, "admin")
+    _name_the_assistant(tmp_path, "Ada")
+    assert "<h2>Ada · AI assistant</h2>" in _get(console, "/dbabrain/ai", cookie).body.decode("utf-8")
+    _name_the_assistant(tmp_path, "Bao <the second>")
+    page = _get(console, "/dbabrain/ai", cookie).body.decode("utf-8")
+    assert "<h2>Bao &lt;the second&gt; · AI assistant</h2>" in page and "Ada" not in page
+
+
+def test_a_node_that_states_no_name_is_shown_what_the_page_is(tmp_path, _template):
+    """No `ai_assist.json`, an unreadable one, or one without the field: the assistant is not
+    configured here. The page says what it is - there is no name in code to say instead."""
+    console = _console(tmp_path, _template)
+    cookie = _sign_in(console, "admin")
+    shipped = ai_assist_rules.shipped_document()["assistant_name"]
+    for write in (lambda: None,
+                  lambda: (tmp_path / "data" / "ai_assist.json").write_text("{not json", encoding="utf-8"),
+                  lambda: (tmp_path / "data" / "ai_assist.json").write_text('{"enabled": true}', encoding="utf-8"),
+                  lambda: _name_the_assistant(tmp_path, "   ")):
+        write()
+        page = _get(console, "/dbabrain/ai", cookie).body.decode("utf-8")
+        assert "<h2>AI assistant</h2>" in page and "<title>AI assistant — dbabrain</title>" in page
+        assert "What the Telegram AI assistant was asked" in page
+        assert shipped not in page, "the shipped name is a value in a file, never a default on a page"
+
+
+def test_the_name_is_read_for_the_one_who_is_shown_the_page(tmp_path, _template):
+    console = _console(tmp_path, _template)
+    _name_the_assistant(tmp_path, "Ada")
+    viewer = _get(console, "/dbabrain/", _sign_in(console, "viewer")).body.decode("utf-8")
+    assert "Ada" not in viewer and 'href="/dbabrain/ai"' not in viewer
+    assert console.assistant_name() == "Ada"

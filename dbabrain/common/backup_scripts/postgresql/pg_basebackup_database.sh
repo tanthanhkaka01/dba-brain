@@ -19,6 +19,14 @@
 #   $BACKUP_DIR/base/<UTC timestamp>_FULL      full baseline
 #   $BACKUP_DIR/base/<UTC timestamp>_INCR      incremental, chained to the previous backup
 #
+# Each directory holds the backup in TAR format, compressed ON THE SERVER (0.37.0, the operator
+# 2026-11-10: *switch to tar, compressed*): base.tar.zst, pg_wal.tar (the WAL streamed during the
+# backup), one <oid>.tar.zst per extra tablespace, and backup_manifest beside them. It used to be the
+# plain format - the whole data directory, byte for byte, uncompressed: the store's 65 GB cluster
+# was 5,904 files and 65 GB a night, where its data compresses five to thirteen times. The plain
+# format cannot be compressed at all. A server older than 15 has no server-side compression and
+# still gets the plain format (said in the output); a restore reads both.
+#
 # Retention deletes whole *chains*, never single backups: an incremental is worthless without the
 # full it descends from, so a chain is dropped only once its newest member is older than
 # $RETENTION_DAYS. Deleting by age alone would happily remove the full that the retained
@@ -171,6 +179,20 @@ run_db "mkdir -p '${base_dir}'" || die "could not create '${base_dir}' inside '$
 in_recovery="$(run_db "psql ${pg_conn} -tAc 'select pg_is_in_recovery()'" 2>/dev/null | tr -d '[:space:]')"
 [ "$in_recovery" = "f" ] || die "target is not a primary (pg_is_in_recovery=${in_recovery:-unknown})."
 
+# TAR, compressed on the server, from PostgreSQL 15 (server-side compression's first release); the
+# plain directory below it. Read from the server, not from this client: it is the server that
+# compresses.
+server_version_num="$(run_db "psql ${pg_conn} -tAc 'show server_version_num'" 2>/dev/null | tr -d '[:space:]')"
+case "$server_version_num" in ''|*[!0-9]*) server_version_num=0 ;; esac
+if [ "$server_version_num" -ge 150000 ]; then
+    bb_format="-Ft --compress=server-zstd"
+    format_name="tar, compressed on the server (zstd)"
+else
+    bb_format=""
+    format_name="plain (PostgreSQL ${server_version_num} has no server-side compression)"
+fi
+printf 'backup format: %s\n' "$format_name"
+
 # The newest existing backup is what an incremental chains onto.
 latest="$(run_db "ls -1d ${base_dir}/*_FULL ${base_dir}/*_INCR 2>/dev/null | sort | tail -1" | tr -d '\r')"
 
@@ -248,11 +270,13 @@ take_backup() {
     # -X stream: ship the WAL generated during the copy inside the backup, so each backup is
     # restorable on its own without reaching into the WAL archive.
     # -c fast: checkpoint immediately instead of waiting for the next scheduled one.
+    # An incremental chains onto its parent's backup_manifest, which sits beside the tars as it sat
+    # in the plain directory - so a tar incremental chains onto a plain parent as well.
     if [ "$level" = "FULL" ]; then
-        bb_args="-D '${target}' -X stream -c fast --manifest-checksums=CRC32C"
+        bb_args="-D '${target}' ${bb_format} -X stream -c fast --manifest-checksums=CRC32C"
     else
         printf 'incremental_parent=%s\n' "$latest"
-        bb_args="-D '${target}' -X stream -c fast --manifest-checksums=CRC32C --incremental='${latest}/backup_manifest'"
+        bb_args="-D '${target}' ${bb_format} -X stream -c fast --manifest-checksums=CRC32C --incremental='${latest}/backup_manifest'"
     fi
     printf 'backup_level=%s where=%s target=%s retention_days=%s\n' \
         "$level" "$where" "$target" "$retention_days"
@@ -315,21 +339,46 @@ HOSTPATHS
 }
 
 # --- The receipt (0.34.0): one FILE line for this backup ---------------------------------------
-# A plain-format base backup is a whole data directory - thousands of files - and its
-# backup_manifest already carries a checksum for every one of them. So the catalog records the
-# backup as one row: its directory, the sha256 of its manifest, and pg_verifybackup's verdict,
-# which checks every file (and the WAL streamed into it) against that manifest.
+# A base backup is a directory - a few tars (or, in the plain format, the whole data directory) -
+# and its backup_manifest carries a checksum of every data file. So the catalog records the backup
+# as one row: its directory, the sha256 of its manifest, and pg_verifybackup's verdict, which
+# checks every file against that manifest.
 taken="${target##*_}"                       # FULL or INCR - the fallback above may have changed it
 case "$taken" in FULL) file_type=FULL_BASE ;; *) file_type=INCR_BASE ;; esac
 verify=not_run
 verify_note=""
-if run_db "command -v pg_verifybackup >/dev/null 2>&1"; then
-    vb_out="$(run_db "pg_verifybackup '${target}' 2>&1")"
-    vb_rc=$?
+is_tar=no
+run_db "ls '${target}'/base.tar* >/dev/null 2>&1" && is_tar=yes
+# Found where it is, not only on PATH: the Debian/PGDG packages put a /usr/bin wrapper in front of
+# pg_basebackup but none in front of pg_verifybackup, and a login shell (`bash -lc`) resets PATH -
+# so on the store's container (2026-11-10) it was never on PATH, and every backup since the
+# receipt was added had read "pg_verifybackup is not installed" while it sat in
+# /usr/lib/postgresql/18/bin. The server's own major first, then any.
+server_major=$(( server_version_num / 10000 ))
+vb_bin="$(run_db "command -v pg_verifybackup || ls -1 /usr/lib/postgresql/${server_major}/bin/pg_verifybackup /usr/pgsql-${server_major}/bin/pg_verifybackup 2>/dev/null | head -1 || true" | head -1 | tr -d '\r')"
+[ -n "$vb_bin" ] || vb_bin="$(run_db "ls -1 /usr/lib/postgresql/*/bin/pg_verifybackup /usr/pgsql-*/bin/pg_verifybackup 2>/dev/null | sort -V | tail -1" | tr -d '\r')"
+vb_major=""
+[ -n "$vb_bin" ] && vb_major="$(run_db "'${vb_bin}' --version 2>/dev/null" | grep -o '[0-9][0-9]*' | head -1)"
+if [ -z "$vb_bin" ]; then
+    verify_note="pg_verifybackup is not installed where the cluster runs"
+elif [ "$is_tar" = "yes" ] && [ "${vb_major:-0}" -lt 18 ]; then
+    # pg_verifybackup reads a tar backup from PostgreSQL 18 on; older ones only a plain directory.
+    verify_note="tar backup: pg_verifybackup ${vb_major:-?} reads tar only from PostgreSQL 18 - not verified here"
+else
+    if [ "$is_tar" = "yes" ]; then
+        # The WAL is inside pg_wal.tar, which pg_waldump cannot read in place: every data file in the
+        # tars is checked against the manifest, the WAL is not parsed (-n) - said, not hidden.
+        vb_out="$(run_db "'${vb_bin}' -n '${target}' 2>&1")"
+        vb_rc=$?
+        verify_note="tar backup: every file checked against the manifest; the WAL in pg_wal.tar not parsed"
+    else
+        vb_out="$(run_db "'${vb_bin}' '${target}' 2>&1")"
+        vb_rc=$?
+    fi
     # The WAL check runs pg_waldump. Where it is missing, every file is still checked against the
     # manifest (-n skips only the WAL) - a missing tool must not read as a broken backup.
-    if [ "$vb_rc" -ne 0 ] && printf '%s' "$vb_out" | grep -q 'pg_waldump'; then
-        vb_out="$(run_db "pg_verifybackup -n '${target}' 2>&1")"
+    if [ "$is_tar" = "no" ] && [ "$vb_rc" -ne 0 ] && printf '%s' "$vb_out" | grep -q 'pg_waldump'; then
+        vb_out="$(run_db "'${vb_bin}' -n '${target}' 2>&1")"
         vb_rc=$?
         verify_note="files checked against the manifest; WAL not parsed (no pg_waldump)"
     fi
@@ -344,13 +393,12 @@ if run_db "command -v pg_verifybackup >/dev/null 2>&1"; then
         verify_note="$(printf '%s' "$vb_out" | tr '\t\r\n' '   ' | cut -c1-300)"
         printf 'ERROR pg_verifybackup failed for %s: %s\n' "$target" "$vb_out" >&2
     fi
-else
-    verify_note="pg_verifybackup is not installed where the cluster runs"
 fi
 manifest_sha="$(run_db "sha256sum '${target}/backup_manifest'" 2>/dev/null | cut -d' ' -f1 | tr -d '[:space:]')"
 [ "${#manifest_sha}" -eq 64 ] || { printf 'warning: could not hash %s/backup_manifest\n' "$target" >&2; manifest_sha=""; }
 target_bytes="$(run_db "du -sb '${target}' 2>/dev/null | cut -f1" | tr -d '[:space:]')"
-# pg_basebackup has no encryption of its own: the backup is written plain.
+# pg_basebackup has no encryption of its own: the backup is written unencrypted - the repository
+# encrypts it (offload_encrypt).
 printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=no\tstart=%s\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
     "cluster" "$file_type" "${target_bytes:-}" "$manifest_sha" "$verify" "${started:-}" "$verify_note" \
     "$(host_path_of "$target")" "$container" "$target"

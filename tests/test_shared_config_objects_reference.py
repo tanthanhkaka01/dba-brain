@@ -82,7 +82,10 @@ def test_the_eighteen_shared_objects_are_described_and_nothing_else_is(reference
         # 0.25.0: a restore's space_check, which a restore entry carried and nothing described.
         "restore_space_check",
         "docker_db_connection", "store_config", "store_sqlite",
-        "store_postgresql", "telegram_settings", "telegram_bot", "backup_policy",
+        "store_postgresql",
+        # 0.37.0: the certificate vault's sealed files - for dbabrain and an offline recovery key.
+        "store_certificate_vault",
+        "telegram_settings", "telegram_bot", "backup_policy",
         "backup_policy_override", "backup_type_rule", "capacity_defaults", "capacity_override",
         "restore_drill_defaults", "restore_drill_override", "maintenance_settings", "emergency_level",
         "emergency_operation", "importance_scale", "importance_override", "network_range",
@@ -94,7 +97,9 @@ def test_the_eighteen_shared_objects_are_described_and_nothing_else_is(reference
         # 0.23.0: the reference describes itself - an entry, a field, a site, a constraint.
         "reference_entry", "reference_field", "reference_site", "reference_constraint",
         # 0.34.0: the AI assistant in Telegram - its settings, a model's price, a user switched on.
-        "ai_assist_settings", "ai_assist_price", "ai_assist_user"]
+        "ai_assist_settings", "ai_assist_price", "ai_assist_user",
+        # 0.38.0: the MCP server for Claude - its terms.
+        "mcp_tools_settings"]
 
 
 def test_every_entry_states_its_shape_before_a_reader_has_to_count(reference):
@@ -249,7 +254,8 @@ def test_every_field_carries_a_constraint_a_program_can_evaluate(reference):
                 # the operator's own - a backup job's `env`, a restore's `target` - so only the
                 # shape can be checked. Refused is an object constraint that says none of the
                 # three, because nothing can act on it.
-                if not (constraint.get("checked_by") or constraint.get("free_form")):
+                if not (constraint.get("checked_by") or constraint.get("free_form")
+                        or constraint.get("object_checked_by")):
                     assert constraint.get("object") in {i["object"] for i in reference}, where
 
 

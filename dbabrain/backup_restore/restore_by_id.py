@@ -27,6 +27,7 @@ that looks symmetrical:
 from __future__ import annotations
 
 from dbabrain.lib import errors
+from dbabrain.lib import consistency_check
 import posixpath
 import sys
 import time
@@ -34,6 +35,9 @@ import time
 import subprocess
 
 import json
+import hashlib
+import tempfile
+from pathlib import Path
 
 from typing import Any
 
@@ -289,21 +293,14 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
         if job.env_secrets.get("BACKUP_ENCRYPTION_PASSWORD") else ""
     if cert_password:
         name = job.env.get("BACKUP_CERT_NAME", sqlserver_certificate.DEFAULT_NAME)
-        key_step = {"op": "restore-key", "request": {
-            "certificate_name": name,
-            "cer_path": f"{directory.rstrip('/')}/_cert/{name}.cer",
-            "pvk_path": f"{directory.rstrip('/')}/_cert/{name}.pvk",
-            "password": cert_password, "target": target}}
         # Imported NOW, before the listing below: RESTORE HEADERONLY cannot read an encrypted
         # backup on an instance without its certificate (Msg 33111), so a key step queued behind
         # the listing never ran on a fresh target - the listing failed first. The import finds
         # the certificate by thumbprint and never drops one, so doing it on every run is safe - and
         # it no longer replaces a target's own certificate of the same name. A dry run changes
         # nothing, so there it stays a planned step - and its listing may fail for this reason.
-        if not dry_run:
-            _execute("restore-key", key_step["request"])
-            key_step["done"] = True
-        steps.append(key_step)
+        steps.append(_key_from_vault(job, name=name, password=cert_password, target=target, host=host,
+                                     directory=directory, dry_run=dry_run))
 
     base = {"db_type": "sqlserver", "path": directory, "target": target}
     databases = [d for d in (job.env.get("MSSQL_DATABASES", "") or "").split(",") if d.strip()]
@@ -356,13 +353,97 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
     # The consistency check too (1.251) unless the entry says `checkdb: false`.
     steps.append({"op": "verify-restore", "request": {
         "db_type": "sqlserver", "database_names": databases, "target": target,
-        "consistency": getattr(job, "checkdb", True)}})
+        "consistency": getattr(job, "checkdb", True), **consistency_check.verify_fields(job)}})
     if _UNREADABLE:
         steps.append({"op": "warning", "warning": (
             f"{len(_UNREADABLE)} file(s) named like backups could not be read as backups and were "
             f"passed over - the restore used the newest chain it could read: "
             f"{', '.join(sorted(_UNREADABLE)[:5])}")})
     return steps
+
+
+#: The folder the vault's pair is placed in on the target for the import, and removed from right
+#: after - one file per command, each held to the pair's own facts.
+KEY_STAGE = "__dbabrain_cert"
+
+
+def _vault_pair(server_id: str, name: str):
+    """``(cer, pvk, row)``, the newest proven pair dbabrain's vault holds, or ``None``."""
+    from dbabrain.backup_restore.certificate_take import vault_pair
+    from dbabrain.lib.config import load_config
+    from dbabrain.lib.secret_text import resolve_key
+
+    passphrase = resolve_key()
+    if not passphrase:
+        return None
+    return vault_pair(load_config(), server_id=server_id, certificate_name=name, passphrase=passphrase)
+
+
+def _key_from_vault(job: Any, *, name: str, password: str, target: dict[str, Any], host: dict[str, Any],
+                    directory: str, dry_run: bool) -> dict[str, Any]:
+    """The source's certificate, from dbabrain's vault, imported on the target (0.37.0).
+
+    Never from beside the backups: the operator, 2026-11-10 - *the certificate and key are kept in
+    dbabrain and deleted on the server_id; a copy carries the backups, never _cert*. The pair is
+    placed on the target only for the import (``push-file``, proven on arrival), and removed right
+    after by ``delete-verified-file`` - one file per command, held to the pair's own bytes and
+    sha256 - then the empty folder. A pair that cannot be removed fails the restore by name.
+    """
+    stage = f"{directory.rstrip('/')}/{KEY_STAGE}"
+    request = {"certificate_name": name, "cer_path": f"{stage}/{name}.cer", "pvk_path": f"{stage}/{name}.pvk",
+               "password": password, "target": target}
+    step: dict[str, Any] = {"op": "restore-key", "request": request, "from": "dbabrain's certificate vault"}
+    if dry_run:
+        return step
+    source_id = str(getattr(job, "server_id", "") or "").strip()
+    pair = _vault_pair(source_id, name)
+    if pair is None:
+        raise RestoreByIdError(
+            f"{job.restore_id}: dbabrain's certificate vault holds no proven {name} for {source_id} - "
+            "take it first (backup_restore take-certificate --backup-id ID --apply). A certificate is "
+            "never read from beside the backups.")
+    cer, pvk, row = pair
+    placed: list[tuple[str, str, int, str]] = []
+    failed = False
+    try:
+        with tempfile.TemporaryDirectory(prefix="dbabrain_key_") as local:
+            for suffix, data in (("cer", cer), ("pvk", pvk)):
+                file_name = f"{name}.{suffix}"
+                local_path = Path(local) / file_name
+                local_path.write_bytes(data)
+                remote = f"{stage}/{file_name}"
+                _execute("push-file", {"local_path": str(local_path), "remote_path": remote, "host": host})
+                placed.append((remote, file_name, len(data), hashlib.sha256(data).hexdigest()))
+        _execute("restore-key", request)
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        left = _remove_staged_key(host, stage=stage, placed=placed)
+        if left and not failed:
+            raise RestoreByIdError(f"{job.restore_id}: the certificate imported, but its pair could not be "
+                                   f"removed from the target: {'; '.join(left)}")
+    step["done"] = True
+    step["vault_row"] = row["certificate_id"]
+    return step
+
+
+def _remove_staged_key(host: dict[str, Any], *, stage: str, placed: list[tuple[str, str, int, str]]) -> list[str]:
+    """What could not be removed - each file by its own command and facts, then the folder."""
+    left = []
+    root = stage.rsplit("/", 1)[0]
+    for remote, file_name, size, sha in placed:
+        try:
+            _execute("delete-verified-file", {"host": host, "path": remote, "file_name": file_name,
+                                              "size_bytes": size, "sha256": sha, "must_be_under": stage})
+        except RestoreByIdError as exc:
+            left.append(f"{remote}: {exc}")
+    if placed and not left:
+        try:
+            _execute("delete-empty-folder", {"host": host, "path": stage, "must_be_under": root})
+        except RestoreByIdError as exc:
+            left.append(f"{stage}: {exc}")
+    return left
 
 
 def _locked() -> bool:
@@ -394,7 +475,8 @@ def _plan_oracle(job: Any, secrets: dict[str, str], *, point_in_time: str,
             # wrong instance under the right name is worse than no check.
             {"op": "verify-restore", "request": {"db_type": "oracle", "host": host,
                                                  "oracle_sid": request["oracle_sid"],
-                                                 "consistency": getattr(job, "checkdb", True)}}]
+                                                 "consistency": getattr(job, "checkdb", True),
+                                                 **consistency_check.verify_fields(job)}}]
 
 
 def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
@@ -457,6 +539,7 @@ def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
         # inside a container and wrong on a host running two.
         {"op": "verify-restore", "request": {
             "db_type": "postgresql", "host": host, "consistency": getattr(job, "checkdb", True),
+            **consistency_check.verify_fields(job),
             **({"port": job.env["PGPORT"]} if job.env.get("PGPORT") else {})}},
     ]
 
@@ -468,7 +551,9 @@ _PLANNERS = {"sqlserver": _plan_sqlserver, "oracle": _plan_oracle,
 #: The step names are the `common` CLI command names. That was already true when these ran
 #: in-process; since 2026-08-15 it is also how they are invoked.
 _STEP_COMMANDS = frozenset({"restore-key", "restore-full", "restore-diff", "restore-log",
-                            "verify-restore"})
+                            "verify-restore",
+                            # 0.37.0: the vault's certificate placed for the import, then removed.
+                            "push-file", "delete-verified-file", "delete-empty-folder"})
 
 
 def _execute(op: str, request: dict[str, Any]) -> dict[str, Any]:
@@ -711,15 +796,15 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
                   + (f", {transferred['removed_absent_at_source']} removed (gone at the source)"
                      if transferred.get("removed_absent_at_source") else "")
                   + ("" if transferred.get("include") else " (the whole directory)")
-                  # The slow way is said where a person reads it, not only on stderr (G4).
-                  + (" - file by file over SFTP, the tar stream could not be used"
-                     if transferred.get("copy_fell_back") else "") + ".",
+                  # Left at the source, never staged unproven - said where a person reads it.
+                  + (f" - {len(transferred['written_after_the_plan'])} file(s) written at the source after "
+                     "the plan were left there" if transferred.get("written_after_the_plan") else "") + ".",
                   {"copied": transferred["copied"], "skipped": transferred["skipped"],
                    "bytes_copied": transferred["bytes_copied"],
                    "removed_absent_at_source": transferred.get("removed_absent_at_source", 0),
-                   **({"copy_mode": transferred["copy_mode"],
-                       "copy_fell_back": bool(transferred.get("copy_fell_back"))}
-                      if transferred.get("copy_mode") else {})})
+                   **({"written_after_the_plan": list(transferred["written_after_the_plan"])}
+                      if transferred.get("written_after_the_plan") else {}),
+                   **({"copy_mode": transferred["copy_mode"]} if transferred.get("copy_mode") else {})})
 
     from dbabrain.backup_restore.copy_gate import record_run
 
@@ -823,12 +908,27 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
                  f"Restore {restore_id}: removing staged backups older than the entry's "
                  f"retention ({int(job.cleanup_retention or 0)} s) from {job.target_backup_dir}.")
         pruned = prune_staged_backups(job, target=target_host, data_dir=data_dir,
-                                      key=key, key_base64=key_base64)
+                                      key=key, key_base64=key_base64, catalog=catalog)
+        # Said in the run's own words (0.38.0): a staged file the catalog does not know is kept and
+        # named, and one that should have gone and did not is a warning on a restore that worked -
+        # the cleanup never turns a verified restore into a failed one.
+        kept = pruned.get("kept_unknown") or []
+        if kept:
+            names = ", ".join(str(one.get("path") or "").rsplit("/", 1)[-1] for one in kept[:3])
+            warnings.append(
+                f"{len(kept)} staged file(s) past retention are not in the catalog and were kept "
+                f"({names}{', ...' if len(kept) > 3 else ''}) - clear one with "
+                "common.cli delete-file and \"force\": true")
+        if pruned.get("error"):
+            warnings.append(f"staging cleanup: {pruned['error']}")
         announce(on_phase, "DELETE_DONE",
                  f"Restore {restore_id}: {pruned.get('pruned', 0)} staged file(s) removed"
-                 + (f" ({pruned['skipped']})" if pruned.get("skipped") else "") + ".",
+                 + (f" ({pruned['skipped']})" if pruned.get("skipped") else "")
+                 + (f", {len(kept)} kept - not in the catalog" if kept else "")
+                 + (f"; {pruned['error']}" if pruned.get("error") else "") + ".",
                  {"pruned": pruned.get("pruned", 0),
-                  "retention_seconds": pruned.get("retention_seconds", 0)})
+                  "retention_seconds": pruned.get("retention_seconds", 0),
+                  "kept_unknown": len(kept), "error": pruned.get("error") or ""})
     return {"restore_id": restore_id, "db_type": engine, "steps": results,
             "transferred": transferred, "point_in_time": point_in_time or None,
             "warnings": warnings, "plan": plan, "verify": verify, "pruned": pruned}

@@ -193,3 +193,48 @@ def test_an_image_that_did_not_load_as_built_stops_the_run(worker, monkeypatch) 
     with pytest.raises(deploy_code.DeployCodeError, match="not the one built"):
         _deploy(apply=True)
     assert "write" not in [kind for kind, _ in client.calls], "nothing written after a bad load"
+
+
+# --------------------------------------------------------------------------- #
+# An image built elsewhere (2026-11-11: docker runs on a build host, not on this PC)
+# --------------------------------------------------------------------------- #
+ID = "sha256:" + "a" * 64
+
+
+def test_an_image_tar_built_elsewhere_is_sent_and_held_to_its_id_with_no_docker_here(worker, monkeypatch,
+                                                                                         tmp_path) -> None:
+    client, commands, built = worker
+    tar = tmp_path / "dbabrain_image_2.88.0.tar"
+    tar.write_bytes(b"image")
+    monkeypatch.setattr(deploy_code, "require_docker", lambda: pytest.fail("no Docker is needed here"))
+    monkeypatch.setattr(deploy_code, "_local_image_id", lambda tag: pytest.fail("no local image is read"))
+    monkeypatch.setattr(deploy_code, "ssh_capture", lambda _c, command: (
+        (0, COMPOSE, "") if command.startswith("cat ") else
+        (0, ID + "\n", "") if "image inspect" in command else (0, "0 running dbabrain:2.88.0\n", "")))
+
+    answer = _deploy(apply=True, image_tar=tar, image_id=ID)
+
+    assert answer["applied"] is True and answer["image_id"] == ID and built == []
+    assert ("put", "/opt/dbabrain/runtime/images/dbabrain_image_2.88.0.tar") in client.calls
+
+
+def test_an_image_tar_that_loads_as_another_image_stops_the_run(worker, tmp_path) -> None:
+    client, _commands, _built = worker
+    tar = tmp_path / "x.tar"
+    tar.write_bytes(b"image")
+    with pytest.raises(deploy_code.DeployCodeError, match="not the one built"):
+        _deploy(apply=True, image_tar=tar, image_id=ID)          # the fixture's worker loads sha256:abc
+    assert "write" not in [kind for kind, _ in client.calls]
+
+
+@pytest.mark.parametrize("tar, image_id, words", [
+    ("x.tar", "", "go together"), (None, ID, "go together"),
+    ("x.tar", "sha256:short", "full id"), ("missing.tar", ID, "not a file"),
+])
+def test_an_image_tar_without_its_id_or_a_tar_that_is_not_there_is_refused_first(worker, tmp_path, tar,
+                                                                                   image_id, words) -> None:
+    client, commands, _built = worker
+    (tmp_path / "x.tar").write_bytes(b"image")
+    with pytest.raises(deploy_code.DeployCodeError, match=words):
+        _deploy(apply=True, image_tar=(tmp_path / tar) if tar else None, image_id=image_id)
+    assert commands == [] and client.calls == [], "the worker is not reached"

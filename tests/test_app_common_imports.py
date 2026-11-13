@@ -47,7 +47,7 @@ DBABRAIN_ROOT = Path(__file__).resolve().parents[1] / "dbabrain"
 #: moved into it, the request reader into `lib.json_io`.
 APPS = frozenset({
     "jobs", "metrics", "sql_tasks", "reports", "telegram",
-    "backup_restore", "sla", "sre", "webhost", "control", "db",
+    "backup_restore", "sla", "sre", "webhost", "control", "db", "mcp",
 })
 
 #: `common` submodules an app may still import, exempt from the rule. Empty since 0.24.0:

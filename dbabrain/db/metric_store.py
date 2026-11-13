@@ -643,6 +643,42 @@ class MetricStore:
             ).fetchone()
         return str(row["collected_at"]) if row else None
 
+    def fetch_previous_read(self, *, target_id: str, metric_code: str, before: str) -> list[sqlite3.Row]:
+        """The rows of the newest read of one metric on one target made before ``before`` - the
+        baseline a change alert holds the new read to (``lib.change_alert``, 0.38.0).
+
+        A read that failed is never a baseline: its one row has no item and is not OK, and comparing
+        against it would report every item as new on the next good read. An **empty** good read
+        (itemless, OK - ``empty_result_is_ok``) is one: nothing was there. Change rows written by an
+        earlier comparison are events, not inventory, and are left out of both the choice and the rows.
+        """
+        self.initialize()
+        with self.connect() as conn:
+            newest = conn.execute(
+                """
+                SELECT collected_at
+                FROM metric_results
+                WHERE target_id = ? AND metric_code = ? AND collected_at < ?
+                  AND COALESCE(metric_unit, '') <> 'change'
+                  AND (metric_item IS NOT NULL OR upper(COALESCE(status, '')) IN ('OK', 'LOGGING'))
+                ORDER BY collected_at DESC, result_id DESC
+                LIMIT 1;
+                """,
+                (target_id, metric_code, before),
+            ).fetchone()
+            if not newest:
+                return []
+            return list(conn.execute(
+                """
+                SELECT collected_at, metric_item, metric_value, metric_unit, status, message
+                FROM metric_results
+                WHERE target_id = ? AND metric_code = ? AND collected_at = ?
+                  AND COALESCE(metric_unit, '') <> 'change'
+                ORDER BY result_id;
+                """,
+                (target_id, metric_code, newest["collected_at"]),
+            ))
+
     def latest_successful_result_time(self, *, target_id: str, metric_code: str) -> str | None:
         self.initialize()
         with self.connect() as conn:

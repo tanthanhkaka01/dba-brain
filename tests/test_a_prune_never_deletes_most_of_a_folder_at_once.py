@@ -34,17 +34,26 @@ def test_a_mass_delete_deletes_nothing_and_says_why(monkeypatch):
     result = prune._prune_one({"delete": True, "cleanup_retention": 86400, "mode": "age",
                                "host": {}, "path": "/b"}, secrets={})
     assert result["deleted"] is None and "15 of 20 files" in result["refused"]
-    assert calls == ["list-backup-files"], "delete-files is never called"
+    assert calls == ["list-backup-files"], "no delete is ever asked for"
 
 
 def test_the_operator_can_say_it_is_meant(monkeypatch):
-    calls = []
-    monkeypatch.setattr(prune.common_cli, "run",
-                        lambda command, request: calls.append(command) or {"files": [], "counts": {"deleted": 15}})
+    calls, asked = [], {}
+    monkeypatch.setattr(prune.common_cli, "run", lambda command, request: calls.append(command) or {"files": []})
+
+    def delete_files(**kwargs):
+        asked.update(kwargs)
+        return {"deleted": list(kwargs["paths"]), "already_gone": [], "would_delete": [], "not_deleted": [],
+                "kept": [], "forced": []}
+
+    monkeypatch.setattr(prune.verified_cleanup, "delete_files", delete_files)
     monkeypatch.setattr(R, "plan_retention", lambda *a, **k: _plan(15, 20))
     result = prune._prune_one({"delete": True, "allow_mass_delete": True, "cleanup_retention": 86400,
                                "mode": "age", "host": {}, "path": "/b"}, secrets={})
-    assert "refused" not in result and calls == ["list-backup-files", "delete-files"]
+    # The files then go one verified delete each (0.38.0), fenced to the entry's own directory.
+    assert "refused" not in result and calls == ["list-backup-files"]
+    assert len(asked["paths"]) == 15 and asked["must_be_under"] == "/b" and asked["force"] is False
+    assert len(result["deleted"]["deleted"]) == 15
 
 
 def test_a_report_only_run_is_never_refused(monkeypatch):

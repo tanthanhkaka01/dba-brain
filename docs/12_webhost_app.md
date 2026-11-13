@@ -412,6 +412,15 @@ admin page is the model (0.34.0, D-AI8):
 the tools read on the estate's servers. It is read-only - nothing here changes the assistant. A
 console started without the store it lives in says so instead of failing.
 
+**The page carries the assistant's name** (0.38.0, 1.326): its heading, its title, the sidebar link
+on every page and the way back from one request read *`<name>` · AI assistant*, where the name is
+`assistant_name` in this node's `data/ai_assist.json` - the field the Telegram job answers under
+(`docs/07_telegram_app.md`). `WebApp.assistant_name` reads the file on each request, for an admin
+only (nobody else is shown the link), and `pages.assistant_label` writes it - HTML-escaped, like
+every value on a page. Renaming the assistant is an edit of the field: no restart. A node with no
+`ai_assist.json`, an unreadable one or one that states no name has not configured its assistant: the
+page then says only *AI assistant*. No name is written in the console's code.
+
 ### Routes
 
 | Route | Method | Needs a session | What it does |

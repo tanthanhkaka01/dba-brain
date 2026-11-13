@@ -140,46 +140,32 @@ def _config(tmp_path: Path, **overrides) -> BackupRestoreConfig:
     return dataclasses.replace(config, **overrides)
 
 
-def test_the_pair_is_read_from_the_share_and_its_thumbprint_computed_here(tmp_path, monkeypatch):
+def test_the_pair_is_read_from_the_vault_and_its_thumbprint_computed_here(tmp_path, monkeypatch):
     monkeypatch.setenv("PASSPHRASE_REF", "passphrase")
-    monkeypatch.setattr(cert_module, "_pair_from_share", lambda config: (b"DER-CERT", b"PVK"))
+    monkeypatch.setattr(cert_module, "_pair_from_vault",
+                        lambda config, name: (b"DER-CERT", b"PVK", {"certificate_id": 1, "thumbprint": "t"}))
     certificate = cert_module.read_backup_certificate_pair(_config(tmp_path))
     assert certificate.thumbprint == hashlib.sha1(b"DER-CERT").hexdigest()
     assert base64.b64decode(certificate.private_key_base64) == b"PVK"
     assert certificate.private_key_password == "passphrase"
 
 
-def test_a_share_that_refuses_the_pair_says_how_to_read_it_instead(tmp_path, monkeypatch):
-    """A pair exported before 0.24.1 is readable by the SQL Server service account only."""
+def test_a_pair_the_vault_does_not_hold_is_refused_and_never_read_from_beside_the_backups(tmp_path, monkeypatch):
+    """0.37.0, the operator: the certificate and key are kept in dbabrain only - the share and the
+    source host are not read any more, so a pair not yet taken says how to take it."""
     monkeypatch.setenv("PASSPHRASE_REF", "passphrase")
-
-    def refused(config):
-        raise RuntimeError("NT_STATUS_ACCESS_DENIED")
-
-    monkeypatch.setattr(cert_module, "_pair_from_share", refused)
-    with pytest.raises(RuntimeError) as error:
+    monkeypatch.setattr(cert_module, "_pair_from_vault", lambda config, name: None)
+    assert not hasattr(cert_module, "_pair_from_share") and not hasattr(cert_module, "_pair_from_source_host")
+    with pytest.raises(Exception) as error:
         cert_module.read_backup_certificate_pair(_config(tmp_path))
-    assert "source.backup_certificate.source_dir" in str(error.value)
-    assert "NT_STATUS_ACCESS_DENIED" in str(error.value)
-
-
-def test_with_source_dir_the_pair_is_read_over_the_source_hosts_login(tmp_path, monkeypatch):
-    monkeypatch.setenv("PASSPHRASE_REF", "passphrase")
-
-    def refused(config):
-        raise RuntimeError("NT_STATUS_ACCESS_DENIED")
-
-    monkeypatch.setattr(cert_module, "_pair_from_share", refused)
-    monkeypatch.setattr(cert_module, "_pair_from_source_host", lambda config: (b"DER", b"KEY"))
-    config = _config(tmp_path, backup_certificate=BackupCertificateSource(
-        name="db_ops_backup_cert", password_ref="PASSPHRASE_REF", source_dir=r"D:\SQLBK_DBOPS\_cert"))
-    assert cert_module.read_backup_certificate_pair(config).thumbprint == hashlib.sha1(b"DER").hexdigest()
+    assert "take-certificate" in str(error.value) and "never read from beside the backups" in str(error.value)
 
 
 def test_a_dry_run_names_where_the_pair_would_come_from(tmp_path):
     answer = cert_module.ensure_source_certificate(config=_config(tmp_path), dry_run=True)
     assert answer["status"] == "DRY_RUN"
-    assert answer["certificate_source"] == r"\\192.0.2.250\SQLBK_DBOPS\_cert\db_ops_backup_cert.cer"
+    assert answer["certificate_source"] == "dbabrain's certificate vault"
+    assert answer["certificate_name"] == "db_ops_backup_cert"
 
 
 def test_an_entry_states_the_pair_and_the_target_container(tmp_path):

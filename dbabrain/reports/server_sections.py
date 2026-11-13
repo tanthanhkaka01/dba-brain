@@ -782,6 +782,9 @@ def build_server_detail(model: dict | None) -> dict:
         "network": (m.get("os_health") or {}).get("network") or [],
         "events": (m.get("os_health") or {}).get("events") or [],
         "security": _security_rows(m.get("security") or {}),
+        # Who can take this server's files - the inventory's own block, whole (reports/protection.py):
+        # the page renders it as its Protection section.
+        "protection": m.get("protection") or {},
         "findings": [str(f) for f in (m.get("findings") or [])],
         "freshness": _freshness_line(m.get("freshness") or {}, str(m.get("inv") or "")),
         "stale": bool((m.get("freshness") or {}).get("stale")),

@@ -48,8 +48,8 @@ $BastionTmpDir = "/tmp/oracle-installer-stage"
 
 $ConnOpts = @(
   "-o", "ConnectTimeout=30",
-  "-o", "StrictHostKeyChecking=no",
-  "-o", "UserKnownHostsFile=/dev/null",
+  # 1.223: a host key pinned on first use and held to it after (was "no" with /dev/null: any key).
+  "-o", "StrictHostKeyChecking=accept-new",
   "-o", "BatchMode=yes"
 )
 if ($script:SshIdentityFile) {
@@ -94,21 +94,21 @@ foreach ($Vm in $TargetInventory) {
   Write-Host "=== $NodeName ($NodeIp) ==="
 
   # Prepare stage dir: temporarily world-writable so scp (running as tuser) can write
-  $PrepRemote = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=30" +
+  $PrepRemote = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30" +
     " $NodeTarget 'sudo mkdir -p $StageDir && sudo chmod 0777 $StageDir'"
   & ssh @ConnOpts $BastionTarget $PrepRemote
   if ($LASTEXITCODE -ne 0) { throw "Failed to prepare stage directory on $NodeName." }
 
   if ($NeedGrid) {
     Write-Host "  Copying Grid installer ..."
-    $ScpGrid = "scp -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=30" +
+    $ScpGrid = "scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30" +
       " $BastionTmpDir/$GridZipName ${NodeTarget}:${StageDir}/${GridZipName}"
     & ssh @ConnOpts $BastionTarget $ScpGrid
     if ($LASTEXITCODE -ne 0) { throw "SCP of Grid installer to $NodeName failed." }
   }
 
   Write-Host "  Copying DB installer ..."
-  $ScpDb = "scp -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=30" +
+  $ScpDb = "scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30" +
     " $BastionTmpDir/$DbZipName ${NodeTarget}:${StageDir}/${DbZipName}"
   & ssh @ConnOpts $BastionTarget $ScpDb
   if ($LASTEXITCODE -ne 0) { throw "SCP of DB installer to $NodeName failed." }
@@ -124,7 +124,7 @@ foreach ($Vm in $TargetInventory) {
     "sudo chown oracle:oinstall $StageDir && sudo chmod 0775 $StageDir && " +
     "ls -lh $StageDir/$DbZipName"
   }
-  $FixupRemote = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=30" +
+  $FixupRemote = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30" +
     " $NodeTarget '$FixupCmds'"
   & ssh @ConnOpts $BastionTarget $FixupRemote
   if ($LASTEXITCODE -ne 0) { throw "Failed to set ownership on $NodeName." }

@@ -78,6 +78,16 @@ ALL_COMMANDS = [
     # two delete commands were dispatched in that form and checked by nothing.
     "sqlserver-export-instance", "sqlserver-replay-instance", "sqlserver-verify-instance",
     "delete-file", "delete-files", "backup-database", "prune-backup-files",
+    # 0.37.0: ONE file whose every fact is stated and true on the host, or ONE empty folder.
+    "delete-verified-file", "delete-empty-folder",
+    # 0.37.0: the same, for a list - each item its own facts and its own script, over one connection.
+    "delete-verified-files", "delete-empty-folders",
+    # 0.37.0: one small file's bytes, proven on arrival - a backup certificate for the vault.
+    "read-file",
+    # 0.37.0: every entry under a folder, its kind and bytes, no hash - the repository check.
+    "list-files",
+    # 0.37.0: one backup file encrypted with age at the repository, then proven by decrypting it.
+    "encrypt-file", "verify-encrypted-file", "fetch-decrypted-file", "decrypt-on-host",
     "list-databases", "list-schemas", "list-jobs", "create-table-from-xlsx",
     "copy-schema", "db-status",
     # 2026-09-19. The shared config objects, answerable from outside Python: what a field means,
@@ -115,6 +125,9 @@ STDIN_ONLY_COMMANDS = [
     # for one or both hosts.
     "backup-chain",
     "copy-backup-dir",
+    # 0.38.0: what replaced it - a staging made ready, then finished; copy-files carries the bytes.
+    "prepare-staging",
+    "finish-staging",
     "prune-staged-backups",
     # 0.24.0: a Windows share, reached through common.cli rather than by the backup app (R10) -
     # every request carries the share's password.

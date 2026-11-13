@@ -135,6 +135,13 @@
   table.rpt .cmdcell{white-space:normal; overflow-wrap:anywhere; word-break:break-word;
                      min-width:190px; max-width:400px; font-family:var(--mono); font-size:11px}
   table.rpt .muted{color:var(--muted)}
+  /* Backup & restore files (0.37.0): a row opens to its files, from the server to the repository
+     to the encrypted copy. The path and the checksums wrap rather than widen the table. */
+  table.rpt tr.bf-main{cursor:pointer}
+  table.rpt td.caret{width:1%; color:var(--muted); padding-right:0}
+  table.rpt td.filecell{white-space:normal; min-width:180px; max-width:300px; overflow-wrap:anywhere}
+  table.rpt td.filecell .detail{overflow-wrap:anywhere}
+  table.rpt tr.more > td{background:var(--surface-2); padding:10px 14px 14px; white-space:normal}
   /* The band that separates one group of workload counters from the next. A table of 25
      measures with no grouping is a wall; the bands are what make it scannable. */
   table.rpt tr.wl-group td{background:var(--bg); font-size:10.5px; letter-spacing:.04em;
@@ -1913,6 +1920,122 @@ function accessBlock(a){
     </div></details>`;
 }
 
+/* Who can take this server's files (0.38.0): each database's data-file encryption, the host's
+   administrators, and the edition held to the environment. One block, built once for both pages
+   (reports/protection.py). It prints what was read and names what was not: a section the
+   collector could not read is a row with its reason, never an empty table. */
+function protectionBlock(p){
+  if (!p) return "";
+  const enc = p.encryption || {}, adm = p.admins || {};
+  const findings = p.findings || [], changes = p.changes || [];
+  if (!enc.collected && !adm.collected && !findings.length) return "";
+  const chip = (t, cls) => `<span class="sev ${cls}">${esc(t)}</span>`;
+  const items = enc.items || [], stores = enc.keystores || [];
+  const scope = items.length && items[0].scope === "tablespace" ? "tablespace" : "database";
+  const headBits = [];
+  if (enc.collected && !enc.error) headBits.push(`${enc.encrypted} of ${enc.total} ${scope}${enc.total===1?"":"s"} encrypted`);
+  if (adm.collected && !adm.error) headBits.push(`${adm.distinctAccounts} administrator account${adm.distinctAccounts===1?"":"s"} on the host`);
+  if (changes.length) headBits.push(`${changes.length} change${changes.length===1?"":"s"} at the last read`);
+  if (p.editionFinding) headBits.push("edition not meant for production");
+
+  const findingsHtml = !findings.length ? "" : `<h3 class="sub">Findings</h3>
+    <ul class="sec-note">${findings.map(f=>`<li>${esc(f)}</li>`).join("")}</ul>`;
+  const changesHtml = !changes.length ? "" : `<h3 class="sub">Changed at the last read</h3>
+    <div class="tbl-wrap"><table class="rpt">
+      <thead><tr><th></th><th>What</th><th>Read</th></tr></thead>
+      <tbody>${changes.map(c=>`<tr class="${c.status==="WARNING"?"warn":"crit"}">
+        <td>${chip(c.status, c.status==="WARNING"?"warn":"crit")}</td>
+        <td class="wrapcell">${esc(c.message)}</td>
+        <td class="nowrap mono">${when(c.at)}</td></tr>`).join("")}</tbody></table></div>`;
+
+  let encHtml = `<h3 class="sub">Data files${enc.asOf ? ` <span class="muted">· as of ${when(enc.asOf)}</span>` : ""}</h3>`;
+  if (!enc.collected) {
+    encHtml += `<p class="sec-note">Not collected for this server: no database is registered on it, its engine has no reading yet, or the metric has not run.</p>`;
+  } else if (enc.error) {
+    encHtml += `<p class="sec-note" style="color:var(--warn)">Not read: ${esc(enc.error)}</p>`;
+  } else {
+    if (stores.length) {
+      encHtml += `<div class="tbl-wrap"><table class="rpt">
+        <thead><tr><th></th><th>Keystore</th><th>Type</th><th>Location</th><th>Opens without a password</th></tr></thead>
+        <tbody>${stores.map(k=>`<tr class="${k.opensWithoutPassword==="yes"?"warn":""}">
+          <td>${chip(k.status, k.status==="OPEN"?"ok":"unk")}</td>
+          <td class="metric">${esc(k.name)}</td>
+          <td class="nowrap mono">${esc(k.walletType || "—")}</td>
+          <td class="wrapcell mono">${esc(k.location || "—")}</td>
+          <td class="nowrap">${esc(k.opensWithoutPassword || "not read")}</td></tr>`).join("")}</tbody></table></div>`;
+    }
+    if (items.length) {
+      const detail = r => [
+        r.algorithm,
+        r.protector ? `protected by ${r.protectorType || "key"} ${r.protector}` : "",
+        r.thumbprint ? `thumbprint ${r.thumbprint}` : "",
+        r.privateKeyBackedUp ? `private key backed up: ${r.privateKeyBackedUp}` : "",
+        r.provider ? `provider: ${r.provider}` : "",
+        r.tablesTotal ? `${r.tablesEncrypted} of ${r.tablesTotal} tables encrypted` : "",
+      ].filter(Boolean).join(" · ");
+      /* "kept" only when the vault was read and holds that thumbprint; a row with no thumbprint,
+         or a vault that could not be read, says nothing about it. */
+      const vault = r => r.vault === "kept" ? chip("IN THE VAULT", "ok")
+                       : r.vault === "not kept" ? chip("NOT IN THE VAULT", "crit")
+                       : (r.thumbprint && !enc.vaultRead ? "vault not read" : "—");
+      encHtml += `<div class="tbl-wrap"><table class="rpt">
+        <thead><tr><th></th><th>${scope === "tablespace" ? "Tablespace" : "Database"}</th><th>Read from the engine</th><th>Certificate in dbabrain's vault</th></tr></thead>
+        <tbody>${items.map(r=>`<tr class="${r.encrypted?"":"warn"}">
+          <td>${chip(r.state.toUpperCase(), r.encrypted?"ok":"warn")}</td>
+          <td class="metric">${esc(r.name)}</td>
+          <td class="wrapcell">${esc(detail(r) || "—")}</td>
+          <td class="nowrap">${vault(r)}</td></tr>`).join("")}</tbody></table></div>`;
+    } else {
+      encHtml += `<p class="sec-note">The engine listed no ${scope} to read.</p>`;
+    }
+    if (enc.howToEncrypt && enc.encrypted < enc.total) encHtml += `<p class="sec-note">${esc(enc.howToEncrypt)}.</p>`;
+  }
+
+  let admHtml = `<h3 class="sub">Administrators on the host${adm.asOf ? ` <span class="muted">· as of ${when(adm.asOf)}</span>` : ""}</h3>`;
+  if (!adm.collected) {
+    admHtml += `<p class="sec-note">Not collected: this server has no command access to its host (cmd_access), or the metric has not run yet.</p>`;
+  } else if (adm.error) {
+    admHtml += `<p class="sec-note" style="color:var(--warn)">Not read: ${esc(adm.error)}</p>`;
+  } else {
+    admHtml += `<p class="sec-note">Read as <b>${esc(adm.readAs || "—")}</b>${adm.rootAccess ? ` · root access for the read: ${esc(adm.rootAccess)}` : ""}.</p>`;
+    if ((adm.accounts||[]).length) admHtml += `<div class="tbl-wrap"><table class="rpt">
+        <thead><tr><th>Group</th><th>Account</th><th>Kind</th><th>Source</th></tr></thead>
+        <tbody>${adm.accounts.map(a=>`<tr>
+          <td class="nowrap mono">${esc(a.group)}</td>
+          <td class="metric">${esc(a.account)}</td>
+          <td class="nowrap">${esc(a.kind || "—")}</td>
+          <td class="nowrap">${esc(a.source || "—")}</td></tr>`).join("")}</tbody></table></div>`;
+    if ((adm.settings||[]).length) admHtml += `<div class="tbl-wrap"><table class="rpt">
+        <thead><tr><th>Setting</th><th>Value</th><th>Read from</th></tr></thead>
+        <tbody>${adm.settings.map(x=>`<tr class="${x.marked?"warn":""}">
+          <td class="metric">${esc(x.name)}</td>
+          <td class="nowrap mono">${x.marked ? chip(x.value, "warn") : esc(x.value)}</td>
+          <td class="wrapcell">${esc(x.detail)}</td></tr>`).join("")}</tbody></table></div>`;
+    if ((adm.keys||[]).length) admHtml += `<div class="tbl-wrap"><table class="rpt">
+        <thead><tr><th>Key that opens root</th><th>Type</th><th>Comment</th><th>File</th></tr></thead>
+        <tbody>${adm.keys.map(k=>`<tr>
+          <td class="wrapcell mono">${esc(k.fingerprint)}</td>
+          <td class="nowrap">${esc(k.type || "—")}</td>
+          <td class="wrapcell">${esc(k.comment || "—")}</td>
+          <td class="wrapcell mono">${esc(k.file || "—")}</td></tr>`).join("")}</tbody></table></div>`;
+    if ((adm.unreadable||[]).length) admHtml += `<p class="sec-note" style="margin-top:8px"><b>Not read</b></p>
+      <ul class="sec-note">${adm.unreadable.map(u=>`<li><span class="mono">${esc(u.section)}</span> — ${esc(u.why)}</li>`).join("")}</ul>`;
+  }
+
+  return `<details class="fold"${findings.length || changes.length ? " open" : ""}>
+    <summary>Protection — who can take this server's files${headBits.length ? " · " + esc(headBits.join(" · ")) : ""}</summary>
+    <div class="in">
+    <p class="sec-note">A database's own files open on another install, so whoever is an
+      administrator on the host can copy them. Encryption at rest protects a copied file or a
+      stolen disk - never against an administrator on the running machine - so this lists both:
+      whether each ${scope}'s data is encrypted, read where the engine says it, and who can be an
+      administrator on the host, read with the login dbabrain already has. Detection only: nothing
+      here is graded or changed, and what raises an alert is a <b>change</b> between two reads
+      (an account added to an admin group, a new key for root, encryption turned off).</p>
+    ${findingsHtml}${changesHtml}${encHtml}${admHtml}
+    </div></details>`;
+}
+
 __BACKUP_FILES_JS__
 
 function linkedServerBlock(rows){
@@ -2279,6 +2402,7 @@ async function select(slug){
     + oracleObjectsBlock(d.oracleObjects)
     + oracleTopSqlBlock(d.oracleTopSql)
     + accessBlock(d.access)
+    + protectionBlock((d.serverDetail || {}).protection)
     + timeline(d.timeline)
     + cardStrip(d.cards)
     + `<h2 class="sec">Primary health indicators</h2>

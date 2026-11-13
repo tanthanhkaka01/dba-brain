@@ -6,6 +6,9 @@
 **/secrets/*.json
 !**/secrets/*.example.json
 data/secret_text.json
+# The operator's cloud tokens and keys (Cloudflare, Oracle Cloud - 2026-11-11), kept beside the
+# repo for MCP way 2. A whole folder: its token.txt / config / *.md matched no other pattern.
+.secret/
 
 # What a quickstart run leaves behind. The repository-root data/encrypted_secret_text.json is
 # tracked on purpose (it is ciphertext, and the estate needs it); an example's copy is scratch.
@@ -96,3 +99,8 @@ audits/*_private_*
 
 # Lock files beside the secret stores (review 0.25.0, B9.1)
 *.json.lock
+
+# The MCP connector's Worker (0.38.0): its packages, wrangler's state, local secrets.
+connector/worker/node_modules/
+connector/worker/.wrangler/
+connector/worker/.dev.vars*

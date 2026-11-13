@@ -17,6 +17,10 @@ services:
     container_name: {{ primary_node }}
     hostname: {{ primary_node }}
     restart: unless-stopped
+    # PID 1 is Docker's init, not the database (0.37.0): a command dbabrain runs in the container and
+    # leaves behind is reaped by it. With postgres as PID 1 such an orphan became postgres's child,
+    # and its abnormal end made postgres restart the whole instance (the store drill, 2026-11-10).
+    init: true
     environment:
       ORACLE_PASSWORD: ${DB_PASSWORD}
     ports:
@@ -37,6 +41,10 @@ services:
     container_name: {{ standby_node }}
     hostname: {{ standby_node }}
     restart: unless-stopped
+    # PID 1 is Docker's init, not the database (0.37.0): a command dbabrain runs in the container and
+    # leaves behind is reaped by it. With postgres as PID 1 such an orphan became postgres's child,
+    # and its abnormal end made postgres restart the whole instance (the store drill, 2026-11-10).
+    init: true
     entrypoint: ["/bin/bash", "/dg/standby_entrypoint.sh"]
     environment:
       ORACLE_PASSWORD: ${DB_PASSWORD}
@@ -59,6 +67,10 @@ services:
     image: docker:cli
     container_name: {{ name }}-shipper
     restart: unless-stopped
+    # PID 1 is Docker's init, not the database (0.37.0): a command dbabrain runs in the container and
+    # leaves behind is reaped by it. With postgres as PID 1 such an orphan became postgres's child,
+    # and its abnormal end made postgres restart the whole instance (the store drill, 2026-11-10).
+    init: true
     environment:
       PRIMARY: {{ primary_node }}
       STANDBY: {{ standby_node }}

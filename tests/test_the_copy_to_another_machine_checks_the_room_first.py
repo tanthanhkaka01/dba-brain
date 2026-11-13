@@ -7,13 +7,17 @@ Oracle, SQL Server in a container - copied whatever the chain held and asked not
 read by nobody on that path (found 2026-10-02, review notes R8).
 
 The operator's rule for it (2026-10-02): **the restore script checks nothing itself; the tool has
-checked before the script runs.** So the check is in the tool's own copy, ``copy-backup-dir``, between
-knowing which files it will write and writing the first:
+checked before the script runs.** So the check is the tool's own, between knowing which files will
+be written and writing the first:
 
     free on the target >= bytes still to copy x factor
 
 with the entry's ``space_check`` - the same object, the same defaults (on, x2), the same two answers
 to a target that cannot be measured.
+
+It was ``copy-backup-dir``'s check until 0.38.0 (1.329), made just before its own stream. The bytes
+travel by ``copy-files`` now, so the check sits in the step that says which files travel:
+``prepare-staging`` measures, and a staging that will not fit answers no file to copy at all.
 """
 
 from __future__ import annotations
@@ -43,7 +47,7 @@ class _Entry:
 class _Sftp:
     def __init__(self, files: dict[str, int]) -> None:
         self.files = dict(files)
-        self.put: list[str] = []
+        self.written: list[str] = []      # every path opened for writing
 
     def listdir_attr(self, path):
         return [_Entry(name, size) for name, size in self.files.items()]
@@ -58,11 +62,10 @@ class _Sftp:
         pass
 
     def open(self, path, mode="r"):
+        self.written.append(path)
+
         class _File:
             def write(self, _data):
-                pass
-
-            def prefetch(self, _size):
                 pass
 
             def __enter__(self):
@@ -72,9 +75,6 @@ class _Sftp:
                 return False
 
         return _File()
-
-    def putfo(self, _reader, remote_path, file_size=0):
-        self.put.append(remote_path)
 
 
 class _Answer:
@@ -106,38 +106,45 @@ class _Session:
                              f"/dev/sda1 {free * 4} {free * 3} {free} 75% /\n"), None
 
 
-def _copy(monkeypatch, *, files: dict[str, int], free_gib: float | None, rule=None, staged=None,
-          said: list[str] | None = None):
+def _staging(*, files: dict[str, int], free_gib: float | None, rule=None, staged=None,
+             said: list[str] | None = None):
+    """A source holding ``files`` and a marked staging with ``free_gib`` free; returns (the
+    ``prepare_staging`` call each test makes, the target)."""
     source = _Session(files)
     target = _Session({backup_copy.STAGING_MARKER: 1, **(staged or {})}, free_gib=free_gib)
-    streamed: list[int] = []
-    monkeypatch.setattr(backup_copy, "_stream_files",
-                        lambda **kwargs: streamed.append(len(kwargs["files"])) or True)
-    run = lambda: backup_copy.sync_backup_dir(  # noqa: E731 - one call, made by each test
+    run = lambda: backup_copy.prepare_staging(  # noqa: E731 - one call, made by each test
         source_session=source, source_dir="/src", target_session=target, target_dir="/stage/PG",
         space_check=restore_space.SpaceCheck() if rule is None else rule,
         log=(said.append if said is not None else None))
-    return run, target, streamed
+    return run, target
+
+
+def _to_travel(result) -> list[str]:
+    """The files the answer hands to ``copy-files``."""
+    return [rel for rel, _size, _mtime in result.pending]
 
 
 # --------------------------------------------------------------------------- #
-# The check, where the copy knows what it will write
+# The check, where the staging knows what will be written
 # --------------------------------------------------------------------------- #
-def test_a_copy_that_fits_says_what_it_measured(monkeypatch):
+def test_a_copy_that_fits_says_what_it_measured():
     said: list[str] = []
-    run, target, streamed = _copy(monkeypatch, files={"full.bak": 30 * GIB}, free_gib=92, said=said)
+    run, target = _staging(files={"full.bak": 30 * GIB}, free_gib=92, said=said)
 
-    answer = run().as_dict()["space_check"]
+    result = run()
+    answer = result.as_dict()["space_check"]
 
     assert answer["ok"] is True and answer["incoming_bytes"] == 30 * GIB
     assert answer["required_bytes"] == 60 * GIB, "the default factor, 2"
-    assert streamed == [1]
+    assert _to_travel(result) == ["full.bak"]
     assert any("space check: 30.0 GiB to copy" in line and "fits" in line for line in said)
     assert target.commands and "df -Pk" in target.commands[0], "asked of the target, where the files land"
 
 
-def test_a_copy_that_would_not_fit_moves_no_file(monkeypatch):
-    run, target, streamed = _copy(monkeypatch, files={"full.bak": 50 * GIB}, free_gib=92)
+def test_a_copy_that_would_not_fit_moves_no_file():
+    """The refusal is the whole answer: no file is named as travelling, so ``copy-files`` is handed
+    nothing - and the staging step itself wrote its write probe and no more."""
+    run, target = _staging(files={"full.bak": 50 * GIB}, free_gib=92)
 
     with pytest.raises(backup_copy.CopySpaceError) as caught:
         run()
@@ -146,73 +153,77 @@ def test_a_copy_that_would_not_fit_moves_no_file(monkeypatch):
     assert "/stage/PG will not fit" in message and "SHORT BY" in message
     assert "space_check.factor (now 2)" in message, "what the operator can change"
     assert "No file was copied" in message
-    assert streamed == [] and target.sftp().put == []
+    assert target.sftp().written == ["/stage/PG/.dbabrain_write_probe"]
 
 
-def test_what_the_target_already_holds_is_not_counted(monkeypatch):
+def test_what_the_target_already_holds_is_not_counted():
     """A drill run again copies the new increment, not the chain: 1 GiB against 2 GiB free fits."""
-    run, _target, _streamed = _copy(
-        monkeypatch, files={"full.bak": 300 * GIB, "incr.bak": 1 * GIB}, free_gib=2,
-        staged={"full.bak": 300 * GIB})
+    run, _target = _staging(files={"full.bak": 300 * GIB, "incr.bak": 1 * GIB}, free_gib=2,
+                            staged={"full.bak": 300 * GIB})
 
-    assert run().as_dict()["space_check"]["incoming_bytes"] == 1 * GIB
+    result = run()
+
+    assert result.as_dict()["space_check"]["incoming_bytes"] == 1 * GIB
+    assert _to_travel(result) == ["incr.bak"]
 
 
-def test_the_entry_s_factor_is_the_margin(monkeypatch):
+def test_the_entry_s_factor_is_the_margin():
     files = {"full.bak": 40 * GIB}
-    fits, _t, _s = _copy(monkeypatch, files=files, free_gib=50, rule=restore_space.SpaceCheck(factor=1.0))
-    short, _t, _s = _copy(monkeypatch, files=files, free_gib=50, rule=restore_space.SpaceCheck(factor=2.0))
+    fits, _t = _staging(files=files, free_gib=50, rule=restore_space.SpaceCheck(factor=1.0))
+    short, _t = _staging(files=files, free_gib=50, rule=restore_space.SpaceCheck(factor=2.0))
 
     assert fits().as_dict()["space_check"]["ok"] is True
     with pytest.raises(backup_copy.CopySpaceError):
         short()
 
 
-def test_a_target_that_cannot_be_measured_is_refused(monkeypatch):
+def test_a_target_that_cannot_be_measured_is_refused():
     """'Could not read the free space' must not read as 'there is enough'."""
-    run, _target, streamed = _copy(monkeypatch, files={"full.bak": 1 * GIB}, free_gib=None)
+    run, _target = _staging(files={"full.bak": 1 * GIB}, free_gib=None)
 
     with pytest.raises(backup_copy.CopySpaceError) as caught:
         run()
 
     assert "could not read the free space of /stage/PG" in str(caught.value)
-    assert "on_unknown" in str(caught.value) and streamed == []
+    assert "on_unknown" in str(caught.value) and "No file was copied" in str(caught.value)
 
 
-def test_an_entry_may_accept_an_unmeasured_copy_and_every_run_says_so(monkeypatch):
+def test_an_entry_may_accept_an_unmeasured_copy_and_every_run_says_so():
     said: list[str] = []
-    run, _target, streamed = _copy(monkeypatch, files={"full.bak": 1 * GIB}, free_gib=None,
-                                   rule=restore_space.SpaceCheck(on_unknown="proceed"), said=said)
+    run, _target = _staging(files={"full.bak": 1 * GIB}, free_gib=None,
+                            rule=restore_space.SpaceCheck(on_unknown="proceed"), said=said)
 
-    answer = run().as_dict()["space_check"]
+    result = run()
 
-    assert answer == {"checked": False, "reason": "unknown", "incoming_bytes": 1 * GIB}
-    assert streamed == [1]
+    assert result.as_dict()["space_check"] == {"checked": False, "reason": "unknown", "incoming_bytes": 1 * GIB}
+    assert _to_travel(result) == ["full.bak"]
     assert any("on_unknown=proceed" in line for line in said)
 
 
-def test_a_check_turned_off_asks_the_target_nothing(monkeypatch):
-    run, target, streamed = _copy(monkeypatch, files={"full.bak": 500 * GIB}, free_gib=1,
-                                  rule=restore_space.SpaceCheck(enabled=False))
+def test_a_check_turned_off_asks_the_target_nothing():
+    run, target = _staging(files={"full.bak": 500 * GIB}, free_gib=1,
+                           rule=restore_space.SpaceCheck(enabled=False))
 
-    assert run().as_dict()["space_check"] == {"checked": False, "reason": "disabled"}
-    assert target.commands == [] and streamed == [1]
+    result = run()
+
+    assert result.as_dict()["space_check"] == {"checked": False, "reason": "disabled"}
+    assert target.commands == [] and _to_travel(result) == ["full.bak"]
 
 
-def test_a_copy_with_nothing_to_move_measures_nothing(monkeypatch):
-    run, target, _streamed = _copy(monkeypatch, files={"full.bak": 30 * GIB}, free_gib=0,
-                                   staged={"full.bak": 30 * GIB})
+def test_a_copy_with_nothing_to_move_measures_nothing():
+    run, target = _staging(files={"full.bak": 30 * GIB}, free_gib=0, staged={"full.bak": 30 * GIB})
 
-    assert "space_check" not in run().as_dict()
+    result = run()
+
+    assert "space_check" not in result.as_dict() and _to_travel(result) == []
     assert target.commands == []
 
 
-def test_a_caller_that_gives_no_rule_is_asked_nothing(monkeypatch):
+def test_a_caller_that_gives_no_rule_is_asked_nothing():
     """The library does what it is told; the command is where *absent means on* is decided."""
     source, target = _Session({"full.bak": 500 * GIB}), _Session({backup_copy.STAGING_MARKER: 1}, free_gib=1)
-    monkeypatch.setattr(backup_copy, "_stream_files", lambda **kwargs: True)
 
-    result = backup_copy.sync_backup_dir(source_session=source, source_dir="/src",
+    result = backup_copy.prepare_staging(source_session=source, source_dir="/src",
                                          target_session=target, target_dir="/stage/PG")
 
     assert result.space is None and target.commands == []
@@ -227,19 +238,24 @@ def _command(monkeypatch, request: dict, *, raises: Exception | None = None) -> 
 
     given: dict = {}
 
-    def sync(**kwargs):
+    def prepare(**kwargs):
         given.update(kwargs)
         if raises is not None:
             raise raises
         return backup_copy.TransferResult()
 
     session = types.SimpleNamespace(run=lambda command: None, close=lambda: None)
-    monkeypatch.setattr(cli_backup_copy, "_open", lambda login, *, role: session)
-    monkeypatch.setattr(backup_copy, "sync_backup_dir", sync)
-    monkeypatch.setattr(backup_copy, "open_for_the_engine", lambda *args, **kwargs: True)
+
+    def open_host(login, *, role):
+        # Recorded beside what the staging was asked: an empty `given` is no host and no staging.
+        given.setdefault("hosts_opened", []).append(role)
+        return session
+
+    monkeypatch.setattr(cli_backup_copy, "_open", open_host)
+    monkeypatch.setattr(backup_copy, "prepare_staging", prepare)
     out = io.StringIO()
     monkeypatch.setattr(sys, "stdout", out)
-    code = cli_backup_copy.run("copy-backup-dir", ["-"], read_request=lambda source, usage: (
+    code = cli_backup_copy.run("prepare-staging", ["-"], read_request=lambda source, usage: (
         {"source": {"host": "192.0.2.49"}, "source_dir": "/src",
          "target": {"host": "192.0.2.50"}, "target_dir": "/stage/PG", **request}, 0))
     return code, json.loads(out.getvalue()), given
@@ -250,6 +266,7 @@ def test_a_request_that_says_nothing_is_checked_at_the_default(monkeypatch):
 
     assert answer["success"] is True
     assert given["space_check"] == restore_space.SpaceCheck(enabled=True, factor=2.0, on_unknown="refuse")
+    assert given["hosts_opened"] == ["source", "target"]
 
 
 def test_the_request_s_own_rule_is_the_one_used(monkeypatch):
@@ -264,7 +281,7 @@ def test_a_rule_that_cannot_be_obeyed_fails_the_command_before_any_host_is_reach
 
     assert code != 0 and answer["success"] is False
     assert "space_check.factor must be >= 1" in answer["message"]
-    assert given == {}, "nothing was opened or copied"
+    assert given == {}, "no host was opened and no staging prepared"
 
 
 def test_a_refusal_is_answered_in_its_own_words(monkeypatch):
@@ -285,17 +302,21 @@ def _sent_by(monkeypatch, **entry_fields) -> dict:
         script="restore.sh", time_window=TimeWindow(), target_server_id="DST",
         target_backup_dir="/opt/db_ops/backup/pg_restore", source_backup_host_dir="/opt/backup/pg",
         integrity=RestoreIntegrity(), **entry_fields)
-    sent: dict[str, dict] = {}
+    sent: list[tuple[str, dict]] = []
 
     def run(command, request, **_kwargs):
-        sent[command] = request
-        return {"include": []} if command == "backup-chain" else {"copied": 0, "skipped": 0}
+        sent.append((command, request))
+        # A source that selects no file: the plan, then the one round every copy makes.
+        return {"include": [], "files": []} if request.get("plan_only") else {}
 
     monkeypatch.setattr(restore_script, "_ssh_login", lambda target, **_kwargs: {"host": "192.0.2.49"})
     monkeypatch.setattr(restore_script.common_cli, "run", run)
     endpoint = types.SimpleNamespace(container_name="")
     restore_script.transfer_backup_to_target(job, source=endpoint, target=endpoint, prune=False)
-    return sent["copy-backup-dir"]
+    # The request that opens the target - the plan reads the source alone and measures nothing.
+    (staged,) = [request for command, request in sent
+                 if command == "prepare-staging" and not request.get("plan_only")]
+    return staged
 
 
 def test_an_entry_that_says_nothing_is_checked_at_the_default(monkeypatch):

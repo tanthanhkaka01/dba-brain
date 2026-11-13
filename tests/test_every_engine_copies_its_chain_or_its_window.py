@@ -8,7 +8,8 @@ took their chain, SQL Server always took the whole directory.
 The rule now, the same for every engine and both ways to a target:
 
 * ``chain`` - the backups the restore applies. SQL Server: each database's newest FULL, its newest
-  DIFF and the LOGs after them, and ``_cert/``. PostgreSQL: the newest ``_FULL``, its ``_INCR``s and
+  DIFF and the LOGs after them - never ``_cert/`` (0.37.0: the certificate is imported from
+  dbabrain's vault). PostgreSQL: the newest ``_FULL``, its ``_INCR``s and
   ``wal/``. Oracle: the pieces RMAN names.
 * ``window`` - the chain AND every other file the source wrote in ``copy_recent_hours``: every
   restore point of the window, never fewer backups than the chain.
@@ -188,20 +189,21 @@ class _Target:
         return self._sftp
 
 
-def _copied(monkeypatch, engine: str, layout: dict[str, float], *, selection: str,
+def _copied(engine: str, layout: dict[str, float], *, selection: str,
             point_in_time: str = "") -> list[str]:
-    """The files one copy moves: backup-chain's include, then copy-backup-dir with the window."""
+    """The files one copy moves onto an empty staging: the chain read on the source, then what
+    ``prepare_staging`` answers as still to travel with the window - the list ``copy-files`` is
+    handed (0.38.0; until then the same selection was streamed by ``copy-backup-dir`` itself)."""
     root = ORACLE_DIR if engine == "oracle" else "/src"
     source = _Source(root, layout)
     include = backup_copy.chain_include(engine, source, source_dir=root, backup_dir=root,
                                         container="ORACLE_LAB", point_in_time=point_in_time)
-    moved: list[str] = []
-    monkeypatch.setattr(backup_copy, "_stream_files",
-                        lambda **kw: moved.extend(rel for rel, _size in kw["files"]) or True)
-    backup_copy.sync_backup_dir(
+    prepared = backup_copy.prepare_staging(
         source_session=source, source_dir=root, target_session=_Target(), target_dir="/dst",
         include=include, window_since=(NOW - WINDOW * HOURS) if selection == "window" else None)
-    return sorted(moved)
+    assert [rel for rel, _size, _mtime in prepared.pending] == [rel for rel, _size in prepared.files], \
+        "on an empty staging every selected file travels - and the gate is told of the same files"
+    return sorted(rel for rel, _size, _mtime in prepared.pending)
 
 
 def _within(layout: dict[str, float], hours: float) -> set[str]:
@@ -215,12 +217,12 @@ PG_CHAIN = {rel for rel in POSTGRESQL
             if "20261003T050007Z_FULL" in rel or "20261003T051015Z_INCR" in rel or rel.startswith("wal/")}
 
 
-def test_postgresql_chain_moves_the_newest_full_its_incremental_and_the_wal(monkeypatch):
-    assert _copied(monkeypatch, "postgresql", POSTGRESQL, selection="chain") == sorted(PG_CHAIN)
+def test_postgresql_chain_moves_the_newest_full_its_incremental_and_the_wal():
+    assert _copied("postgresql", POSTGRESQL, selection="chain") == sorted(PG_CHAIN)
 
 
-def test_postgresql_window_adds_every_backup_of_the_window_to_the_chain(monkeypatch):
-    moved = _copied(monkeypatch, "postgresql", POSTGRESQL, selection="window")
+def test_postgresql_window_adds_every_backup_of_the_window_to_the_chain():
+    moved = _copied("postgresql", POSTGRESQL, selection="window")
 
     assert moved == sorted(PG_CHAIN | _within(POSTGRESQL, WINDOW))
     assert "base/20261003T040018Z_FULL/backup_manifest" in moved          # the restore point before
@@ -233,46 +235,54 @@ def test_postgresql_window_adds_every_backup_of_the_window_to_the_chain(monkeypa
 SQL_CHAIN = {"LABTEST/FULL/LABTEST_FULL_20261003_050004Z.bak",
              "LABTEST/DIFF/LABTEST_DIFF_20261003_051012Z.bak",
              "LABTEST/LOG/LABTEST_LOG_20261003_052026Z.trn",
-             "LABTEST/LOG/LABTEST_LOG_20261003_052519Z.trn",
-             "_cert/db_ops_backup_cert.cer", "_cert/db_ops_backup_cert.pvk"}
+             "LABTEST/LOG/LABTEST_LOG_20261003_052519Z.trn"}
 
 
-def test_sqlserver_chain_moves_the_newest_full_diff_the_logs_after_and_the_certificate(monkeypatch):
-    """It took the whole directory until 2026-10-03, whatever the entry asked for."""
-    assert _copied(monkeypatch, "sqlserver", SQLSERVER, selection="chain") == sorted(SQL_CHAIN)
+def test_sqlserver_chain_moves_the_newest_full_diff_the_logs_after_and_never_the_certificate():
+    """It took the whole directory until 2026-10-03, whatever the entry asked for. The certificate
+    travelled with it until 0.37.0 - the operator: kept in dbabrain, copied by its own command,
+    never with the backups."""
+    assert _copied("sqlserver", SQLSERVER, selection="chain") == sorted(SQL_CHAIN)
 
 
-def test_sqlserver_window_adds_every_backup_of_the_window_to_the_chain(monkeypatch):
-    moved = _copied(monkeypatch, "sqlserver", SQLSERVER, selection="window")
+def test_a_whole_directory_copy_never_carries_the_certificate_or_its_key():
+    flat = {"APPDB_20261003_050000Z.bak": 0.5, "_cert/db_ops_backup_cert.cer": 13.0,
+            "_cert/db_ops_backup_cert.pvk": 13.0, "stray.pvk": 1.0, "old/_CERT/x.cer": 1.0}
+
+    assert _copied("sqlserver", flat, selection="chain") == ["APPDB_20261003_050000Z.bak"]
+
+
+def test_sqlserver_window_adds_every_backup_of_the_window_to_the_chain():
+    moved = _copied("sqlserver", SQLSERVER, selection="window")
 
     assert moved == sorted(SQL_CHAIN | _within(SQLSERVER, WINDOW))
     assert "LABTEST/FULL/LABTEST_FULL_20261003_040015Z.bak" in moved
     assert "LABTEST/FULL/LABTEST_FULL_20261003_030012Z.bak" not in moved
 
 
-def test_sqlserver_a_database_with_no_full_is_copied_whole(monkeypatch):
+def test_sqlserver_a_database_with_no_full_is_copied_whole():
     """The chain cannot be settled without a FULL; a narrowed copy that guessed would fail the
     restore, a whole one only costs time - and the other database still gets its chain."""
     layout = {**SQLSERVER, "ORPHAN/LOG/ORPHAN_LOG_20261003_052000Z.trn": 0.1,
               "ORPHAN/DIFF/ORPHAN_DIFF_20261003_040000Z.bak": 1.5}
 
-    moved = _copied(monkeypatch, "sqlserver", layout, selection="chain")
+    moved = _copied("sqlserver", layout, selection="chain")
 
     assert moved == sorted(SQL_CHAIN | {"ORPHAN/LOG/ORPHAN_LOG_20261003_052000Z.trn",
                                         "ORPHAN/DIFF/ORPHAN_DIFF_20261003_040000Z.bak"})
 
 
-def test_sqlserver_a_layout_without_full_diff_log_folders_is_copied_whole(monkeypatch):
+def test_sqlserver_a_layout_without_full_diff_log_folders_is_copied_whole():
     flat = {"APPDB_20261003_050000Z.bak": 0.5, "APPDB_20261002_050000Z.bak": 24.5}
 
-    assert _copied(monkeypatch, "sqlserver", flat, selection="chain") == sorted(flat)
+    assert _copied("sqlserver", flat, selection="chain") == sorted(flat)
 
 
 # --------------------------------------------------------------------------- #
 # Oracle
 # --------------------------------------------------------------------------- #
-def test_oracle_chain_moves_the_pieces_rman_names(monkeypatch):
-    assert _copied(monkeypatch, "oracle", ORACLE, selection="chain") == sorted(ORACLE_CHAIN)
+def test_oracle_chain_moves_the_pieces_rman_names():
+    assert _copied("oracle", ORACLE, selection="chain") == sorted(ORACLE_CHAIN)
 
 
 def test_oracle_chain_reaches_back_to_the_level_0_the_newest_log_can_recover(monkeypatch):
@@ -314,8 +324,8 @@ def test_no_sql_sent_through_printf_carries_a_format_character():
         assert "%" not in text
 
 
-def test_oracle_window_adds_every_piece_of_the_window_to_the_chain(monkeypatch):
-    moved = _copied(monkeypatch, "oracle", ORACLE, selection="window")
+def test_oracle_window_adds_every_piece_of_the_window_to_the_chain():
+    moved = _copied("oracle", ORACLE, selection="window")
 
     assert moved == sorted(set(ORACLE_CHAIN) | _within(ORACLE, WINDOW))
     assert "FREE_L0_20261003_jgsu1usa_600_1_1.bkp" in moved              # the level 0 before
@@ -328,20 +338,20 @@ def test_oracle_window_adds_every_piece_of_the_window_to_the_chain(monkeypatch):
 @pytest.mark.parametrize("selection", ["chain", "window"])
 @pytest.mark.parametrize("engine,layout", [("postgresql", POSTGRESQL), ("sqlserver", SQLSERVER),
                                            ("oracle", ORACLE)])
-def test_a_point_in_time_copies_everything(monkeypatch, engine, layout, selection):
+def test_a_point_in_time_copies_everything(engine, layout, selection):
     """A moment before the newest full needs an older chain, so every engine takes the whole
-    directory for one - whichever copy the entry chose."""
-    moved = _copied(monkeypatch, engine, layout, selection=selection,
+    directory for one - whichever copy the entry chose - but never the certificate (0.37.0)."""
+    moved = _copied(engine, layout, selection=selection,
                     point_in_time="2026-10-03 03:45:00 +00:00")
 
-    assert moved == sorted(layout)
+    assert moved == sorted(rel for rel in layout if not rel.startswith("_cert/"))
 
 
 @pytest.mark.parametrize("engine,layout", [("postgresql", POSTGRESQL), ("sqlserver", SQLSERVER),
                                            ("oracle", ORACLE)])
-def test_a_window_never_moves_fewer_files_than_the_chain(monkeypatch, engine, layout):
-    chain = set(_copied(monkeypatch, engine, layout, selection="chain"))
-    window = set(_copied(monkeypatch, engine, layout, selection="window"))
+def test_a_window_never_moves_fewer_files_than_the_chain(engine, layout):
+    chain = set(_copied(engine, layout, selection="chain"))
+    window = set(_copied(engine, layout, selection="window"))
 
     assert chain <= window
 
@@ -383,21 +393,35 @@ def test_the_copy_asks_common_for_the_chain_and_the_window_the_entry_chose(
     from dbabrain.backup_restore import restore_script
 
     job = _parsed(copy_selection=selection, copy_recent_hours=hours)
+    chain = ["base/20261003T050007Z_FULL", "wal/"]
     sent: list[tuple[str, dict]] = []
 
     def run(command, request, **_kw):
         sent.append((command, request))
-        return {"include": ["base/20261003T050007Z_FULL", "wal/"]} if command == "backup-chain" else {}
+        if command == "prepare-staging" and request.get("plan_only"):
+            # The command reads the chain itself when it is asked to, and answers what it settled on.
+            return {"include": chain if "chain" in request else list(request["include"]), "files": []}
+        return {}
 
     monkeypatch.setattr(restore_script.common_cli, "run", run)
     monkeypatch.setattr(restore_script, "_ssh_login", lambda *_a, **_k: {"host": "192.0.2.10"})
     source = type("S", (), {"container_name": ""})()
 
-    restore_script.transfer_backup_to_target(job, source=source, target=source, data_dir=None,
-                                             prune=False)
+    out = restore_script.transfer_backup_to_target(job, source=source, target=source, data_dir=None,
+                                                   prune=False)
 
-    commands = [command for command, _request in sent]
-    assert ("backup-chain" in commands) is asks_chain
-    copy = dict(sent)["copy-backup-dir"]
-    assert copy.get("window_hours") == window_hours
-    assert copy["include"] == (["base/20261003T050007Z_FULL", "wal/"] if asks_chain else [])
+    # The plan, then - nothing being selected on this fake source - the one round a copy always makes.
+    assert [command for command, _request in sent] == ["prepare-staging", "prepare-staging", "finish-staging"]
+    plan, staged = sent[0][1], sent[1][1]
+    assert plan["plan_only"] is True and "plan_only" not in staged
+    if asks_chain:
+        assert plan["chain"] == {"db_type": "postgresql", "backup_dir": "/opt/db_ops/backup/PG",
+                                 "container": "", "point_in_time": ""}
+        assert "include" not in plan, "stated beside it, an include would be what the command reads"
+    else:
+        assert "chain" not in plan and plan["include"] == []
+    # The chain is read once, with the plan (RMAN's preview is not cheap), and stated from then on.
+    assert "chain" not in staged
+    assert staged["include"] == out["include"] == (chain if asks_chain else [])
+    assert plan.get("window_hours") == staged.get("window_hours") == window_hours
+    assert out["copy_selection"] == selection

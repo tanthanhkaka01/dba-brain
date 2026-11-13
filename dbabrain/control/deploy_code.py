@@ -16,6 +16,11 @@ What it changes on the worker, and nothing else:
   that name the code (0.29.0 renamed both). Every other line is the worker's and stays;
 - the node's ``data/``: what ``upgrade-config`` and ``sync-config`` in the new image change.
 
+**The image may be built elsewhere** (``--image-tar`` with ``--image-id``, 2026-11-11 - the
+operator: *docker runs on the build host now*, not on this PC): the tar ``docker save`` wrote there, and the
+id ``docker image inspect`` gave there. Nothing then needs Docker here; the worker's loaded image is
+still held to that id, and a tar that is not of this version's tag is refused by the load check.
+
 Before it writes anything it keeps the compose file and a tar of ``data/``, ``assets/`` and
 ``config.json`` under ``runtime/pre_deploy_<version>_<stamp>/`` - the way back. Without ``--apply``
 it builds nothing and changes nothing: it reads the worker and prints the plan.
@@ -148,8 +153,16 @@ def _remote_script(client, script: str, what: str) -> str:
 def deploy_code(*, host: str, user: str, password: str, port: int = 22, secret_key: str,
                 remote_dir: str = DEFAULT_REMOTE_DIR, container: str = DEFAULT_CONTAINER,
                 apply: bool = False, skip_build: bool = False,
-                platform: str = "linux/amd64") -> dict:
+                platform: str = "linux/amd64", image_tar: str | Path | None = None,
+                image_id: str = "") -> dict:
     """Plan, or with *apply* run, the code-only deployment described in the module docstring."""
+    if bool(image_tar) != bool(image_id):
+        raise DeployCodeError("--image-tar and --image-id go together: the tar built elsewhere, and the id "
+                              "it was built with - the worker's loaded image is held to that id.")
+    if image_tar and not re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_id).strip()):
+        raise DeployCodeError(f"--image-id must be the image's full id (sha256:<64 hex>); got {image_id!r}.")
+    if image_tar and not Path(image_tar).is_file():
+        raise DeployCodeError(f"--image-tar {image_tar} is not a file here.")
     version = read_version()
     image = f"{IMAGE_REPO}:{version}"
     compose_path = f"{remote_dir.rstrip('/')}/docker-compose.yml"
@@ -165,7 +178,8 @@ def deploy_code(*, host: str, user: str, password: str, port: int = 22, secret_k
               f"container '{container}', root {remote_dir}")
         for old, new in plan.changes:
             print(f"  - {old.strip()}\n  + {new.strip()}")
-        steps = ["build the image here" if not skip_build else "use the image already built here",
+        steps = [("use the image tar built elsewhere" if image_tar else
+                  "build the image here" if not skip_build else "use the image already built here"),
                  "save it to a tar and send it", "docker load, and compare the image id",
                  "keep the compose file and a tar of data/, assets/, config.json",
                  "write the compose file", "stop and remove the running container",
@@ -177,16 +191,20 @@ def deploy_code(*, host: str, user: str, password: str, port: int = 22, secret_k
             return {"applied": False, "image": image, "previous_image": plan.previous_image,
                     "compose_changes": plan.changes, "steps": steps}
 
-        require_docker()
-        if not skip_build:
-            run_local(["docker", "build", "--platform", platform,
-                       "--label", f"org.opencontainers.image.version={version}", "-t", image, "."],
-                      cwd=DBABRAIN_ROOT)
-        local_id = _local_image_id(image)
-        BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
-        tar = BUNDLE_DIR / f"{IMAGE_REPO}_image_{version}.tar"
-        run_local(["docker", "save", image, "-o", str(tar)])
-        remote_tar = f"{remote_dir.rstrip('/')}/runtime/images/{tar.name}"
+        if image_tar:
+            local_id = str(image_id).strip()
+            tar = Path(image_tar)
+        else:
+            require_docker()
+            if not skip_build:
+                run_local(["docker", "build", "--platform", platform,
+                           "--label", f"org.opencontainers.image.version={version}", "-t", image, "."],
+                          cwd=DBABRAIN_ROOT)
+            local_id = _local_image_id(image)
+            BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
+            tar = BUNDLE_DIR / f"{IMAGE_REPO}_image_{version}.tar"
+            run_local(["docker", "save", image, "-o", str(tar)])
+        remote_tar = f"{remote_dir.rstrip('/')}/runtime/images/{IMAGE_REPO}_image_{version}.tar"
         client.put(tar, remote_tar)
         ssh_run(client, f"docker load -i {shlex.quote(remote_tar)}")
         code, remote_id, _ = ssh_capture(client, f"docker image inspect -f '{{{{.Id}}}}' {shlex.quote(image)}")

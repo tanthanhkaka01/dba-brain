@@ -63,7 +63,7 @@ fi
 # arranged by giving the target a bind mount at the same path — which quietly restricts the
 # restore to containers built for the purpose. Any running container can be a target if the
 # staged directory is simply copied in, so when BACKUP_DIR is missing inside the container but
-# present on the host (where sync_backup_dir put it), copy it across. A container that already
+# present on the host (where the staging copy put it), copy it across. A container that already
 # has the path mounted is left alone, so the mounted setup keeps working unchanged.
 # Is backup_dir served by a real mount inside the container? Matching /proc/mounts against
 # backup_dir alone was wrong: the bind mount is usually a PARENT ("/opt/oracle/backup" holding

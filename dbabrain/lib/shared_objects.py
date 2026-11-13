@@ -318,6 +318,16 @@ def check_value(constraint: dict[str, Any], value: Any, *, where: str, field: st
         # shape is still checked; what it contains is checked where that object is declared.
         if constraint.get("checked_by"):
             return findings
+        # `object_checked_by` names the parser that reads this object (offload_retention: file type ->
+        # seconds), so the reference judges its content the one way the code does.
+        checker = str(constraint.get("object_checked_by") or "")
+        if checker:
+            import importlib
+
+            module, _, name = checker.rpartition(".")
+            for problem in getattr(importlib.import_module(module), name)(value):
+                findings.append(_finding("value", where, field, problem))
+            return findings
         # `free_form: true` says the CONTENTS are deliberately not described, only the shape. It is
         # distinct from `checked_by`, which names the entry that walks this path: here there is no
         # such entry and never will be, because the keys are the operator's own. A backup job's

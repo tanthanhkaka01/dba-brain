@@ -19,13 +19,17 @@ from dbabrain.logging_ops import log_event
 # app (restore-latest, restore-workflow, copy-backup, delete-backup, verify-restore) is a
 # step of a restore entry and is keyed by restore_id.
 BACKUP_COMMAND_PREFIX = "backup"
+#: The commands that are steps of a BACKUP flow and are named by its backup_id: the backup itself and
+#: its offload (copy, encrypt, delete at the source, repository check - 2026-11-11: the offload's
+#: messages read "restore_id=<unknown>").
+BACKUP_FLOW_COMMANDS = (BACKUP_COMMAND_PREFIX, "offload")
 UNKNOWN_RUN_ID = "<unknown>"
 
 
 def run_id_key(command: str) -> str:
     """The id field that identifies a run of ``command``: ``backup_id`` or ``restore_id``."""
     head = str(command or "").split(".", 1)[0].strip().lower()
-    return "backup_id" if head == BACKUP_COMMAND_PREFIX else "restore_id"
+    return "backup_id" if head in BACKUP_FLOW_COMMANDS else "restore_id"
 
 
 def resolve_run_id(command: str, metadata: dict[str, Any] | None) -> tuple[str, str]:
@@ -79,8 +83,13 @@ def emit_backup_restore_event(
     error_text: str | None = None,
     metadata: dict[str, Any] | None = None,
     notify: NotifyConfig | None = None,
+    telegram: bool = True,
 ) -> None:
     """Record one backup/restore event to the log file, ``job_runs`` and Telegram.
+
+    ``telegram`` false keeps the event off Telegram (the file log and the run row still record it):
+    a short step's start is not a message of its own (1.306, the operator 2026-11-11: *a short step
+    one line, a long step a start and a done*).
 
     ``notify`` is the emitting job's :class:`dbabrain.lib.notify.NotifyConfig` — the shared
     ``notify`` object every app's config carries. Only the Telegram push consults it; the file
@@ -126,13 +135,14 @@ def emit_backup_restore_event(
         error_text=error_text,
         metadata=event_metadata,
     )
-    _safe_push_telegram(
-        app_config=app_config,
-        level=logical_level,
-        message=event_message,
-        metadata=event_metadata,
-        notify=notify,
-    )
+    if telegram:
+        _safe_push_telegram(
+            app_config=app_config,
+            level=logical_level,
+            message=event_message,
+            metadata=event_metadata,
+            notify=notify,
+        )
 
 
 def _safe_log_file(*, logger: logging.Logger, level: str, message: str) -> None:
@@ -343,9 +353,20 @@ def _format_restore_workflow_telegram_message(*, level: str, message: str, metad
     return "\n".join(lines)
 
 
+def _format_flow_message(*, level: str, metadata: dict[str, Any]) -> str:
+    """A backup flow's step, as the operator approved it on 2026-11-11 (1.306): the backup_id and the
+    step on the first line, each step's result a line of its own - what it did, of how many, where -
+    and no JSON: the run's whole output is on its job_runs row."""
+    title = str(metadata.get("flow_title") or "")
+    lines = [str(line) for line in metadata.get("flow_lines") or [] if str(line).strip()]
+    return "\n".join([f"{level.upper()}|{socket.gethostname()}|{title}", *lines])
+
+
 def _format_telegram_message(*, level: str, message: str, metadata: dict[str, Any]) -> str:
     if metadata.get("command") == "restore-workflow":
         return _format_restore_workflow_telegram_message(level=level, message=message, metadata=metadata)
+    if metadata.get("flow_title"):
+        return _format_flow_message(level=level, metadata=metadata)
     # Own line for the run id: it used to be reachable only inside the JSON payload, which was
     # clipped at 3900 characters — so the id was cut off exactly when the message mattered most.
     # The clip is gone (the send layer splits instead) but the line stays: an id on its own line

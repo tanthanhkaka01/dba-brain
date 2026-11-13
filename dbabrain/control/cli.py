@@ -340,6 +340,10 @@ def parse_args(argv):
     dc.add_argument("--container", default=DEFAULT_CONTAINER)
     dc.add_argument("--platform", default="linux/amd64")
     dc.add_argument("--skip-build", action="store_true", help="Use the image already built here.")
+    dc.add_argument("--image-tar", default=None,
+                    help="An image tar built elsewhere (docker save of dbabrain:<this version>) - no Docker here.")
+    dc.add_argument("--image-id", default="",
+                    help="With --image-tar: the image id it was built with (sha256:...); the worker's load is held to it.")
     dc.add_argument("--apply", action="store_true",
                     help="Do it. Without it the worker is read and the plan printed; nothing is built or changed.")
 
@@ -808,7 +812,8 @@ def _run(args) -> int:
         deploy_code_ops.deploy_code(host=host, user=args.user, password=password, port=args.port,
                                     secret_key=secret_key, remote_dir=args.remote_dir,
                                     container=args.container, apply=args.apply,
-                                    skip_build=args.skip_build, platform=args.platform)
+                                    skip_build=args.skip_build, platform=args.platform,
+                                    image_tar=args.image_tar, image_id=args.image_id)
     elif args.command == "deploy":
         # Refresh the encrypted secret store from the plaintext source, then deploy. So
         # `deploy --key-base64 ...` ships the latest secrets without a separate encrypt step.

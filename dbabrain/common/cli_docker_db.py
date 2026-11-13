@@ -125,6 +125,8 @@ def _create(request: dict[str, Any]) -> dict[str, Any]:
         password_env=str(request.get("password_ref") or f"{name.upper()}_PASSWORD").strip(),
         backup_mount=None if backup_mount is None else str(backup_mount).strip(),
         network_subnet=str(request.get("network_subnet") or "").strip(),
+        data_host_dir=str(request.get("data_host_dir") or "").strip(),
+        run_as=str(request.get("run_as") or "").strip(),
     )
     spec.validate(replicas_explicit=replicas_explicit)
 

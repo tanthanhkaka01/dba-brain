@@ -24,7 +24,9 @@ from dbabrain.lib.docker_db_spec import ENGINE_META
 
 # Statuses that mean "this will never become healthy without intervention".
 DEAD_STATES = ("exited", "dead", "removing", "paused")
-MISSING = "missing"
+#: The container is not there at all. Named for what it is - a status - since ``MISSING`` is also
+#: the repository check's word for a proven file that is gone (lib.repository_check).
+STATUS_MISSING = "missing"
 
 
 def container_state_command(service: str) -> list[str]:
@@ -91,7 +93,7 @@ def wait_healthy(
             return statuses
         # A dead container will not recover on its own; waiting out the budget only delays
         # the same answer by up to half an hour and mislabels it "timeout".
-        if any(s in DEAD_STATES or s == MISSING for s in statuses.values()):
+        if any(s in DEAD_STATES or s == STATUS_MISSING for s in statuses.values()):
             return statuses
         if time.monotonic() >= deadline:
             return {svc: (s if s == "healthy" else "timeout") for svc, s in statuses.items()}
@@ -110,7 +112,7 @@ def failure_detail(statuses: dict[str, str], *, tail: int = 20, runner=subproces
         if status == "healthy":
             continue
         parts.append(f"--- {svc} ({status}) ---")
-        if status == MISSING:
+        if status == STATUS_MISSING:
             parts.append("container does not exist (compose up did not create it, or it was removed)")
             continue
         try:
@@ -128,12 +130,12 @@ def _probe_once(service: str, engine: str, *, runner) -> str:
     # below fail identically for a container that is gone.
     state_result = runner(container_state_command(service), capture_output=True, text=True, check=False)
     if getattr(state_result, "returncode", 1) != 0:
-        return MISSING
+        return STATUS_MISSING
     state = (state_result.stdout or "").strip().lower()
     if state in DEAD_STATES:
         return state
     if not state:
-        return MISSING
+        return STATUS_MISSING
 
     inspect = runner(container_health_command(service), capture_output=True, text=True, check=False)
     status = (inspect.stdout or "").strip().lower()

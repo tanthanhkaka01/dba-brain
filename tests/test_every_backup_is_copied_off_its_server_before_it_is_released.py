@@ -18,7 +18,10 @@ So these tests hold the four promises a person relies on when they turn ``offloa
 4. a repository copy is never a restore and never a drill - it does not mark the file as used.
 
 Two hosts are simulated by one fake ``common.cli``: ``file-checksum`` on either, ``copy-files`` from
-the source to the repository (which can corrupt a copy on demand), ``delete-files`` on the source.
+the source to the repository (which can corrupt a copy on demand), ``delete-verified-file`` on the
+source. The fake holds both to the real commands' rules (0.37.0): every copy line states its file's
+name, bytes and sha256, and the source is read only when they are its own; a delete names ONE file
+with its name, path, bytes and sha256, inside its fence, and deletes only when all of them are true.
 The catalog is a real SQLite one.
 """
 
@@ -35,7 +38,7 @@ from dbabrain.backup_restore import workflow
 from dbabrain.db.backup_catalog import (
     ADDED_CONSTRAINTS, OFFLOAD_COLUMNS, BackupCatalogError, BackupCatalogStore, _migrate)
 from dbabrain.lib import integrity as I
-from dbabrain.lib.offload import BackupOffload
+from dbabrain.lib.offload import BackupOffload, parse_repository_retention
 
 SRC, REPO = "A1A-SRC-01", "A1A-REPO-01"
 BACKUP_DIR = "/var/opt/mssql/backup"
@@ -59,6 +62,9 @@ class _Net:
         self.deleted: list[str] = []
         self.fences: list[str] = []
         self.share_reads: list[str] = []
+        self.delete_requests: list[dict] = []
+        self.copy_lines: list[dict] = []
+        self.overwrites: list[bool] = []
 
     def run(self, command, request, **_kwargs):
         self.calls.append(command)
@@ -73,12 +79,28 @@ class _Net:
                               for p in request["paths"] if p in files]}
         if command == "copy-files":
             lines = []
+            assert isinstance(request["overwrite"], bool), "overwrite is stated on every copy"
+            self.overwrites.append(request["overwrite"])
             for item in request["files"]:
+                self.copy_lines.append(dict(item))
+                # The real command refuses a line without every fact (filecopy._files).
+                assert set(item) == {"source", "target", "file_name", "size_bytes", "sha256"}, item
+                assert item["file_name"] == item["target"].rsplit("/", 1)[-1]
                 if "source_share" in request:
                     self.share_reads.append(item["source"])
                     data = self.source.get("D:\\SQLBK\\" + item["source"])
                 else:
                     data = self.source.get(item["source"])
+                if data is not None and (len(data) != item["size_bytes"] or _sha(data) != item["sha256"]):
+                    # The real copier holds the stream to the stated facts and lands nothing otherwise.
+                    lines.append({"source": item["source"], "target": item["target"], "ok": False,
+                                  "bytes_copied": 0, "error": "FactMismatch: not the file stated"})
+                    continue
+                if not request["overwrite"] and item["target"] in self.repo:
+                    lines.append({"source": item["source"], "target": item["target"], "ok": False, "exists": True,
+                                  "bytes_copied": 0, "error": "the target already holds a file and overwrite "
+                                                              "is false - left as it is"})
+                    continue
                 if data is None or self.copy_fails:
                     lines.append({"source": item["source"], "target": item["target"], "ok": False,
                                   "bytes_copied": 0, "error": "FileNotFoundError: gone"})
@@ -93,23 +115,66 @@ class _Net:
                 lines.append({"source": item["source"], "target": item["target"], "ok": True,
                               "bytes_copied": len(data), "error": ""})
             return {"files": lines}
-        if command == "delete-files":
-            self.fences.append(request["must_be_under"])
-            out = []
-            files = self.source if request["host"]["host"] == "src" else self.repo
-            for path in request["paths"]:
-                assert path.startswith(request["must_be_under"])
-                status = "deleted" if files.pop(path, None) is not None else "not_found"
-                self.deleted.append(path)
-                out.append({"path": path, "status": status})
-            return {"files": out}
+        # Nothing deletes through a list of bare paths any more (0.37.0): delete-files is not answered.
         raise AssertionError(command)
+
+    def run_allowing_failure(self, command, request, **_kwargs):
+        """``(ok, data, error)`` - the transport's form for a command whose failure is data."""
+        self.calls.append(command)
+        if command == "delete-verified-files":
+            # The list form: each item the single command's request, the first one not deleted stops it.
+            assert set(request) <= {"host", "files", "dry_run", "timeout_seconds"}, request
+            rows, stopped = [], False
+            for item in request["files"]:
+                assert set(item) == {"path", "file_name", "size_bytes", "sha256", "must_be_under"}, item
+                if stopped:
+                    rows.append({**item, "status": "not_attempted", "reason": "an earlier item stopped the list"})
+                    continue
+                _ok, data, _e = self._delete_one({"host": request["host"], **item})
+                rows.append(data["file"])
+                stopped = data["file"]["status"] not in ("deleted", "not_found")
+            return (not stopped), {"files": rows, "complete": not stopped}, ("stopped" if stopped else "")
+        if command == "delete-empty-folder":
+            path = request["path"].rstrip("/")
+            assert path.startswith(request["must_be_under"].rstrip("/") + "/")
+            files = self.source if request["host"]["host"] == "src" else self.repo
+            inside = [p for p in files if p.startswith(path + "/")]
+            status = "refused" if inside else "deleted"
+            if not inside:
+                self.deleted.append(path + "/")
+            return (not inside), {"folder": {"path": path, "status": status,
+                                             "reason": f"holds {inside[0]}" if inside else ""}}, ""
+        assert command == "delete-verified-file", command
+        return self._delete_one(request)
+
+    def _delete_one(self, request):
+        self.delete_requests.append(dict(request))
+        # The real command's request rules (deleteverified): one path, every fact, a fence.
+        assert set(request) <= {"host", "path", "file_name", "size_bytes", "sha256", "must_be_under",
+                                "dry_run", "timeout_seconds"}, request
+        assert "paths" not in request and isinstance(request["path"], str)
+        path, root = request["path"], request["must_be_under"]
+        assert path.startswith(root.rstrip("/\\") + ("\\" if "\\" in path else "/"))
+        assert request["file_name"] == path.replace("\\", "/").rsplit("/", 1)[-1]
+        self.fences.append(root)
+        files = self.source if request["host"]["host"] == "src" else self.repo
+        data = files.get(path)
+        line = {"path": path, "file_name": request["file_name"], "size_bytes": request["size_bytes"],
+                "sha256": request["sha256"]}
+        if data is None:
+            return True, {"file": {**line, "status": "not_found", "reason": ""}, "deleted": False}, ""
+        if len(data) != request["size_bytes"] or _sha(data) != request["sha256"]:
+            return False, {"file": {**line, "status": "refused", "reason": "not the file stated"}}, "refused"
+        del files[path]
+        self.deleted.append(path)
+        return True, {"file": {**line, "status": "deleted", "reason": ""}, "deleted": True}, ""
 
 
 @pytest.fixture
 def net(monkeypatch):
     fake = _Net()
     monkeypatch.setattr(O.common_cli, "run", fake.run)
+    monkeypatch.setattr(O.common_cli, "run_allowing_failure", fake.run_allowing_failure)
     return fake
 
 
@@ -124,6 +189,9 @@ def _offload(**overrides):
     values = dict(enabled=True, server_id=REPO, folder="/repository", copy_max_retry=2, scan="none",
                   delete_source=False, source_share="", source_username="", source_password_ref="")
     values.update(overrides)
+    if isinstance(values.get("retention"), dict):
+        # As an entry states it: seconds per file type (offload_retention), read by the one parser.
+        values["retention"] = parse_repository_retention(values["retention"], label="test")
     return BackupOffload(**values)
 
 
@@ -235,7 +303,7 @@ def test_files_written_before_the_offload_was_turned_on_are_copied_too_and_a_ful
 def test_a_copy_that_arrives_corrupted_is_copied_again_until_it_is_proven(catalog, net):
     _backup(catalog, net, [("APPDB", "FULL", "APPDB_FULL.bak", b"full bytes")])
     net.corrupt_next = 1
-    entry = _entry()
+    entry = _entry(offload=_offload(copy_overwrite=True))
     answer = O.offload_entry(entry, catalog=catalog, hosts=_hosts(entry),
                              rows=catalog.files_to_offload(backup_id=entry.backup_id), sleep=lambda _s: None)
 
@@ -246,7 +314,7 @@ def test_a_copy_that_arrives_corrupted_is_copied_again_until_it_is_proven(catalo
 def test_a_truncated_copy_is_neither_checksum_nor_bytes_and_is_copied_again_with_both_recorded(catalog, net):
     _backup(catalog, net, [("APPDB", "FULL", "APPDB_FULL.bak", b"full backup bytes")])
     net.truncate_next = 1
-    entry = _entry()
+    entry = _entry(offload=_offload(copy_overwrite=True))
     answer = O.offload_entry(entry, catalog=catalog, hosts=_hosts(entry),
                              rows=catalog.files_to_offload(backup_id=entry.backup_id), sleep=lambda _s: None)
 
@@ -279,7 +347,7 @@ def test_a_copy_that_never_lands_on_the_repository_spends_every_retry_and_keeps_
 def test_a_copy_that_never_arrives_intact_is_failed_with_its_reason_and_the_source_is_untouched(catalog, net):
     _backup(catalog, net, [("APPDB", "FULL", "APPDB_FULL.bak", b"full bytes")])
     net.corrupt_next = 99
-    entry = _entry(offload=_offload(copy_max_retry=2))
+    entry = _entry(offload=_offload(copy_max_retry=2, copy_overwrite=True))
     answer = O.offload_entry(entry, catalog=catalog, hosts=_hosts(entry),
                              rows=catalog.files_to_offload(backup_id=entry.backup_id), sleep=lambda _s: None)
 
@@ -289,6 +357,33 @@ def test_a_copy_that_never_arrives_intact_is_failed_with_its_reason_and_the_sour
     assert row["state"] == "present" and f"{HOST_DIR}/APPDB/FULL/APPDB_FULL.bak" in net.source
     with catalog.connect() as conn:
         assert conn.execute("SELECT phase FROM restore_runs").fetchone()["phase"] == "refused"
+
+
+def test_without_overwrite_a_differing_file_already_on_the_repository_is_kept_and_the_row_fails(catalog, net):
+    _backup(catalog, net, [("APPDB", "FULL", "APPDB_FULL.bak", b"full bytes")])
+    target = "/repository/A1A-SRC-01/APPDB/FULL/APPDB_FULL.bak"
+    net.repo[target] = b"something else"
+    entry = _entry(offload=_offload(copy_max_retry=1))
+
+    answer = O.offload_entry(entry, catalog=catalog, hosts=_hosts(entry),
+                             rows=catalog.files_to_offload(backup_id=entry.backup_id), sleep=lambda _s: None)
+
+    assert net.overwrites and not any(net.overwrites), "offload_copy_overwrite false travels as overwrite false"
+    assert answer["verified"] == 0 and net.repo[target] == b"something else"
+    row = _rows(catalog)["APPDB_FULL.bak"]
+    assert row["offload_state"] == "failed" and row["state"] == "present"
+
+
+def test_without_overwrite_an_identical_file_already_on_the_repository_is_proven_not_copied_again(catalog, net):
+    _backup(catalog, net, [("APPDB", "FULL", "APPDB_FULL.bak", b"full bytes")])
+    target = "/repository/A1A-SRC-01/APPDB/FULL/APPDB_FULL.bak"
+    net.repo[target] = b"full bytes"            # an earlier pass landed it and died before recording
+    entry = _entry()
+
+    answer = O.offload_entry(entry, catalog=catalog, hosts=_hosts(entry),
+                             rows=catalog.files_to_offload(backup_id=entry.backup_id), sleep=lambda _s: None)
+
+    assert answer["verified"] == 1 and _rows(catalog)["APPDB_FULL.bak"]["offload_state"] == "verified"
 
 
 def test_a_backup_that_changed_after_it_was_written_is_never_copied(catalog, net):
@@ -338,7 +433,7 @@ def test_a_verified_source_is_released_but_the_newest_chain_stays_on_the_server(
     assert answer["deleted"] == 2 and answer["refused"] == []
     assert answer["kept"] == 0, "the newest chain is not even offered: the query keeps it out"
     assert sorted(net.deleted) == [f"{HOST_DIR}/APPDB/FULL/APPDB_FULL_1.bak", f"{HOST_DIR}/APPDB/LOG/APPDB_LOG_1.trn"]
-    assert net.fences == [HOST_DIR], "the delete is fenced to the backup folder as the host names it"
+    assert net.fences == [HOST_DIR, HOST_DIR], "each delete is fenced to the backup folder as the host names it"
     rows = _rows(catalog)
     assert rows["APPDB_FULL_1.bak"]["state"] == "pruned" and rows["APPDB_FULL_1.bak"]["source_deleted_at"]
     assert rows["APPDB_FULL_2.bak"]["state"] == "present" and rows["APPDB_LOG_2.trn"]["source_deleted_at"] is None
@@ -357,6 +452,71 @@ def test_a_repository_copy_that_changed_since_it_was_proven_keeps_its_source(cat
     assert row["offload_state"] == "failed" and row["state"] == "present"
     assert row["checksum_matches"] == 1, "the SOURCE is still the backup's bytes - only the copy changed"
     assert [r["file_name"] for r in catalog.files_to_offload(backup_id=entry.backup_id)] == ["APPDB_FULL_1.bak"]
+
+
+def test_each_released_file_is_its_own_delete_command_carrying_its_name_path_bytes_and_sha256(catalog, net):
+    entry = _two_chains(catalog, net)
+
+    O.release_sources(entry, catalog=catalog, hosts=_hosts(entry),
+                      rows=catalog.files_to_release(backup_id=entry.backup_id))
+
+    assert net.calls.count("delete-verified-file") == 2 and "delete-files" not in net.calls
+    by_name = {r["file_name"]: r for r in net.delete_requests}
+    assert set(by_name) == {"APPDB_FULL_1.bak", "APPDB_LOG_1.trn"}
+    full = by_name["APPDB_FULL_1.bak"]
+    assert full["path"] == f"{HOST_DIR}/APPDB/FULL/APPDB_FULL_1.bak"
+    assert full["size_bytes"] == len(b"full one") and full["sha256"] == _sha(b"full one")
+    assert full["must_be_under"] == HOST_DIR
+
+
+def test_a_source_that_changed_after_its_copy_was_verified_is_refused_by_the_host_and_kept(catalog, net):
+    """The repository copy is still the backup; the file on the server is not any more. The delete
+    states the backup's facts, so the host refuses it - the changed file stays, the copy stays."""
+    entry = _two_chains(catalog, net)
+    net.source[f"{HOST_DIR}/APPDB/FULL/APPDB_FULL_1.bak"] = b"full ONE"      # same size, other bytes
+
+    answer = O.release_sources(entry, catalog=catalog, hosts=_hosts(entry),
+                               rows=catalog.files_to_release(backup_id=entry.backup_id))
+
+    assert net.deleted == [f"{HOST_DIR}/APPDB/LOG/APPDB_LOG_1.trn"]
+    assert answer["deleted"] == 1 and len(answer["refused"]) == 1
+    assert answer["refused"][0].startswith("APPDB_FULL_1.bak: delete refused")
+    assert f"{HOST_DIR}/APPDB/FULL/APPDB_FULL_1.bak" in net.source
+    assert _rows(catalog)["APPDB_FULL_1.bak"]["state"] == "present"
+
+
+@pytest.mark.parametrize("column, value, words", [
+    ("checksum_after_backup", None, "no sha256 recorded"),
+    ("size_bytes", None, "no size recorded"),
+])
+def test_a_row_without_its_recorded_facts_is_never_sent_to_delete(catalog, net, column, value, words):
+    entry = _two_chains(catalog, net)
+    rows = catalog.files_to_release(backup_id=entry.backup_id)
+    rows = [{**r, column: value} if r["file_name"] == "APPDB_LOG_1.trn" else r for r in rows]
+    # The repository re-check would refuse a row without a checksum first; this holds the delete
+    # request itself to its facts, whatever reaches it.
+    with pytest.raises(O.OffloadRefused, match=words):
+        O.release_request(entry, next(r for r in rows if r["file_name"] == "APPDB_LOG_1.trn"), _hosts(entry))
+
+
+def test_a_catalog_name_that_is_not_the_paths_last_part_is_never_sent_to_delete(catalog, net):
+    entry = _two_chains(catalog, net)
+    row = {**catalog.files_to_release(backup_id=entry.backup_id)[0], "file_name": "SOMETHING_ELSE.bak"}
+    with pytest.raises(O.OffloadRefused, match="not the last part"):
+        O.release_request(entry, row, _hosts(entry))
+
+
+def test_every_copy_line_carries_the_files_name_bytes_and_sha256_measured_on_the_source(catalog, net):
+    _backup(catalog, net, [("APPDB", "FULL", "APPDB_FULL_20261030.bak", b"full bytes")])
+    entry = _entry()
+    O.offload_entry(entry, catalog=catalog, hosts=_hosts(entry),
+                    rows=catalog.files_to_offload(backup_id=entry.backup_id), sleep=lambda _s: None)
+
+    [line] = net.copy_lines
+    assert line == {"source": f"{HOST_DIR}/APPDB/FULL/APPDB_FULL_20261030.bak",
+                    "target": "/repository/A1A-SRC-01/APPDB/FULL/APPDB_FULL_20261030.bak",
+                    "file_name": "APPDB_FULL_20261030.bak", "size_bytes": len(b"full bytes"),
+                    "sha256": _sha(b"full bytes")}
 
 
 def test_a_database_with_no_full_on_the_server_releases_nothing(catalog, net):
@@ -400,8 +560,57 @@ def test_a_base_backup_directory_is_copied_file_by_file_its_manifest_held_to_the
                              rows=catalog.files_to_offload(backup_id="PG01"), sleep=lambda _s: None)
 
     assert answer["verified"] == 1
-    assert sorted(net.repo) == [f"/repository/A1A-SRC-01/base/20261030T010000Z_FULL/{n}"
-                                for n in ("backup_manifest", "base.tar", "pg_wal.tar")]
+    assert sorted(net.repo) == [f"/repository/A1A-SRC-01/_instance/base/20261030T010000Z_FULL/{n}"
+                                for n in ("backup_manifest", "base.tar", "pg_wal.tar")],         "an instance-wide base backup goes under _instance, the engine's own base/ kept below it"
+
+
+# --------------------------------------------------------------------------- #
+# The repository's layout: <folder>/<server_id>/<db_name>/<the engine's own folders> (0.37.0)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("backup_dir, row, expected", [
+    # SQL Server writes <DB>/FULL|DIFF|LOG/<file>: already database first, kept as it is.
+    ("/var/opt/mssql/backup", {"database_name": "APPDB", "file_type": "FULL",
+                               "file_path": "/var/opt/mssql/backup/APPDB/FULL/APPDB_FULL_1.bak"},
+     "/mnt/nas/SRV-01/APPDB/FULL/APPDB_FULL_1.bak"),
+    ("/var/opt/mssql/backup", {"database_name": "APPDB", "file_type": "LOG",
+                               "file_path": "/var/opt/mssql/backup/APPDB/LOG/APPDB_LOG_1.trn"},
+     "/mnt/nas/SRV-01/APPDB/LOG/APPDB_LOG_1.trn"),
+    ("D:\\SQLBK", {"database_name": "HR", "file_type": "DIFF", "file_path": "D:\\SQLBK\\HR\\DIFF\\HR_DIFF.bak"},
+     "/mnt/nas/SRV-01/HR/DIFF/HR_DIFF.bak"),
+    # PostgreSQL's base/ and wal/ are the whole instance's.
+    ("/backup", {"database_name": "", "file_type": "FULL_BASE", "file_path": "/backup/base/20261030T010000Z_FULL"},
+     "/mnt/nas/SRV-01/_instance/base/20261030T010000Z_FULL"),
+    ("/backup", {"database_name": None, "file_type": "WAL", "file_path": "/backup/wal/000000010000000000000001"},
+     "/mnt/nas/SRV-01/_instance/wal/000000010000000000000001"),
+    # Oracle's RMAN pieces are flat in their folder: under their database.
+    ("/opt/oracle/backup/dbops", {"database_name": "FREE", "file_type": "RMAN_L0",
+                                  "file_path": "/opt/oracle/backup/dbops/FREE_L0_20261101_x.bkp"},
+     "/mnt/nas/SRV-01/FREE/FREE_L0_20261101_x.bkp"),
+    # Outside the backup folder: <db_name>/<file_type>/<file>.
+    ("/backup", {"database_name": "APPDB", "file_type": "log", "file_name": "a.trn", "file_path": "/elsewhere/a.trn"},
+     "/mnt/nas/SRV-01/APPDB/LOG/a.trn"),
+])
+def test_every_copy_sits_under_its_server_id_and_its_database(backup_dir, row, expected):
+    entry = _entry(server_id="SRV-01", backup_dir=backup_dir, offload=_offload(folder="/mnt/nas/"))
+    assert O.repository_path(entry, row) == expected
+
+
+def test_two_servers_with_a_database_of_the_same_name_never_share_a_folder():
+    row = {"database_name": "APPDB", "file_type": "FULL", "file_path": "/b/APPDB/FULL/APPDB_FULL_1.bak"}
+    one = O.repository_path(_entry(server_id="SRV-01", backup_dir="/b"), row)
+    two = O.repository_path(_entry(server_id="SRV-02", backup_dir="/b"), row)
+    assert one != two and one.split("/")[2] == "SRV-01" and two.split("/")[2] == "SRV-02"
+
+
+def test_a_certificate_or_key_is_never_offered_to_the_repository(catalog, net):
+    _backup(catalog, net, [("APPDB", "FULL", "APPDB_FULL.bak", b"full"),
+                           ("_cert", "CERT", "dbabrain_backup_cert.cer", b"cer"),
+                           ("_cert", "CERT", "dbabrain_backup_cert.pvk", b"pvk")])
+
+    offered = [r["file_name"] for r in catalog.files_to_offload(backup_id="SRC01_MSSQL")]
+
+    assert offered == ["APPDB_FULL.bak"]
+    assert "CERT" in I.NEVER_ON_REPOSITORY
 
 
 def test_a_windows_source_is_hashed_on_its_own_host_and_read_through_its_share(catalog, net):

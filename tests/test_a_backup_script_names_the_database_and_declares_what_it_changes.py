@@ -76,17 +76,18 @@ def test_the_postgres_port_travels_as_an_argument_not_as_an_environment_variable
 
 
 def test_every_client_call_in_the_container_uses_the_same_connection_arguments(pg: str):
-    """Four calls: pg_is_in_recovery, summarize_wal, the system identifier, and the backup itself.
+    """Five calls: pg_is_in_recovery, the server's version (0.37.0: it decides tar or plain),
+    summarize_wal, the system identifier, and the backup itself.
 
-    They are one variable rather than four argument lists because the failure of threading a port
-    into three of four is not an error — it is a check that silently ran against a different
+    They are one variable rather than five argument lists because the failure of threading a port
+    into four of five is not an error — it is a check that silently ran against a different
     cluster than the backup did.
     """
     code = statements(pg)
     client_calls = [line for line in code.splitlines()
                     if "run_db " in line and ("psql " in line or "pg_basebackup " in line)]
 
-    assert len(client_calls) == 4, client_calls
+    assert len(client_calls) == 5, client_calls
     assert all("${pg_conn}" in line for line in client_calls), client_calls
     # Exactly once, in the line that builds pg_conn. A second occurrence is a call site that was
     # written with its own argument list instead of the shared one.

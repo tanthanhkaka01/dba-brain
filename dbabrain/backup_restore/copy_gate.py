@@ -173,6 +173,7 @@ def copy_verified_batch(
     restore_run_id: int | None = None,
     copy_engine: str = "",
     sleep: Callable[[float], None] = time.sleep,
+    copy_said: Callable[[FileToCopy], str | None] | None = None,
 ) -> list[FileOutcome]:
     """Prove every file of a run onto the target; one outcome per item, in order.
 
@@ -180,6 +181,11 @@ def copy_verified_batch(
     hashed in one call, the targets before the copy in one, and each round of copies is followed by
     one hash of everything it copied. A round's failures are copied again together, after one pause -
     so ``copy_max_retry`` is the number of rounds after the first, for every file alike.
+
+    ``copy_said`` is for a copier whose files travel together when the round is hashed (the restore's
+    staging copy): what the round said about one file that did not arrive - "will not fit", the
+    transfer's own error. Without it the attempt records only that the file is not there, and the
+    reason a person needs is on nobody's screen (0.38.0, 1.329).
     """
     if integrity is None:
         # R50: the entry states it, or the gate does not run - never a silent 3.
@@ -283,8 +289,10 @@ def copy_verified_batch(
             item, outcome, attempt = items[index], outcomes[index], attempts[index]
             if index in copied:
                 found = after.get(item.target_path)
+                said = str(copy_said(item) or "").strip() if copy_said is not None else ""
                 if found is None:
-                    attempt.error_text = f"{item.target_path} is not on {item.target_server_id} after the copy"
+                    attempt.error_text = (f"{item.target_path} is not on {item.target_server_id} after the copy"
+                                          + (f" - {said}" if said else ""))[:2000]
                 else:
                     attempt.checksum_target_after_copy, attempt.size_target_after_copy = found
                     attempt.result = "match" if same_bytes(found, sha_of[index], size_of[index]) else "mismatch"
@@ -292,6 +300,9 @@ def copy_verified_batch(
                         # The hash agrees and the size does not: the two readings disagree about one
                         # file, which is never proof - named, so the row says which one failed.
                         attempt.error_text = _size_note(found, size_of[index])
+                    if attempt.result == "mismatch" and said:
+                        # What is there is not the source's bytes, and the round said why it is not.
+                        attempt.error_text = (f"{attempt.error_text} - {said}" if attempt.error_text else said)[:2000]
             outcome.attempts.append(attempt)
             record.record_copy_attempt(
                 run_file_id=outcome.run_file_id, attempt_no=attempt_no, source_server_id=item.source_server_id,

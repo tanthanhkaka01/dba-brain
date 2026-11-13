@@ -388,11 +388,10 @@ def test_the_common_command_refuses_to_delete_a_postgresql_backup_by_name(monkey
          "finished_at": "2026-10-02 09:00:00", "age_seconds": 2580},
     ]}
     monkeypatch.setattr("dbabrain.common.backupfiles.list_backup_files", lambda request: listed)
-    monkeypatch.setattr("dbabrain.common.deletefiles.delete_files",
-                        lambda request: pytest.fail("nothing may be deleted"))
     code = cli_backup_files._prune({"db_type": "postgresql", "path": "/b", "cleanup_retention": 7200,
                                     "delete": True, "host": {}})
     answer = json.loads(capsys.readouterr().out)
+    # Since 0.38.0 the command deletes for no engine: it answers the plan and refuses the flag.
     assert code != 0 and answer["success"] is False
-    assert "delete is not available for postgresql" in answer["message"]
-    assert answer["data"]["counts"]["obsolete"] == 1 and answer["data"]["deleted"] is None
+    assert "no longer deletes" in answer["message"]
+    assert answer["data"]["counts"]["obsolete"] == 1 and "deleted" not in answer["data"]

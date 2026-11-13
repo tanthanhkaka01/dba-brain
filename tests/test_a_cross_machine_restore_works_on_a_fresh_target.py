@@ -19,6 +19,8 @@ an 11433 lab is the other instance. Each of these is pinned below; the drill its
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -57,16 +59,15 @@ class _FreshTarget(_Sftp):
         return super().listdir_attr(path)
 
 
-def test_the_first_run_creates_the_target_folder_before_looking_in_it(monkeypatch):
+def test_the_first_run_creates_the_target_folder_before_looking_in_it():
     source = _Client(sftp=_Sftp({"/src": [("a.bak", 100, False)]}))
     target_sftp = _FreshTarget({})
-    monkeypatch.setattr(transfer, "_stream_files", lambda **kw: True)
 
-    result = transfer.sync_backup_dir(source_session=source, source_dir="/src",
+    result = transfer.prepare_staging(source_session=source, source_dir="/src",
                                       target_session=_Client(sftp=target_sftp), target_dir="/dst")
 
     assert "/dst" in target_sftp.made
-    assert result.copied == 1
+    assert [rel for rel, _size, _mtime in result.pending] == ["a.bak"], "and its one file is still to travel"
 
 
 class _Refusing(_Sftp):
@@ -87,7 +88,7 @@ def test_an_unreadable_source_still_stops_the_copy():
     source = _Client(sftp=_Refusing({}, path="/src", error=IOError(13, "Permission denied")))
 
     with pytest.raises(PermissionError, match="could not be read by the SSH user"):
-        transfer.sync_backup_dir(source_session=source, source_dir="/src",
+        transfer.prepare_staging(source_session=source, source_dir="/src",
                                  target_session=_Client(sftp=_Sftp({})), target_dir="/dst")
 
 
@@ -98,7 +99,7 @@ def test_a_source_folder_that_does_not_exist_is_said_to_be_missing_not_unreadabl
 
     with pytest.raises(FileNotFoundError, match="does not exist on that host - no backup has been "
                                                 "written there yet") as caught:
-        transfer.sync_backup_dir(source_session=source, source_dir="/src",
+        transfer.prepare_staging(source_session=source, source_dir="/src",
                                  target_session=_Client(sftp=_Sftp({})), target_dir="/dst")
     assert "could not be read" not in str(caught.value)
 
@@ -108,7 +109,7 @@ def test_a_folder_removed_while_it_is_listed_stops_the_copy_and_says_so():
     source = _Client(sftp=_Refusing(tree, path="/src/full", error=IOError(2, "No such file")))
 
     with pytest.raises(FileNotFoundError, match="disappeared while it was being listed"):
-        transfer.sync_backup_dir(source_session=source, source_dir="/src",
+        transfer.prepare_staging(source_session=source, source_dir="/src",
                                  target_session=_Client(sftp=_Sftp({})), target_dir="/dst")
 
 
@@ -141,10 +142,21 @@ def _job(**env):
         overwrite_existing=True)
 
 
+VAULT_CER, VAULT_PVK = b"DER-CERT-BYTES", b"PVK-BYTES"
+
+
 @pytest.fixture
 def plan(monkeypatch):
     calls: list[tuple[str, dict]] = []
-    monkeypatch.setattr(restore_by_id, "_execute", lambda op, request: calls.append((op, request)) or {"ok": True})
+
+    def execute(op, request):
+        if op == "push-file":  # what push-file would carry: the bytes the vault handed over
+            request = {**request, "bytes": Path(request["local_path"]).read_bytes()}
+        calls.append((op, request))
+        return {"ok": True}
+    monkeypatch.setattr(restore_by_id, "_execute", execute)
+    monkeypatch.setattr(restore_by_id, "_vault_pair", lambda server_id, name: (
+        VAULT_CER, VAULT_PVK, {"certificate_id": 7, "thumbprint": "t"}) if server_id == "SRC" else None)
 
     def listing_(request):
         calls.append(("list", request))
@@ -168,8 +180,50 @@ def plan(monkeypatch):
 def test_the_certificate_is_imported_before_the_backups_are_listed(plan):
     steps, calls = plan(_job())
 
-    assert [op for op, _ in calls][:2] == ["restore-key", "list"]
-    assert steps[0]["op"] == "restore-key" and steps[0]["done"] is True
+    assert [op for op, _ in calls][:7] == ["push-file", "push-file", "restore-key", "delete-verified-file",
+                                           "delete-verified-file", "delete-empty-folder", "list"]
+    assert steps[0]["op"] == "restore-key" and steps[0]["done"] is True and steps[0]["vault_row"] == 7
+
+
+def test_the_certificate_comes_from_the_vault_and_is_removed_one_file_at_a_time(plan):
+    """0.37.0, the operator: kept in dbabrain, never copied with the backups - placed on the target
+    by its own command for the import, then deleted, each file held to its own bytes and sha256."""
+    _steps, calls = plan(_job())
+    pushed = [request for op, request in calls if op == "push-file"]
+    assert [p["bytes"] for p in pushed] == [VAULT_CER, VAULT_PVK]
+    assert [p["remote_path"] for p in pushed] == ["/in/__dbabrain_cert/dbabrain_backup_cert.cer",
+                                                  "/in/__dbabrain_cert/dbabrain_backup_cert.pvk"]
+    key = next(request for op, request in calls if op == "restore-key")
+    assert key["cer_path"] == pushed[0]["remote_path"] and "_cert/" not in key["cer_path"].replace("__dbabrain_cert", "")
+    deleted = [request for op, request in calls if op == "delete-verified-file"]
+    assert [(d["path"], d["size_bytes"], d["sha256"]) for d in deleted] == [
+        ("/in/__dbabrain_cert/dbabrain_backup_cert.cer", len(VAULT_CER), hashlib.sha256(VAULT_CER).hexdigest()),
+        ("/in/__dbabrain_cert/dbabrain_backup_cert.pvk", len(VAULT_PVK), hashlib.sha256(VAULT_PVK).hexdigest())]
+    assert all(d["must_be_under"] == "/in/__dbabrain_cert" and "paths" not in d for d in deleted)
+    folder = next(request for op, request in calls if op == "delete-empty-folder")
+    assert folder["path"] == "/in/__dbabrain_cert" and folder["must_be_under"] == "/in"
+
+
+def test_a_certificate_the_vault_does_not_hold_fails_the_restore_before_anything_is_placed(plan):
+    job = _job()
+    job.server_id = "OTHER"
+    with pytest.raises(restore_by_id.RestoreByIdError, match="take-certificate"):
+        plan(job)
+
+
+def test_a_failed_import_still_removes_the_pair_from_the_target(plan, monkeypatch):
+    calls = []
+
+    def execute(op, request):
+        calls.append(op)
+        if op == "restore-key":
+            raise restore_by_id.RestoreByIdError("Msg 15208")
+        return {"ok": True}
+    monkeypatch.setattr(restore_by_id, "_execute", execute)
+    with pytest.raises(restore_by_id.RestoreByIdError, match="15208"):
+        plan(_job())
+    assert calls == ["push-file", "push-file", "restore-key", "delete-verified-file", "delete-verified-file",
+                     "delete-empty-folder"]
 
 
 def test_a_dry_run_imports_nothing(plan):

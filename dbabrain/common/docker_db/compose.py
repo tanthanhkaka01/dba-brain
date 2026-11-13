@@ -72,6 +72,8 @@ def _connection_info(spec: DockerDbSpec, *, worker_host: str, compose_path: str)
         "password_source": f"env:{spec.password_env}",
         "compose_path": compose_path,
         "connect": connect,
+        **({"data_host_dir": spec.data_host_dir} if spec.data_host_dir else {}),
+        **({"run_as": spec.run_as} if spec.run_as else {}),
     }
 
 
@@ -109,7 +111,7 @@ def build_plan(
     # Database data lives in Docker-managed named volumes (declared in the compose
     # file), so no host data directories are pre-created — a host bind mount would
     # inherit the host uid and break the DB image's own user (permission errors).
-    data_dirs: list[str] = []
+    data_dirs: list[str] = [spec.data_host_dir.rstrip("/")] if spec.data_host_dir else []
 
     return ProvisionPlan(
         spec=spec,

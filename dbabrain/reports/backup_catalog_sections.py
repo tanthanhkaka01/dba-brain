@@ -78,9 +78,235 @@ def _restore(row: dict) -> dict:
     }
 
 
-def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id: str) -> dict:
+def _base(path: str) -> str:
+    return str(path or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+def load_repository(catalog: Any, backup_rows: list[dict]) -> dict[int, dict]:
+    """What the repository holds of each backup row that went there (0.37.0, the operator 2026-11-11:
+    *encrypted or not, with which key, until when; the checksum and bytes before and after encryption;
+    the three files of one FULL shown as one backup*): ``{file_id: repository facts}``, read in a few
+    queries for the whole page. A row no offload took has none."""
+    from dbabrain.db.repository_encryption_store import RepositoryEncryptionStore
+
+    ids = [int(r["file_id"]) for r in backup_rows if r.get("offload_state") or r.get("offload_path")]
+    if not ids:
+        return {}
+    members = catalog.offload_members_of(ids)
+    store = RepositoryEncryptionStore(catalog.target)
+    sealed = store.files_of_many(ids)
+    keys = {int(k["key_id"]): k for k in store.keys()}
+    by_id = {int(r["file_id"]): r for r in backup_rows}
+    return {fid: repository_facts(by_id[fid], members.get(fid, []), sealed.get(fid, []), keys) for fid in ids}
+
+
+def repository_facts(row: dict, members: list[dict], sealed: list[dict], keys: dict[int, dict]) -> dict:
+    """One backup's repository copy, file by file: on the server (bytes, sha256 before the copy) ->
+    on the repository (bytes, sha256 after) -> encrypted (the .age file's bytes and sha256, its key and
+    the moment that key stops encrypting, proven, the plain file removed there)."""
+    by_plain = {str(f.get("plain_path") or ""): f for f in sealed}
+    files = []
+    for m in members:
+        target = str(m.get("target_path") or "")
+        age = by_plain.pop(target, None)
+        key = keys.get(int(age["key_id"])) if age else None
+        files.append({
+            "name": _base(target or m.get("source_path") or ""),
+            "serverPath": m.get("source_host_path") or m.get("source_path") or "",
+            "bytes": m.get("size_source_bytes"), "sha256": m.get("checksum_source_before_copy"),
+            "repoPath": target, "repoBytes": m.get("size_target_bytes") if m.get("size_target_bytes") is not None
+            else m.get("size_source_bytes"),
+            "repoSha256": m.get("checksum_target_after_copy"),
+            # The copy's own start and end (its attempts'); null for a copy made before they were read
+            # here - never the run's end, which comes after the verify.
+            "copyStartedAt": m.get("copy_started_at"), "copiedAt": m.get("copy_ended_at"),
+            "age": _age(age, key),
+        })
+    # An encrypted file whose copy row is not among the newest proven ones: shown, never dropped.
+    for age in by_plain.values():
+        key = keys.get(int(age["key_id"]))
+        files.append({"name": _base(age.get("plain_path")), "serverPath": "", "bytes": age.get("plain_size_bytes"),
+                      "sha256": age.get("plain_sha256"), "repoPath": age.get("plain_path"),
+                      "repoBytes": age.get("plain_size_bytes"), "repoSha256": age.get("plain_sha256"),
+                      "copyStartedAt": None, "copiedAt": None, "age": _age(age, key)})
+    proven = [f for f in files if f["age"] and f["age"]["provenAt"]]
+    return {
+        "server": row.get("offload_server_id") or "", "state": row.get("offload_state") or "",
+        "path": row.get("offload_path") or "", "verifiedAt": row.get("offload_verified_at"),
+        "expiredAt": row.get("offload_expired_at"), "error": row.get("offload_error") or "",
+        "files": files, "encrypted": len(proven), "total": len(files),
+        # The moments of the copy's life, for the row's timeline (1.345): when the first file's copy
+        # began, and - once EVERY file of the backup has reached it - when the last one was copied,
+        # encrypted, proven, and had no plain file left there. Null while one file has not.
+        "copyStartedAt": min((f["copyStartedAt"] for f in files if f["copyStartedAt"]), default=None),
+        "copiedAt": _when_all(f["copiedAt"] for f in files),
+        "encryptedAt": _when_all((f["age"] or {}).get("encryptedAt") for f in files),
+        "provenAt": _when_all((f["age"] or {}).get("provenAt") for f in files),
+        "plainGoneAt": _when_all((f["age"] or {}).get("plainRemovedAt") for f in files),
+        "keys": sorted({f["age"]["keyId"] for f in files if f["age"]}),
+        "keyUntil": min((f["age"]["keyUntil"] for f in files if f["age"] and f["age"]["keyUntil"]), default=None),
+    }
+
+
+def _when_all(moments) -> str | None:
+    """The latest of ``moments`` when every one is there - the instant the last file got there; else
+    ``None``: a backup is copied, encrypted or proven only once all its files are."""
+    values = [str(m) if m else "" for m in moments]
+    return max(values) if values and all(values) else None
+
+
+def _age(age: dict | None, key: dict | None) -> dict | None:
+    if not age:
+        return None
+    return {"path": age.get("encrypted_path"), "bytes": age.get("encrypted_size_bytes"),
+            "sha256": age.get("encrypted_sha256"), "keyId": int(age["key_id"]),
+            "keyUntil": (key or {}).get("encrypt_until"), "algorithm": age.get("algorithm") or "",
+            "encryptedAt": age.get("encrypted_at"), "provenAt": age.get("proven_at"),
+            "plainRemovedAt": age.get("plain_deleted_at")}
+
+
+def _on_server(row: dict) -> dict:
+    """Where the backup stands on its own server: there, deleted after its repository copy was
+    verified (when), only the manifest the next incremental reads, or gone without a release."""
+    from dbabrain.db.backup_catalog import MANIFEST_KEPT
+
+    if row.get("source_deleted_at"):
+        return {"state": "released", "at": row.get("source_deleted_at")}
+    if row.get("pruned_by") == MANIFEST_KEPT:
+        return {"state": "manifest_only", "at": None}
+    if _flag(row.get("on_disk")) is False:
+        return {"state": "pruned" if row.get("state") == "pruned" else "missing", "at": None,
+                "by": row.get("pruned_by") or ""}
+    return {"state": "present", "at": None}
+
+
+# --------------------------------------------------------------------------- #
+# A file's restore chain (0.38.0, 1.345)
+# --------------------------------------------------------------------------- #
+# The operator, 2026-11-12, reading one LOG file's row (translated): *and if the file is a diff or a
+# log, can the full, diff, log chain be had?* A log alone restores nothing: what a restore to its end
+# reads is the newest full before it, the differential or incrementals after that full, and every
+# log since. The catalog holds each of them with its moment, so the page can name them and say where
+# each is - on the repository, on the server, or nowhere.
+#
+# By time, not by the row's recorded link (`chain_parent_file_id`): that link was written as "the
+# newest full still on the server", and a full released to the repository is no longer that - on the
+# estate every log after a release pointed at an older full, or at none (see `chain_rows`).
+def _level(row: dict) -> str:
+    return integrity.LEVEL_OF_FILE_TYPE.get(str(row.get("file_type") or "").upper(), "")
+
+
+def _moment(row: dict) -> tuple[str, int]:
+    """When a file ended and its id - the order of a chain, the id breaking a tie."""
+    return str(row.get("ended_at") or row.get("backup_ended_at") or row.get("created_at") or ""), int(row["file_id"])
+
+
+def _of(row: dict) -> tuple[str, str]:
+    return str(row.get("server_id") or ""), str(row.get("database_name") or "")
+
+
+def _base_full(row: dict, fulls: list[dict]) -> dict | None:
+    """The newest of ``fulls`` (one database's, oldest first) that ended before ``row`` did."""
+    at = _moment(row)
+    earlier = [f for f in fulls if _moment(f) < at]
+    return earlier[-1] if earlier else None
+
+
+def load_chains(catalog: Any, backup_rows: list[dict]) -> dict[int, dict]:
+    """``{file_id: chain}`` for the diff and log rows a page shows (:func:`build_chains`): per server,
+    its fulls, then every diff and log since the oldest full one of those rows builds on."""
+    wanted = [r for r in backup_rows[:ROW_LIMIT] if _level(r) in ("diff", "log")]
+    chains: dict[int, dict] = {}
+    for server_id in sorted({_of(r)[0] for r in wanted}):
+        rows = [r for r in wanted if _of(r)[0] == server_id]
+        fulls = catalog.chain_rows(server_id, levels=("full",))
+        by_db: dict[tuple[str, str], list[dict]] = {}
+        for full in fulls:
+            by_db.setdefault(_of(full), []).append(full)
+        bases = [base for base in (_base_full(r, by_db.get(_of(r), [])) for r in rows) if base]
+        rest = (catalog.chain_rows(server_id, levels=("diff", "log"), since=min(_moment(b)[0] for b in bases))
+                if bases else [])
+        chains.update(build_chains(rows, [*fulls, *rest]))
+    return chains
+
+
+def _link(row: dict) -> dict:
+    return {"type": row.get("file_type"), "name": row.get("file_name"), "at": _moment(row)[0],
+            "repo": row.get("offload_state") or "", "repoServer": row.get("offload_server_id") or "",
+            "onServer": _on_server(row)["state"], "deletedAt": row.get("source_deleted_at")}
+
+
+def _can_be_had(row: dict) -> bool:
+    """A restore can read the file: its repository copy is verified, or it is still on its server."""
+    return row.get("offload_state") == "verified" or _on_server(row)["state"] == "present"
+
+
+def build_chains(backup_rows: list[dict], chain_rows: list[dict]) -> dict[int, dict]:
+    """For each diff or log among ``backup_rows``: the files a restore to its end reads, and whether
+    every one can be had. ``chain_rows``: ``BackupCatalogStore.chain_rows`` - the fulls, diffs and
+    logs of the same servers, oldest first.
+
+    The full is the newest of the same database on the same server that ended before the file. A SQL
+    Server differential holds everything since its full, so only the newest one after that full
+    counts; an incremental of another engine builds on the one before it, so every one since the full
+    does. Logs: every one after the last of those (or the full) up to the file itself. By the
+    catalog's order of ending - the engine's own check of the chain (LSNs, WAL names) is the
+    restore's, before it restores anything."""
+    groups: dict[tuple[str, str], dict[str, list[dict]]] = {}
+    for row in chain_rows:
+        if _level(row) in ("full", "diff", "log"):
+            groups.setdefault(_of(row), {"full": [], "diff": [], "log": []})[_level(row)].append(row)
+    for group in groups.values():
+        for rows in group.values():
+            rows.sort(key=_moment)
+
+    chains: dict[int, dict] = {}
+    for row in backup_rows:
+        level = _level(row)
+        if level not in ("diff", "log"):
+            continue
+        file_id, group = int(row["file_id"]), groups.get(_of(row), {"full": [], "diff": [], "log": []})
+        full = _base_full(row, group["full"])
+        if full is None:
+            chains[file_id] = {"full": None, "diffs": [], "logs": None, "complete": False, "onRepository": False,
+                               "missing": [], "missingCount": 0, "selfGone": not _can_be_had(row),
+                               "note": "the catalog holds no full backup of this database taken before this file"}
+            continue
+        at, since = _moment(row), _moment(full)
+        cumulative = str(row.get("engine") or full.get("engine") or "") == "sqlserver"
+        before = [d for d in group["diff"] if since < _moment(d) < at]
+        if level == "diff":
+            diffs, logs = ([] if cumulative else before) + [row], []
+        else:
+            diffs = before[-1:] if cumulative else before
+            base = _moment(diffs[-1]) if diffs else since
+            logs = [entry for entry in group["log"] if base < _moment(entry) <= at]
+            if not any(int(entry["file_id"]) == file_id for entry in logs):
+                logs.append(row)
+        needed = [full, *diffs, *logs]
+        gone = [r for r in needed if not _can_be_had(r)]
+        chains[file_id] = {
+            "full": _link(full), "diffs": [_link(d) for d in diffs],
+            "logs": ({"count": len(logs), "from": _moment(logs[0])[0], "to": _moment(logs[-1])[0],
+                      "onRepository": sum(1 for r in logs if r.get("offload_state") == "verified"),
+                      "onServer": sum(1 for r in logs if _on_server(r)["state"] == "present")} if logs else None),
+            "complete": not gone,
+            "onRepository": all(r.get("offload_state") == "verified" for r in needed),
+            "missing": [str(r.get("file_name")) for r in gone[:5]], "missingCount": len(gone), "note": "",
+            # The file itself is nowhere any more - a chain its retention swept, which is history, not
+            # an alarm. The alarm is a file still kept whose chain lacks a piece.
+            "selfGone": not _can_be_had(row),
+        }
+    return chains
+
+
+def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id: str,
+                repository: dict[int, dict] | None = None, chains: dict[int, dict] | None = None) -> dict:
     """``backup_rows``: ``BackupCatalogStore.server_backup_files``; ``restore_rows``:
-    ``server_restore_files`` - both newest first already."""
+    ``server_restore_files`` - both newest first already; ``repository``: :func:`load_repository`;
+    ``chains``: :func:`load_chains`."""
+    repository = repository or {}
+    chains = chains or {}
     by_id: dict[int, list[dict]] = {}
     by_name: dict[str, list[dict]] = {}
     for row in restore_rows:
@@ -100,6 +326,8 @@ def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id:
         files.append({
             "kind": "backup",
             "at": row.get("backup_ended_at") or row.get("created_at"),
+            # When the engine began writing it - the first moment of the row's timeline (1.345).
+            "startedAt": row.get("backup_started_at"),
             "server": row.get("server_id"),
             "database": row.get("database_name") or "",
             "type": row.get("file_type"),
@@ -128,6 +356,10 @@ def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id:
                       "result": row.get("last_restore_result"), "verdict": row.get("last_restore_verdict")}
                      if row.get("last_restore_run_id") is not None else None),
             "lastRestore": _restore(restores[0]) if restores else None,
+            "repo": repository.get(int(row["file_id"])),
+            "onServer": _on_server(row),
+            # A diff's or a log's restore chain; null on a full, which is its own.
+            "chain": chains.get(int(row["file_id"])),
         })
 
     # Restores of another server's files onto this one, and this server's files that no catalogued
@@ -159,10 +391,16 @@ def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id:
             "mark": {"at": restore["at"], "action": restore["action"], "target": restore["target"],
                      "result": restore["phase"], "verdict": restore["verdict"]},
             "lastRestore": restore,
+            "repo": None, "onServer": None,
         })
 
     files.sort(key=lambda f: str(f.get("at") or ""), reverse=True)
     return summarize(files, total=len(backup_rows) + len(restore_rows))
+
+
+def _missing(f: dict) -> bool:
+    state = (f.get("onServer") or {}).get("state")
+    return state == "missing" if state else f.get("onDisk") is False
 
 
 def summarize(files: list[dict], *, total: int) -> dict:
@@ -177,7 +415,8 @@ def summarize(files: list[dict], *, total: int) -> dict:
         "total": total, "shown": len(files),
         "notOk": sum(1 for f in files if f["kind"] == "backup" and f["verdict"] != "ok"),
         "changed": sum(1 for f in files if f["checksumMatches"] is False),
-        "missing": sum(1 for f in files if f["onDisk"] is False),
+        # Gone from its server without a release or a retention prune: a deleted-as-meant file is not missing.
+        "missing": sum(1 for f in files if _missing(f)),
         "used": sum(1 for f in files if f["usedCount"]),
         "restoredOk": sum(1 for f in files if f["restoredOk"]),
         "notProven": sum(1 for f in files if f["lastRestore"] and not f["lastRestore"]["proven"]),
@@ -207,7 +446,8 @@ def build_retention(rows: list[dict]) -> list[dict]:
     return out
 
 
-def build_fleet(per_server: dict[str, tuple[list[dict], list[dict]]]) -> dict:
+def build_fleet(per_server: dict[str, tuple[list[dict], list[dict]]],
+                repository: dict[int, dict] | None = None, chains: dict[int, dict] | None = None) -> dict:
     """Every server's files in one table - the fleet page, ``backup-restore.html``.
 
     ``per_server``: ``{server_id: (server_backup_files, server_restore_files)}``. Each server's rows
@@ -219,7 +459,7 @@ def build_fleet(per_server: dict[str, tuple[list[dict], list[dict]]]) -> dict:
     files: list[dict] = []
     total = 0
     for server_id, (backup_rows, restore_rows) in sorted(per_server.items()):
-        table = build_files(backup_rows, restore_rows, server_id=server_id)
+        table = build_files(backup_rows, restore_rows, server_id=server_id, repository=repository, chains=chains)
         total += table["total"]
         files += [{**row, "host": server_id} for row in table["files"] if row["kind"] != "restored_here"]
     files.sort(key=lambda f: str(f.get("at") or ""), reverse=True)
@@ -282,6 +522,14 @@ def build_drills(runs: list[dict], *, now, entries: list[dict] | None = None) ->
             "ok_7": ok_7, "runs_7": runs_7, "ok_30": ok_30, "runs_30": runs_30,
             "state": drill_tiers.drill_state(tier, last_success, now),
         })
+    if entries is not None:
+        # A drill whose entry is gone from the config: its runs stay in the catalog, but it is no
+        # deadline's any more - listed as such, never as a failing drill (2026-11-11: the store's
+        # repository drill read "error" for a week after its entry was removed).
+        configured = {str(e.get("restore_id") or "") for e in entries}
+        for row in rows:
+            if row["restore_id"] not in configured:
+                row["state"] = "REMOVED"
     listed = {row["restore_id"] for row in rows}
     for entry in entries or []:
         restore_id = str(entry.get("restore_id") or "")
@@ -308,8 +556,8 @@ def build_coverage(rows: list[dict]) -> list[dict]:
         key = (str(row.get("server_id") or ""), str(row.get("database_name") or ""))
         item = grouped.setdefault(key, {"server_id": key[0], "database_name": key[1],
                                         "engine": row.get("engine"), "levels": set(), "files": 0,
-                                        "offloaded": 0, "newest_full": None, "newest_log": None,
-                                        "last_restored": None})
+                                        "offloaded": 0, "newest_full": None, "newest_diff": None,
+                                        "newest_log": None, "last_restored": None})
         level = integrity.LEVEL_OF_FILE_TYPE.get(str(row.get("file_type") or "").upper())
         if level:
             item["levels"].add(level)
@@ -317,6 +565,10 @@ def build_coverage(rows: list[dict]) -> list[dict]:
         item["offloaded"] += int(row.get("offloaded") or 0)
         if level == "full":
             item["newest_full"] = max(filter(None, [item["newest_full"], row.get("newest")]), default=None)
+        if level == "diff":
+            # A differential or an incremental (1.345): the table said when the newest full and the
+            # newest log were, and nothing of the level between them.
+            item["newest_diff"] = max(filter(None, [item["newest_diff"], row.get("newest")]), default=None)
         if level == "log":
             item["newest_log"] = max(filter(None, [item["newest_log"], row.get("newest")]), default=None)
         item["last_restored"] = max(filter(None, [item["last_restored"], row.get("last_restored")]), default=None)

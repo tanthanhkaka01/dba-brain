@@ -582,6 +582,39 @@ const securityBlock = s => {
     <div class="dblist" style="margin-top:5px">${bits.join("")}</div></div>`;
 };
 
+/* ---------- Protection: who can take the server's files ---------- */
+/* Data-file encryption, the host's administrators and the edition against the environment
+   (reports/protection.py). The counts here; every row is on the server's own page. */
+const protectionBlock = s => {
+  const p = s.protection||{}, enc = p.encryption||{}, adm = p.admins||{};
+  if(!enc.collected && !adm.collected && !(p.findings||[]).length) return '';
+  const warn = ' style="color:var(--warn);border-color:var(--warn-line)"';
+  const crit = ' style="color:var(--crit);border-color:var(--crit-line)"';
+  const bits = [];
+  if(p.editionFinding) bits.push(`<span class="dbchip"${warn}>${esc(p.editionFinding)}</span>`);
+  if(enc.collected){
+    if(enc.error) bits.push(`<span class="dbchip"${warn} title="${esc(enc.error)}">data-file encryption not read</span>`);
+    else {
+      const scope = (enc.items||[]).length && enc.items[0].scope==='tablespace' ? 'tablespaces' : 'databases';
+      bits.push(`<span class="dbchip"${enc.encrypted<enc.total?warn:''} title="${esc((enc.items||[]).filter(i=>!i.encrypted).map(i=>i.name).join(", "))}">data files encrypted: ${enc.encrypted} of ${enc.total} ${scope}</span>`);
+      (enc.items||[]).filter(i=>i.vault==='not kept').forEach(i=>bits.push(`<span class="dbchip"${crit}>${esc(i.name)}: certificate not in the vault</span>`));
+      (enc.keystores||[]).filter(k=>k.opensWithoutPassword==='yes').forEach(k=>bits.push(`<span class="dbchip"${warn}>${esc(k.name)}: auto-login keystore on the host</span>`));
+    }
+  }
+  if(adm.collected){
+    if(adm.error) bits.push(`<span class="dbchip"${warn} title="${esc(adm.error)}">host administrators not read</span>`);
+    else {
+      bits.push(`<span class="dbchip" title="${esc((adm.accounts||[]).map(a=>a.group+": "+a.account).join(", "))}">host administrators: ${adm.distinctAccounts} account(s)</span>`);
+      if((adm.keys||[]).length) bits.push(`<span class="dbchip">keys that open root: ${adm.keys.length}</span>`);
+      (adm.settings||[]).filter(x=>x.marked).forEach(x=>bits.push(`<span class="dbchip"${warn}>${esc(x.name)} = ${esc(x.value)}</span>`));
+      if((adm.unreadable||[]).length) bits.push(`<span class="dbchip" title="${esc(adm.unreadable.map(u=>u.section+": "+u.why).join(" | "))}">${adm.unreadable.length} section(s) not read</span>`);
+    }
+  }
+  (p.changes||[]).forEach(c=>bits.push(`<span class="dbchip"${c.status==='WARNING'?warn:crit}>${esc(c.message.split(" | ")[0])}</span>`));
+  return `<div class="f" style="margin-top:12px"><div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">Protection — who can take the files</div>
+    <div class="dblist" style="margin-top:5px">${bits.join("")}</div></div>`;
+};
+
 /* ---------- Data freshness ---------- */
 /* Static inventory and live metrics used to render identically, so a backup time from June
    sat next to one from an hour ago with nothing to tell them apart. */
@@ -771,6 +804,7 @@ document.getElementById("details").innerHTML = sorted.map(s=>`
         <div class="dblist" style="margin-top:5px">${s.disks.map(d=>`<span class="dbchip" style="${d.sev==='crit'?'color:var(--crit);border-color:var(--crit-line)':d.sev==='warn'?'color:var(--warn);border-color:var(--warn-line)':''}">${esc(diskText(d))}</span>`).join("")}</div></div>`:''}
       ${dbTable(s)}
       ${securityBlock(s)}
+      ${protectionBlock(s)}
       ${(!(s.databases||[]).length && s.dbs && s.dbs.length)?`<div class="f" style="margin-top:12px"><div class="k" style="color:var(--muted);font-size:11px;text-transform:uppercase">Databases (${s.dbs.length})</div>
         <div class="dblist">${s.dbs.map(d=>`<span class="dbchip">${esc(d)}</span>`).join("")}</div></div>`:''}
       ${workloadBlock(s)}

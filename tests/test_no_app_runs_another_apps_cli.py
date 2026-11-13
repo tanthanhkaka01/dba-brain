@@ -22,7 +22,7 @@ import pytest
 
 DBABRAIN = Path(__file__).resolve().parents[1] / "dbabrain"
 APPS = frozenset({"backup_restore", "control", "jobs", "metrics", "reports", "sla", "sql_tasks",
-                  "sre", "telegram", "webhost"})
+                  "sre", "telegram", "webhost", "mcp"})
 
 #: (file, the app whose CLI it starts) - measured 2026-09-25, when there were four; empty since
 #: 0.24.0, and it stays empty. Gone: `telegram`'s alias of a `reports` command, the bot's SQL task

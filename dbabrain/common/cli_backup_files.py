@@ -1,11 +1,17 @@
 """``list-backup-files`` and ``prune-backup-files`` — what an engine holds, and what of it is dead.
 
-Plumbing only: :mod:`dbabrain.common.backupfiles` decides, :mod:`dbabrain.common.deletefiles` removes,
-:mod:`dbabrain.lib.response` shapes the answer, this reads argv and prints.
+Plumbing only: :mod:`dbabrain.common.backupfiles` decides, :mod:`dbabrain.lib.response` shapes the
+answer, this reads argv and prints.
 
 Two commands rather than one because listing and pruning answer to different people. A listing is
 safe to run anywhere by anyone; a prune has a verdict in it, and the verdict is the thing worth
 reading before anything is deleted.
+
+**Neither deletes** (0.38.0, 1.329). ``prune-backup-files`` took ``delete: true`` and removed every
+obsolete path through the old path-list delete - many files in one command, none held to anything.
+It now answers the plan and refuses the flag: each file is deleted on its own, by
+``delete-verified-file`` when the catalog recorded it and by ``delete-file`` with ``"force": true``
+when it did not.
 """
 
 from __future__ import annotations
@@ -69,7 +75,7 @@ An empty `files` is a normal answer, not an error - a chain with no differential
 PRUNE_USAGE = f"""\
 Usage: python -m dbabrain.common.cli prune-backup-files '<json>'|@file|-
 
-Which backups are obsolete, and optionally remove them.
+Which backups are obsolete under a retention window. It answers; it deletes nothing (0.38.0).
 
   {{"db_type": "oracle",
    "path": "/opt/oracle/backup/dbops",
@@ -77,8 +83,7 @@ Which backups are obsolete, and optionally remove them.
    "mode": "age",                    // DEFAULT age. age | recovery_window
    "kinds": ["full", "diff", "log"], // default: all three. controlfile is opt-in, as in list
    "database": "SALESDB_STG",            // optional; judge one database of a SQL Server directory
-   "delete": false,                  // DEFAULT false - report only. true actually removes.
-   "dry_run": false,                 // with delete=true: go through the motions, remove nothing
+   "delete": false,                  // true is REFUSED since 0.38.0 - see below
 
 {_HOST_BLOCK}}}
 
@@ -98,19 +103,19 @@ agree.
 Both keep a file whose finished_at the engine could not state: "unknown age" is not "old".
 `recovery_window` judges per database, because a chain belongs to one.
 
-`delete: true` removes them one file at a time through the same path as delete-files, with the
-same refusals. Without it the command only answers - and `obsolete_paths` is exactly the array
-delete-files takes as `paths`, so deciding and deleting can stay two deliberate steps.
+`delete: true` is refused (0.38.0): one command never deletes two files, and a path from a listing
+is not a file held to its facts. Deciding and deleting are two steps - this answers `obsolete_paths`,
+and each file is then deleted on its own: delete-verified-file for a file the catalog recorded (its
+name, path, bytes and sha256), delete-file with "force": true for one it did not. A configured
+backup entry does both through `backup_restore prune-backups --apply`.
 
-ORACLE: this removes files, not RMAN's record of them. A backup piece deleted from disk leaves
-RMAN still listing it. Prefer `DELETE OBSOLETE` inside RMAN for an RMAN-managed directory; use
-this to report on one, or to clean files RMAN does not own.
+ORACLE: prefer `DELETE OBSOLETE` inside RMAN for an RMAN-managed directory - a piece deleted from
+disk leaves RMAN still listing it. Use this to report on one.
 
 data: {{"mode", "retention_days", "cutoff",
        "obsolete": [{{"path", "kind", "database_name", "size_bytes", "finished_at", "verdict", "reason"}}, ...],
        "keep":     [ ...same shape... ],
-       "obsolete_paths": [path, ...], "counts", "reclaimable_bytes",
-       "deleted": {{...}}}}   // only when delete=true; the delete-files answer verbatim
+       "obsolete_paths": [path, ...], "counts", "reclaimable_bytes"}}
 """
 
 _COMMANDS = {"list-backup-files": LIST_USAGE, "prune-backup-files": PRUNE_USAGE}
@@ -188,62 +193,22 @@ def _prune(request: dict) -> int:
     metrics = {"duration_ms": int((time.monotonic() - started) * 1000),
                "reclaimable_bytes": plan["reclaimable_bytes"], **counts}
 
-    if not request.get("delete"):
-        return response.emit(response.ok(
+    if request.get("delete"):
+        # The plan is still the answer's data: what would have gone is the thing to read next.
+        return response.emit(response.fail(
             operation,
-            message=(f"{counts['obsolete']} of {counts['total']} backup file(s) obsolete under a "
-                     f"{plan['window']} {plan['mode']} rule "
-                     f"({_bytes(plan)}). Nothing deleted: pass delete=true."),
+            "prune-backup-files no longer deletes (0.38.0): one command never deletes two files. "
+            f"{counts['obsolete']} of {counts['total']} file(s) are obsolete - their paths are in "
+            "data.obsolete_paths. Delete each on its own: delete-verified-file for a file the catalog "
+            "recorded, delete-file with \"force\": true for one it did not; a configured entry: "
+            "backup_restore prune-backups --apply. Nothing was deleted.",
             data=plan, metrics=metrics))
-
-    if not plan["obsolete_paths"]:
-        return response.emit(response.ok(
-            operation,
-            message=f"Nothing obsolete under a {plan['window']} {plan['mode']} rule.",
-            data={**plan, "deleted": None}, metrics=metrics))
-
-    if str(request.get("db_type") or "").strip().lower() in {"postgresql", "postgres"}:
-        # Refused by name rather than attempted: every path here is a directory, and the delete
-        # below takes files only - it planned, then failed on each one, and had never removed a
-        # PostgreSQL backup. The engine's own way is the backup script's: whole chains, and
-        # pg_archivecleanup for the WAL archive.
-        return response.emit(response.fail(
-            operation,
-            "delete is not available for postgresql: a base backup is a directory in a chain, and "
-            "the backup script removes whole chains itself (RETENTION_DAYS, or RETENTION_SECONDS "
-            "under a day). Nothing was deleted; the plan is in data.",
-            data={**plan, "deleted": None}, metrics=metrics))
-
-    from dbabrain.common.deletefiles import delete_files
-
-    try:
-        deleted = delete_files({
-            "paths": plan["obsolete_paths"],
-            "host": request.get("host"),
-            # The directory being pruned is the only place this may remove anything from. The
-            # paths came from the listing of that directory, so the fence costs nothing and closes
-            # the gap between listing and deleting if the two ever disagree.
-            "must_be_under": request.get("path"),
-            "dry_run": bool(request.get("dry_run")),
-        })
-    except Exception as exc:  # noqa: BLE001
-        return response.emit(response.fail(operation, str(exc), data=plan, metrics=metrics))
-
-    data = {**plan, "deleted": deleted}
-    metrics = {**metrics, "deleted": deleted["counts"]["deleted"],
-               "freed_bytes": deleted["freed_bytes"]}
-    if deleted["counts"]["failed"]:
-        return response.emit(response.fail(
-            operation,
-            f"{deleted['counts']['failed']} obsolete file(s) could not be deleted: "
-            f"{'; '.join(deleted['failed'][:3])}",
-            data=data, metrics=metrics))
-    verb = "would be deleted" if request.get("dry_run") else "deleted"
     return response.emit(response.ok(
         operation,
-        message=(f"{counts['obsolete']} obsolete file(s) {verb} "
-                 f"({deleted['freed_bytes']} bytes freed), {counts['keep']} kept."),
-        data=data, metrics=metrics))
+        message=(f"{counts['obsolete']} of {counts['total']} backup file(s) obsolete under a "
+                 f"{plan['window']} {plan['mode']} rule ({_bytes(plan)}). Nothing deleted: this "
+                 "command only answers."),
+        data=plan, metrics=metrics))
 
 
 def _bytes(plan: dict) -> str:

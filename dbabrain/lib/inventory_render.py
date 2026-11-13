@@ -225,6 +225,9 @@ HEALTH_BLOCKS = ["instance_health", "metric_severity", "metric_problems", "metri
                  # canonical file and not from the overlay.
                  "workload",
                  "security_health", "config_warnings", "os_health", "inventory_status",
+                 # Who can take the server's files (0.38.0): data-file encryption, the host's
+                 # administrators, the edition against the environment.
+                 "protection",
                  # When the blocks above were collected. A server the overlay does not reach
                  # keeps its previous blocks *and* its previous stamp, so the report can say
                  # "last known 20/06" instead of presenting stale values as current.

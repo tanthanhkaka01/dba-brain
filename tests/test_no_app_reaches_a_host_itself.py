@@ -23,7 +23,7 @@ import pytest
 
 DBABRAIN = Path(__file__).resolve().parents[1] / "dbabrain"
 APPS = frozenset({"backup_restore", "control", "jobs", "metrics", "reports", "sla", "sql_tasks",
-                  "sre", "telegram", "webhost"})
+                  "sre", "telegram", "webhost", "mcp"})
 
 #: Libraries that open a session to another machine. An app never imports one; `common` does.
 HOST_LIBRARIES = frozenset({"paramiko", "pypsrp", "winrm", "smbprotocol", "smbclient", "fabric"})

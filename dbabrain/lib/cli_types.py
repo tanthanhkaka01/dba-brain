@@ -141,6 +141,8 @@ CopyFilesAnswer = TypedDict('CopyFilesAnswer', {
     'copied': int | None,
     'failed': int | None,
     'bytes_copied': int | None,
+    'transfer': str | None,
+    'encrypted': bool | None,
 }, total=False)
 
 
@@ -204,19 +206,140 @@ BackupPruneAnswer = TypedDict('BackupPruneAnswer', {
     'total': int | None,
     'reclaimable_bytes': int | None,
     'sizes_known': bool | None,
-    'deleted': dict[str, Any] | None,
 }, total=False)
 
 
-#: Files deleted on a host, one row each, and what it freed. (delete-file, delete-files)
+#: The one stray file a forced delete removed, with the bytes and sha256 the host measured. (delete-file)
 FileDeleteAnswer = TypedDict('FileDeleteAnswer', {
     'file': dict[str, Any] | None,
-    'files': list[Any] | None,
-    'counts': dict[str, Any] | None,
-    'freed_bytes': int | None,
-    'failed': list[Any] | None,
+    'deleted': bool | None,
     'dry_run': bool | None,
-    'stopped_early': bool | None,
+    'forced': bool | None,
+}, total=False)
+
+
+#: The one folder: how many entries it held, and whether it is gone. (delete-empty-folder)
+FolderDeleteEmptyAnswer = TypedDict('FolderDeleteEmptyAnswer', {
+    'folder': dict[str, Any] | None,
+    'deleted': bool | None,
+    'dry_run': bool | None,
+}, total=False)
+
+
+#: Each folder's row (as delete-empty-folder answers it) and the count of each outcome. (delete-empty-folders)
+FoldersDeleteEmptyAnswer = TypedDict('FoldersDeleteEmptyAnswer', {
+    'folders': list[Any] | None,
+    'deleted': int | None,
+    'not_found': int | None,
+    'skipped': int | None,
+    'not_attempted': int | None,
+    'complete': bool | None,
+    'stopped_at': dict[str, Any] | None,
+    'dry_run': bool | None,
+}, total=False)
+
+
+#: The file's bytes as the host stated them, proven on arrival. (read-file)
+ReadFileAnswer = TypedDict('ReadFileAnswer', {
+    'path': str | None,
+    'file_name': str | None,
+    'size_bytes': int | None,
+    'sha256': str | None,
+    'base64': str | None,
+}, total=False)
+
+
+#: Every entry under a folder - kind, bytes, time - without hashing (0.37.0). (list-files)
+ListFilesRequest = TypedDict('ListFilesRequest', {
+    'host': dict[str, Any] | None,
+    'folder': Required[str],
+    'max_files': int | None,
+    'timeout_seconds': int | None,
+    'with_folders': bool | None,
+}, total=False)
+
+
+#: The folder's entries, each with its kind, bytes and time. (list-files)
+ListFilesAnswer = TypedDict('ListFilesAnswer', {
+    'folder': str | None,
+    'folder_found': bool | None,
+    'files': list[Any] | None,
+    'listed': int | None,
+    'truncated': bool | None,
+    'folders': list[Any] | None,
+}, total=False)
+
+
+#: The plain file and the .age file, each measured. (encrypt-file)
+FileEncryptAnswer = TypedDict('FileEncryptAnswer', {
+    'path': str | None,
+    'encrypted_path': str | None,
+    'size_bytes': int | None,
+    'sha256': str | None,
+    'encrypted_size_bytes': int | None,
+    'encrypted_sha256': str | None,
+    'key_id': int | None,
+    'age_version': str | None,
+}, total=False)
+
+
+#: The .age file proven against both sets of facts. (verify-encrypted-file)
+FileVerifyEncryptedAnswer = TypedDict('FileVerifyEncryptedAnswer', {
+    'path': str | None,
+    'size_bytes': int | None,
+    'sha256': str | None,
+    'plain_size_bytes': int | None,
+    'plain_sha256': str | None,
+    'proven': bool | None,
+}, total=False)
+
+
+#: The file restored, each set of facts proven. (fetch-decrypted-file)
+FileFetchDecryptedAnswer = TypedDict('FileFetchDecryptedAnswer', {
+    'path': str | None,
+    'target_path': str | None,
+    'file_name': str | None,
+    'size_bytes': int | None,
+    'sha256': str | None,
+    'plain_size_bytes': int | None,
+    'plain_sha256': str | None,
+    'transfer': str | None,
+    'restored': bool | None,
+}, total=False)
+
+
+#: The .age file and the decrypted file's facts, held to the request. (decrypt-on-host)
+FileDecryptOnHostAnswer = TypedDict('FileDecryptOnHostAnswer', {
+    'path': str | None,
+    'target_path': str | None,
+    'file_name': str | None,
+    'size_bytes': int | None,
+    'sha256': str | None,
+    'plain_size_bytes': int | None,
+    'plain_sha256': str | None,
+    'restored': bool | None,
+    'already_there': bool | None,
+}, total=False)
+
+
+#: The one file: what was stated, what the host found, and whether it is gone. (delete-verified-file)
+FileDeleteVerifiedAnswer = TypedDict('FileDeleteVerifiedAnswer', {
+    'file': dict[str, Any] | None,
+    'deleted': bool | None,
+    'dry_run': bool | None,
+}, total=False)
+
+
+#: Each file's row (as delete-verified-file answers it) and the count of each outcome. (delete-verified-files)
+FilesDeleteVerifiedAnswer = TypedDict('FilesDeleteVerifiedAnswer', {
+    'files': list[Any] | None,
+    'deleted': int | None,
+    'not_found': int | None,
+    'skipped': int | None,
+    'not_attempted': int | None,
+    'complete': bool | None,
+    'stopped_at': dict[str, Any] | None,
+    'dry_run': bool | None,
 }, total=False)
 
 
@@ -509,30 +632,23 @@ RunSqlcmdAnswer = TypedDict('RunSqlcmdAnswer', {
 }, total=False)
 
 
-#: Which parts of a backup directory a restore needs. (backup-chain)
+#: REFUSED since 0.38.0 - the request backup-chain took; it is read and then refused (prepare-staging reads the chain). (backup-chain)
 BackupChainRequest = TypedDict('BackupChainRequest', {
-    'db_type': Required[str | None],
-    'source': Required[dict[str, Any] | None],
-    'source_dir': Required[str | None],
+    'db_type': str | None,
+    'source': dict[str, Any] | None,
+    'source_dir': str | None,
     'backup_dir': str | None,
     'container': str | None,
     'point_in_time': str | None,
 }, total=False)
 
 
-#: The path prefixes a restore's copy is narrowed to. (backup-chain)
-BackupChainAnswer = TypedDict('BackupChainAnswer', {
-    'include': list[str] | None,
-    'narrowed': bool | None,
-}, total=False)
-
-
-#: A backup directory to copy from one host to another. (copy-backup-dir)
+#: REFUSED since 0.38.0 - the request copy-backup-dir took; it is read and then refused (prepare-staging, copy-files, finish-staging). (copy-backup-dir)
 CopyBackupDirRequest = TypedDict('CopyBackupDirRequest', {
-    'source': Required[dict[str, Any] | None],
-    'source_dir': Required[str | None],
-    'target': Required[dict[str, Any] | None],
-    'target_dir': Required[str | None],
+    'source': dict[str, Any] | None,
+    'source_dir': str | None,
+    'target': dict[str, Any] | None,
+    'target_dir': str | None,
     'include': list[str] | None,
     'window_hours': float | None,
     'make_readable': bool | None,
@@ -545,35 +661,64 @@ CopyBackupDirRequest = TypedDict('CopyBackupDirRequest', {
 }, total=False)
 
 
-#: What one host-to-host copy moved. (copy-backup-dir)
-CopyBackupDirAnswer = TypedDict('CopyBackupDirAnswer', {
-    'copied': int | None,
-    'skipped': int | None,
-    'bytes_copied': int | None,
-    'removed_absent_at_source': int | None,
-    'opened_for_engine': bool | None,
-    'copy_mode': str | None,
-    'copy_fell_back': bool | None,
+#: A restore's staging folder to make ready for a backup directory's files, and the question of which still have to travel. (prepare-staging)
+PrepareStagingRequest = TypedDict('PrepareStagingRequest', {
+    'source': Required[dict[str, Any] | None],
+    'source_dir': Required[str | None],
+    'target': dict[str, Any] | None,
+    'target_dir': str | None,
+    'chain': dict[str, Any] | None,
+    'include': list[str] | None,
+    'window_hours': float | None,
+    'make_readable': bool | None,
     'space_check': dict[str, Any] | None,
-    'files': list[dict[str, Any]] | None,
+    'staging_marker': str | None,
+    'replace': list[str] | None,
+    'plan_only': bool | None,
 }, total=False)
 
 
-#: A restore's staging folder to clear past its retention. (prune-staged-backups)
-PruneStagedBackupsRequest = TypedDict('PruneStagedBackupsRequest', {
+#: The files that just travelled into a staging, to be given their source's times, and the folder to open for the engine. (finish-staging)
+FinishStagingRequest = TypedDict('FinishStagingRequest', {
     'target': Required[dict[str, Any] | None],
     'target_dir': Required[str | None],
+    'files': list[dict[str, Any]] | None,
+    'open_for_engine': bool | None,
+}, total=False)
+
+
+#: Which files a restore's staging needs, which still have to travel, and what it holds that the source no longer has. (prepare-staging)
+PrepareStagingAnswer = TypedDict('PrepareStagingAnswer', {
+    'include': list[str] | None,
+    'narrowed': bool | None,
+    'files': list[dict[str, Any]] | None,
+    'pending': list[dict[str, Any]] | None,
+    'skipped': int | None,
+    'absent_at_source': list[Any] | None,
+    'folders_absent_at_source': list[Any] | None,
+    'space_check': dict[str, Any] | None,
+}, total=False)
+
+
+#: How many staged files were given their source's time, and whether the folder was opened. (finish-staging)
+FinishStagingAnswer = TypedDict('FinishStagingAnswer', {
+    'timed': int | None,
+    'not_timed': list[dict[str, Any]] | None,
+    'opened_for_engine': bool | None,
+}, total=False)
+
+
+#: REFUSED since 0.38.0 - the request a restore's staging cleanup took; it is read and then refused (backup_restore cleans a staging itself, one verified delete per file). (prune-staged-backups)
+PruneStagedBackupsRequest = TypedDict('PruneStagedBackupsRequest', {
+    'target': dict[str, Any] | None,
+    'target_dir': str | None,
     'cleanup_retention': int | None,
     'staging_marker': str | None,
 }, total=False)
 
 
-#: What one staging cleanup removed. (prune-staged-backups)
-PruneStagedBackupsAnswer = TypedDict('PruneStagedBackupsAnswer', {
-    'pruned': int | None,
-    'retention_seconds': int | None,
-    'skipped': str | None,
-    'error': str | None,
+#: Nothing: the command is refused since 0.38.0 and answers a failure naming what replaces it. (delete-files, prune-staged-backups, backup-chain, copy-backup-dir)
+RefusedCommandAnswer = TypedDict('RefusedCommandAnswer', {
 }, total=False)
 
 
@@ -999,11 +1144,14 @@ FileChecksumRequest = TypedDict('FileChecksumRequest', {
 #: Named files copied from one host to another, removing nothing - a repository copy. (copy-files)
 CopyFilesRequest = TypedDict('CopyFilesRequest', {
     'files': list[dict[str, Any]] | None,
+    'overwrite': Required[bool],
     'source': dict[str, Any] | None,
     'source_share': dict[str, Any] | None,
     'target': dict[str, Any] | None,
     'timeout_seconds': int | None,
     'stall_seconds': int | None,
+    'transfer': Required[str],
+    'encrypt': dict[str, Any] | None,
 }, total=False)
 
 
@@ -1031,20 +1179,135 @@ BackupFilesRequest = TypedDict('BackupFilesRequest', {
     'mode': str | None,
     'cleanup_retention': int | None,
     'delete': bool | None,
-    'dry_run': bool | None,
     'timeout_seconds': int | None,
     'wal_segments': bool | None,
 }, total=False)
 
 
-#: Files deleted on a host, never outside a named folder. (delete-file, delete-files)
+#: ONE stray file to delete by force, inside a named folder (delete-files is refused). (delete-file, delete-files)
 FileDeleteRequest = TypedDict('FileDeleteRequest', {
     'host': dict[str, Any] | None,
     'path': str | None,
     'paths': list[Any] | None,
     'must_be_under': Required[str | None],
-    'stop_on_error': bool | None,
+    'force': bool | None,
     'dry_run': bool | None,
+    'timeout_seconds': int | None,
+}, total=False)
+
+
+#: ONE folder deleted only when it holds nothing at all - hidden entries count (0.37.0). (delete-empty-folder)
+FolderDeleteEmptyRequest = TypedDict('FolderDeleteEmptyRequest', {
+    'host': dict[str, Any] | None,
+    'path': Required[str],
+    'must_be_under': Required[str],
+    'dry_run': bool | None,
+    'timeout_seconds': int | None,
+}, total=False)
+
+
+#: A list of empty folders, each deleted as delete-empty-folder deletes one, in the order given (deepest first); the first not deleted stops the list (0.37.0). (delete-empty-folders)
+FoldersDeleteEmptyRequest = TypedDict('FoldersDeleteEmptyRequest', {
+    'host': dict[str, Any] | None,
+    'folders': Required[list[Any]],
+    'dry_run': bool | None,
+    'timeout_seconds': int | None,
+}, total=False)
+
+
+#: ONE small file read on its host, its bytes proven by size and sha256 (0.37.0). (read-file)
+ReadFileRequest = TypedDict('ReadFileRequest', {
+    'host': dict[str, Any] | None,
+    'path': Required[str],
+    'max_bytes': int | None,
+    'timeout_seconds': int | None,
+}, total=False)
+
+
+#: ONE file encrypted with age where it lies on the repository, for a key's public half only (0.37.0). (encrypt-file)
+FileEncryptRequest = TypedDict('FileEncryptRequest', {
+    'host': Required[dict[str, Any] | None],
+    'path': Required[str],
+    'file_name': Required[str],
+    'size_bytes': Required[int],
+    'sha256': Required[str],
+    'must_be_under': Required[str],
+    'recipients': Required[list[str]],
+    'key_id': Required[int],
+    'key_expires_at': Required[str],
+    'timeout_seconds': int | None,
+}, total=False)
+
+
+#: ONE .age file streamed back and decrypted on the way, held to the plain file's facts (0.37.0). (verify-encrypted-file)
+FileVerifyEncryptedRequest = TypedDict('FileVerifyEncryptedRequest', {
+    'host': Required[dict[str, Any] | None],
+    'path': Required[str],
+    'size_bytes': Required[int],
+    'sha256': Required[str],
+    'plain_size_bytes': Required[int],
+    'plain_sha256': Required[str],
+    'identity': Required[str],
+    'timeout_seconds': int | None,
+    'transfer': Required[str],
+}, total=False)
+
+
+#: ONE .age file back from the repository to a restore target, decrypted and proven on the way (0.37.0). (fetch-decrypted-file)
+FileFetchDecryptedRequest = TypedDict('FileFetchDecryptedRequest', {
+    'source': Required[dict[str, Any] | None],
+    'path': Required[str],
+    'size_bytes': Required[int],
+    'sha256': Required[str],
+    'target': Required[dict[str, Any] | None],
+    'target_path': Required[str],
+    'file_name': Required[str],
+    'plain_size_bytes': Required[int],
+    'plain_sha256': Required[str],
+    'identity': Required[str],
+    'transfer': Required[str],
+    'overwrite': Required[bool],
+    'stall_seconds': int | None,
+    'timeout_seconds': int | None,
+}, total=False)
+
+
+#: ONE .age file decrypted where it lies, on the same host - the identity on stdin, both fact sets held (0.37.0). (decrypt-on-host)
+FileDecryptOnHostRequest = TypedDict('FileDecryptOnHostRequest', {
+    'host': Required[dict[str, Any]],
+    'path': Required[str],
+    'size_bytes': Required[int],
+    'sha256': Required[str],
+    'target_path': Required[str],
+    'file_name': Required[str],
+    'plain_size_bytes': Required[int],
+    'plain_sha256': Required[str],
+    'identity': Required[str],
+    'overwrite': Required[bool],
+    'must_be_under': Required[str],
+    'timeout_seconds': int | None,
+}, total=False)
+
+
+#: ONE file deleted only when its name, path, bytes and sha256 are all true on the host (0.37.0). (delete-verified-file)
+FileDeleteVerifiedRequest = TypedDict('FileDeleteVerifiedRequest', {
+    'host': dict[str, Any] | None,
+    'path': Required[str],
+    'file_name': Required[str],
+    'size_bytes': Required[int],
+    'sha256': Required[str],
+    'must_be_under': Required[str],
+    'dry_run': bool | None,
+    'timeout_seconds': int | None,
+}, total=False)
+
+
+#: A list of files, each deleted as delete-verified-file deletes one - its own facts, its own script, over one connection; the first not deleted stops the list (0.37.0). (delete-verified-files)
+FilesDeleteVerifiedRequest = TypedDict('FilesDeleteVerifiedRequest', {
+    'host': dict[str, Any] | None,
+    'files': Required[list[Any]],
+    'dry_run': bool | None,
+    'timeout_seconds': int | None,
 }, total=False)
 
 
@@ -1197,6 +1460,8 @@ VerifyRestoreRequest = TypedDict('VerifyRestoreRequest', {
     'oracle_sid': str | None,
     'timeout_seconds': int | None,
     'consistency': bool | None,
+    'consistency_timeout_seconds': int | None,
+    'consistency_jobs': int | None,
 }, total=False)
 
 
@@ -1227,6 +1492,8 @@ CreateDbDockerRequest = TypedDict('CreateDbDockerRequest', {
     'password': str | None,
     'backup_mount': str | None,
     'network_subnet': str | None,
+    'data_host_dir': str | None,
+    'run_as': str | None,
     'containers_dir': Required[str | None],
     'worker_host': str | None,
     'remote': dict[str, Any] | None,
@@ -1288,6 +1555,7 @@ SmbRequest = TypedDict('SmbRequest', {
     'remote_path': str | None,
     'local_path': str | None,
     'paths': list[Any] | None,
+    'force': bool | None,
     'target': str | None,
 }, total=False)
 
@@ -1843,6 +2111,17 @@ __all__ = [
     'BackupFileAnswer',
     'BackupPruneAnswer',
     'FileDeleteAnswer',
+    'FolderDeleteEmptyAnswer',
+    'FoldersDeleteEmptyAnswer',
+    'ReadFileAnswer',
+    'ListFilesRequest',
+    'ListFilesAnswer',
+    'FileEncryptAnswer',
+    'FileVerifyEncryptedAnswer',
+    'FileFetchDecryptedAnswer',
+    'FileDecryptOnHostAnswer',
+    'FileDeleteVerifiedAnswer',
+    'FilesDeleteVerifiedAnswer',
     'DatabaseListAnswer',
     'SchemaListAnswer',
     'JobListAnswer',
@@ -1864,11 +2143,13 @@ __all__ = [
     'CheckCredentialsAnswer',
     'RunSqlcmdAnswer',
     'BackupChainRequest',
-    'BackupChainAnswer',
     'CopyBackupDirRequest',
-    'CopyBackupDirAnswer',
+    'PrepareStagingRequest',
+    'FinishStagingRequest',
+    'PrepareStagingAnswer',
+    'FinishStagingAnswer',
     'PruneStagedBackupsRequest',
-    'PruneStagedBackupsAnswer',
+    'RefusedCommandAnswer',
     'RegistrationAnswer',
     'ConfigEditAnswer',
     'SecretSetAnswer',
@@ -1898,6 +2179,15 @@ __all__ = [
     'BackupStopRequest',
     'BackupFilesRequest',
     'FileDeleteRequest',
+    'FolderDeleteEmptyRequest',
+    'FoldersDeleteEmptyRequest',
+    'ReadFileRequest',
+    'FileEncryptRequest',
+    'FileVerifyEncryptedRequest',
+    'FileFetchDecryptedRequest',
+    'FileDecryptOnHostRequest',
+    'FileDeleteVerifiedRequest',
+    'FilesDeleteVerifiedRequest',
     'CatalogRequest',
     'TableLoadRequest',
     'DescribeObjectRequest',

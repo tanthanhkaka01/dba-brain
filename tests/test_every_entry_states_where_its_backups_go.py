@@ -221,19 +221,122 @@ def test_every_master_job_states_its_databases_as_a_list():
 
 
 # --------------------------------------------------------------------------- #
-# How long the repository keeps each copy - by the level of its file type
+# How long the repository keeps each copy - seconds per file type (0.37.0, the operator 2026-11-11:
+# *one array, the file type and how long it is kept*; *dbabrain is seconds throughout*)
 # --------------------------------------------------------------------------- #
-def test_the_repository_keeps_each_copy_by_its_level_and_zero_keeps_it_for_good():
-    kept = O.parse_backup_offload({**ON, "offload_retention_full": 2419200, "offload_retention_diff": 1209600,
-                                   "offload_retention_log": 604800}, label="B")
-    assert [kept.retention_of(t) for t in ("FULL", "FULL_BASE", "RMAN_L0", "CERT", "CONTROLFILE")] == [2419200] * 5, \
-        "a certificate or a control file belongs to the full it travels with"
-    assert [kept.retention_of(t) for t in ("DIFF", "INCR_BASE", "RMAN_L1")] == [1209600] * 3
-    assert [kept.retention_of(t) for t in ("LOG", "WAL", "ARCHIVELOG")] == [604800] * 3
-    assert O.parse_backup_offload(STATED, label="B").retention_of("FULL") == 0, "written as 0: never deleted"
+DAY = 86400
 
 
-@pytest.mark.parametrize("value", [-1, "604800", True, 1.5])
-def test_a_retention_that_is_not_whole_seconds_is_refused(value):
-    with pytest.raises(O.OffloadConfigError, match="must be whole seconds"):
-        O.parse_backup_offload({**STATED, "offload_retention_log": value}, label="B")
+def _kept(retention, db_type="sqlserver"):
+    return O.parse_backup_offload({**ON, "offload_retention": retention}, label="B", db_type=db_type)
+
+
+def test_the_repository_keeps_each_copy_by_its_own_file_type():
+    kept = _kept({"FULL": 50 * DAY, "LOG": 100 * DAY})
+    assert kept.retention_of("FULL") == 50 * DAY and kept.retention_of("LOG") == 100 * DAY
+    assert kept.retention_of("DIFF") is None, "a type not named is kept for good"
+    assert kept.shortest_retention() == 50 * DAY
+    assert _kept({"FULL": 50 * DAY, "default": 7 * DAY}).retention_of("DIFF") == 7 * DAY, "default covers the rest"
+    assert _kept({"FULL": "keep", "default": 7 * DAY}).retention_of("FULL") is None, "keep says so outright"
+
+
+def test_written_as_nothing_named_every_copy_is_kept_for_good():
+    assert STATED["offload_retention"] == {}
+    kept = O.parse_backup_offload(STATED, label="B")
+    assert all(kept.retention_of(t) is None for t in ("FULL", "DIFF", "LOG", "FULL_BASE", "WAL", "RMAN_L0"))
+    assert kept.shortest_retention() is None and kept.as_record()["offload_retention"] == {}
+
+
+def test_a_file_without_a_level_of_its_own_goes_by_the_full_of_its_run():
+    oracle = _kept({"RMAN_L0": 30 * DAY, "ARCHIVELOG": 7 * DAY, "default": DAY}, db_type="oracle")
+    assert oracle.retention_of("CONTROLFILE") == oracle.retention_of("SPFILE") == 30 * DAY
+    postgres = _kept({"FULL_BASE": 30 * DAY, "WAL": 7 * DAY}, db_type="postgresql")
+    assert postgres.retention_of("MANIFEST") == 30 * DAY
+
+
+def test_the_value_is_written_back_as_it_was_stated():
+    stated = {"FULL": 50 * DAY, "DIFF": "keep", "LOG": 100 * DAY, "default": DAY}
+    assert _kept(stated).as_record()["offload_retention"] == stated
+
+
+@pytest.mark.parametrize("value", [0, -1, "604800", True, 1.5, None, "forever"])
+def test_a_window_that_is_not_whole_seconds_above_zero_or_keep_is_refused(value):
+    with pytest.raises(O.OffloadConfigError, match="whole seconds above 0"):
+        _kept({"LOG": value})
+
+
+@pytest.mark.parametrize("retention, words", [
+    ({"FUL": DAY}, "is not a file type a sqlserver backup writes"),
+    ({"WAL": DAY}, "is not a file type a sqlserver backup writes"),
+    ({"CERT": DAY}, "a certificate is never copied to the repository"),
+    ({"MANIFEST": DAY}, "goes with the base backup of its run"),
+    ({"FULL": DAY, "full": DAY}, "named twice"),
+])
+def test_a_type_that_is_not_one_of_the_engines_own_is_refused_by_name(retention, words):
+    with pytest.raises(O.OffloadConfigError, match=words):
+        _kept(retention)
+
+
+@pytest.mark.parametrize("value", [[{"FULL": DAY}], 604800, "keep", None])
+def test_a_retention_that_is_not_an_object_is_refused(value):
+    with pytest.raises(O.OffloadConfigError, match="must be an object"):
+        _kept(value)
+
+
+def test_an_incremental_that_needs_its_chain_is_kept_as_long_as_its_base():
+    with pytest.raises(O.OffloadConfigError, match="INCR_BASE"):
+        _kept({"FULL_BASE": 30 * DAY, "INCR_BASE": 7 * DAY}, db_type="postgresql")
+    assert _kept({"FULL_BASE": 30 * DAY, "INCR_BASE": 30 * DAY}, db_type="postgresql").retention_of("INCR_BASE") \
+        == 30 * DAY
+
+
+def test_an_entry_still_on_the_three_level_fields_is_sent_to_upgrade_config():
+    old = {k: v for k, v in STATED.items() if k != "offload_retention"}
+    with pytest.raises(O.OffloadConfigError, match="replaced by offload_retention"):
+        O.parse_backup_offload({**old, "offload_retention_full": 0, "offload_retention_diff": 0,
+                                "offload_retention_log": 0}, label="B")
+
+
+@pytest.mark.parametrize("db_type, levels, written", [
+    ("sqlserver", (0, 0, 0), {}),
+    ("sqlserver", (30 * DAY, 0, 7 * DAY), {"FULL": 30 * DAY, "DIFF": "keep", "LOG": 7 * DAY}),
+    ("postgresql", (30 * DAY, 30 * DAY, 7 * DAY), {"FULL_BASE": 30 * DAY, "WAL": 7 * DAY}),
+    ("oracle", (30 * DAY, 0, 7 * DAY), {"RMAN_L0": 30 * DAY, "ARCHIVELOG": 7 * DAY}),
+])
+def test_upgrade_config_turns_the_three_level_fields_into_the_same_windows_per_type(db_type, levels, written):
+    old = {k: v for k, v in STATED.items() if k != "offload_retention"}
+    entry = {"backup_id": "B", "db_type": db_type, **old,
+             **dict(zip(O.LEGACY_RETENTION_FIELDS, levels))}
+    changes = O.state_offload({"backup_restore": {"backups": [entry]}})
+
+    assert entry["offload_retention"] == written and not set(O.LEGACY_RETENTION_FIELDS) & set(entry)
+    assert [c["field"] for c in changes] == ["offload_retention"]
+    parsed = O.parse_backup_offload(entry, label="B", db_type=db_type)     # and it reads back
+    for file_type, level in (("FULL", 0), ("FULL_BASE", 0), ("RMAN_L0", 0), ("LOG", 2), ("WAL", 2)):
+        if file_type in written:
+            assert parsed.retention_of(file_type) == (levels[level] or None)
+
+
+def test_the_written_value_is_each_entrys_own_copy():
+    document = {"backup_restore": {"backups": [{"backup_id": "A"}, {"backup_id": "B"}]}}
+    O.state_offload(document)
+    first, second = document["backup_restore"]["backups"]
+    first["offload_retention"]["FULL"] = DAY
+    assert second["offload_retention"] == {} and O.OFFLOAD_FIELDS["offload_retention"] == {}
+
+
+# --------------------------------------------------------------------------- #
+# offload_files_since - only from the new FULL (0.37.0, the operator 2026-11-11: *the old backups keep
+# the old behaviour and fade out*)
+# --------------------------------------------------------------------------- #
+def test_files_since_is_written_empty_and_takes_a_utc_moment_as_the_catalog_writes_them():
+    assert STATED["offload_files_since"] == "" and O.parse_backup_offload(STATED, label="B").files_since == ""
+    assert O.parse_backup_offload({**ON, "offload_files_since": "2026-11-11T04:30:00Z"}, label="B").files_since \
+        == "2026-11-11T04:30:00Z"
+
+
+@pytest.mark.parametrize("value", ["2026-11-11", "2026-11-11 04:30:00", "2026-11-11T04:30:00+07:00",
+                                   "2026-02-30T00:00:00Z", 1731299400, None])
+def test_files_since_in_another_spelling_is_refused(value):
+    with pytest.raises(O.OffloadConfigError, match="offload_files_since"):
+        O.parse_backup_offload({**ON, "offload_files_since": value}, label="B")

@@ -155,7 +155,7 @@ def test_each_backup_file_says_whether_it_is_encrypted_and_unknown_is_not_no(cat
     done = subprocess.run([NODE, "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert done.returncode == 0, done.stderr
     html = done.stdout
-    assert "<th>Encrypted</th>" in html
+    assert "Engine's own encryption" in html, "in the opened row since 0.37.0, beside the repository's"
     assert 'sev ok">yes<' in html and 'sev warn">no<' in html and 'sev">not recorded<' in html
 
 

@@ -215,6 +215,24 @@ def load_restore_entries(
     return [entry for entry in entries or [] if isinstance(entry, dict)]
 
 
+def load_backup_restore_document(
+    path: str | Path | None = None, *, data_dir: str | Path | None = None
+) -> dict[str, Any]:
+    """``data/restore_config.json`` as written - both lists, ``backup_restore.backups`` and
+    ``backup_restore.restores``.
+
+    For a reader that describes an entry rather than runs one: the assistant's runbook
+    (``lib.backup_runbook``, 0.38.0) builds the lines that run an entry by hand from what the entry
+    states. ``{}`` when there is no file - an install with nothing configured has nothing to run,
+    which is an answer.
+    """
+    source = Path(path) if path else _resolve_data_dir(data_dir) / RESTORE_CONFIG_FILENAME
+    if not source.exists():
+        return {}
+    document = load_json_file(source)
+    return document if isinstance(document, dict) else {}
+
+
 def load_sqlserver_instance_policy(
     path: str | Path | None = None, *, data_dir: str | Path | None = None
 ) -> dict[str, Any]:

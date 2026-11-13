@@ -701,6 +701,12 @@ def build_context(spec: DockerDbSpec) -> dict[str, Any]:
         # hand this lab a range the estate already routes to a real database. See
         # models.lab_network_subnet for the two outages that made this non-optional.
         "network_subnet": spec.resolved_network_subnet,
+        # 0.37.0: the data on a stated host folder instead of a named volume, and the uid the
+        # container runs as - pre-rendered lines, the renderer has no {% if %}.
+        "data_volume_line": (f'- "{spec.data_host_dir.rstrip("/")}:/var/lib/postgresql"' if spec.data_host_dir
+                             else f"- {spec.name}_data:/var/lib/postgresql"),
+        "named_volumes_block": "" if spec.data_host_dir else f"volumes:\n  {spec.name}_data:",
+        "user_line": f'    user: "{spec.run_as}"' if spec.run_as else "",
     }
     ctx.update(_backup_ready(spec))
     if spec.is_ha:
@@ -774,7 +780,13 @@ def _backup_ready(spec: DockerDbSpec) -> dict[str, Any]:
     wal = f"{folder}/wal"
     ready: dict[str, Any] = {"backup_folder": folder,
                              "backup_volume_line": f'- "{mount}:{mount}"' if mount else ""}
-    if spec.engine == "postgres" and folder:
+    if spec.engine == "postgres" and folder and spec.run_as:
+        # Run as a stated uid (0.37.0): the entrypoint is not root, cannot chown, and the folder is
+        # the host's to own (a share mapping every user to that uid). The mount stays a plain folder -
+        # a restore drill's staging - with no WAL archive of this lab's own.
+        ready["pg_backup_entrypoint"] = ""
+        ready["pg_archive_args"] = ""
+    elif spec.engine == "postgres" and folder:
         # The image's entrypoint starts as root: the folder is made there and handed to postgres,
         # which cannot create it in a mount that belongs to the SSH user. "$$@" is compose's escape
         # for the shell's "$@" - the command below, passed through unchanged.

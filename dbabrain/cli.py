@@ -40,6 +40,7 @@ APPS: dict[str, str] = {
     "sre": "dbabrain.sre.cli",
     "control": "dbabrain.control.cli",
     "webhost": "dbabrain.webhost.cli",
+    "mcp": "dbabrain.mcp.cli",
     "db": "dbabrain.db.cli",
     "common": "dbabrain.common.cli",
     "daemon": "dbabrain.jobs.daemon",

@@ -35,7 +35,10 @@ Every request:
   smb-get         {"remote_path": "APPDB\\\\FULL\\\\x.bak", "local_path": "/tmp/stage/APPDB/FULL/x.bak"}
                   -> data: {"local_path", "bytes", "exit_code", "detail"} - a non-zero exit is an
                   answer; compare "bytes" with the size smb-list gave
-  smb-delete      {"paths": ["APPDB\\\\LOG\\\\old.trn", ...]} - exactly these files, never a pattern
+  smb-delete      {"paths": ["APPDB\\\\LOG\\\\stray.tmp"], "force": true} - ONE stray file, forced
+                  (0.38.0): refused without "force": true, refused for two paths or more, never a
+                  pattern. A file dbabrain recorded is deleted through its host, held to its facts
+                  (delete-verified-file) - a share has no host to hash it on.
                   -> data: {"results": [{"path", "status", "bytes", "error"}], "deleted", "failed"}
   smb-credential  {"target": "192.0.2.10", "username": "...", "password": "..."} - Windows only
                   (cmdkey); elsewhere answers registered false, which is not a failure

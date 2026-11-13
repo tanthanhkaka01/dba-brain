@@ -125,7 +125,9 @@ def _engine(resolved: dict[str, Any]) -> str:
 def _check_instance(parsed: dict[str, Any], engine: str) -> dict[str, Any]:
     """Connect, run the engine's probe, and say what came back."""
     try:
-        rows = db_catalog._query(parsed, _INSTANCE_SQL[engine])
+        # Lower-cased: Oracle hands back VERSION / STATUS / STATE for the aliases, and read as written
+        # every Oracle instance said UNKNOWN - found 2026-11-11 on an Oracle 23ai lab through MCP.
+        rows = db_catalog._lower_keys(db_catalog._query(parsed, _INSTANCE_SQL[engine]))
     except db_catalog.DbCatalogError as exc:
         # Could not reach it at all. That is a finding, not an error: the caller asked what state
         # the server is in and "unreachable" is the state.
@@ -167,7 +169,9 @@ def _check_databases(request: dict[str, Any], parsed: dict[str, Any],
             items.append({"name": name, "kind": "database", "state": "ABSENT", "ok": False,
                           "detail": "not present on this instance"})
             continue
-        state = str(found.get("state") or "").strip().upper()
+        # Oracle names a PDB's state `open_mode` (READ WRITE / MOUNTED); read as `state` every PDB said
+        # UNKNOWN - found 2026-11-11 through MCP on the demo's Oracle lab.
+        state = str(found.get("state") or found.get("open_mode") or "").strip().upper()
         if state not in _DATABASE_OK[engine]:
             items.append({"name": name, "kind": "database", "state": state or "UNKNOWN",
                           "ok": False, "detail": f"state is {state or 'unknown'}"})
@@ -207,7 +211,7 @@ def _answers(parsed: dict[str, Any], engine: str, *, database: str,
         "oracle": "select count(*) as n from all_tables",
     }[engine]
     try:
-        rows = db_catalog._query(parsed, sql, database=database)
+        rows = db_catalog._lower_keys(db_catalog._query(parsed, sql, database=database))
     except db_catalog.DbCatalogError as exc:
         return {"name": name, "kind": kind, "state": "ONLINE", "ok": False,
                 "detail": str(exc)[:300]}

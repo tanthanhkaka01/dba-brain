@@ -13,6 +13,10 @@ call the page's own GET routes as the asker; dbabrain's is to let it call what a
   uses (``telegram.sql_commands.run_sql_to_xlsx`` -> ``common.cli run-sql``, never committed),
   behind its own switch and server list.
 * ``bot_commands`` - the bot's commands the asker may run, so an answer proposes one exactly.
+* ``backup_runbook`` (0.38.0, 1.327 / 1.328) - how to run one backup or restore entry by hand: the
+  lines for this node, the master's ``worker-run`` form and the Telegram command, built by
+  ``lib.backup_runbook`` from what the entry states; a step that changes something keeps its line
+  only for an asker whose Telegram level may run the bot command that does the same.
 
 Three rules hold for every tool: **the output is redacted** of every value in the encrypted secret
 store before it goes to the model or into the store; **it is cut** to ``tool_result_max_chars`` and
@@ -31,93 +35,14 @@ from typing import Any
 
 from dbabrain.lib import errors
 from dbabrain.lib import ai_assist as A
+# Every value of the secret store taken out of an answer - one class, lib's, since the MCP server
+# needed it too (0.38.0); this module carried a second copy of it.
+from dbabrain.lib.redaction import Redactor
 
-# --------------------------------------------------------------------------- #
-# The read-only check
-# --------------------------------------------------------------------------- #
-#: Words that make a statement more than a read, on any of the engines dbabrain reaches. Matched on
-#: the text with its strings and comments taken out, so a column called 'updated_at' or a literal
-#: 'DELETE' in a WHERE clause is not a refusal. ``INTO`` covers SELECT ... INTO, which creates.
-WRITE_WORDS = (
-    "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "DROP", "ALTER", "CREATE", "TRUNCATE", "RENAME",
-    "GRANT", "REVOKE", "DENY", "COPY", "CALL", "DO", "EXEC", "EXECUTE", "VACUUM", "ANALYZE", "REINDEX",
-    "CLUSTER", "LOCK", "UNLOCK", "SET", "RESET", "COMMIT", "ROLLBACK", "BEGIN", "SAVEPOINT", "PREPARE",
-    "DEALLOCATE", "LISTEN", "NOTIFY", "ATTACH", "DETACH", "PRAGMA", "REFRESH", "SECURITY", "LOAD", "IMPORT",
-    "INTO", "KILL", "RECONFIGURE", "SHUTDOWN", "BACKUP", "RESTORE", "DBCC", "BULK", "OPENROWSET", "OPENQUERY",
-    "OPENDATASOURCE", "WAITFOR", "USE", "DECLARE", "CHECKPOINT", "PURGE", "FLASHBACK", "AUDIT", "NOAUDIT",
-    "COMMENT", "UNDROP", "DISCARD",
-)
-#: Functions that act though they are called from a SELECT.
-WRITE_FUNCTIONS = re.compile(
-    r"\b(pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|pg_promote|set_config|"
-    r"pg_sleep\w*|lo_\w+|dblink\w*|pg_read_file|pg_read_binary_file|pg_ls_\w+|pg_stat_file|pg_advisory\w*|"
-    r"pg_switch_wal|pg_create_\w+|pg_drop_\w+|pg_replication_origin_\w+|pg_logical_emit_message|nextval|setval|"
-    r"txid_current|pg_current_xact_id|xp_\w+|sp_\w+|dbms_\w+|utl_\w+)\s*\(", re.IGNORECASE)
-_WRITE_WORDS = re.compile(r"\b(" + "|".join(WRITE_WORDS) + r")\b", re.IGNORECASE)
-_STRINGS = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|\$\$.*?\$\$", re.DOTALL)
-#: Literals only - a double-quoted name is an IDENTIFIER, and "web_users" is still that table.
-_LITERALS = re.compile(r"'(?:[^']|'')*'|\$\$.*?\$\$", re.DOTALL)
-_COMMENTS = re.compile(r"--[^\n]*|/\*.*?\*/", re.DOTALL)
-#: A comment some engine RUNS: MySQL's /*! ... */ executes its text, so taking comments out would
-#: hide whatever it holds from every check below.
-_EXECUTED_COMMENT = re.compile(r"/\*\s*!")
-
-
-class ReadOnlyRefusal(errors.RequestError):
-    """A statement that is not one plain read."""
-
-
-def read_only_sql(sql: str, *, blocked_tables: list[str] | tuple[str, ...] = ()) -> str:
-    """The statement, trimmed, when it is one SELECT (or WITH ... SELECT) and touches no blocked
-    table - else :class:`ReadOnlyRefusal` naming why. A guard, not the only one: the store query
-    runs in a read-only transaction, and a monitored server's run is never committed."""
-    text = str(sql or "").strip().rstrip(";").strip()
-    if not text:
-        raise ReadOnlyRefusal("the SQL is empty.")
-    if _EXECUTED_COMMENT.search(_LITERALS.sub("''", text)):
-        raise ReadOnlyRefusal("a /*! ... */ comment is executed by MySQL - write the statement without it.")
-    bare = _COMMENTS.sub(" ", _STRINGS.sub("''", text))
-    names = _COMMENTS.sub(" ", _LITERALS.sub("''", text))
-    if ";" in bare:
-        raise ReadOnlyRefusal("one statement only - no ';' inside it.")
-    first = bare.strip().split(None, 1)[0].upper() if bare.strip() else ""
-    if first not in ("SELECT", "WITH", "(", "VALUES") and not first.startswith("("):
-        raise ReadOnlyRefusal(f"only a SELECT (or WITH ... SELECT) is run; this starts with {first or 'nothing'}.")
-    word = _WRITE_WORDS.search(bare)
-    if word:
-        raise ReadOnlyRefusal(f"{word.group(1).upper()} is not allowed - the tools only read.")
-    function = WRITE_FUNCTIONS.search(bare)
-    if function:
-        raise ReadOnlyRefusal(f"{function.group(1)}() is not allowed - it acts, it does not read.")
-    for table in blocked_tables:
-        if re.search(rf"\b{re.escape(table)}\b", names, re.IGNORECASE):
-            raise ReadOnlyRefusal(f"table {table} is not readable by the assistant.")
-    return text
-
-
-# --------------------------------------------------------------------------- #
-# Redaction
-# --------------------------------------------------------------------------- #
-class Redactor:
-    """Every value of the encrypted secret store, taken out of a text wherever it appears."""
-
-    def __init__(self, secrets: dict[str, str] | None = None) -> None:
-        values = {str(value) for value in (secrets or {}).values() if len(str(value or "").strip()) >= 4}
-        spellings: set[str] = set()
-        for value in values:
-            spellings.add(value)
-            spellings.add(json.dumps(value)[1:-1])  # as it appears inside JSON
-        # Longest first, so a secret that contains another is taken out whole.
-        self.values = sorted(spellings, key=len, reverse=True)
-
-    def __call__(self, text: str) -> str:
-        from dbabrain.telegram.command_base import mask_sensitive_text
-
-        out = str(text)
-        for value in self.values:
-            if value and value in out:
-                out = out.replace(value, "***")
-        return mask_sensitive_text(out)
+# The read-only check is ``lib.read_only_sql`` since 0.38.0 (1.312) - the MCP server runs SQL a model
+# wrote too; the names stay importable from here.
+from dbabrain.lib.read_only_sql import (  # noqa: E402,F401 - re-exported
+    WRITE_FUNCTIONS, WRITE_WORDS, ReadOnlyRefusal, read_only_sql)
 
 
 # --------------------------------------------------------------------------- #
@@ -133,6 +58,14 @@ class ToolContext:
     asker_user_id: str
     redact: Redactor = field(default_factory=Redactor)
     data_dir: Path | None = None
+    # What backup_runbook writes its lines for and holds them to (0.38.0): how this node runs
+    # (lib.node_environment.describe), its role, its clock in the configured timezone, and whether
+    # the asker is the node's own operator at its command line - who has no Telegram level and
+    # holds the passphrase already. Empty, the lines take the general form and say so.
+    environment: dict[str, Any] = field(default_factory=dict)
+    node_role: str = ""
+    now_local: Any = None
+    asker_is_operator: bool = False
 
 
 @dataclass
@@ -155,61 +88,29 @@ def _error(message: str) -> ToolOutput:
 # The store
 # --------------------------------------------------------------------------- #
 def _store_schema(context: ToolContext, args: dict[str, Any]) -> ToolOutput:
-    table = str(args.get("table") or "").strip()
-    blocked = {name.lower() for name in context.settings.store_query_blocked_tables}
-    if table and table.lower() in blocked:
-        return _error(f"table {table} is not readable by the assistant.")
-    with context.store_target.connect() as conn:
-        if context.store_target.is_sqlite:
-            names = [row["name"] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name").fetchall()]
-            columns = {name: [(row["name"], row["type"]) for row in conn.execute(f'PRAGMA table_info("{name}")')]
-                       for name in names if not table or name == table}
-        else:
-            binds: tuple[Any, ...] = ()
-            sql = ("SELECT table_name, column_name, data_type FROM information_schema.columns "
-                   "WHERE table_schema = current_schema()")
-            if table:
-                sql += " AND table_name = ?"
-                binds = (table,)
-            columns = {}
-            for row in conn.execute(sql + " ORDER BY table_name, ordinal_position", binds).fetchall():
-                columns.setdefault(row["table_name"], []).append((row["column_name"], row["data_type"]))
-        conn.rollback()
-    columns = {name: cols for name, cols in columns.items() if name.lower() not in blocked}
-    if table:
-        if table not in columns:
-            return _error(f"no table {table} in the store.")
-        return _ok({"table": table, "columns": [{"name": name, "type": kind} for name, kind in columns[table]]})
-    return _ok({"tables": {name: ", ".join(col for col, _kind in cols) for name, cols in sorted(columns.items())}},
-               rows=len(columns))
+    from dbabrain.db.read_only_query import StoreReadRefused, store_schema
+
+    try:
+        answer = store_schema(context.store_target, table=str(args.get("table") or ""),
+                              blocked_tables=context.settings.store_query_blocked_tables)
+    except StoreReadRefused as exc:
+        return _error(str(exc).replace("is not readable.", "is not readable by the assistant."))
+    return _ok(answer, rows=None if "table" in answer else len(answer["tables"]))
 
 
 def _store_query(context: ToolContext, args: dict[str, Any]) -> ToolOutput:
+    from dbabrain.db.read_only_query import store_query
+
     settings = context.settings
     try:
-        sql = read_only_sql(str(args.get("sql") or ""), blocked_tables=settings.store_query_blocked_tables)
+        answer = store_query(context.store_target, str(args.get("sql") or ""),
+                             max_rows=min(int(args.get("max_rows") or settings.store_query_max_rows),
+                                          settings.store_query_max_rows),
+                             timeout_seconds=settings.store_query_timeout_seconds,
+                             blocked_tables=settings.store_query_blocked_tables)
     except ReadOnlyRefusal as exc:
         return _error(str(exc))
-    limit = min(int(args.get("max_rows") or settings.store_query_max_rows), settings.store_query_max_rows)
-    with context.store_target.connect() as conn:
-        try:
-            if context.store_target.is_sqlite:
-                conn.execute("PRAGMA query_only = ON")
-            else:
-                conn.execute("SET TRANSACTION READ ONLY")
-                conn.execute(f"SET LOCAL statement_timeout = {int(settings.store_query_timeout_seconds) * 1000}")
-            cursor = conn.execute(sql)
-            names = [item[0] for item in (cursor.description or [])]
-            rows = cursor.fetchmany(limit + 1) if hasattr(cursor, "fetchmany") else cursor.fetchall()[: limit + 1]
-        finally:
-            conn.rollback()
-            if context.store_target.is_sqlite:
-                conn.execute("PRAGMA query_only = OFF")
-    truncated = len(rows) > limit
-    rows = rows[:limit]
-    values = [[row[index] for index in range(len(names))] for row in rows]
-    return _ok({"columns": names, "rows": values, "row_count": len(values), "truncated": truncated}, rows=len(values))
+    return _ok(answer, rows=answer["row_count"])
 
 
 # --------------------------------------------------------------------------- #
@@ -493,6 +394,65 @@ def _bot_commands(context: ToolContext, args: dict[str, Any]) -> ToolOutput:
 
 
 # --------------------------------------------------------------------------- #
+# Running a backup or a restore by hand
+# --------------------------------------------------------------------------- #
+def _has_worker(context: ToolContext) -> bool:
+    """Whether this node's ``config.json`` names a worker - then every step also has the master's
+    ``worker-run`` form. A node with none is a single node: that form would name nothing."""
+    try:
+        config = json.loads((context.tool_root / "config.json").read_bytes().decode("utf-8-sig"))
+    except (OSError, ValueError):
+        return False
+    workers = config.get("worker") if isinstance(config, dict) else None
+    workers = [workers] if isinstance(workers, dict) else workers or []
+    return any(isinstance(item, dict) and str(item.get("host") or "").strip() for item in workers)
+
+
+def _backup_runbook(context: ToolContext, args: dict[str, Any]) -> ToolOutput:
+    """The runbook of the entry asked for, as this asker may have it.
+
+    The telegram app reads the files and knows the asker; ``lib.backup_runbook`` builds the answer.
+    The level rule is the bot's own (``can_run_command``, with the asker's level as the chat's -
+    what ``bot_commands`` answers ``asker_may_run_in_private_chat`` by), so a line is handed out
+    here on exactly the terms the bot would run its command on.
+    """
+    from dbabrain.lib import backup_runbook as runbook
+    from dbabrain.lib import data_sources
+    from dbabrain.telegram.command_permissions import telegram_user_type
+    from dbabrain.telegram.commands import can_run_command
+
+    data_dir = context.data_dir or context.commands_path.parent
+    document = data_sources.load_backup_restore_document(data_dir=data_dir)
+    try:
+        commands = json.loads(context.commands_path.read_bytes().decode("utf-8-sig"))
+    except (OSError, ValueError):
+        commands = {}  # no commands file: no bot command does the same, and the answer says so
+    environments = {str(item.get("server_id") or ""): str(item.get("environment") or "")
+                    for item in data_sources.load_db_instances(data_dir) if isinstance(item, dict)}
+    node = runbook.node_form(context.environment, node_role=context.node_role, has_worker=_has_worker(context))
+    answer = runbook.build(
+        document, backup_id=str(args.get("backup_id") or ""), restore_id=str(args.get("restore_id") or ""),
+        server_id=str(args.get("server_id") or ""), node=node, twins=runbook.bot_twins(commands),
+        environments=environments, now=context.now_local, report_base=data_sources.report_base_url(data_dir))
+    entries = len(answer.get("backups") or []) + len(answer.get("restores") or [])
+    if "node" not in answer:
+        return _ok(answer, rows=entries)  # the index: ids only, no line to hold back
+    if context.asker_is_operator:
+        runbook.for_asker(answer, asker_level=None)
+    else:
+        user_type = telegram_user_type(context.users_path, user_id=context.asker_user_id)
+        runbook.for_asker(answer, asker_level=user_type, may_run=lambda level: can_run_command(
+            allow_command=user_type, user_type=user_type, command_type=level))
+    text = json.dumps(answer, ensure_ascii=False, default=str)
+    if entries > 1 and len(text) > int(context.settings.tool_result_max_chars):
+        # Cut in the middle, a runbook is a line without its warning. Said by id instead.
+        return _ok({"asked": answer["asked"], **runbook.listing(answer),
+                    "next": f"{entries} entries are more than one answer holds: name one backup_id or "
+                            "restore_id for its runbook."}, rows=entries)
+    return _ok(text, rows=entries)
+
+
+# --------------------------------------------------------------------------- #
 # Definitions and dispatch
 # --------------------------------------------------------------------------- #
 def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
@@ -553,6 +513,25 @@ TOOLS: dict[str, dict[str, Any]] = {
                        "propose the exact command the user can run themselves, on one line, arguments in position "
                        "order; or the bare command, which asks one question at a time.",
         "input_schema": _schema({"find": {"type": "string", "description": "A word to filter by."}}, []),
+    },
+    # After the seven tools 0.34.0 shipped, in their order: the list is part of the cached prefix.
+    "backup_runbook": {
+        "switch": "backup_runbook_enabled", "run": _backup_runbook,
+        "description": "How to run a backup or a restore BY HAND, built from the entry's own configuration - for "
+                       "one backup_id, one restore_id, or every entry of a server_id: the entry's jobs, schedule "
+                       "and repository; what each step of its flow does; the exact command line of each step "
+                       "for this node, the dry run first; the same from the master (control.cli worker-run); the "
+                       "Telegram command that does the same; what a step that changes something touches and "
+                       "what stands in its way; and where to watch the run. A step the asker's Telegram level "
+                       "may not run comes without its line and says so. With no argument: every entry by id. "
+                       "Use it for every question about running, forcing, rehearsing or stopping a backup, a "
+                       "repository copy or a restore - never write those lines from memory.",
+        "input_schema": _schema({
+            "backup_id": {"type": "string", "description": "One backup entry (restore_config.json backups[])."},
+            "restore_id": {"type": "string", "description": "One restore entry (restores[])."},
+            "server_id": {"type": "string", "description": "Every backup entry of this server, and every "
+                                                           "restore entry that reads from it or restores onto it."},
+        }, []),
     },
 }
 

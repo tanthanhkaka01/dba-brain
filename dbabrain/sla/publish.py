@@ -985,9 +985,13 @@ _INDEX_TEMPLATE = """<!doctype html>
 <title>DBA Brain · Reports</title>
 <style>
   /* Tabler draws the cards and badges (lib.page_kit.ALIASES); this is the page's layout. */
-  .wrap {{ max-width: 760px; margin: 0 auto; padding: 40px 16px; }}
+  /* The whole window like every other report page, not a centred 760px column (1.279). */
+  .wrap {{ max-width: none; margin: 0; padding: 20px 24px 64px; }}
   .sub {{ color: var(--tblr-secondary); margin-bottom: 24px; }}
-  .hub-card {{ display: block; text-decoration: none; color: inherit; padding: 20px 22px; margin-bottom: 14px; }}
+  /* The cards are Tabler card-links: its ".card-link + .card-link" (aliased "a.hub-card+a.hub-card")
+     pushed every card after the first right; this reset must be at least as specific (1.279). */
+  .hub-card {{ display: block; text-decoration: none; color: inherit; padding: 20px 22px; margin: 0 0 14px 0; }}
+  .wrap a.hub-card + a.hub-card {{ margin-inline-start: 0; }}
   .hub-card.disabled {{ opacity: .55; }}
   .hub-note {{ color: var(--tblr-secondary); }}
   .muted {{ color: var(--tblr-secondary); }}

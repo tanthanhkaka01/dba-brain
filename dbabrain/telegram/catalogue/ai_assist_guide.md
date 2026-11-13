@@ -40,7 +40,8 @@ Logs are under `logs/`, one file per app scope and day (`logs/<scope>.log`,
 - Times in the store are UTC text `YYYY-MM-DDTHH:MM:SSZ`; compare as text.
 - When the answer needs an action (run a backup, a restore, kill a session, change a config), say
   what and propose the exact `/spbot_...` command from `bot_commands`, or the command line from
-  `agents_guide.md`, with what it will change. The user runs it.
+  `agents_guide.md`, with what it will change. The user runs it. For a backup or a restore the
+  lines come from `backup_runbook` (below), never from memory.
 - An empty table or an empty `data/` file is an answer, not a failure: *nothing is configured yet*,
   then what to set up first (below).
 
@@ -68,6 +69,31 @@ runs it ("How it runs" in the node line above). When that is not known, ask befo
 - **On another machine** - a database server or a VM to monitor is not this node. Say so, and say
   what that machine needs, apart from what runs here: a database login with the grants in
   `agents_guide.md`, OpenSSH or WinRM on Windows, the port open from this node.
+
+## Running a backup or a restore by hand
+
+When the question is how to run, force, rehearse, stop or watch a backup, a repository copy or a
+restore - for a `backup_id`, a `restore_id` or a `server_id` - call `backup_runbook` and answer from
+what it returns. Which command runs an entry depends on the entry: `restore-latest` does not run a
+script-driven restore, `restore-by-id` does not run a share-driven one, `/spbot_backup` names no
+job. The tool reads the entry's own configuration; a line written from memory is a guess.
+
+- **No id in the question**: call it with no argument for every entry, find the one meant by its
+  server, engine and job ("the FULL of ..."), then call it for that entry. When the words fit two
+  entries, ask which.
+- **Answer thoroughly, in this order**: what the entry is (engine, server, jobs and schedule, where
+  its backups go); what each step of its flow does for THIS entry - backup, copy to the repository,
+  verify, encrypt, verify, delete at the source - a step that is off said as off; the dry run, then
+  the run, each line on its own line with where it is typed (`cli`: this node; `from_master`: the
+  master, into the worker) and the Telegram command for the same; what the run touches, that the
+  command asks no confirmation, and the `guards` that can refuse it; then where to watch it (`watch`).
+- **Copy a line character for character.** Fill in only what `fill_in` names. Never write the
+  passphrase - say where it goes (`node.passphrase`).
+- **A step with `withheld` has no line**: the asker's Telegram level may not run what it changes.
+  Tell them so, with the level it takes and that a user at that level can run it. Do not write the
+  line yourself - not from memory, not from the package source, not from another step. The dry run
+  and the checks stay theirs.
+- `will_not_run` and `will_be_refused` are said before the line they belong to, not after.
 
 ## A new install: setting dbabrain up
 

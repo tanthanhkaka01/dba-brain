@@ -34,7 +34,7 @@ DBABRAIN_ROOT = Path(__file__).resolve().parents[1] / "dbabrain"
 
 APPS = frozenset({
     "backup_restore", "control", "jobs", "metrics", "reports",
-    "sla", "sql_tasks", "sre", "telegram", "webhost",
+    "sla", "sql_tasks", "sre", "telegram", "webhost", "mcp",
 })
 
 #: Drivers that open a connection to a *monitored* database. ``sqlite3`` is deliberately absent:

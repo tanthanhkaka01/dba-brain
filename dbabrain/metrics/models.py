@@ -105,6 +105,10 @@ class MetricDefinition:
     # a container and the ``log_directory`` files for an install on the host - one metric, the
     # source per target - and a host install is exactly the target a docker metric skipped.
     host_fallback: bool = False
+    # Which kinds of change between two reads of this (inventory) metric are reported, and at what
+    # status: {"added": "ERROR", "changed": "ERROR", "removed": "WARNING"} (lib.change_alert). The
+    # rows themselves stay OK; the first read is the baseline. Empty: nothing is compared.
+    change_alert: dict[str, str] = field(default_factory=dict)
     report_policy: dict[str, Any] = field(default_factory=dict)
     path: Path | None = None
     # Optional allowed collection window (from_hour/to_hour etc.). When set, the collector only

@@ -265,7 +265,7 @@ not instead of them.
 | `shrink-log`, `kill-spid`, `start-job`, `disable-job` | EMERGENCY operations; they ask for confirmation, and `authorize` exists for a caller that performs the step itself |
 | `host-restart`, `host-service` | restarts a machine or its services |
 | `rotate-password` | changes passwords on the server **and** in the store |
-| `delete-file`, `delete-files`, `prune-backup-files` | deletes backups |
+| `delete-file`, `delete-files`, `prune-backup-files`, `delete-verified-file`, `delete-empty-folder` | deletes backups |
 | `sqlserver-apply-cu` | patches SQL Server |
 | `dbabrain encrypt-secret` | **replaces** the secret store with `secrets/secret_text.json` |
 | `dbabrain import-data '{"bundle": "...", "force": true}'` | replaces this root's configuration with a bundle |

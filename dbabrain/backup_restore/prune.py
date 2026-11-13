@@ -33,7 +33,9 @@ from pathlib import Path
 from typing import Any
 
 from dbabrain.transport import common_cli
+from dbabrain.backup_restore import verified_cleanup
 from dbabrain.backup_restore.backup import _load_secrets, load_backup_jobs, resolve_backup_target
+from dbabrain.lib import verified_cleanup as rules
 from dbabrain.backup_restore.events import emit_backup_restore_event
 from dbabrain.lib.backupfiles_retention import AGE, DEFAULT_RETENTION_DAYS
 from dbabrain.db.job_runs import JobRun
@@ -155,8 +157,14 @@ def run_prune(
     key_base64: str | None = None,
     apply: bool = False,
     allow_mass_delete: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Prune the obsolete files of every selected backup entry.
+
+    A file is deleted only by a verified command (0.38.0, 1.329): the catalog's own record of it -
+    its path, bytes and sha256 - held to the file on the host. An obsolete file the catalog does not
+    know is **kept and named**; ``force`` (an operator, by hand) deletes each of those too, one
+    forced command per file, and the answer records the bytes and sha256 of what went.
 
     ``apply`` is what makes it delete. Without it the command answers and removes nothing — the
     opposite default from ``backup``, because reporting a backup that did not happen is a wasted
@@ -178,9 +186,15 @@ def run_prune(
             raise ValueError(f"No active backup job named {job_name}.")
 
     store = DbaBrainStore.from_config(app_config)
+    # Only a run that deletes needs the catalog: its rows are the facts each delete is held to.
+    catalog = None
+    if apply:
+        from dbabrain.db.backup_catalog import BackupCatalogStore
+
+        catalog = BackupCatalogStore.from_config(app_config)
     summary: dict[str, Any] = {
         "configured": len(jobs), "pruned": 0, "obsolete": 0, "deleted": 0, "failed": 0,
-        "skipped": 0, "apply": bool(apply), "mode": mode, "jobs": [],
+        "skipped": 0, "kept_unknown": 0, "apply": bool(apply), "force": bool(force), "mode": mode, "jobs": [],
     }
     secrets = _load_secrets(data_dir=data_dir, key=key, key_base64=key_base64)
 
@@ -210,7 +224,8 @@ def run_prune(
                                         delete=bool(apply) and not report_only, dry_run=False,
                                         data_dir=data_dir)
             request["allow_mass_delete"] = bool(allow_mass_delete)
-            result = _prune_one(request, secrets=secrets)
+            result = _prune_one(request, secrets=secrets, catalog=catalog, server_id=item.server_id,
+                                force=bool(force))
         except Exception as exc:  # noqa: BLE001 - one entry must not stop the rest.
             summary["failed"] += 1
             summary["jobs"].append({"job": item.label, "status": "error", "error": str(exc)})
@@ -225,29 +240,66 @@ def run_prune(
                     app_config=app_config, logger=logger, level="error")
             continue
         obsolete = result["counts"]["obsolete"]
-        deleted = int(((result.get("deleted") or {}).get("counts") or {}).get("deleted", 0))
+        cleanup = result.get("deleted") or {}
+        deleted = len(cleanup.get("deleted") or []) + len(cleanup.get("forced") or [])
+        kept_unknown = cleanup.get("kept") or []
+        not_deleted = cleanup.get("not_deleted") or []
         summary["pruned"] += 1
         summary["obsolete"] += obsolete
         summary["deleted"] += deleted
+        summary["kept_unknown"] += len(kept_unknown)
         summary["jobs"].append({
-            "job": item.label, "status": "done", "path": item.backup_dir,
+            "job": item.label, "status": "done" if not not_deleted else "not_deleted", "path": item.backup_dir,
             "retention_days": result["retention_days"], "obsolete": obsolete, "deleted": deleted,
             "kept": result["counts"]["keep"],
+            # Each by name: a file the catalog does not know is somebody's to decide about.
+            **({"kept_unknown": kept_unknown} if kept_unknown else {}),
+            **({"forced": cleanup["forced"]} if cleanup.get("forced") else {}),
+            **({"not_deleted": not_deleted} if not_deleted else {}),
             # Said on the entry it applies to: `--apply` was given and nothing was deleted.
             **({"report_only": REPORT_ONLY_REASON} if apply and report_only else {}),
         })
         message = (f"{item.label}: {obsolete} obsolete of {result['counts']['total']} at "
                    f"a {result.get('window') or str(result['retention_days']) + '-day'} window"
-                   + (f", {deleted} deleted." if apply and not report_only
+                   + (f" - {verified_cleanup.summary_line(cleanup)}." if apply and not report_only
                       else ", nothing deleted (report only)."))
-        _record(store, item, status="DONE", started_at=started_at, message=message,
-                app_config=app_config, logger=logger,
-                metadata={"obsolete": obsolete, "deleted": deleted})
+        if not_deleted:
+            # A file that should have gone and did not is the run's failure, said as one.
+            summary["failed"] += 1
+        _record(store, item, status="ERROR" if not_deleted else "DONE", started_at=started_at, message=message,
+                app_config=app_config, logger=logger, level="error" if not_deleted else "logging",
+                metadata={"obsolete": obsolete, "deleted": deleted, "kept_unknown": len(kept_unknown),
+                          "not_deleted": len(not_deleted)})
 
     return summary
 
 
-def _prune_one(request: dict[str, Any], *, secrets: dict[str, str]) -> dict[str, Any]:
+def catalog_facts(catalog: Any, *, server_id: str, paths: list[str]) -> dict[str, dict[str, Any]]:
+    """``{path: {"size_bytes", "sha256"}}`` for the listed paths the backup catalog recorded.
+
+    A backup file's name carries its database and a UTC stamp, so the catalog is asked by name
+    (``stored_files``) - and a row counts only at the path it was recorded at: ``file_path`` (as the
+    engine's own listing names it, inside a container) or ``host_path``. A file of the same name
+    lying somewhere else is not that row's file, and stays unknown.
+    """
+    if catalog is None or not paths:
+        return {}
+    names = sorted({rules.last_part(path) for path in paths})
+    rows = catalog.stored_files(server_id=server_id, file_names=names)
+    facts: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        row = rows.get(rules.last_part(path))
+        if not row:
+            continue
+        recorded = [str(row.get(field) or "") for field in ("file_path", "host_path")]
+        if not any(place and rules.same_path(place, path) for place in recorded):
+            continue
+        facts[path] = {"size_bytes": row.get("size_bytes"), "sha256": row.get("checksum_after_backup")}
+    return facts
+
+
+def _prune_one(request: dict[str, Any], *, secrets: dict[str, str], catalog: Any = None,
+               server_id: str = "", force: bool = False) -> dict[str, Any]:
     """List, judge, and (when the request says so) delete.
 
     The two halves are deliberately not the same kind of thing. Listing what is on the share and
@@ -284,13 +336,15 @@ def _prune_one(request: dict[str, Any], *, secrets: dict[str, str]) -> dict[str,
         # Nothing at all, not "half of it": a cap that deleted the first half of a mass delete would
         # have done half the damage before anyone looked (1.221).
         return {**plan, "deleted": None, "refused": refusal}
-    deleted = common_cli.run("delete-files", {
-        "paths": plan["obsolete_paths"],
-        "host": request["host"],
-        # The entry's own directory is the only place this may remove anything from.
-        "must_be_under": request["path"],
-    })
-    return {**plan, "deleted": deleted}
+    # Each file by its own verified delete (0.38.0, 1.329), held to what the catalog recorded for it;
+    # the entry's own directory is the only place anything may be removed from. An obsolete file the
+    # catalog does not know is kept and named - or, forced by hand, deleted one command per file.
+    paths = list(plan["obsolete_paths"])
+    cleanup = verified_cleanup.delete_files(
+        host=request["host"], paths=paths,
+        facts=catalog_facts(catalog, server_id=server_id, paths=paths),
+        must_be_under=str(request["path"]), force=bool(force))
+    return {**plan, "deleted": cleanup}
 
 
 def _record(store: DbaBrainStore, job: Any, *, status: str, started_at: str, message: str,

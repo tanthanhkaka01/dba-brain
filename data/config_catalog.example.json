@@ -148,6 +148,13 @@
       ]
     },
     {
+      "file": "mcp_tools.json",
+      "app_code": "mcp",
+      "display_name": "MCP tools",
+      "description": "What Claude may reach through MCP: the switch, each tool that is off, the answer cap, timeouts and the store tables kept out.",
+      "collections": []
+    },
+    {
       "file": "bot_telegram.json",
       "app_code": "telegram",
       "display_name": "Telegram bot identity",

@@ -27,6 +27,9 @@ BOT = "dbabrain_test_bot"
 BOT_ID = "4242"
 OPERATOR = "100"
 NOW = datetime(2026, 10, 31, 6, 0, tzinfo=timezone.utc)
+#: What the replies call the assistant: the shipped file's ``assistant_name`` (0.38.0) - read here
+#: as the job reads it, so these tests hold the wording around the name, not the name.
+NAME = A.shipped_document()["assistant_name"]
 
 
 class Model:
@@ -112,7 +115,7 @@ def test_a_question_is_answered_and_every_step_is_kept(tmp_path):
     assert [row["role"] for row in _rows(root, "SELECT role FROM ai_messages ORDER BY seq")] == [
         "user", "assistant", "user", "assistant"]
     sent = _rows(root, "SELECT * FROM telegram_send_messages ORDER BY send_tlgmsg_id")
-    assert sent[0]["message_text"].startswith("Working on it")
+    assert sent[0]["message_text"].startswith(f"{NAME} is working on it")
     answer = sent[-1]
     assert answer["source_type"] == "ai_requests" and answer["source_id"] == str(request["ai_request_id"])
     assert answer["reply_message_id"] == 1 and "Mọi thứ ổn." in answer["message_text"]
@@ -297,7 +300,7 @@ def test_a_message_that_fails_is_closed_and_answered_and_the_run_goes_on(tmp_pat
     assert rows[1]["status"] == "done", "the next message was still answered"
     assert counts["errors"] == 1
     replies = [row["message_text"] for row in _rows(root, "SELECT message_text FROM telegram_send_messages")]
-    assert any("The assistant failed: RuntimeError: history unreadable" in text for text in replies)
+    assert any(f"{NAME} failed: RuntimeError: history unreadable" in text for text in replies)
 
 
 # --------------------------------------------------------------------------- #

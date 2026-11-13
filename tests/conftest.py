@@ -479,6 +479,14 @@ def write_catalogued_data(data: Path) -> Path:
                 "doc": "docs/15_transport.md",
                 "summary": "The one client of common.cli and db.cli: lib builds the command and reads the answer, this starts the process between them.",
                 "app_command_ids": []
+        },
+        {
+                "app_code": "mcp",
+                "ord": 16,
+                "display_name": "MCP Server",
+                "doc": "docs/16_mcp_app.md",
+                "summary": "dbabrain for Claude Desktop and Claude Code: every common.cli command and the runtime store as MCP tools.",
+                "app_command_ids": []
         }
 ]})
 

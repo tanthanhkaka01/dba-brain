@@ -306,7 +306,9 @@ def step_bastion_key_to_sql_nodes(install: dict) -> StepResult:
         deploy = (
             "PUBKEY=$(cat ~/.ssh/id_ed25519.pub); "
             f"SSHPASS={qpwd} sshpass -e ssh "
-            "-o StrictHostKeyChecking=no -o ConnectTimeout=10 "
+            # 1.223: the node's key pinned on first use in the bastion's known_hosts, refused if
+            # it changes - never "no".
+            "-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "
             f"{shlex.quote(user)}@{shlex.quote(ip)} "
             "\"mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
             "touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && "

@@ -88,7 +88,8 @@ def render_recoverability(catalog, *, now=None, entries: list[dict] | None = Non
     retention = backup_catalog_sections.build_retention(catalog.retention_by_entry())
     drill_rows = "".join(
         f"<tr><td>{escape(d['restore_id'])}</td><td>{escape(d['tier'] or '-')}</td>"
-        f"<td class='st-{escape(d['state'])}'>{escape(d['state'])}</td><td>{_utc(d['last_success'])}</td>"
+        f"<td class='st-{escape(d['state'])}'>{escape('no longer configured' if d['state'] == 'REMOVED' else d['state'])}</td>"
+        f"<td>{_utc(d['last_success'])}</td>"
         f"<td>{_utc(d['last_run'])} ({escape(d['last_phase'] or '')})</td>"
         f"<td>{d['ok_7']} / {d['runs_7']}</td><td>{d['ok_30']} / {d['runs_30']}</td>"
         f"<td>{escape(d['source'] or '')} &rarr; {escape(d['target'] or '')}</td></tr>"
@@ -96,10 +97,10 @@ def render_recoverability(catalog, *, now=None, entries: list[dict] | None = Non
     cover_rows = "".join(
         f"<tr><td>{escape(c['server_id'])}</td><td>{escape(c['database_name'] or '-')}</td>"
         f"<td class='st-{escape(c['status'])}'>{escape(c['status'])}</td><td>{escape(', '.join(c['levels']) or '-')}</td>"
-        f"<td>{_utc(c.get('newest_full'))}</td><td>{_utc(c.get('newest_log'))}</td>"
+        f"<td>{_utc(c.get('newest_full'))}</td><td>{_utc(c.get('newest_diff'))}</td><td>{_utc(c.get('newest_log'))}</td>"
         f"<td>{c['offloaded']} of {c['files']}</td><td>{_utc(c['last_restored'])}</td>"
         f"<td>{escape('; '.join(c['missing']) or '-')}</td></tr>"
-        for c in coverage) or "<tr><td colspan='9'>The catalog holds no backup yet.</td></tr>"
+        for c in coverage) or "<tr><td colspan='10'>The catalog holds no backup yet.</td></tr>"
     reach_rows = "".join(
         f"<tr><td>{escape(str(r['backupId']))}</td><td>{escape(str(r['server']))}</td><td>{escape(str(r['engine']))}</td>"
         f"<td>{escape(r['windows'])}</td><td>{escape(r['reach'])}</td><td>{_utc(r['since'])}</td></tr>"
@@ -113,7 +114,7 @@ def render_recoverability(catalog, *, now=None, entries: list[dict] | None = Non
         "<th>OK, 7 days</th><th>OK, 30 days</th><th>From &rarr; onto</th></tr></thead>"
         f"<tbody>{drill_rows}</tbody></table>"
         "<table><thead><tr><th>Server</th><th>Database</th><th>Coverage</th><th>Levels</th>"
-        "<th>Newest full</th><th>Newest log</th>"
+        "<th>Newest full</th><th>Newest diff / incr.</th><th>Newest log</th>"
         "<th>Copied off host</th><th>Last restored</th><th>Missing</th></tr></thead>"
         f"<tbody>{cover_rows}</tbody></table>"
         "<p class='subtitle'>Each backup entry's retention, per file type, and how far back point-in-time "
@@ -140,11 +141,16 @@ def build_page(*, sqlite_path, output_dir: str | Path, stamp: str, snapshot_date
         # Read through lib.data_sources - the one reader of data/ - never the backup app.
         from dbabrain.lib import data_sources
         recoverability = render_recoverability(catalog, entries=data_sources.load_restore_entries())
+        repository = backup_catalog_sections.load_repository(
+            catalog, [row for rows, _restores in per_server.values() for row in rows])
+        chains: dict[int, dict] = {}
+        for rows, _restores in per_server.values():       # per server: each one's own newest rows
+            chains.update(backup_catalog_sections.load_chains(catalog, rows))
     except Exception:  # noqa: BLE001 - the other pages are still built; this one is not offered
         return ""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    html = render_page(files=backup_catalog_sections.build_fleet(per_server), snapshot_date=snapshot_date,
+    html = render_page(files=backup_catalog_sections.build_fleet(per_server, repository, chains), snapshot_date=snapshot_date,
                        report_dir=out_dir, recoverability=recoverability)
     _write(out_dir, PAGE_NAME, html, stamp=stamp, archive_only=False)
     return str(out_dir / PAGE_NAME)

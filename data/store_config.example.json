@@ -36,5 +36,14 @@
     "connect_timeout_seconds": 10,
     "application_name": "dbabrain",
     "connection_string": ""
+  },
+
+  "certificate_vault": {
+    "_note": "0.37.0: each proven certificate vault row also as a sealed file on this node - for dbabrain AND an offline recovery key. Absent: no file is written and take-certificate --delete-at-source refuses. Make the keys with `backup_restore vault-key --recovery --out FILE` and `vault-key --dbabrain`.",
+    "file_folder": "runtime/certificate_vault",
+    "identity_ref": "DBABRAIN_CERTIFICATE_VAULT_IDENTITY",
+    "recovery_recipients": [
+      "age1gurthsvwj09pxg4066afu35ea7u4lfvv5gahzx90v5n6c5kn8vxshyuync"
+    ]
   }
 }

@@ -11,6 +11,11 @@ services:
     image: {{ image }}
     container_name: {{ name }}
     restart: unless-stopped
+    # PID 1 is Docker's init, not the database (0.37.0): a command dbabrain runs in the container and
+    # leaves behind is reaped by it. With postgres as PID 1 such an orphan became postgres's child,
+    # and its abnormal end made postgres restart the whole instance (the store drill, 2026-11-10).
+    init: true
+{{ user_line }}
     environment:
       POSTGRES_USER: {{ username }}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
@@ -22,7 +27,8 @@ services:
       - postgres
 {{ pg_archive_args }}
 {% endfor %}    volumes:
-      - {{ name }}_data:/var/lib/postgresql
+      # A named volume, or - stated with --data-host-dir (0.37.0) - a host folder, run as --run-as.
+      {{ data_volume_line }}
 {% for mount in bind_mounts %}      # Same path on both sides on purpose: a backup written here inside the container sits at
       # the same path on the host, which is what a cross-machine restore reads over SSH.
       - "{{ mount }}:{{ mount }}"
@@ -31,8 +37,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-volumes:
-  {{ name }}_data:
+{{ named_volumes_block }}
 
 # The compose network is pinned, never left to Docker's default address pool: that pool covers
 # 172.17-172.31, ranges this estate routes real databases on, and an auto-allocated lab bridge

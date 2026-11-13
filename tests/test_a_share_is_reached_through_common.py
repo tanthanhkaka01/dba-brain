@@ -134,19 +134,28 @@ def test_a_fetched_file_is_where_the_request_said_with_its_size(unc, tmp_path):
     assert (tmp_path / "stage" / "APPDB" / "a.bak").read_bytes() == b"x" * 10
 
 
-def test_a_delete_removes_exactly_the_files_named_and_reports_one_it_could_not(unc):
-    answer = smb.delete({"host": "h", "share": "s", "backend": "unc",
-                         "paths": ["APPDB/LOG/b.trn", "APPDB/LOG/not_there.trn"]})
-
-    assert [(item["path"], item["status"]) for item in answer["results"]] == [
-        ("APPDB\\LOG\\b.trn", "DELETED"), ("APPDB\\LOG\\not_there.trn", "FAILED")]
-    assert (answer["deleted"], answer["failed"]) == (1, 1)
+def test_a_forced_delete_removes_the_one_file_named_and_says_when_it_could_not(unc):
+    """0.38.0: a share has no host to hash a file on, so this is the forced delete of ONE stray
+    file and nothing else - a file dbabrain recorded goes through its host, held to its facts."""
+    answer = smb.delete({"host": "h", "share": "s", "backend": "unc", "paths": ["APPDB/LOG/b.trn"], "force": True})
+    assert [(item["path"], item["status"]) for item in answer["results"]] == [("APPDB\\LOG\\b.trn", "DELETED")]
+    missing = smb.delete({"host": "h", "share": "s", "backend": "unc", "paths": ["APPDB/LOG/not_there.trn"],
+                          "force": True})
+    assert (missing["deleted"], missing["failed"]) == (0, 1)
     assert (unc / "APPDB" / "FULL" / "a.bak").exists()
 
 
-def test_a_delete_names_its_files_and_is_never_a_pattern():
+def test_a_delete_through_a_share_is_refused_without_force_for_two_files_and_for_a_pattern(unc):
+    share = {"host": "h", "share": "s", "backend": "unc"}
+    with pytest.raises(smb.SmbError, match="refused"):
+        smb.delete({**share, "paths": ["APPDB/FULL/a.bak"]})
+    with pytest.raises(smb.SmbError, match="ONE file per command; got 2"):
+        smb.delete({**share, "paths": ["APPDB/FULL/a.bak", "APPDB/LOG/b.trn"], "force": True})
     with pytest.raises(smb.SmbError, match='needs "paths"'):
-        smb.delete({"host": "h", "share": "s", "paths": "APPDB/*"})
+        smb.delete({**share, "paths": "APPDB/*", "force": True})
+    with pytest.raises(smb.SmbError, match="never a pattern"):
+        smb.delete({**share, "paths": ["APPDB/*"], "force": True})
+    assert (unc / "APPDB" / "FULL" / "a.bak").exists() and (unc / "APPDB" / "LOG" / "b.trn").exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -175,8 +184,13 @@ def test_on_windows_the_login_is_stored_with_its_domain(monkeypatch):
 # --------------------------------------------------------------------------- #
 # The app keeps deciding what goes
 # --------------------------------------------------------------------------- #
-def _share_answers(root: Path, deleted: list):
-    """``common.cli`` for a Windows import share standing in as a local folder."""
+LOCAL_ROOT = "E:\\SQLBK_IMPORT"
+HOST = {"runtime": "windows", "access": "winrm", "host": "192.0.2.40", "username": "u", "password": "p"}
+
+
+def _share_answers(root: Path, asked: list):
+    """``common.cli`` for a Windows import folder: listed through its share (a local folder stands
+    in for it), deleted through its host - each file by a verified command (0.38.0)."""
 
     def call(command, request, **_kwargs):
         if command == "smb-list":
@@ -187,17 +201,24 @@ def _share_answers(root: Path, deleted: list):
         raise AssertionError(command)
 
     def call_allowing_failure(command, request, **_kwargs):
-        assert command == "smb-delete"
-        deleted.extend(request["paths"])
-        return True, {"results": [{"path": item, "status": "DELETED", "bytes": 1, "error": ""}
-                                  for item in request["paths"]]}, ""
+        assert command == "delete-verified-files", f"{command}: nothing is deleted through the share"
+        asked.append(request)
+        status = "skipped" if request.get("dry_run") else "deleted"
+        return True, {"files": [{"path": item["path"], "status": status} for item in request["files"]]}, ""
 
     return call, call_allowing_failure
 
 
+def _facts_for_everything(**kwargs):
+    """A catalog whose proven copies recorded every staged file asked about."""
+    return {path: {"size_bytes": 1, "sha256": "a" * 64} for path in kwargs["paths"]}
+
+
 @pytest.fixture()
 def staged(tmp_path, monkeypatch):
-    from dbabrain.backup_restore import share
+    from types import SimpleNamespace
+
+    from dbabrain.backup_restore import delete_backup, share
 
     root = tmp_path / "import"
     (root / "APPDB" / "FULL").mkdir(parents=True)
@@ -211,11 +232,15 @@ def staged(tmp_path, monkeypatch):
     os.utime(old_full, (stamp, stamp))
     os.utime(old_log, (stamp + 60, stamp + 60))
     os.utime(new_full, (stamp + 600, stamp + 600))
-    deleted: list[str] = []
-    call, allowing = _share_answers(root, deleted)
+    asked: list[dict] = []
+    call, allowing = _share_answers(root, asked)
     monkeypatch.setattr(share.common_cli, "run", call)
     monkeypatch.setattr(share.common_cli, "run_allowing_failure", allowing)
-    return {"root": root, "deleted": deleted, "now": stamp + 3 * 86400}
+    # The target's own host, from the inventory; and a catalog that recorded the staged files.
+    monkeypatch.setattr(delete_backup, "_windows_target_host", lambda config: (HOST, ""))
+    monkeypatch.setattr(delete_backup, "_catalog",
+                        lambda: SimpleNamespace(staged_file_facts=_facts_for_everything))
+    return {"root": root, "asked": asked, "now": stamp + 3 * 86400}
 
 
 def _target(root: Path):
@@ -230,8 +255,12 @@ def _target(root: Path):
             prod_smb_username="", prod_smb_password_env="", vm_credential_target="", vm_username="",
             vm_password_env="", restore_sql_instance_on_vm="localhost", source_database_name="APPDB",
             restore_database_name="APPDB_DR", restore_data_file_on_vm=Path(r"D:\d.mdf"),
-            restore_log_file_on_vm=Path(r"D:\l.ldf"), cleanup_retention=86400),
+            restore_log_file_on_vm=Path(r"D:\l.ldf"), cleanup_retention=86400, target_id="TGT-01"),
     )
+
+
+def _names(request: dict) -> list[str]:
+    return sorted(item["file_name"] for item in request["files"])
 
 
 def test_a_windows_cleanup_deletes_only_what_is_aged_and_behind_the_newest_full(staged):
@@ -239,8 +268,13 @@ def test_a_windows_cleanup_deletes_only_what_is_aged_and_behind_the_newest_full(
 
     results = delete_old_target_backup_files_on_share(_target(staged["root"]), now=staged["now"])
 
-    assert sorted(Path(item.replace("\\", "/")).name for item in staged["deleted"]) == [
-        "APPDB_FULL_20260601_010000.bak", "APPDB_LOG_20260601_020000.trn"]
+    assert len(staged["asked"]) == 1, "one verified request, through the host"
+    request = staged["asked"][0]
+    assert _names(request) == ["APPDB_FULL_20260601_010000.bak", "APPDB_LOG_20260601_020000.trn"]
+    # Each file by its local path on the target, fenced to the import folder, with its facts.
+    assert all(item["path"].startswith(LOCAL_ROOT + "\\APPDB\\") and item["must_be_under"] == LOCAL_ROOT
+               and item["size_bytes"] == 1 and len(item["sha256"]) == 64 for item in request["files"])
+    assert request["host"] == HOST
     assert {item.status for item in results} == {"DELETED", "SKIPPED"}
 
 
@@ -249,8 +283,33 @@ def test_a_dry_run_on_a_windows_target_deletes_nothing(staged):
 
     results = delete_old_target_backup_files_on_share(_target(staged["root"]), dry_run=True, now=staged["now"])
 
-    assert staged["deleted"] == []
+    assert [request["dry_run"] for request in staged["asked"]] == [True]
     assert sorted(item.status for item in results) == ["DRY_RUN", "DRY_RUN", "SKIPPED"]
+
+
+def test_a_staged_file_no_copy_recorded_is_kept_and_named(staged, monkeypatch):
+    from types import SimpleNamespace
+
+    from dbabrain.backup_restore import delete_backup
+
+    monkeypatch.setattr(delete_backup, "_catalog", lambda: SimpleNamespace(staged_file_facts=lambda **_k: {}))
+    results = delete_backup.delete_old_target_backup_files_on_share(_target(staged["root"]), now=staged["now"])
+
+    assert staged["asked"] == [], "a file with no recorded facts is not asked to be deleted"
+    kept = [item for item in results if item.status == delete_backup.KEPT]
+    assert len(kept) == 2 and all("not in the catalog" in item.reason for item in kept)
+
+
+def test_a_target_reachable_only_as_a_share_keeps_its_files_and_says_why(staged, monkeypatch):
+    from dbabrain.backup_restore import delete_backup
+
+    monkeypatch.setattr(delete_backup, "_windows_target_host",
+                        lambda config: (None, "TGT-01 cannot be reached as a host (no cmd_access)"))
+    results = delete_backup.delete_old_target_backup_files_on_share(_target(staged["root"]), now=staged["now"])
+
+    assert staged["asked"] == []
+    kept = [item for item in results if item.status == delete_backup.KEPT]
+    assert len(kept) == 2 and all("cannot be reached as a host" in item.reason for item in kept)
 
 
 def test_the_chain_is_read_from_the_share_listing_never_by_walking_the_path(monkeypatch):
@@ -259,8 +318,10 @@ def test_the_chain_is_read_from_the_share_listing_never_by_walking_the_path(monk
     there, no split at a backslash - so every aged file was held back as `still_needed` and the
     share filled. `ci` found it (Linux runners; the soak node was Windows). Here the share is one
     nothing on this machine serves, as it is for a Linux node: the listing is all there is, and it
-    is enough. (On Linux the two tests above also hold the separator.)"""
-    from dbabrain.backup_restore import delete_backup, share
+    is enough. (On Linux the tests above also hold the separator.)"""
+    from types import SimpleNamespace
+
+    from dbabrain.backup_restore import delete_backup, share, verified_cleanup
 
     def walked(root):
         raise AssertionError(f"the cleanup walked {root} instead of reading the share's listing")
@@ -270,15 +331,24 @@ def test_the_chain_is_read_from_the_share_listing_never_by_walking_the_path(monk
         {"path": "APPDB\\LOG\\APPDB_LOG_20260601_020000.trn", "modified_epoch": 1_780_000_060.0, "size_bytes": 1},
         {"path": "APPDB\\FULL\\APPDB_FULL_20260620_010000.bak", "modified_epoch": 1_780_000_600.0, "size_bytes": 1},
     ]
-    deleted: list[str] = []
+    asked: list[dict] = []
+
+    def delete_files(**kwargs):
+        asked.append(kwargs)
+        return {"deleted": list(kwargs["paths"]), "already_gone": [], "would_delete": [], "not_deleted": [],
+                "kept": [], "forced": []}
+
     monkeypatch.setattr(delete_backup, "_all_target_backup_files", walked)
     monkeypatch.setattr(share, "list_files", lambda *args, **kwargs: listing)
-    monkeypatch.setattr(share, "delete_files", lambda root, paths, **kwargs: (
-        deleted.extend(paths) or {"results": [{"status": "DELETED", "bytes": 1} for _ in paths]}))
+    monkeypatch.setattr(delete_backup, "_windows_target_host", lambda config: (HOST, ""))
+    monkeypatch.setattr(delete_backup, "_catalog",
+                        lambda: SimpleNamespace(staged_file_facts=_facts_for_everything))
+    monkeypatch.setattr(verified_cleanup, "delete_files", delete_files)
 
     results = delete_backup.delete_old_target_backup_files_on_share(
         _target(Path("\\\\192.0.2.40\\SQLBK_IMPORT\\APPDB_STAGE")), now=1_780_000_000.0 + 3 * 86400)
 
-    assert sorted(item.rsplit("\\", 1)[-1] for item in deleted) == [
+    assert sorted(item.rsplit("\\", 1)[-1] for item in asked[0]["paths"]) == [
         "APPDB_FULL_20260601_010000.bak", "APPDB_LOG_20260601_020000.trn"]
+    assert asked[0]["windows"] is True and asked[0]["must_be_under"] == LOCAL_ROOT
     assert {item.status for item in results} == {"DELETED", "SKIPPED"}

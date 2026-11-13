@@ -379,37 +379,85 @@ def test_no_copy_engine_runs_without_the_gate(tmp_path, monkeypatch, engine):
 
 
 # --------------------------------------------------------------------------- #
-# copy-backup-dir (script restores, host to host) through the same gate - 1.213b
+# A staging filled host to host (script restores) through the same gate - 1.213b.
+# One `copy-backup-dir` per round until 0.38.0 (1.329); since then each round is prepare-staging,
+# ONE copy-files for what it answers as pending - every file with its size and sha256 - and
+# finish-staging.
 # --------------------------------------------------------------------------- #
-class _Hosts:
-    """Two SSH hosts behind ``common.cli``: ``copy-backup-dir`` (plan or copy, size-and-replace rule)
-    and ``file-checksum`` (each host hashes its own files)."""
+SOURCE_HOST, TARGET_HOST = "192.0.2.49", "192.0.2.50"
+STAGED_AT = 1_790_000_000      # the source's time for every file, as prepare-staging answers it
 
-    def __init__(self, source, target=None, corrupt=None):
-        self.files = {"192.0.2.49": dict(source), "192.0.2.50": dict(target or {})}
+
+class _Hosts:
+    """Two SSH hosts behind ``common.cli``.
+
+    ``prepare-staging`` answers the plan, or which files still travel by the size-and-replace rule;
+    ``copy-files`` moves the bytes; ``finish-staging`` answers; ``file-checksum`` has each host hash
+    its own files. ``corrupt`` is how often a file lands whole by ``copy-files``' own account and is
+    other bytes on disk - what only the gate's hash of the target sees. ``refuse`` is how often
+    ``copy-files`` cannot land a file at all (its line says so). ``late`` is a source file written
+    after the plan was read. ``rounds_fail`` is what the next rounds' ``prepare-staging`` raises
+    instead of answering, one per round.
+    """
+
+    def __init__(self, source, target=None, corrupt=None, refuse=None, late=None, rounds_fail=None):
+        self.rounds_fail = list(rounds_fail or [])
+        self.files = {SOURCE_HOST: dict(source), TARGET_HOST: dict(target or {})}
         self.corrupt = dict(corrupt or {})
-        self.copies: list[dict] = []
+        self.refuse = dict(refuse or {})
+        self.late = dict(late or {})
+        self.calls: list[tuple[str, dict]] = []
+
+    def named(self, command):
+        return [request for name, request in self.calls if name == command]
+
+    @property
+    def rounds(self):
+        """The ``prepare-staging`` requests that open the target - one per round of copies."""
+        return [request for request in self.named("prepare-staging") if not request.get("plan_only")]
 
     def run(self, command, request, **_kw):
+        self.calls.append((command, request))
         if command == "file-checksum":
             held = self.files[request["host"]["host"]]
             return {"files": [{"path": p, "sha256": sha(held[p]), "size_bytes": len(held[p])}
                               for p in request["paths"] if p in held]}
-        assert command == "copy-backup-dir"
-        src = {p.removeprefix("/b/A/"): body for p, body in self.files["192.0.2.49"].items()}
-        if request.get("plan_only"):
-            return {"files": [{"path": rel, "size_bytes": len(body)} for rel, body in sorted(src.items())]}
-        self.copies.append(request)
-        dst, copied = self.files["192.0.2.50"], 0
-        for rel, body in src.items():
-            path = f"/b/B/{rel}"
-            if rel not in request.get("replace", []) and path in dst and len(dst[path]) == len(body):
-                continue
-            dst[path] = b"x" * len(body) if self.corrupt.get(rel, 0) > 0 else body
-            self.corrupt[rel] = self.corrupt.get(rel, 0) - 1
-            copied += 1
-        return {"copied": copied, "skipped": len(src) - copied, "bytes_copied": 0, "removed_absent_at_source": 0,
-                "opened_for_engine": True, "copy_mode": "tar", "copy_fell_back": False}
+        if command == "prepare-staging":
+            if not request.get("plan_only"):
+                self.files[SOURCE_HOST].update(self.late)
+            src = {p.removeprefix("/b/A/"): body for p, body in sorted(self.files[SOURCE_HOST].items())}
+            selected = [{"path": rel, "size_bytes": len(body)} for rel, body in src.items()]
+            if request.get("plan_only"):
+                return {"files": selected, "include": list(request.get("include") or [])}
+            if self.rounds_fail:
+                raise self.rounds_fail.pop(0)
+            dst = self.files[TARGET_HOST]
+            pending = [{**one, "mtime": STAGED_AT} for one in selected
+                       if one["path"] in request.get("replace", [])
+                       or len(dst.get(f"/b/B/{one['path']}", b"")) != one["size_bytes"]
+                       or f"/b/B/{one['path']}" not in dst]
+            return {"files": selected, "pending": pending, "skipped": len(selected) - len(pending),
+                    "absent_at_source": [], "folders_absent_at_source": [],
+                    "include": list(request.get("include") or [])}
+        if command == "copy-files":
+            src, dst, lines = self.files[request["source"]["host"]], self.files[request["target"]["host"]], []
+            for one in request["files"]:
+                rel, body = one["target"].removeprefix("/b/B/"), src[one["source"]]
+                if self.refuse.get(rel, 0) > 0:
+                    self.refuse[rel] -= 1
+                    lines.append({"source": one["source"], "target": one["target"], "ok": False,
+                                  "bytes_copied": 0, "error": "the stream stopped moving"})
+                    continue
+                dst[one["target"]] = b"x" * len(body) if self.corrupt.get(rel, 0) > 0 else body
+                self.corrupt[rel] = self.corrupt.get(rel, 0) - 1
+                lines.append({"source": one["source"], "target": one["target"], "ok": True,
+                              "bytes_copied": len(body), "sha256_streamed": one["sha256"]})
+            landed = [line for line in lines if line["ok"]]
+            return {"source_kind": "sftp", "files": lines, "copied": len(landed), "failed": len(lines) - len(landed),
+                    "bytes_copied": sum(line["bytes_copied"] for line in landed)}
+        if command == "finish-staging":
+            return {"timed": len(request["files"]), "not_timed": [], "opened_for_engine": True}
+        raise AssertionError(f"unexpected command {command}")
 
 
 def _script_job(integrity=True):
@@ -417,7 +465,7 @@ def _script_job(integrity=True):
 
     return SimpleNamespace(
         restore_id="PG_A_TO_B", db_type="postgresql", label="PG_A_TO_B", server_id="LAB-A", target_server_id="LAB-B",
-        source_backup_host_dir="/b/A", target_backup_dir="/b/B",
+        source_backup_host_dir="/b/A", target_backup_dir="/b/B", copy_mode="auto",
         integrity=I.RestoreIntegrity(copy_retry_interval_seconds=0) if integrity else None)
 
 
@@ -425,7 +473,7 @@ def _script_copy(monkeypatch, hosts, catalog, job=None):
     from dbabrain.backup_restore import restore_script
 
     monkeypatch.setattr(restore_script.common_cli, "run", hosts.run)
-    request = {"source": {"host": "192.0.2.49"}, "target": {"host": "192.0.2.50"}, "include": ["base/F", "wal/"]}
+    request = {"source": {"host": SOURCE_HOST}, "target": {"host": TARGET_HOST}, "include": ["base/F", "wal/"]}
     return restore_script._copy_gated_between_hosts(job or _script_job(), request, source=None, target=None,
                                                     catalog=catalog)
 
@@ -435,27 +483,157 @@ def test_a_host_to_host_copy_is_proven_and_a_wrong_copy_is_sent_again_by_name(mo
 
     out = _script_copy(monkeypatch, hosts, catalog)
 
-    assert [c.get("replace") for c in hosts.copies] == [["base/F/backup_manifest", "wal/0001"], ["wal/0001"]], \
-        "one copy per round, and the round after names only what arrived wrong - at the same size"
-    assert all(c["include"] == ["base/F", "wal/"] for c in hosts.copies), "the request as asked, every round"
-    assert hosts.files["192.0.2.50"]["/b/B/wal/0001"] == b"wal"
+    assert [c.get("replace") for c in hosts.rounds] == [["base/F/backup_manifest", "wal/0001"], ["wal/0001"]], \
+        "one staging per round, and the round after names only what arrived wrong - at the same size"
+    assert all(c["include"] == ["base/F", "wal/"] for c in hosts.rounds), "the request as asked, every round"
+    assert [[line["target"] for line in c["files"]] for c in hosts.named("copy-files")] == [
+        ["/b/B/base/F/backup_manifest", "/b/B/wal/0001"], ["/b/B/wal/0001"]], "one copy-files per round"
+    assert hosts.files[TARGET_HOST]["/b/B/wal/0001"] == b"wal"
     assert out["integrity"]["proven"] is True and out["integrity"]["recopied"] == 1
+    assert (out["copied"], out["bytes_copied"], out["skipped"]) == (3, len(b"manifest") + 2 * len(b"wal"), 0), \
+        "every arrival counted, the one sent again too"
     rows = {r["file_name"]: r for r in catalog.run_files(out["restore_run_id"])}
     assert rows["0001"]["file_type"] == "WAL" and rows["backup_manifest"]["file_type"] == "MANIFEST"
-    assert {a["copy_engine"] for a in catalog.attempts(rows["0001"]["run_file_id"])} == {"copy-backup-dir"}
+    assert {a["copy_engine"] for a in catalog.attempts(rows["0001"]["run_file_id"])} == {"copy-files"}
     with catalog.connect() as conn:
         assert conn.execute("SELECT phase FROM restore_runs").fetchone()[0] == "verified"
 
 
-def test_a_target_already_equal_is_matched_and_the_copy_still_runs_once_for_the_mirror(monkeypatch, catalog):
+def test_every_file_travels_with_the_size_and_sha256_its_source_was_just_hashed_to(monkeypatch, catalog):
+    """The point of the change (0.38.0, 1.329): the tar stream carried names. ``copy-files`` is
+    handed each file's bytes and sha256 - the gate's own hash of the source, made a moment before -
+    and writes over the staged name only when the stream holds to them."""
+    from dbabrain.backup_restore import restore_script
+
+    hosts = _Hosts({"/b/A/base/F/backup_manifest": b"manifest", "/b/A/wal/0001": b"wal"})
+
+    _script_copy(monkeypatch, hosts, catalog)
+
+    assert hosts.named("copy-files") == [{
+        "source": {"host": SOURCE_HOST}, "target": {"host": TARGET_HOST},
+        "files": [{"source": "/b/A/base/F/backup_manifest", "target": "/b/B/base/F/backup_manifest",
+                   "file_name": "backup_manifest", "size_bytes": len(b"manifest"), "sha256": sha(b"manifest")},
+                  {"source": "/b/A/wal/0001", "target": "/b/B/wal/0001",
+                   "file_name": "0001", "size_bytes": len(b"wal"), "sha256": sha(b"wal")}],
+        # prepare-staging decided each must travel, so a staged file under the name is replaced.
+        "overwrite": True, "transfer": "cat",
+        "timeout_seconds": restore_script.STAGING_COPY_TIMEOUT_SECONDS}]
+    assert [request["paths"] for request in hosts.named("file-checksum") if request["host"]["host"] == SOURCE_HOST] == [
+        ["/b/A/base/F/backup_manifest", "/b/A/wal/0001"]], "hashed once, by the gate - not again for the copy"
+
+
+def test_a_round_is_the_staging_the_copy_and_the_times_and_only_then_the_hash(monkeypatch, catalog):
+    hosts = _Hosts({"/b/A/wal/0001": b"wal"})
+
+    out = _script_copy(monkeypatch, hosts, catalog)
+
+    assert [(command, request.get("host", {}).get("host") or bool(request.get("plan_only")))
+            for command, request in hosts.calls] == [
+        ("prepare-staging", True),           # the plan: which files, read from the source alone
+        ("file-checksum", SOURCE_HOST),      # the gate: every source
+        ("file-checksum", TARGET_HOST),      # and what the target already holds
+        ("prepare-staging", False),          # the round: the staging made ready, what still travels
+        ("copy-files", False),
+        ("finish-staging", False),
+        ("file-checksum", TARGET_HOST)]      # the round is proven on the target
+    assert hosts.named("finish-staging") == [{
+        "target": {"host": TARGET_HOST}, "target_dir": "/b/B",
+        "files": [{"path": "wal/0001", "mtime": STAGED_AT}], "open_for_engine": True}], \
+        "each landed file is given its source's time, and the folder opened for the engine"
+    assert out["opened_for_engine"] is True and out["copy_mode"] == "cat"
+
+
+def test_a_target_already_equal_is_matched_and_the_staging_is_still_prepared_once(monkeypatch, catalog):
     body = {"/b/A/wal/0001": b"wal"}
     hosts = _Hosts(body, target={"/b/B/wal/0001": b"wal"})
 
     out = _script_copy(monkeypatch, hosts, catalog)
 
     assert out["integrity"]["verdicts"] == {"match": 1}
-    assert [c.get("replace") for c in hosts.copies] == [[]], \
-        "one call with nothing to replace: the mirror, the marker and the engine's access are the copy's"
+    assert [c.get("replace") for c in hosts.rounds] == [[]], \
+        "one round with nothing to replace: the marker, the engine's access and the word on what the source " \
+        "no longer has are the staging's"
+    assert hosts.named("copy-files") == [], "and no file travels"
+    assert hosts.named("finish-staging") == [{"target": {"host": TARGET_HOST}, "target_dir": "/b/B",
+                                              "files": [], "open_for_engine": True}]
+    assert (out["copied"], out["bytes_copied"], out["skipped"], out["copy_mode"]) == (0, 0, 1, "none")
+
+
+def test_a_file_copy_files_could_not_land_is_that_files_attempt_not_the_rounds_failure(monkeypatch, catalog):
+    """``copy-files`` answers a file it could not copy as its own line, and the command still
+    succeeds. The files that did land are timed and proven; the one that did not is an attempt
+    spent, sent again by name in the next round."""
+    hosts = _Hosts({"/b/A/base/F/backup_manifest": b"manifest", "/b/A/wal/0001": b"wal"}, refuse={"wal/0001": 1})
+
+    out = _script_copy(monkeypatch, hosts, catalog)
+
+    assert [[one["path"] for one in c["files"]] for c in hosts.named("finish-staging")] == [
+        ["base/F/backup_manifest"], ["wal/0001"]], "only what landed is given a time"
+    assert [c.get("replace") for c in hosts.rounds] == [["base/F/backup_manifest", "wal/0001"], ["wal/0001"]]
+    assert out["integrity"]["proven"] is True and out["integrity"]["recopied"] == 1
+    rows = {r["file_name"]: r for r in catalog.run_files(out["restore_run_id"])}
+    attempts = catalog.attempts(rows["0001"]["run_file_id"])
+    assert [a["result"] for a in attempts] == ["copy_error", "match"]
+    assert "is not on LAB-B after the copy" in attempts[0]["error_text"]
+    assert "the stream stopped moving" in attempts[0]["error_text"], \
+        "copy-files' own word on the file is the attempt's reason - it was written to a key nobody read"
+
+
+def test_a_round_that_could_not_run_says_why_on_every_file_it_was_sending(monkeypatch, catalog):
+    """The link dropped while the staging was read: the round is an attempt spent for its files,
+    and its error is that attempt's text - "is not on LAB-B after the copy" alone told nobody what
+    to look at."""
+    from dbabrain.lib.common_cli import CommonCliError
+
+    hosts = _Hosts({"/b/A/wal/0001": b"wal"}, rounds_fail=[
+        CommonCliError("prepare-staging: the session to 192.0.2.50 closed", kind="unreachable")])
+
+    out = _script_copy(monkeypatch, hosts, catalog)
+
+    assert out["integrity"]["proven"] is True and out["integrity"]["recopied"] == 1
+    (row,) = catalog.run_files(out["restore_run_id"])
+    attempts = catalog.attempts(row["run_file_id"])
+    assert [a["result"] for a in attempts] == ["copy_error", "match"]
+    assert "the session to 192.0.2.50 closed" in attempts[0]["error_text"]
+    assert out["copy_mode"] == "cat", "the way the bytes crossed, though the first round moved none"
+
+
+def test_a_refused_round_ends_the_run_with_its_own_sentence_and_is_not_tried_again(monkeypatch, catalog):
+    """ "Will not fit" was caught as an attempt spent: four rounds, a retry interval apart, then
+    "the copy is not proven - wal/0001 is not on LAB-B after the copy" - and the sentence that said
+    why never reached the operator. A refusal is the same answer every round, so the first ends the
+    run, as itself."""
+    from dbabrain.lib.common_cli import CommonCliError
+
+    refusal = CommonCliError("prepare-staging: /b/B has 1 GB free and the copy needs 40 GB", kind="refused")
+    hosts = _Hosts({"/b/A/wal/0001": b"wal"}, rounds_fail=[refusal] * 4)
+
+    with pytest.raises(CommonCliError, match="needs 40 GB"):
+        _script_copy(monkeypatch, hosts, catalog)
+
+    assert len(hosts.rounds) == 1, "asked once"
+    assert hosts.named("copy-files") == []
+    with catalog.connect() as conn:
+        phase, error_text = conn.execute("SELECT phase, error_text FROM restore_runs").fetchone()
+    assert phase == "error" and "needs 40 GB" in error_text
+
+
+def test_a_file_the_source_wrote_after_the_plan_stays_there_and_is_named(monkeypatch, catalog):
+    """``prepare-staging`` reads the source again each round, so it can answer a file the plan did
+    not hold - a WAL segment archived in between. The gate holds the plan's files only: copied now,
+    that one would lie in the staging with nothing proving it. It does not travel, it is not even
+    hashed, and the answer names it."""
+    hosts = _Hosts({"/b/A/wal/0001": b"wal"}, late={"/b/A/wal/0002": b"later"})
+
+    out = _script_copy(monkeypatch, hosts, catalog)
+
+    (copy,) = hosts.named("copy-files")
+    assert [line["file_name"] for line in copy["files"]] == ["0001"]
+    assert "/b/B/wal/0002" not in hosts.files[TARGET_HOST]
+    assert out["written_after_the_plan"] == ["wal/0002"]
+    assert [request["paths"] for request in hosts.named("file-checksum") if request["host"]["host"] == SOURCE_HOST] == [
+        ["/b/A/wal/0001"]], "the gate's hash, and no other"
+    assert out["integrity"]["proven"] is True and out["integrity"]["files"] == 1
 
 
 def test_a_host_to_host_copy_that_never_arrives_intact_refuses_the_restore(monkeypatch, catalog):
@@ -465,7 +643,7 @@ def test_a_host_to_host_copy_that_never_arrives_intact_refuses_the_restore(monke
 
     with pytest.raises(restore_script.CopyNotProvenError, match="not proven"):
         _script_copy(monkeypatch, hosts, catalog)
-    assert len(hosts.copies) == 4, "copy_max_retry 3: four rounds, then refused"
+    assert len(hosts.rounds) == len(hosts.named("copy-files")) == 4, "copy_max_retry 3: four rounds, then refused"
     with catalog.connect() as conn:
         phase, ended = conn.execute("SELECT phase, ended_at FROM restore_runs").fetchone()
     assert phase == "refused" and ended, "no restore follows, so the refusal closes its own row"
@@ -476,7 +654,7 @@ def test_a_host_to_host_copy_without_integrity_is_refused_before_the_source_is_r
 
     with pytest.raises(I.IntegrityConfigError):
         _script_copy(monkeypatch, hosts, catalog, job=_script_job(integrity=False))
-    assert hosts.copies == []
+    assert hosts.calls == []
 
 
 @pytest.mark.parametrize("db_type, relative, file_type", [

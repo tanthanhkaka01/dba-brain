@@ -660,6 +660,9 @@ def build_models(data: dict, *, exclude_ip_prefixes=EXCLUDE_IP_PREFIXES):
             "dbType": dt or "",
             "freshness": _build_freshness(s),
             "security": _build_security(s),
+            # Who can take this server's files - the overlay's block, as built: the server page
+            # renders the same one, so the two pages cannot describe one server differently.
+            "protection": s.get("protection") or {},
             # The interval counters, carried through whole rather than reduced here: the
             # per-server page renders the same block from the same builder, and a fleet
             # page that summarised it differently would describe the same hour two ways.
@@ -1016,6 +1019,31 @@ def build_triage(models: list) -> list:
                       "body": "Approaching the danger zone for data/log growth: " + "; ".join(warn_disk) + ".",
                       "action": "Plan capacity / archive old backups; set disk alerts at 15%.",
                       "tags": warn_disk})
+
+    wrong_edition = [m for m in models if (m.get("protection") or {}).get("editionFinding")]
+    if wrong_edition:
+        cards.append({"sev": "warn",
+                      "title": f"{len(wrong_edition)} production instance(s) on an edition not meant for production",
+                      "body": "; ".join(f"{m['role']} ({_ip_tag(m)}) — {m['protection']['editionFinding']}"
+                                        for m in wrong_edition) + ".",
+                      "action": "Move the instance to a licensed production edition, or correct its "
+                                "environment in the inventory if it is not production.",
+                      "tags": [_ip_tag(m) for m in wrong_edition]})
+
+    plain = [(m, enc) for m in models
+             for enc in [(m.get("protection") or {}).get("encryption") or {}]
+             if enc.get("collected") and not enc.get("error") and enc.get("total")
+             and enc.get("encrypted", 0) < enc["total"]]
+    if plain:
+        cards.append({"sev": "info",
+                      "title": f"Data files not encrypted at rest on {len(plain)} server(s)",
+                      "body": "A copy of these files opens on another install, so whoever is an "
+                              "administrator on the host can take the data: "
+                              + "; ".join(f"{m['role']} ({_ip_tag(m)}) — {enc['encrypted']} of {enc['total']} encrypted"
+                                          for m, enc in plain) + ".",
+                      "action": "Detection only: each server's page lists the databases, who the host's "
+                                "administrators are, and the engine's way to encrypt.",
+                      "tags": [_ip_tag(m) for m, _enc in plain]})
 
     xpcmd = [m for m in models if (m["cfg"].get("xpcmd") == 1)]
     if xpcmd:

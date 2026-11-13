@@ -918,6 +918,24 @@ directly, like petweb; keep what was asked, what the AI answered and which dbabr
 with a quota in $.* A message addressed to the bot in the assistant's chat is a question to
 Claude, answered with dbabrain's own read-only tools.
 
+**It has a name, and the name is configuration** (0.38.0, 1.326 - the operator, 2026-11-11: *name
+dbabrain's AI, set in the config json*). `data/ai_assist.json` `assistant_name` (mandatory, shipped
+`Phanes`; one line of 1 to 40 characters, not starting with `/` or `@`) is read wherever the
+assistant speaks or is addressed, and no name is written in code - `lib/ai_assist.py` holds the
+shipped value, the one `upgrade-config` writes into a file that states none, and nothing reads it
+as a fallback (`tests/test_the_ai_assistant_answers_to_the_name_its_config_states.py` scans for a
+second place):
+
+| Where | What reads the field |
+| --- | --- |
+| the system prompt | `ai_assist.name_rule`: *Your name is ...*, first in the prompt; the rules after it are unchanged |
+| the replies the job writes itself | *`<name>` is working on it*, the footer (`-- <name> · <model> · ...`), `/help`, `/usage`, *`<name>` failed: ...*, *you are not switched on for `<name>`*; the queued row's `note` |
+| being addressed | `lib.ai_assist.called_by_name`: a message that **starts** with the name (`<name>, ...`, `@<name> ...`) or carries `@<name>` anywhere is for the assistant, beside the bot's own `@mention`; the name is taken out of the question. In the middle of a sentence it is people talking about the assistant: neither answered nor kept |
+| the console | the page, its title and its sidebar link (`docs/12_webhost_app.md`) |
+
+A node renames its assistant by editing the field: the next question, and the next console request,
+use the new name. The worker and the PC read the same field of their own `data/ai_assist.json`.
+
 **Its chat is a level, as every app's is.** `data/ai_assist.json` `telegram_chat` (mandatory,
 shipped `ai_assist`) names a notify level, exactly as a SQL target's `notify.*.telegram_chat: "sql"`
 does; the chat is the **active** group in `telegram_groups.json` whose `notify_level` is that level,
@@ -960,8 +978,10 @@ file, no key or no chat is *not configured*: said in the run's answer and skippe
 - a message **not addressed to the assistant**, with `require_mention` on (shipped): kept as
   `stopped` **without its text** - people talking to each other are neither answered nor recorded
   (the operator, 2026-10-31). Addressed is an `@<telegram_bot_username>` in the text (taken out of
-  the question), a `text_mention` of the bot's id, a reply to one of the bot's own messages when
-  `reply_to_assistant_is_mention`, or a group word; `@bot` alone answers with `/help`. A node
+  the question), a `text_mention` of the bot's id, the assistant called by its name
+  (`assistant_name` at the start of the message, or `@<name>` anywhere - above), a reply to one of
+  the bot's own messages when `reply_to_assistant_is_mention`, or a group word; `@bot` or the name
+  alone answers with `/help`. A node
   that does not know its bot's username or id skips the run and says so;
 - a user who is not in `users[]` with `"active": true`: refused by name (the reply carries the
   `telegram_user_id` to add) and kept as `blocked`;
@@ -1011,6 +1031,7 @@ one's switch is on:
 | `list_files`, `read_file`, `grep_files` | the tool root's `file_roots` (`data`, `assets`, `logs`, `runtime/output`, `dbabrain`, `config.json`) | `file_denied` (the encrypted store, `secrets/`, `ssh_keys/`, keys, sqlite files); no path outside the root |
 | `run_sql` | a monitored server, by `server_id` | the same read-only check, then `sql_commands.run_sql_to_xlsx` -> `common.cli run-sql` (never committed); `run_sql_server_ids`, `run_sql_credential_name`, `run_sql_max_rows`, `run_sql_timeout_seconds` |
 | `bot_commands` | `telegram_support_commands.json` and the BotFather menu | which `/spbot_*` command the asker may run, so an answer proposes one exactly - the user runs it |
+| `backup_runbook` (0.38.0) | `restore_config.json`, `telegram_support_commands.json`, the inventory's `environment`, this node's install | `backup_runbook_enabled`; builds lines and runs none; a step that changes something keeps its lines only for an asker whose Telegram level may run it (below) |
 
 Every result is **redacted** of every value in the encrypted secret store (and of `password=`,
 `token=` shapes), cut to `tool_result_max_chars` with the cut said, and kept in `ai_tool_runs`. The
@@ -1023,8 +1044,10 @@ tools used and the user's month so far. `ack_message` queues *Working on it* fir
 **Every field of `ai_assist.json` is mandatory** (R50): the reference objects `ai_assist_settings`,
 `ai_assist_price` and `ai_assist_user` in `shared_config_objects.json`; `upgrade-config`'s
 `stated-ai-assist` step writes the shipped values (a user row's missing `active` is `false`).
-Shipped: `claude-sonnet-5-5`, effort `medium`, $10 a month for the system, $5 for a user, $0.50 a
-question. The SDK is the `anthropic` package (`requirements.txt`, extra `ai`); a node without it
+Shipped: the name `Phanes`, `claude-sonnet-5-5`, effort `medium`, $10 a month for the system, $5 for
+a user, $0.50 a question, every tool's switch on. 0.38.0 added `assistant_name` and
+`backup_runbook_enabled`: a file from before it is refused by the name of the missing field until
+`upgrade-config` has run. The SDK is the `anthropic` package (`requirements.txt`, extra `ai`); a node without it
 skips with *not installed*.
 
 **Commands written for the node it runs on** (0.35.0, 1.267). The system prompt carries how the node
@@ -1058,6 +1081,78 @@ The same test found two faults in the file tools, both fixed:
   not exist.
 
 Five questions on the clean install were answered for about $0.15 in all.
+
+**How to run a backup or a restore by hand: `backup_runbook`** (0.38.0, 1.327 - the operator,
+2026-11-11: *backup and restore are complex; asked over Telegram, the AI answers how to run one by
+hand - from the CLI, from a Telegram command - thoroughly*). Everything the assistant did before
+stays: the seven tools above in their order, every rule of the prompt, every section of the guide,
+every setting at its shipped value, who is answered and who is refused
+(`tests/test_the_ai_assistant_still_does_everything_it_did.py` records them). On top, one more
+read-only tool. Asked for a `backup_id`, a `restore_id` or a `server_id` (every backup entry of the
+server, every restore that reads from it or restores onto it), it answers the entry's runbook; asked
+for nothing, every entry by id, so "the store's FULL" is found, not guessed.
+
+The runbook is built by `lib.backup_runbook` (pure - `docs/14_lib.md`) from what the entry states,
+never from a general description:
+
+| In the answer | Built from |
+| --- | --- |
+| the entry: engine, server and its `environment`, each job's level, scope, schedule (and whether its window is open now, on the node's clock), retention, notify chats | `restore_config.json` `backups[]` / `restores[]`, `db_instances.json`, `lib.time_window` |
+| `flow`: backup -> copy to the repository -> verify -> encrypt -> verify -> delete at the source -> repository check, each **on or off for this entry**, with the step number its Telegram message carries (`1. Backup`, `2-5. Repository`) | the entry's `offload_*` fields: the repository, how the server is read (SSH `cat`, SFTP, or its share), `offload_encrypt`, `offload_delete_source`, `offload_source_keeps_newest_chain`; a restore's `restore_from`, `server_metadata`, `cleanup_retention` |
+| `steps`: the dry run first, then the run - each with `cli` (this node) and `from_master` (the master's `control.cli worker-run -- ...`, when the estate has a worker) | the entry's own `backup_id` / `restore_id` and job names; the node's install (`lib.node_environment`): `dbabrain backup-restore ...` when pip-installed, `<that Python> -m dbabrain.backup_restore.cli ...` in a source tree; every line states `--config config.json` |
+| `telegram`: the command that does the same, its level, where it may be typed, whether it asks anything | this node's `telegram_support_commands.json` - the command is found by what it **runs** (`command_argv`), so a renamed or switched-off command is read as it is here |
+| `touches`, `guards`, `will_not_run`, `will_be_refused` | the entry: an inactive job (`backup --force` leaves it out), `overwrite_existing`, `allow_production_target` held to the target's `environment` (`lib.integrity.production_target_refusal`), the lockdown rule |
+| `watch` | the entry's `notify`, `reports_config.json`'s published address for `backup-restore.html`, the store's tables, the log files |
+
+Which commands an entry is given depends on its kind - the reason a line from memory is a guess:
+
+| Entry | Dry run | Run |
+| --- | --- | --- |
+| a backup entry, per job | `backup --backup-id <id> --job <job> --force --dry-run` | `backup --backup-id <id> --job <job> --force`; `--backup-type` offered only where the script derives the level (never for a job that states `BACKUP_LEVEL` or ships the log stream - `lib.backup_runbook.LOG_STREAM_JOBS`, which `list-backups` reads too) |
+| its repository pass, when `offload_enabled` | `offload --backup-id <id> --dry-run` | `offload --backup-id <id>` |
+| its files | - | `verify-backup-files --backup-id <id>` (a check: reads, changes nothing on the server); `backup-stop --backup-id <id>` |
+| a script-driven restore (`lib.restore.kind.is_script_restore`) | `restore-by-id '{"restore_id": ..., "dry_run": true}'` (the plan; bash only - inline JSON does not survive PowerShell, and the answer says so instead of writing the line); `restore-workflow --restore-id <id> --dry-run` | `restore-workflow --restore-id <id>` (`--point-in-time "..."`, `--copy-only`); `restore-by-id` as the same restore without the entry's run claim |
+| a share-driven SQL Server restore | `restore-workflow --restore-id <id> --dry-run`; `restore-latest --restore-id <id> --dry-run` | `restore-workflow --restore-id <id>` (`--point-in-time`, `--copy-only`); `restore-latest --restore-id <id>` (what is staged, no copy) |
+
+`/spbot_backup` names no job, so on an entry with two it runs both - said beside the CLI line that
+runs one. None of these commands asks a confirmation: each step says so, and `guards` lists what can
+refuse it instead. **No line carries the passphrase, or a placeholder for it**: each reads
+`DBABRAIN_SECRET_KEY` - the worker's container holds it, and `worker-run` opens the worker's SSH
+login with the master's - and the answer says so once. A tool result passes through the secret
+redactor, which takes whatever follows a key flag for a key: a placeholder after `--key-base64` came
+out as a line nobody could type, so what the model is given is, character for character, what was
+built (held by a test). An answer for a
+server with more entries than one tool result holds is given by id (a runbook cut in the middle is a
+line without its warning); the model asks again for one entry. The guide
+(`ai_assist_guide.md`, *Running a backup or a restore by hand*) tells the model to answer from the
+runbook in a fixed order, to copy a line character for character, and never to write one itself.
+
+Every line is held to the parser that will read it
+(`tests/test_the_ai_assistant_says_how_to_run_a_backup_or_a_restore_by_hand.py`): `backup_restore.cli`
+for the command, `control.cli` for the master's `worker-run`, the bot's own parameter patterns for
+the Telegram line - for the store's FULL, a SQL Server FULL, DIFF and LOG, a Windows server read
+over SSH and over a share, and a restore from the server and from the repository.
+
+**The answer is the asker's level** (0.38.0, 1.328). A step that changes something - a forced
+backup, a repository pass (it deletes at the source), a restore, a copy, a stop - is held to the
+level of the bot command that does the same thing **on this node**: its `command_type` in
+`telegram_support_commands.json` (shipped: 10 for `/spbot_backup`, `/spbot_restore` and
+`/spbot_copy_backup`). `lib.backup_runbook.for_asker` is given the asker's level from
+`telegram_users.json` and the bot's own rule (`commands.can_run_command`, with the asker's level as
+the chat's - what `bot_commands` answers `asker_may_run_in_private_chat` by):
+
+- an asker at or above the level gets the step with its lines, what it touches and that nothing asks
+  for a confirmation;
+- an asker below it gets the step **without** `cli`, `from_master` and the Telegram line: `withheld`
+  says the level it takes and the asker's own, and `touches` still says what it would change. The
+  dry runs, the check and the listing stay theirs;
+- a command switched off on this node (level below 0), or a node with no bot command for the step,
+  has no level to hold it to: the step is given in no chat, only at the node's command line;
+- the node's operator at its command line (`telegram ai-ask`) has no Telegram level and holds the
+  passphrase already: every line.
+
+The level is held where the line is made - in the tool's result, which is also what `ai_tool_runs`
+keeps - not in the prompt (`tests/test_a_changing_command_is_handed_only_to_a_level_that_may_run_it.py`).
 
 **Reading what it did**: `telegram.cli ai-usage --days 30 --by day|user|model` and
 `telegram.cli ai-show --id <ai_request_id>`, or the console's *AI assistant* page (0.35.0, admins;

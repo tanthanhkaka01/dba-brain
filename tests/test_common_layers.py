@@ -263,6 +263,10 @@ def test_the_library_tier_is_still_the_large_majority() -> None:
 CONFIG_FREE_BY_NAME: tuple[str, ...] = (
     "cli_backup.py", "backup/",
     "cli_backup_files.py", "backupfiles/", "deletefiles.py",
+    # 0.37.0: one verified file, or one empty folder - nothing but the request.
+    "cli_delete_verified.py", "deleteverified.py",
+    "cli_readfile.py", "readfile.py",
+    "cli_repoencrypt.py", "repoencrypt.py", "filecopy_source.py",
     "cli_restorestep.py", "restorestep/", "restorekey.py", "restoremetadata.py", "verifyrestore.py",
     "cli_filetransfer.py", "filetransfer.py",
     # 0.34.0 (1.210): the one checksum, taken where the file is.

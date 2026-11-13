@@ -193,3 +193,14 @@ def test_describe_names_the_person_before_the_numbers():
     assert "app_user=ACMECEN01.PU (ORDER PROCESSING PU&NON)" in line
     assert "tran_age=388m" in line
     assert "blocking=52,1266" in line
+
+
+def test_a_target_that_is_not_sql_server_is_refused_with_a_sentence_before_any_sql(monkeypatch):
+    """trace-session reads SQL Server's DMVs; on PostgreSQL it ran them and failed with a syntax error
+    at "XML" (2026-11-11, through MCP on the demo's lab). The engine is checked before any SQL."""
+    ran = []
+    monkeypatch.setattr(session_trace.sql_run, "run_sql", lambda request: ran.append(request))
+    with pytest.raises(session_trace.SessionTraceError, match="SQL Server's sessions.*postgresql"):
+        session_trace.trace_sessions({"target": "PG", "connection": {
+            "db_type": "postgresql", "host": "192.0.2.5", "port": 5432, "username": "u", "password": "p"}})
+    assert ran == []

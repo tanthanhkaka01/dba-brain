@@ -83,6 +83,10 @@ def test_every_file_restored_from_the_repository_is_held_to_what_its_offload_pro
 
     assert out["integrity"]["proven"] is True
     assert hosts.files["192.0.2.50"]["/b/B/wal/0002"] == b"wal two"
+    (copy,) = hosts.named("copy-files")
+    assert [(line["source"], line["size_bytes"], line["sha256"]) for line in copy["files"]] == [
+        ("/b/A/wal/0001", 7, sha(b"wal one")), ("/b/A/wal/0002", 7, sha(b"wal two"))], \
+        "each file leaves the repository stated as the bytes its offload proved"
     rows = {r["file_name"]: r for r in catalog.run_files(out["restore_run_id"])}
     assert rows["0001"]["source_server_id"] == "REPO", "the bytes came from the repository"
     assert rows["0001"]["checksum_after_backup"] == sha(b"wal one") and rows["0001"]["file_id"]
@@ -96,6 +100,24 @@ def test_a_file_on_the_repository_no_offload_proved_is_refused_and_nothing_is_re
 
     with pytest.raises(restore_script.CopyNotProvenError, match="not proven"):
         _restore(monkeypatch, hosts, catalog)
+
+
+def test_a_file_offloaded_after_the_plan_stays_on_the_repository_for_the_next_run(monkeypatch, catalog):
+    """The staging is read again for each round, so it can name a file the plan did not hold - an
+    offload that landed in between. This run's gate proves the plan's files, and that one is not
+    among them: its offload's proof or not, staged now it would be a file the run never held to
+    anything. It stays on the repository, and the answer names it."""
+    _offloaded(catalog, {"/b/A/wal/0001": b"wal one", "/b/A/wal/0002": b"wal two"})
+    hosts = _Hosts({"/b/A/wal/0001": b"wal one"}, late={"/b/A/wal/0002": b"wal two"})
+
+    out = _restore(monkeypatch, hosts, catalog)
+
+    (copy,) = hosts.named("copy-files")
+    assert [(line["file_name"], line["size_bytes"], line["sha256"]) for line in copy["files"]] == [
+        ("0001", 7, sha(b"wal one"))]
+    assert out["written_after_the_plan"] == ["wal/0002"]
+    assert [request["paths"] for request in hosts.named("file-checksum")
+            if request["host"]["host"] == "192.0.2.49"] == [["/b/A/wal/0001"]], "the gate's own hash, and no other"
 
 
 def test_a_copy_cut_off_on_the_repository_is_never_even_selected():
@@ -154,14 +176,18 @@ def test_the_transfer_reads_the_repository_host_and_folder_not_the_servers(monke
     monkeypatch.setattr(catalog, "repository_locations",
                         lambda **_k: [_location("/srv/pg/backup/wal/0001", "/b/A/wal/0001")])
 
-    def gated(job, request, *, source, target, catalog, proofs):
+    def gated(job, request, *, source, target, catalog, proofs, plan):
         seen.update(source=source.server_id, source_dir=request["source_dir"], login=request["source"],
-                    proofs=sorted(proofs))
+                    proofs=sorted(proofs), include=request["include"], plan=plan)
         return {"copied": 1, "skipped": 0, "bytes_copied": 7}
 
+    def run(command, request, **_k):
+        # The one command the transfer sends itself: the plan, which reads the chain with it.
+        seen.setdefault("asked", []).append((command, request))
+        return {"include": ["wal/"], "files": [{"path": "wal/0001", "size_bytes": 7}]}
+
     monkeypatch.setattr(restore_script, "_copy_gated_between_hosts", gated)
-    monkeypatch.setattr(restore_script.common_cli, "run", lambda command, request, **_k: (
-        seen.setdefault("chain_dir", request["source_dir"]) and {"include": ["wal/"]}))
+    monkeypatch.setattr(restore_script.common_cli, "run", run)
     job = SimpleNamespace(**{**vars(_script_job()), "source_backup_host_dir": "/srv/pg/backup",
                              "restore_from": "repository", "copy_selection": "chain",
                              "copy_recent_hours": 24, "backup_dir": "/backup", "copy_mode": "auto",
@@ -172,7 +198,14 @@ def test_the_transfer_reads_the_repository_host_and_folder_not_the_servers(monke
                                                    target=SimpleNamespace(host="lab-b"), catalog=catalog, prune=False)
 
     assert seen["source"] == "REPO" and seen["source_dir"] == "/b/A" and seen["login"] == {"host": "repo-host"}
-    assert seen["chain_dir"] == "/b/A", "the chain is read on the repository too"
+    ((command, plan),) = seen["asked"]
+    assert command == "prepare-staging" and plan["plan_only"] is True
+    assert plan["source_dir"] == "/b/A" and plan["source"] == {"host": "repo-host"}, \
+        "the chain is read on the repository too"
+    assert plan["chain"]["db_type"] == "postgresql"
+    assert seen["include"] == ["wal/"], "and stated from then on"
+    assert seen["plan"]["files"] == [{"path": "wal/0001", "size_bytes": 7}], \
+        "the plan is handed on - the repository is not walked a second time for it"
     assert seen["proofs"] == ["/b/A/wal/0001"]
     assert out["restore_from"] == "repository" and out["repository_server_id"] == "REPO"
 

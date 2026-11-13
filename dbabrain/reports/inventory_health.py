@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 
 from dbabrain.lib import backup_policy
-from dbabrain.reports import workload
+from dbabrain.reports import protection, workload
 from dbabrain.lib import health_model, report_windows
 from dbabrain.db.metric_store import MetricStore
 from dbabrain.lib.timezone import display_now, file_stamp, format_display
@@ -92,6 +92,9 @@ HEALTH_CODES = [
     # An Oracle database's size is the sum of its data files: it has no DATABASE_DATA_SIZE, so
     # its row on the page said "-" beside SQL Server's and PostgreSQL's gigabytes.
     "STORAGE_DATA_FILE_SPACE",
+    # Who can take a database's files (0.38.0): each database's data-file encryption and the
+    # host's administrators - inventories, rendered as the protection block on both pages.
+    "SECURITY_DATA_ENCRYPTION", "SECURITY_HOST_ADMINS",
 ]
 
 
@@ -1715,7 +1718,8 @@ def build_engine_facts(code_map) -> list[dict]:
 
 
 def build_server_overlay(server_id, ip, code_map, severity=None, problems=None,
-                         freshness=None, workload_rows=None):
+                         freshness=None, workload_rows=None, environment="",
+                         edition_rule=None, vault=None):
     # When these blocks were true. Everything below is derived from metrics, so one stamp
     # covers them all — and a server the overlay never reaches keeps its old blocks with no
     # stamp at all, which is exactly how the report tells "live" from "last known".
@@ -1757,6 +1761,12 @@ def build_server_overlay(server_id, ip, code_map, severity=None, problems=None,
         "workload": workload.build_workload(workload_rows or []),
         "index_health": build_index_health(code_map),
         "security_health": build_security_health(code_map),
+        # Who can take this server's files: data-file encryption, the host's administrators, and
+        # the edition held to the environment the inventory states (0.38.0, 1.322 - 1.325).
+        "protection": protection.build_protection(
+            code_map, environment=environment,
+            edition=str(build_instance_health(code_map).get("edition") or ""),
+            edition_rule=edition_rule, vault=vault),
         "config_warnings": build_config_warnings(code_map),
         "os_health": build_os_health(code_map),
         "inventory_status": build_inventory_status(code_map),
@@ -1836,11 +1846,50 @@ def _windowed(server_id: str, row: dict, history: dict) -> dict:
         row, report_windows.history_for(history, server_id, code, item))
 
 
+def _environments() -> dict[str, str]:
+    """``server_id -> environment`` as the inventory states it; ``{}`` when there is none to read."""
+    try:
+        return {str(server.get("server_id") or ""): str(database.get("environment") or "")
+                for server in data_sources.load_inventory()
+                for database in (server.get("databases") or [])[:1] if isinstance(database, dict)}
+    except Exception:  # noqa: BLE001 - a page without the environment still says what was read.
+        return {}
+
+
+def _edition_rule() -> dict:
+    """``SECURITY_DATA_ENCRYPTION``'s ``report_policy.edition_rule`` - the estate's, not the code's."""
+    try:
+        for item in data_sources.load_metric_definition_records():
+            if str(item.get("metric_code") or "").upper() == protection.ENCRYPTION_CODE:
+                rule = (item.get("report_policy") or {}).get("edition_rule")
+                return rule if isinstance(rule, dict) else {}
+    except Exception:  # noqa: BLE001 - no rule read is no edition finding, never a failed page.
+        pass
+    return {}
+
+
+def _vault_thumbprints(store_source) -> dict[str, set[str]] | None:
+    """``server_id -> thumbprints`` (lower case) the certificate vault holds; ``None`` when it could
+    not be read - then no row on a page claims anything about the vault."""
+    from dbabrain.db.certificate_vault import CertificateVault  # noqa: PLC0415 - only this block reads it
+
+    try:
+        held: dict[str, set[str]] = {}
+        for row in CertificateVault(store_source).listing():
+            held.setdefault(str(row.get("server_id") or ""), set()).add(str(row.get("thumbprint") or "").lower())
+        return held
+    except Exception:  # noqa: BLE001 - a store without the vault's table, or one not reachable.
+        return None
+
+
 def build_inventory_health(*, sqlite_path, config=None, output_dir=None, days=2,
-                           date=None, logger=None) -> dict:
+                           date=None, logger=None, environments=None) -> dict:
     rows = load_metrics(sqlite_path, int(days))
     servers = index_by_server(rows)
     store = MetricStore(sqlite_path)
+    environments = environments if environments is not None else _environments()
+    edition_rule = _edition_rule()
+    vault = _vault_thumbprints(sqlite_path)
     # Fetched apart from `rows` on purpose. `index_by_server` reduces every metric to its newest
     # collection, which is right for a current-state overlay and is exactly what a rate cannot be
     # computed from — so these rows are read whole, and capped at their own window so the fleet
@@ -1882,6 +1931,9 @@ def build_inventory_health(*, sqlite_path, config=None, output_dir=None, days=2,
             problems=build_metric_problems(problem_rows.get(sid, []), now=now),
             freshness=_freshness_block(freshness_rows.get(sid, []), now=now, days=int(days)),
             workload_rows=workload_rows.get(sid, []),
+            environment=environments.get(sid, ""),
+            edition_rule=edition_rule,
+            vault=None if vault is None else vault.get(sid, set()),
         )
         for sid, (ip, code_map) in sorted(servers.items())
     ]

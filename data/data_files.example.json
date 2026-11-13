@@ -268,6 +268,14 @@
             "description": "The AI assistant in Telegram: its chats, model, limits, tools, prices and who may ask."
         },
         {
+            "file": "mcp_tools.json",
+            "app_code": "mcp",
+            "kind": "config",
+            "transfer": "push",
+            "in_bundle": true,
+            "description": "What Claude may reach through MCP: the switch, each tool that is off, the answer cap, timeouts and the store tables kept out."
+        },
+        {
             "file": "telegram_groups.json",
             "app_code": "telegram",
             "kind": "config",

@@ -223,3 +223,32 @@ def test_an_engine_this_command_cannot_answer_for_is_refused_by_name(server, mon
 def test_a_request_that_is_not_an_object_is_refused() -> None:
     with pytest.raises(dbstatus.DbStatusError, match="JSON object"):
         dbstatus.status(["target"])
+
+
+def test_an_oracle_instance_is_read_whatever_case_oracle_gives_its_column_names(server, monkeypatch) -> None:
+    """Oracle upper-cases every unquoted alias: the probe's `version` / `status` / `state` come back
+    VERSION / STATUS / STATE, and read as written every Oracle instance said UNKNOWN - found on
+    2026-11-11 on an Oracle 23ai lab through MCP. The table count inside a database is the same."""
+    monkeypatch.setattr(db_catalog, "_resolve", lambda parsed: {"db_type": "oracle", "server_id": "ACME-ORA"})
+    monkeypatch.setattr(db_catalog, "_query", lambda parsed, sql, *, database="": (
+        [{"N": 42}] if "all_tables" in sql else [{"VERSION": "23.0.0.0.0", "STATUS": "OPEN", "STATE": "READ WRITE"}]))
+
+    answer = dbstatus.status({"target": "ACME-ORA", "connection": CONNECTION})
+
+    assert answer["ok"] is True and answer["instance"]["state"] == "READ WRITE"
+    assert answer["instance"]["version"] == "23.0.0.0.0" and answer["instance"]["instance_status"] == "OPEN"
+    item = dbstatus._answers({}, "oracle", database="FREEPDB1", name="FREEPDB1", kind="database")
+    assert item["detail"] == "answered; 42 tables visible"
+
+
+def test_an_oracle_pdb_is_read_by_its_open_mode(server, monkeypatch) -> None:
+    """Oracle names a PDB's state `open_mode`; read as `state`, every PDB said UNKNOWN (2026-11-11)."""
+    monkeypatch.setattr(db_catalog, "_resolve", lambda parsed: {"db_type": "oracle", "server_id": "ACME-ORA"})
+    monkeypatch.setattr(db_catalog, "_query", lambda parsed, sql, *, database="": (
+        [{"N": 7}] if "all_tables" in sql else [{"VERSION": "23", "STATUS": "OPEN", "STATE": "READ WRITE"}]))
+    monkeypatch.setattr(db_catalog, "list_databases", lambda request: {
+        "databases": [{"name": "FREEPDB1", "kind": "PDB", "open_mode": "READ WRITE"}]})
+
+    answer = dbstatus.status({"target": "ACME-ORA", "connection": CONNECTION, "depth": "database"})
+
+    assert answer["ok"] is True and answer["items"][0]["detail"] == "answered; 7 tables visible"

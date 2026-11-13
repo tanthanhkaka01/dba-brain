@@ -148,9 +148,17 @@ def trace_sessions(request: Any) -> dict[str, Any]:
         raise SessionTraceError("The request must be a JSON object.")
     try:
         # Checked here, before any SQL is built: rules R09 - the login is the request's own.
-        sql_run.stated_connection(request, what="trace-session")
+        connection = sql_run.stated_connection(request, what="trace-session")
     except sql_run.SqlRunError as exc:
         raise SessionTraceError(str(exc)) from exc
+    # SQL Server's DMVs only. Run on PostgreSQL it failed with a syntax error at "XML" (found
+    # 2026-11-11 through MCP on the demo's lab) - a sentence about the engine, before any SQL.
+    engine = str(connection.get("db_type") or "sqlserver").strip().lower()
+    if engine not in ("sqlserver", "mssql"):
+        raise SessionTraceError(
+            f"trace-session reads SQL Server's sessions (sys.dm_tran_*, sys.dm_exec_*); this target is {engine}. "
+            "On PostgreSQL, run-sql on pg_stat_activity shows the open transactions; on Oracle, v$session and "
+            "v$transaction.")
 
     filters = []
     session_id = request.get("session_id")

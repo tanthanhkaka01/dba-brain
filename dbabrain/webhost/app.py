@@ -392,6 +392,10 @@ class WebApp:
                                f"{session['username']} is level {session['user_level']}.")
         # The pages decide whether to show the Administration links from the session itself.
         session["can_admin"] = self._can(session, self.settings.min_level_admin)
+        # ... and what to call the assistant's page and its link (0.38.0, 1.326). Read only for
+        # the one who is shown them, and on each request: a node renames its assistant by editing
+        # the field, with no restart.
+        session["assistant_name"] = self.assistant_name() if session["can_admin"] else ""
         if not segments or head == "dashboard":
             return self._get_overview(request, session)
         if head == "users":
@@ -819,6 +823,24 @@ class WebApp:
 
     #: How many requests one page of the AI list shows.
     AI_PAGE_ROWS = 50
+
+    def assistant_name(self) -> str:
+        """The assistant's name as this node's ``data/ai_assist.json`` states it, or ``""``.
+
+        The same field the Telegram job reads (``assistant_name``), read from the file as the
+        console's own settings are - never a name of this module's. No file, an unreadable one or
+        one that states no name is the assistant *not configured* here: the page and its link then
+        say what they are, without a name.
+        """
+        if self.data_dir is None:
+            return ""
+        from dbabrain.lib import ai_assist as ai_assist_rules
+
+        try:
+            document = json.loads((self.data_dir / ai_assist_rules.FILE_NAME).read_bytes().decode("utf-8-sig"))
+        except (OSError, ValueError):
+            return ""
+        return ai_assist_rules.stated_name(document)
 
     def _route_ai(self, rest: list[str], request: Request, session: dict[str, Any]) -> Response:
         """The AI assistant: what it cost, and every question it was asked (0.35.0, 1.266).

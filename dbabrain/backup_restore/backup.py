@@ -47,6 +47,7 @@ from dbabrain.db import lockdown_store
 from dbabrain.lib.backup_run import RUN_TAG_ENV, run_tag
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib import backup_scope
+from dbabrain.lib.timezone import format_display_text
 from dbabrain.lib.version import __version__
 from dbabrain.db.backup_catalog import BackupCatalogStore
 from dbabrain.lib.time_window import TimeWindow, is_time_window_open, job_due, parse_time_window_config
@@ -928,6 +929,48 @@ def _retention_of(item: "BackupJob") -> dict[str, Any]:
             "pitr_reach_seconds": None if reach is None else int(reach)}
 
 
+#: The levels whose run is a long step - a start message and a done one (1.306): a full, an RMAN level 0.
+LONG_LEVELS = ("full", "0")
+
+
+def is_long_level(item: Any) -> bool:
+    level = str((getattr(item, "env", None) or {}).get("BACKUP_LEVEL") or getattr(item, "job", "") or "").lower()
+    return level in LONG_LEVELS or level.endswith("_full")
+
+
+def backup_flow_lines(item: Any, *, result: Any, started_at: str, finished_at: str | None,
+                      catalog_summary: dict[str, Any] | None, scrub: dict[str, Any] | None,
+                      anomalies: list[str], markers: list[str], server_metadata: Any) -> dict[str, Any]:
+    """Step 1 of a backup flow, as its message reads it (1.306): when, how many files, verified - and
+    each finding on a line of its own; what comes next when the entry offloads."""
+    done = result.status == "done"
+    title = f"{item.backup_id} · 1. Backup {item.job} {'done' if done else result.status.upper()}"
+    when = f"{format_display_text(started_at)} → {format_display_text(finished_at)[11:]}" if finished_at else ""
+    files = (catalog_summary or {}).get("files") or 0
+    summary = [when] + ([f"{files} file(s)", f"{(catalog_summary or {}).get('verified', 0)}/{files} hashed and verified"]
+                        if files else [])
+    lines = [" · ".join(part for part in summary if part)]
+    if not done:
+        lines.append(f"❌ {' '.join(str(result.error_text or 'failed').split())[:300]}")
+    if markers:
+        lines.append(f"❌ RANSOM MARKERS in {item.backup_dir}: {', '.join(markers[:5])}")
+    if anomalies:
+        lines.append("⚠ size far from its history: " + "; ".join(anomalies[:3]))
+    if scrub:
+        changed, gone = scrub.get("mismatch") or [], scrub.get("missing") or []
+        if changed or gone:
+            names = ", ".join(str(f.get("file")) for f in [*changed, *gone][:5])
+            lines.append(f"❌ stored backups changed: {len(changed)}, gone: {len(gone)} - {names}")
+        elif scrub.get("unreadable"):
+            lines.append(f"⚠ {len(scrub['unreadable'])} stored file(s) could not be re-read")
+    if isinstance(server_metadata, dict) and not server_metadata.get("ok", True):
+        lines.append(f"⚠ server metadata export failed: {' '.join(str(server_metadata.get('error') or '').split())[:160]}")
+    offload = getattr(item, "offload", None)
+    if done and offload is not None and getattr(offload, "enabled", False):
+        lines.append(f"next: 2. copy to {offload.server_id}, 3. encrypt, 4. delete at the source, 5. check")
+    return {"flow_title": title, "flow_lines": lines}
+
+
 def _engage_lockdown(app_config: Any, metadata: dict[str, Any], *, reason: str, by: str) -> str:
     """Turn the lockdown on (1.220) and answer the words the alert carries."""
     try:
@@ -1238,8 +1281,12 @@ def run_backup(
         emit_backup_restore_event(
             app_config=app_config, command="backup", phase="START", level="logging",
             message=f"{item.label} started.", logger=logger, started_at=started_at,
-            metadata={"backup_id": item.backup_id, "job": item.job, "server_id": item.server_id},
+            metadata={"backup_id": item.backup_id, "job": item.job, "server_id": item.server_id,
+                      "flow_title": f"{item.backup_id} · 1. Backup {item.job} started",
+                      "flow_lines": [f"started {format_display_text(started_at)}"]},
             notify=item.notify,
+            # A long step a start and a done; a short one only its done (1.306).
+            telegram=is_long_level(item),
         )
         try:
             target = resolve_backup_target(item, data_dir=data_dir)
@@ -1258,6 +1305,14 @@ def run_backup(
                 last_wal = catalog.last_file_name(backup_id=item.backup_id, file_type="WAL")
                 if last_wal:
                     job_env.setdefault("CATALOG_AFTER", last_wal)
+            # A certificate the vault holds is not exported beside the backups again (0.37.0): it was
+            # taken off the server on purpose. Absent when the vault holds none or cannot be read -
+            # the script then exports as it always did.
+            from dbabrain.backup_restore.certificate_take import HELD_ENV, held_thumbprints
+
+            held = held_thumbprints(app_config, item)
+            if held:
+                job_env.setdefault(HELD_ENV, held)
             # backup_type travels as a word, not as a translated BACKUP_LEVEL: the same word maps
             # to a different level per engine (and a --backup-id can select jobs of more than one),
             # so the translation belongs where the engine is known — once, in the spec.
@@ -1415,6 +1470,10 @@ def run_backup(
                 error_text=result.error_text,
                 metadata=metadata,
             )
+            metadata.update(backup_flow_lines(item, result=result, started_at=started_at,
+                                              finished_at=finished_at, catalog_summary=catalog_summary,
+                                              scrub=scrub, anomalies=anomalies, markers=markers,
+                                              server_metadata=metadata.get("server_metadata")))
             emit_backup_restore_event(
                 app_config=app_config, command="backup",
                 phase="END" if result.status == "done" else "ERROR",

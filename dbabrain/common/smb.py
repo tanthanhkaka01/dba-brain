@@ -249,12 +249,28 @@ def get(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def delete(request: dict[str, Any]) -> dict[str, Any]:
-    """Delete exactly the files ``paths`` names, each under the share - never a pattern, never a
-    folder. What to delete is the caller's decision (an age, a chain); this only carries it out."""
+    """Delete ONE file on the share - forced (0.38.0, 1.329).
+
+    A share has no host to run a script on: nothing can hash the file where it lies, so this cannot
+    hold it to stored facts the way ``delete-verified-file`` does. It is therefore the forced delete
+    and nothing else - refused without ``"force": true``, and refused for two files or more: one
+    command deletes one file. A file dbabrain recorded on a Windows host is deleted through that
+    host (``delete-verified-file`` over WinRM or SSH), not through its share.
+    """
     host, share = _share(request)
+    if request.get("force") is not True:
+        raise SmbError(
+            'smb-delete is refused: a file on a share cannot be held to its bytes and sha256 from here. '
+            'A file dbabrain recorded is deleted through its host (delete-verified-file over WinRM or '
+            'SSH). To clear ONE stray file on the share, state "force": true with that one path.')
     if not isinstance(request.get("paths"), list):
-        raise SmbError('needs "paths": the files to delete, each relative to the share.')
+        raise SmbError('needs "paths": the ONE file to delete, relative to the share.')
     paths = [_subpath(item) for item in request["paths"] if _subpath(item)]
+    if len(paths) != 1:
+        raise SmbError(f"smb-delete deletes ONE file per command; got {len(paths)}. Nothing was deleted - "
+                       "call it once for each file.")
+    if any(char in paths[0] for char in "*?["):
+        raise SmbError(f"smb-delete names one file, never a pattern: {paths[0]!r}.")
     timeout = _timeout(request, LIST_TIMEOUT_SECONDS)
     backend = _backend(request)
     results: list[dict[str, Any]] = []
