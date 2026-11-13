@@ -45,7 +45,9 @@ from dbabrain.common import deleteverified as D
 from dbabrain.common import hostcmd
 
 WINDOWS_HERE = os.name == "nt"
-POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
+# The Windows script, run where its paths are Windows paths: a Linux runner has pwsh too, and its
+# POSIX temp folder is no path the script takes (0.38.0, the first CI run on Linux).
+POWERSHELL = (shutil.which("powershell") or shutil.which("pwsh")) if os.name == "nt" else None
 
 
 def _git_bash() -> str | None:

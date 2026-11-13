@@ -288,6 +288,8 @@ def host(tmp_path):
         '  args+=("$1"); shift\ndone\n'
         f'exec "{_posix(sys.executable)}" "{_posix(helper)}" "${{args[@]}}"\n',
         encoding="utf-8", newline="\n")
+    # Run by bash as a command: on Linux it needs its execute bit (the first CI run on Linux, 0.38.0).
+    (bin_dir / "age").chmod(0o755)
     seen = []
 
     class _Session:

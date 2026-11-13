@@ -21,7 +21,9 @@ import pytest
 
 from dbabrain.common import readfile as R
 
-POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
+# The Windows script, run where its paths are Windows paths: a Linux runner has pwsh too, and its
+# POSIX temp folder is no path the script takes (0.38.0, the first CI run on Linux).
+POWERSHELL = (shutil.which("powershell") or shutil.which("pwsh")) if os.name == "nt" else None
 SH = (r"C:\Program Files\Git\bin\bash.exe" if os.name == "nt" and os.path.exists(r"C:\Program Files\Git\bin\bash.exe")
       else (shutil.which("sh") if os.name != "nt" else None))
 
