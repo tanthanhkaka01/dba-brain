@@ -25,6 +25,10 @@ from dbabrain.backup_restore import restore_by_id, restore_script, workflow
 from dbabrain.lib import integrity as I
 from tests.test_restore_reporting import harness  # noqa: F401 - the scheduler's fixture
 
+# Its restore targets are lab machines the tests do not list in an inventory; a target whose
+# environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
+pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")
+
 # --------------------------------------------------------------------------- #
 # The field
 # --------------------------------------------------------------------------- #
@@ -55,7 +59,8 @@ def test_upgrade_config_states_restore_and_keeps_a_stated_copy_only():
     changes = I.state_restore_integrity(document)
 
     assert [r["action"] for r in document["backup_restore"]["restores"]] == ["restore", "copy_only"]
-    assert [c["field"] for c in changes] == ["action"], "only what was missing is written"
+    # overwrite_existing stated off on both (0.39.0, 1.362): it is required, and written false.
+    assert [c["field"] for c in changes] == ["action", "overwrite_existing", "overwrite_existing"],         "only what was missing is written"
 
 
 # --------------------------------------------------------------------------- #

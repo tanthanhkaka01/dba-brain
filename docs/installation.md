@@ -194,6 +194,19 @@ file works in both.
 The five-minute version, against a throwaway PostgreSQL container, is
 [`examples/postgres-quickstart/`](../examples/postgres-quickstart). Against your own estate:
 
+0. **First, if you have an Anthropic API key: the AI assistant** (0.39.0). It then walks you through
+   every step below and answers questions about this install; it only reads, and proposes each command
+   for you to run. After step 1 and the passphrase:
+
+   ```bash
+   pip install "dbabrain[ai]"
+   export DBABRAIN_SECRET_KEY='<passphrase>'          # PowerShell: $env:DBABRAIN_SECRET_KEY = '<passphrase>'
+   dbabrain ai-key                                    # paste the key; it is not shown
+   dbabrain telegram ai-ask "What do I set up next?"
+   ```
+
+   `ai-key` stores the key in the encrypted store and switches the assistant on in
+   `data/ai_assist.json`; a script pipes `{"value": "<key>"}` to `dbabrain common ai-key -` instead.
 1. **Create a tool root.** `dbabrain init` writes one — twelve files, and it prints the next six
    commands. Four of them arrive complete because they are product data rather than your estate:
    the 93-metric catalogue, the report definitions, the bot commands, and the daemon's schedule. A directory holding `data/` or `config.json` *is* a tool root: stand in it, or point

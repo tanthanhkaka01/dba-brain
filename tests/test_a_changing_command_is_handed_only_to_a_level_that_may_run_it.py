@@ -1,7 +1,7 @@
 """The assistant's answer is the asker's level: a command that changes something is handed only to
 a user whose Telegram level may run it (0.38.0, 1.328).
 
-The operator's rule for Phanes' runbook: *a command that changes something - a forced backup on
+The operator's rule for the assistant's runbook: *a command that changes something - a forced backup on
 production by day, a restore, a delete - is given with what it touches and the confirmation it asks;
 a user whose Telegram level may not run it is told so, not handed the line.* The bot already holds
 its commands to ``telegram_users.json`` levels (``commands.can_run_command``); an assistant that

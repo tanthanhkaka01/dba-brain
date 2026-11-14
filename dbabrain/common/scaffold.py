@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dbabrain.lib.json_io import atomic_write_text
+from dbabrain.lib.packaging import install_hint
 
 #: The store an install starts with. Rewritten by whoever moves to PostgreSQL later, which is a
 #: change of one value plus the block beside it.
@@ -673,6 +674,16 @@ def next_steps(root: Path) -> str:
     return "\n".join([
         f"Tool root ready at {root}",
         "",
+        "First, if you have an Anthropic API key - the AI assistant then guides every step below.",
+        "It reads only, and proposes each command for you to run (no Telegram needed):",
+        f"       {install_hint('ai')}",
+        "       set the store's passphrase: export DBABRAIN_SECRET_KEY='<passphrase>'",
+        "         (PowerShell: $env:DBABRAIN_SECRET_KEY = '<passphrase>')",
+        "       dbabrain ai-key                                   (paste the key; it is not shown)",
+        "       dbabrain telegram ai-ask \"What do I set up next?\"",
+        "     Later, in a Telegram group: dbabrain telegram group-level --group \"<group title>\" --level ai_assist",
+        "     and each person who may ask there in users[] of data/ai_assist.json with \"active\": true.",
+        "",
         "Next, to monitor one SQL Server:",
         "",
         "  1. Add the instance to data/db_instances.json",
@@ -696,15 +707,6 @@ def next_steps(root: Path) -> str:
         "       dbabrain metrics summary-latest",
         "",
         "Alerts to Telegram are step 6, and data/telegram_config.json says how.",
-        "",
-        "Optional: an AI assistant can guide the rest of the setup from here. It reads only, and",
-        "proposes each command for you to run. It needs the 'ai' extra (pip install \"dbabrain[ai]\")",
-        "and an Anthropic key - no Telegram yet:",
-        "       dbabrain common secret-set -      (stdin: {\"ref\": \"ANTHROPIC_API_KEY\", \"value\": \"<key>\"})",
-        "     then in data/ai_assist.json: \"enabled\": true, \"api_key_ref\": \"ANTHROPIC_API_KEY\", and ask:",
-        "       dbabrain telegram ai-ask \"What do I set up next?\"",
-        "     Later, in a Telegram group: dbabrain telegram group-level --group \"<group title>\" --level ai_assist",
-        "     and each person who may ask there in users[] with \"active\": true.",
         "",
         "Results are stored in SQLite under runtime/ - nothing else to install.",
         "data/store_config.json is where you move to PostgreSQL later.",

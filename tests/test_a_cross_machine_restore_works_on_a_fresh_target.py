@@ -25,12 +25,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import landing_of
 from dbabrain.backup_restore import events, restore_by_id, restore_script
 from dbabrain.common import backup_copy, cli_restorestep
 from dbabrain.common import backup_copy as transfer
 from dbabrain.common.backupfiles import BackupListError
 from dbabrain.common.backupfiles import sqlserver as listing
 from tests.test_backup_transfer_stream import _Client, _Sftp
+
+# Its restore targets are lab machines the tests do not list in an inventory; a target whose
+# environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
+pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")
 
 
 # --------------------------------------------------------------------------- #
@@ -139,7 +144,8 @@ def _job(**env):
         target_backup_dir="/in", target_visible_dir="", backup_dir="/out",
         env={"MSSQL_USER": "sa", **env},
         env_secrets={"MSSQL_PASSWORD": "SA_REF", "BACKUP_ENCRYPTION_PASSWORD": "ENC_REF"},
-        overwrite_existing=True)
+        # restore_all_databases: every database the staged folder holds, as this lab entry restored.
+        landing=landing_of(), overwrite_existing=True)
 
 
 VAULT_CER, VAULT_PVK = b"DER-CERT-BYTES", b"PVK-BYTES"
@@ -236,7 +242,8 @@ def test_a_dry_run_imports_nothing(plan):
 def test_the_plan_connects_to_the_port_the_target_listens_on(plan):
     steps, _ = plan(_job())
 
-    assert {step["request"]["target"]["port"] for step in steps} == {11433}
+    # Every step that reaches the target (an `expect` is the plan's note for the check, not a step).
+    assert {step["request"]["target"]["port"] for step in steps if "request" in step} == {11433}
 
 
 def test_env_mssql_port_overrides_the_inventory(plan):
@@ -247,7 +254,8 @@ def test_env_mssql_port_overrides_the_inventory(plan):
 
 def test_a_step_run_while_planning_is_recorded_not_repeated(monkeypatch):
     ran = []
-    job = SimpleNamespace(restore_id="R", db_type="sqlserver", env_secrets={}, is_remote=False, label="L")
+    job = SimpleNamespace(restore_id="R", db_type="sqlserver", env_secrets={}, is_remote=False, label="L",
+                          landing=landing_of())
     monkeypatch.setattr(restore_script, "load_script_restores", lambda _p=None: [job])
     monkeypatch.setattr(restore_by_id, "_host_block", lambda j, **_: {"host": "h"})
     monkeypatch.setattr(restore_by_id, "assert_target_is_not_source", lambda *a, **k: None)

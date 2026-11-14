@@ -25,6 +25,16 @@ The sections below are not edge cases. Each one is a place where two things look
 the collector treated them as one, and the result was a confident wrong answer. They are first
 because they are what a reader gets wrong; the reference material follows them.
 
+## What the reports call a metric and tell a reader to do (`report_policy.label`, `action`, 0.39.0)
+
+Each metric states its own words for the report pages: `report_policy.label` (what a page calls
+it) and `report_policy.action` (the *What to do* sentence), with `action_by_platform` (`windows`,
+`linux`) and `action_by_db_type` (`sqlserver`, `postgresql`, `oracle`, `mysql`) for the words that
+differ. The collector does not read them - they are the reports' (docs/06) - but they live with the
+metric so that a new metric, or a new variant, brings its own words: a sentence is written only for
+a platform or engine one of the metric's variants collects on. `upgrade-config` (`report-texts`)
+gives a node's own file the shipped ones where it states none.
+
 ## Metrics that are collected but not reported (`report_policy.collect_only`)
 
 Most metrics are a **signal**: a row means something needs attention. A few are an **inventory**.

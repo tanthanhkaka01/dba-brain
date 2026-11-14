@@ -36,6 +36,10 @@ from dbabrain.backup_restore.config import BackupRestoreConfig, DatabaseRestoreM
 from dbabrain.lib import restore_space
 from dbabrain.lib.config import DbaBrainConfig
 
+# Its restore targets are lab machines the tests do not list in an inventory; a target whose
+# environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
+pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")
+
 GIB = 1024 ** 3
 
 

@@ -19,6 +19,12 @@ from typing import Any
 SCRIPT_RESTORE_DB_TYPES = {"oracle", "postgresql", "mysql"}
 
 
+#: The engines a restore can read from the repository: their chain is read from the folder's own
+#: layout, which the repository keeps. Oracle's pieces are RMAN's to catalog (a later item). One
+#: definition for the restore and for the assistant's runbook, which says the same rule (0.39.0).
+REPOSITORY_ENGINES = ("postgresql", "sqlserver")
+
+
 def is_script_restore(item: dict[str, Any]) -> bool:
     """Whether this entry is driven by a shell script rather than the SQL Server engine.
 

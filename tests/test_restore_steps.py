@@ -84,12 +84,15 @@ def test_stopat_lands_on_the_last_log_only():
     assert "STOPAT = N'2026-08-07T01:40:00'" in statements[1]
 
 
-def test_replace_appears_on_the_full_and_nowhere_else():
-    """REPLACE means "overwrite the existing database" - a statement about starting a chain."""
-    full = mssql.build_statements("full", _mssql(), ["/b/a.bak"])
-    logs = mssql.build_statements("log", _mssql(), ["/b/1.trn"])
+def test_replace_appears_on_a_full_that_may_overwrite_and_nowhere_else():
+    """REPLACE means "overwrite the existing database" - a statement about starting a chain, and
+    since 0.39.0 (1.362) one the entry has to make: without overwrite_existing true no step carries it."""
+    full = mssql.build_statements("full", _mssql(overwrite_existing=True), ["/b/a.bak"])
+    logs = mssql.build_statements("log", _mssql(overwrite_existing=True), ["/b/1.trn"])
     assert "REPLACE" in full[0]
     assert "REPLACE" not in logs[0]
+    unstated = mssql.build_statements("full", _mssql(), ["/b/a.bak"])[0]
+    assert "REPLACE" not in unstated.split("RESTORE DATABASE", 1)[1]
 
 
 def test_move_is_rejected_on_a_log():

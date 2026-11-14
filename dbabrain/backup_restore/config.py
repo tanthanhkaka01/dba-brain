@@ -23,6 +23,8 @@ from dbabrain.lib import (
     cleanup_retention, errors, field_names, restore_space, sqlserver_certificate, stated_facts,
 )
 from dbabrain.lib import integrity as restore_integrity
+from dbabrain.lib.restore import stated as restore_stated
+from dbabrain.lib.restore.stated import RESTORE_PARSER_DEFAULTS  # noqa: F401 - re-exported: the parser reads it here
 from dbabrain.lib import drill_tiers
 from dbabrain.lib import consistency_check
 from dbabrain.lib import offload as offload_rules
@@ -101,36 +103,9 @@ def merge_notify_configs(blocks: list[NotifyConfig]) -> NotifyConfig:
         merged[name] = enabled[0] if enabled else rules[0]
     return NotifyConfig(**merged)
 
-RESTORE_PARSER_DEFAULTS = {
-    "copy_file_patterns": ["*.bak", "*.trn"],
-    "copy_recent_hours": 24,
-    "copy_selection": "chain",
-    "cleanup_retention": None,
-    "full_backup_subdir": "FULL",
-    "sqlcmd_path": "sqlcmd",
-    "robocopy_path": "robocopy",
-    "prod_smb_credential_target": "",
-    "prod_smb_username": "",
-    "prod_smb_password_env": "",
-    "vm_credential_target": "",
-    "vm_username": "",
-    "vm_password_env": "",
-    "restore_sql_instance_on_vm": "localhost",
-    "restore_data_dir_on_vm": r"D:\MSSQL\DATA",
-    "restore_sql_username": "",
-    "restore_sql_password_env": "",
-    "sql_login_timeout_seconds": 60,
-    "sql_query_timeout_seconds": 0,
-    "remote_command_timeout_seconds": 60,
-    "restore_command_timeout_seconds": 0,
-    "certificate_api_url": "",
-    # No built-in ref (rules R50): an entry with a certificate API names its token's secret.
-    "certificate_api_token_ref": "",
-    # Verified by default (review 0.25.0, B5.4): the request carries the Vault token and returns the
-    # certificate's private key. An internal CA is named with certificate_api_ca_file.
-    "certificate_api_verify_tls": True,
-    "certificate_api_ca_file": "",
-}
+# RESTORE_PARSER_DEFAULTS - what a share-driven entry reads where its file states nothing - is
+# lib.restore.stated's since 0.39.0 (1.366): each value that decides the run is what an entry that
+# left it out had been running on, and that entry is refused inside its run until it states it.
 
 
 @dataclass(frozen=True)
@@ -241,8 +216,13 @@ class BackupRestoreConfig:
     # so (owner decision G2.10): REPLACE overwrites it, users and all. A drill that runs again over
     # its own last restore states `overwrite_existing: true`.
     overwrite_existing: bool = False
-    # A target the inventory calls production is refused unless this says so (1.223).
+    # A target the inventory calls production is refused unless this says so (1.223) - and so is one
+    # it does not list or lists with no environment (D-39.6).
     allow_production_target: bool = False
+    # The fields that decide what a run does and that this entry - with the section above it - left
+    # to a default (0.39.0, 1.366, lib.restore.stated.SHARE_RESTORE_FIELDS). Loaded, and refused
+    # inside the entry's own run.
+    unstated: tuple[str, ...] = ()
     # Every database whose FULL is on the share, each under its backup's own name - stated, never
     # implied by an empty `database_mappings` (0.27.0 1.101): the entry says either which databases
     # or this. The check after the restore then opens each one the run restored.
@@ -318,6 +298,9 @@ class BackupRestoreConfig:
 def load_restore_configs(config_path: str | Path | None = None) -> list[BackupRestoreConfig]:
     values = _load_default_restore_values()
     path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
+    # The flat single-source form's fields as written, for what it states (lib.restore.stated):
+    # `values` has the parser's table under them.
+    written: dict[str, Any] = {}
     if path.exists():
         with path.open("r", encoding="utf-8-sig") as file:
             raw = json.load(file)
@@ -338,12 +321,14 @@ def load_restore_configs(config_path: str | Path | None = None) -> list[BackupRe
         if sources is not None:
             return _parse_restore_sources(values=values, section=section)
         values.update({key: value for key, value in section.items() if value is not None})
+        written.update(section)
 
     if values.get("restores") is not None:
         return _parse_restore_items(values=RESTORE_PARSER_DEFAULTS, section=values,
                                     raw_block=_default_restore_section())
     if values.get("sources") is not None:
-        return _parse_restore_sources(values=RESTORE_PARSER_DEFAULTS, section=values)
+        return _parse_restore_sources(values=RESTORE_PARSER_DEFAULTS, section=values,
+                                      raw_block=_default_restore_section())
     if "prod_backup_share" not in values:
         # Nothing declared a restore anywhere: no `restores`, no `sources`, and no flat
         # single-source block. That is **not configured**, which is a state and not a failure
@@ -356,7 +341,8 @@ def load_restore_configs(config_path: str | Path | None = None) -> list[BackupRe
         # is missing nor the app that wanted it. Reported 2026-09-11 from a node where
         # `data/restore_config.json` had never existed, because `init` does not write one.
         return []
-    return [parse_restore_config(values)]
+    return [parse_restore_config(values, unstated=restore_stated.unstated(
+        {**_default_restore_section(), **written}, kind=restore_stated.SHARE_RESTORE))]
 
 
 def load_restore_config(config_path: str | Path | None = None) -> BackupRestoreConfig:
@@ -433,21 +419,27 @@ class ProductionTargetRefused(errors.Refused, ValueError):
     so a caller that handles an unsafe restore config handles this one the same way."""
 
 
-def target_environment(target_server_id: str, *, data_dir: Any = None) -> str:
-    """The inventory's ``environment`` of a restore target, or ``""`` when it is not listed."""
+def target_environment(target_server_id: str, *, data_dir: Any = None) -> str | None:
+    """The inventory's ``environment`` of a restore target: ``""`` when its record states none, and
+    ``None`` when the inventory has no record of it (or no target is named).
+
+    Two answers rather than one ``""``, because the refusal says what to do and the two need
+    different things done: a label added to a record, or a record registered (D-39.6).
+    """
     from dbabrain.lib import data_sources
 
     wanted = str(target_server_id or "").strip()
     if not wanted:
-        return ""
+        return None
     for record in data_sources.load_db_instances(data_dir):
         if str(record.get("server_id") or "").strip() == wanted:
             return str(record.get("environment") or "")
-    return ""
+    return None
 
 
 def assert_target_is_allowed(*, restore_id: str, target_server_id: str, allowed: bool, data_dir: Any = None) -> None:
-    """Refuse a restore into a production instance its entry does not allow (1.223)."""
+    """Refuse a restore into a production instance its entry does not allow (1.223), and into a
+    target whose environment the inventory does not state - or that it does not list (D-39.6)."""
     why = restore_integrity.production_target_refusal(
         target_environment(target_server_id, data_dir=data_dir), allowed=allowed,
         restore_id=restore_id, target=target_server_id)
@@ -536,16 +528,22 @@ def _parse_restore_items(*, values: dict[str, Any], section: dict[str, Any],
     block = section if raw_block is None else raw_block
     return _parse_entries(restores, merge=lambda item: _merge_source_config(
         values=values, common=common, item=item),
-        gaps=lambda item: stated_facts.restore_gaps(block, item))
+        gaps=lambda item: stated_facts.restore_gaps(block, item),
+        stated=lambda item: restore_stated.unstated(
+            item, kind=restore_stated.SHARE_RESTORE, above=restore_stated.section_above(block)))
 
 
-def _parse_restore_sources(*, values: dict[str, Any], section: dict[str, Any]) -> list[BackupRestoreConfig]:
+def _parse_restore_sources(*, values: dict[str, Any], section: dict[str, Any],
+                           raw_block: dict[str, Any] | None = None) -> list[BackupRestoreConfig]:
     sources = section.get("sources")
     if not isinstance(sources, list):
         raise ValueError("backup_restore.sources must be an array.")
     common = {key: value for key, value in section.items() if key != "sources" and value is not None}
+    block = section if raw_block is None else raw_block
     return _parse_entries(sources, merge=lambda item: _merge_source_config(
-        values=values, common=common, item=item))
+        values=values, common=common, item=item),
+        stated=lambda item: restore_stated.unstated(
+            item, kind=restore_stated.SHARE_RESTORE, above=restore_stated.section_above(block)))
 
 
 class RestoreConfigs(list):
@@ -565,12 +563,15 @@ class RestoreConfigs(list):
 
 
 def _parse_entries(items: list[Any], *, merge: Callable[[Any], dict[str, Any]],
-                   gaps: Callable[[Any], list[dict[str, str]]] | None = None) -> RestoreConfigs:
+                   gaps: Callable[[Any], list[dict[str, str]]] | None = None,
+                   stated: Callable[[Any], tuple[str, ...]] | None = None) -> RestoreConfigs:
     """Each entry merged with what it inherits (``merge``) and parsed - see :class:`RestoreConfigs`.
 
     ``gaps`` names the facts the entry leaves to a default (rules R50): an entry with any is
     refused like one missing a required field - with the file when it is active, kept out with its
-    reason when it is not."""
+    reason when it is not. ``stated`` names the fields that decide its run and that it leaves out
+    (lib.restore.stated): read from the entry as written, never from ``merge``'s answer, where the
+    parser's own table would state them all; the entry loads, and its run refuses them."""
     configs = RestoreConfigs()
     for item in items:
         merged = merge(item)
@@ -578,7 +579,8 @@ def _parse_entries(items: list[Any], *, merge: Callable[[Any], dict[str, Any]],
             unstated = gaps(item) if gaps is not None else []
             if unstated:
                 raise errors.ConfigError(stated_facts.sentence(unstated))
-            configs.append(parse_restore_config(merged))
+            configs.append(parse_restore_config(
+                merged, unstated=stated(item) if stated is not None and isinstance(item, dict) else None))
         except ValueError as exc:
             restore_id = str(item.get("restore_id") or "").strip()
             if not restore_id or _parse_bool(merged.get("active"), default=True):
@@ -698,7 +700,9 @@ def _assert_restore_fields(values: dict[str, Any]) -> None:
         "data/restore_config.example.json carries a worked entry for both target platforms.")
 
 
-def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
+def parse_restore_config(raw: dict[str, Any], *, unstated: tuple[str, ...] | None = None) -> BackupRestoreConfig:
+    """One share-driven entry. ``unstated`` is what the loader read the entry as leaving out, from
+    the file as written; given none, ``raw`` itself is read as the entry as written."""
     values = _with_legacy_keys(_with_source_target_pair(raw))
     # Before anything is constructed: six of the fields below are read by subscript, and the first
     # one missing would otherwise be the entire error message.
@@ -781,8 +785,10 @@ def parse_restore_config(raw: dict[str, Any]) -> BackupRestoreConfig:
         checkdb_jobs=consistency_check.parse_jobs(
             values.get("checkdb_jobs"), where=f"restore entry {restore_id_for_label}"),
         tier=drill_tiers.parse_tier(values.get("tier"), where="restore entry tier"),
-        overwrite_existing=values.get("overwrite_existing") is True,
+        overwrite_existing=restore_integrity.stated_overwrite(values.get("overwrite_existing")),
         allow_production_target=values.get("allow_production_target") is True,
+        unstated=(restore_stated.unstated(raw, kind=restore_stated.SHARE_RESTORE)
+                  if unstated is None else tuple(unstated)),
         restore_all_databases=restore_all,
         time_window=parse_time_window_config(
             values, context=f"backup_restore.restores[{values.get('restore_id') or '?'}]"

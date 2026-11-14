@@ -148,6 +148,14 @@ def call_tool(node: Node, tool: str, arguments: dict[str, Any] | None) -> str:
 
 
 def _command_tool(node: Node, command: str, request: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    carried = M.secrets_carried(command, request)
+    if carried:
+        # Refused before anything runs, and without echoing what was sent (0.39.0).
+        raise McpToolError(
+            f"no secret enters through MCP - this request carries {', '.join(carried)}. Type it on the node "
+            "itself, where it is stored encrypted and never echoed - `dbabrain common secret-set -` (the request "
+            "on stdin), or `dbabrain ai-key` for the assistant's key - then name it here by its reference "
+            "(`password_ref`). A login the node completes from its own store needs nothing: name the server_id.")
     if command == "run-sql":
         request = _read_only_sql_request(request)
     elif command == M.SQL_WRITE_TOOL:
@@ -234,7 +242,8 @@ def tool_list(node: Node) -> list[dict[str, Any]]:
 
     tools = []
     for command, entry in node.commands().items():
-        if not node.settings.offers(command):
+        if not node.settings.offers(command) or M.takes_a_secret_only(
+                command, entry, filled=request_fill.FILLS.get(command, ())):
             continue
         # One of the two hints on every tool (the directory's rule): what does not only read, changes.
         read_only = M.is_read_only(command, node.operations)

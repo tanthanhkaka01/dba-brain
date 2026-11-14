@@ -64,6 +64,8 @@ ALIASES: dict[str, str] = {
     "init": '{"format": "txt"}',
     "guide": '{"format": "txt"}',
     "encrypt-secret": "",
+    # 0.39.0: the first step of a new install - the AI assistant's key, asked for when bare.
+    "ai-key": "",
     "export-data": "",
     "import-data": "",
     # 0.24.0: the last command the root answered itself (rules R41). Bare, it checks this node.
@@ -129,6 +131,7 @@ def _usage() -> str:
         "  init                   create a tool root here: config, a SQLite store, empty inventory",
         "  guide                  print the getting-started guide (writes nothing)",
         "  encrypt-secret         encrypt secrets/secret_text.json into the store the tool reads",
+        "  ai-key                 store the AI assistant's API key and switch it on (asks for the key)",
         "  check-credentials      does every configured target resolve to a real login",
         "  export-data            write this machine's whole configuration to one JSON file",
         "  import-data            apply such a file, so this machine runs the same estate",

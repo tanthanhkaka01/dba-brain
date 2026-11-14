@@ -192,6 +192,9 @@ space*.
 
 - Writes `backup_restore_history`.
 - Workflow-level events may also be written to `job_runs`.
+- The backup catalog (`backup_runs`, `backup_files`, `backup_file_checks`, `restore_runs`,
+  `restore_run_files`, `copy_attempts` and, since 0.39.0, `restore_chain_files` - the files a
+  restore applied, in order).
 
 ## Config Files
 
@@ -936,6 +939,39 @@ when it was written and the plaintext to the plain file's; anything else leaves 
 Proven on 2026-11-10: the store's 65 GB cluster restored on the repository VM, recovered, and
 `pg_amcheck --heapallindexed` clean.
 
+**A point in time copies the chain that reaches the moment** (0.39.0, 1.360). It copied the whole
+directory - from the repository, every file of every chain, and one newest log not yet sealed there
+refused the run. `backup_copy.chain_include` now takes the moment: SQL Server per database the newest
+FULL at or before it, the newest DIFF after that and before it, and the LOGs up to the first that
+reaches it (`lib.sqlserver_backup_chain.restore_chain(until=)`, the share copy's rule); PostgreSQL the
+newest `_FULL` at or before it, its `_INCR`s before it, and `wal/`; a moment before every full has no
+chain and is refused by name. Oracle still copies the whole directory - RMAN decides. An encryption's
+partial on the repository (`<file>.age.<pid>.partial`) is never selected.
+
+**A dry run plans on a target nothing was restored to** (0.39.0, 1.356). `restore-by-id` with `dry_run`
+used to skip the copy and plan from what was already staged - an empty folder on a fresh target, so it
+failed - and `restore-workflow --dry-run` answered `dry-run` alone. Onto another machine the dry run is
+now `restore_script.plan_transfer`: the chain read where the copy would read it (`prepare-staging`
+`plan_only`, `make_readable` off - no `chmod` at the source), each file with the bytes it will have on the
+target (a `.age` by the plain size the store recorded; a file no offload proved named as what the restore
+would refuse), and the target asked read only (`prepare-staging` `incoming` + `dry_run`: whether the
+staging folder is there and whose, which files are there, whether the rest fit - verdicts, not
+exceptions). The answer adds the steps after the copy (`restore_by_id.DRY_RUN_STEPS`) and `would_refuse`.
+`restore-workflow --restore-id <id> --dry-run` answers it per entry with one sentence (`said`) - or the
+refusal its entry action gives - and claims no run; `/spbot_restore_plan <restore_id> <LATEST|moment>`
+asks it from a chat (level 2: it changes nothing).
+
+**The staging is prepared as a plain copy's is** (0.39.0, 1.355). Until then the encrypted path read the
+chain at the repository and decrypted straight into the folder: no room checked, no staging marker (its
+cleanup kept the folder and said why), and no `finish-staging` - the engine's own uid (10001 in a SQL
+Server container) could be left unable to read the files. Before the first `.age` is decrypted,
+`prepare-staging` is given `incoming` - each file's plain name and bytes from the store - and makes,
+marks and measures the folder; after the last, `finish-staging` opens it to the engine - and gives each
+decrypted file its backup's finish from the catalog (`backup_ended_at_of`, by the encrypted row's
+`file_id`), as a plain copy keeps its source's time. Dated by the decryption, a PostgreSQL base backup
+(dated by its manifest) read as finished after any moment before the restore, and a point in time
+found no base backup (0.39.0, the PIT test on the lab host).
+
 **The source is released once the copy is wholly encrypted** (0.37.0, 2026-11-11; the operator: *once
 encrypted ok, delete the old file - on the server_id too*). With `offload_delete_source` on, a row whose
 every `.age` file is proven and whose plain files are gone from the repository
@@ -1027,6 +1063,30 @@ A repository check never rewrites the source's own latest-check columns. A copy 
 is `failed`, with `offload_error`, and its source is untouched. A file gone from its server before
 its copy is marked `missing` and is not tried again.
 
+**A file the release deletes is never the age window's as well** (0.39.0, 1.373). The operator,
+2026-11-14 (translated): *a backup that follows the repository is not cleaned the old way any more -
+unless it does not go to the repository, and then by a cleanup retention stated at the source*; and
+*keep the windows per file type, because some backups are not copied to the repository*. Until then
+an entry with `offload_delete_source` kept its script's own age window too (14 days here), and that
+window asked nothing of the repository: an offload stuck longer than it, and the script deleted a file
+no copy had reached. `lib.offload.source_age_cut_before`, applied where the script's request is built
+(`spec_builder`):
+
+- releasing at the source, on SQL Server, with `offload_files_since`: the script is handed
+  `RETENTION_ONLY_BEFORE` (epoch seconds, UTC) - that moment - and its age window, per type as
+  `cleanup_retention` states it, cuts only the files written before it (both scripts: `find !
+  -newermt @...`, `LastWriteTimeUtc -lt ...`; the run's line says so). Every later file goes only by
+  the release, after its copy is proven;
+- releasing with no `offload_files_since`, or on an engine whose script cannot bound its cut
+  (PostgreSQL cuts whole chains): `cleanup_retention` states `keep` for every type, or the job is
+  refused by name before anything is shipped;
+- not releasing (no repository, or a copy that leaves the source as it is): the entry's own windows,
+  per type, are the only deleter - as before.
+
+On this estate (2026-11-14): the 15 SQL Server entries that release are handed their
+`offload_files_since` (2026-11-11 04:16Z / 2026-11-12 04:30Z) - their 14 days now cut only the files
+from before the repository; the PostgreSQL store's two entries state `keep`.
+
 **The source is released only on proof** (1.246, with `offload_delete_source`):
 - the repository copy is hashed **again** right before the delete; a copy that changed or vanished
   since it was proven turns `failed`, and its source is kept and copied again;
@@ -1053,7 +1113,12 @@ its copy is marked `missing` and is not tried again.
   The server then holds no restorable backup: every restore reads the repository;
 - **an entry that releases states `cleanup_retention: {"default": "keep"}`**, so its scripts never
   delete: the PostgreSQL sweep removed whole chains with `rm -rf` and the WAL script cut the archive
-  itself. dbabrain alone deletes at the source, by the rules above;
+  itself. dbabrain alone deletes at the source, by the rules above. **An entry that also states
+  `offload_files_since` may keep a window instead**: the files written before that moment are never
+  copied to the repository and never released, so the script's own retention is what removes them
+  (a SQL Server entry's 14 days, say) - and it is then also what would remove a file the offload
+  has not reached within that window, so the window must be longer than any time the repository
+  can be out of reach;
 - the delete is `common.cli delete-verified-file`, **one file per command** (0.37.0): it states the
   file's name, path, size and sha256 as its backup recorded them, fenced (`must_be_under`) to the
   entry's backup folder as the host names it, and the host deletes it only when all of them are still
@@ -1096,6 +1161,13 @@ window - and `prune_repository` deletes them. Per database:
 3. **A full is the floor of its chain** - it expires only when every DIFF and LOG that depends on it
    (after it, before the next full) expires too; otherwise it is kept, and the run says why.
 4. **A certificate never expires there** - every encrypted backup made with it needs it.
+5. **An incremental that needs every link back to its base goes with its chain** (0.39.0, 1.373) -
+   PostgreSQL's `INCR_BASE` and Oracle's `RMAN_L1` (`cleanup_retention.CHAIN_MEMBERS`) expire
+   together, once the newest of them in that chain is past its window. By rule 1 alone the oldest
+   link went first, and for as many days as the chain was long the incrementals after it - inside
+   their window, still listed - restored nothing; found reading the estate's retention on
+   2026-11-13, before any copy was old enough for it to happen. A SQL Server DIFF is cumulative and
+   needs only its full: it still goes by its own age. The run says which links it is holding.
 
 So `FULL: 50 days, LOG: 100 days` keeps a full until the logs after it go - about 100 days - and the
 run says why.
@@ -1151,6 +1223,444 @@ list CHECK a named one. An older catalog is brought up in place by `_migrate`:
   re-proven over old ones. Schema 2 was tried on the live store inside a transaction and rolled back
   (2026-10-31), then reached for real at 2.87.56's first backup;
 - on SQLite, only the columns are added; no older SQLite catalog exists outside a test.
+
+## A restore onto SQL Server running natively on Windows (0.39.0)
+
+The operator, 2026-11-14: test restores into SQL Server installed on Windows (the lab host, SQL Server 2025
+Developer, the named instance `MSSQL2025` on the static TCP port 14330), from the repository's encrypted
+copies, to the newest point and to a point in time. Until then the script-driven restore
+(`restore_by_id`) knew two targets - a Linux host, and a container on one - and a Windows record fell
+through as `linux`: `df` and `chmod` reached cmd.exe, a staging path was refused for not starting with
+`/`, and a `cat` channel was opened into a host that has none.
+
+**How the target is chosen - from the record, never from a path.** The target's inventory record
+says `platform: windows` and the entry names no `target_container`: the host block is then
+`runtime: windows` (PowerShell over Windows OpenSSH, never `sudo`), and every login handed to `common`
+says `"platform": "windows"`. What that shape cannot do is refused by `_host_block`, before anything
+is copied, each by name (`dbabrain/lib/restore/windows.py`):
+
+| Refused | Why |
+| --- | --- |
+| a PostgreSQL or Oracle entry | they lay down a data directory (`pg_combinebackup`) or run an RMAN `DUPLICATE` through bash; neither is built for Windows |
+| a `target_container` | SQL Server runs natively there; a container on a Windows host is not built |
+| a target reached by WinRM only | the staging is written over SFTP and cleaned through PowerShell over SSH - WinRM has no SFTP |
+| a `target_backup_dir` / `target_visible_dir` that is not a drive path | the staging is a folder on the Windows host |
+| a drive path on a target whose record does not say `platform: windows` | it would be made as a folder called `C:` in the login's home |
+
+**What the entry states.** A script-driven SQL Server entry like any other; the staging is a drive
+path, with either separator - it is carried with forward slashes (`C:\x` is read as `C:/x` when the
+entry loads) and handed to SQL Server with backslashes, the form it names its own files in.
+`target_visible_dir` may be left out: on a native instance the folder SQL Server reads is the folder
+staged.
+
+```jsonc
+{"restore_id": "ACME_SQL01_TO_WINLAB_NATIVE", "active": false, "db_type": "sqlserver",
+ "server_id": "ACME-SQL01", "target_server_id": "ACME-WINLAB-MSSQL2025-14330",
+ "backup_dir": "C:\\SQLBK_DBOPS", "source_backup_host_dir": "C:\\SQLBK_DBOPS",
+ "target_backup_dir": "C:/dbabrain_restore/ACME_SQL01_TO_WINLAB_NATIVE",
+ "script": "assets/restore/sqlserver/mssql_restore.sh",
+ "env": {"MSSQL_USER": "sa", "BACKUP_CERT_NAME": "db_ops_backup_cert"},
+ "env_secrets": {"MSSQL_PASSWORD": "<the target instance's sa password ref>"},
+ "action": "restore", "restore_from": "repository", "overwrite_existing": true,
+ "database_mappings": [{"source_database": "APP", "target_database": "APP"},
+                       {"source_database": "Tpro_Stag", "target_database": "Tpro_Stag"}],
+ "copy_mode": "auto", "copy_selection": "chain", "staging_marker": ".dbops-staging",
+ "space_check": {"enabled": true, "factor": 2.0, "on_unknown": "refuse"}, "cleanup_retention": 86400,
+ ... every other field a run decides, stated (1.366) }
+```
+
+**What the target's inventory record states** - `platform` on the instance, `cmd_access` an SSH login
+(the credential's password ref resolved by the app), and the SQL port the restore connects to:
+
+```jsonc
+{"server_id": "ACME-WINLAB-MSSQL2025-14330", "db_type": "sqlserver", "platform": "windows",
+ "environment": "lab", "ip": "192.0.2.140", "port": 14330, "instance_name": "MSSQL2025",
+ "cmd_access": {"enabled": true, "method": "ssh", "host": "winlab.example.com", "port": 22,
+                "shell": "powershell", "auth_type": "password",
+                "credential_name": "remote_winlab_dba"}}
+```
+
+**What runs, step by step.** The `.age` copies are streamed from the repository through this node
+and decrypted on the way (`fetch-decrypted-file`) - the target is never the repository host, so
+`decrypt-on-host` does not apply:
+
+| Step | On a Windows target |
+| --- | --- |
+| `prepare-staging` (`incoming`, and the dry run's read-only form) | the folder made over SFTP (`/C:/...` - the drive itself is never made), proven writable, marked; the free space asked of the drive in PowerShell (`DriveInfo.AvailableFreeSpace`: the room this login has) and held to `space_check` |
+| `fetch-decrypted-file` | the plaintext written over SFTP through its partial name and put in place by `posix-rename` only when both sets of facts hold; `transfer` still says how the `.age` is read from the repository - a Windows host has no `cat` to write a channel into |
+| `copy-files` (a repository copy kept plain) | the same: SFTP on the target, whatever `copy_mode` says |
+| `finish-staging` | each file given its source's time over SFTP; **nothing is opened for the engine** - `opened_for_engine: false` (below) |
+| `file-checksum` (a continued run's staged files) | PowerShell through .NET, as on any Windows host |
+| `list-backup-files`, `restore-full` / `-diff` / `-log`, `verify-restore` | over TCP from this node to the instance's port; the staging in SQL Server's own form (`C:\dbabrain_restore\<id>`); `relocate: {}` moves every file to the instance's `InstanceDefaultDataPath` / `InstanceDefaultLogPath` |
+| `restore-key` (a certificate-encrypted backup) | the vault's pair pushed (`push-file`) into `<staging>/__dbabrain_cert`, read by SQL Server by its backslash path, removed by `delete-verified-file` |
+| the clean-up (1.371) and the retention sweep | `list-files` answers Windows paths (`C:\...`); they are read in the staging's stated form (`C:/dbabrain_restore/<id>/...`), so the marker is found, the catalog knows each file, and each is deleted by `delete-verified-files` with its recorded bytes and sha256 - never by pattern |
+
+**What the operator sets up once on the Windows host** - nothing of it is done by dbabrain:
+
+- **Windows OpenSSH Server** running (service Automatic, port 22), and the login's password in the
+  secret store under the credential's ref.
+- **The staging folder's ACL.** `finish-staging` changes no access on Windows: SQL Server's service
+  account reads the staging through the folder's ACL, and every file written under it inherits it.
+  Grant it once on the staging root, for example
+  `icacls C:\dbabrain_restore /grant "NT SERVICE\MSSQL$MSSQL2025:(OI)(CI)RX"` (the virtual account of
+  the named instance; a domain service account by its own name). Without it the first RESTORE fails
+  with operating system error 5 (Access is denied) on the backup file.
+- **The firewall**: the instance's TCP port (14330 here) open inbound from the node that runs the
+  restore (the worker, or this PC); port 22 from the same.
+- **The instance**: TCP/IP enabled on its static port, and a login the entry's `env.MSSQL_USER` names
+  with the rights to restore - sysadmin: the restore creates the databases, and imports the backup's
+  certificate when the backup is encrypted with one.
+
+**Measured on the lab host, 2026-11-14** (a probe folder, removed after): Windows OpenSSH's SFTP takes
+`C:/x`, `/C:/x` and `C:\x` alike and lists the drives under `/`; `posix-rename` replaces a file and a
+plain `rename` refuses an existing name (so `overwrite: false` holds there too); `utime` sets a time;
+a command reaches cmd.exe, which is why every one is sent as `powershell -EncodedCommand`. The staging
+commands ran end to end against it: the dry run, `prepare-staging`, `fetch-decrypted-file`,
+`file-checksum`, `finish-staging`, `list-files`, `push-file`, `delete-verified-file(s)`,
+`delete-empty-folder(s)`. The RESTORE itself waits for the instance (being installed that day).
+
+**Not built:** a PostgreSQL or Oracle target on Windows; a container on a Windows host; a Windows
+target reached only by WinRM. A copy straight from a Windows source server's own folder over SSH
+(`restore_from: server`) is not tried - the repository is a Linux host. The share-driven SQL Server
+restore is a separate flow with its own Windows transport (below).
+
+## Where a restore lands, and what it may replace (0.39.0)
+
+The operator, 2026-11-13: *restore must be guarded very carefully - into an existing DB, into a new
+DB, under another name (SQL Server, PostgreSQL, Oracle)*; *overwriting a DB must be a required field,
+set explicitly, off by default*; *`overwrite_existing: true` still overwrites*; *these fields must be
+required - a mistake can ruin the whole production*; and *keep the full chain of files a restore
+used, so it can be shown which file went into which restore*.
+
+### Which databases, under which names - stated on the entry
+
+A script-driven SQL Server entry (every restore of the repository flow) states, as a share-driven
+one has since 0.27.0:
+
+```json
+"database_mappings": [
+  {"source_database": "APPDB", "target_database": "APPDB"},
+  {"source_database": "HR",    "target_database": "HR_COPY"}
+]
+```
+
+- `source_database` is the name the **backup** carries; `target_database` the name it is restored
+  **as**. The same name twice is the plain restore; another name restores it beside whatever the
+  target holds - its files land as `<target_database>_<the backup's file name>`, so a copy never
+  asks for the original's files.
+- `"restore_all_databases": true` instead: every database whose FULL is in the staged folder, each
+  under its own name.
+- Exactly one of the two. An entry stating neither is **refused inside its own run** (and by
+  `restore-by-id`, before anything is copied); two databases landing under one name, a database
+  named twice, or the list also in `env.MSSQL_DATABASES` is refused when the file loads.
+  `upgrade-config` (`stated-integrity`) moves an existing `env.MSSQL_DATABASES` into
+  `database_mappings`, each name mapped to itself, and states `restore_all_databases: true` where
+  the entry named none - what it had been doing. Until 0.39.0 an entry naming none restored
+  **whatever FULL the folder held**.
+- A PostgreSQL or Oracle entry states neither: a base backup and an RMAN duplicate bring a whole
+  cluster / instance, whose databases come under the names they had. A mapping there is refused by
+  name (restoring one of those under another name is not built).
+
+The copy follows the statement: `prepare-staging` is handed the named databases
+(`chain.databases`) and chooses only their chains. It used to take every database of the folder -
+copied, and from an encrypted repository decrypted, for nothing - and a point in time refused the
+whole copy when a database nobody asked for had no full before the moment.
+
+### `overwrite_existing`, per engine
+
+Required on every entry, `true` or `false` (`1` is not a statement); `upgrade-config` writes `false`.
+
+| Engine | `false` - the restore stops when ... | `true` |
+| --- | --- | --- |
+| SQL Server | the target holds a database under the name it lands as, **in any state** (ONLINE, OFFLINE, RESTORING, a standby ...). Asked twice: of the target before anything is copied (`restore-by-id`, one read-only query), and by the RESTORE batch's own first lines, which raise before the database is touched. The statement carries no `REPLACE` either | the database is replaced, as before |
+| PostgreSQL | the target's data directory holds a cluster with a database of its own, a relation of its own in the databases `initdb` made, or a tablespace - or files that are not a cluster. Read from the directory through the target's own volumes (objects made after `initdb` have an OID of 16384 or more), so a target that is stopped or crash-looping answers too; asked **before the target is stopped** | the data directory's contents are replaced, as before |
+| Oracle | the target database holds a segment owned by a schema Oracle does not maintain (`cdb_segments` / `cdb_users.oracle_maintained = 'N'`) - or is not open, and so cannot say. Asked before anything is staged into the container or the instance is shut down | the duplicate rebuilds the database, as before |
+
+What cannot be read is **refused, never assumed empty**. A database left RESTORING by an unfinished
+run is a database that exists: drop it, or state `true` - a drill run again over its own last
+restore states `true`. Never onto a production target, never while a lockdown is on (both as before).
+
+**`true` under a lockdown is refused before the copy, as the lockdown** (0.39.0). The lockdown holds
+every replace, so the restore step itself runs as if the entry said `false` - and used to answer
+after the whole copy, in words that told the entry to state the `true` it states. Now `restore-by-id`
+asks first: SQL Server when a name it lands as exists on the target (the same read-only query);
+PostgreSQL and Oracle always, since their restore lays down the whole instance. The refusal names
+the lockdown (`... a lockdown is on: nothing is replaced until it is turned off ...`) and nothing is
+copied. A `true` entry onto a free SQL Server name goes on - it replaces nothing.
+
+Until 0.39.0 only a SQL Server database that was ONLINE stopped a restore, and the PostgreSQL and
+Oracle steps did not read the field at all.
+
+### The four fields that decided a run from a default (1.366)
+
+`action`, `restore_from`, `integrity`, `overwrite_existing` and a SQL Server entry's databases are
+stated on every entry. Four more decided what a run did from a default nobody could read in the
+entry, and are required too:
+
+| Field | An entry that said nothing ran on | What it decides |
+| --- | --- | --- |
+| `allow_production_target` | `false` | whether it may restore onto an instance the inventory calls production |
+| `checkdb` | `true` | whether the engine's consistency check runs on what was restored |
+| `copy_selection` | `chain` | what the copy takes: the chain the restore applies, or every file of a window |
+| `space_check` | `{"enabled": true, "factor": 2.0, "on_unknown": "refuse"}` | whether the copy must fit the target's free space first |
+
+An entry that leaves one out still loads - it cannot stop the other restores of its file - and is
+refused inside its own run and by `restore-by-id` before anything is copied, naming each field and
+what it decides. `upgrade-config` (`stated-integrity`) writes the value each entry had been running
+on; `restore-add` writes them into a new entry, with `overwrite_existing: false` unless the
+registration says `true`, and refuses a script-driven SQL Server registration that names no
+databases. A share-driven entry may leave a field to the section above it. The next section made the
+rest of a record's fields required the same way.
+
+### Every field that decides a backup or restore run is stated (1.366, 2026-11-14)
+
+The operator, 2026-11-14: *time_window and active must be required; backup and restore are very
+important in production, so nearly every field must be required, and there is no fallback
+anywhere.* A backup job with no `timeout`, a restore with no `notify`, a share-driven target with no
+`sql_instance` loaded and ran on a value in the code - and the file could not tell a decision from
+an omission. Each kind of record now states every field below, at the value it decides on; the rule
+is `lib.restore.stated`, one table per kind, and it works exactly as the four above: the record
+**loads** on what it had been running on, its **run refuses it** by name with what each field
+decides (a restore in `_entry_action` and `restore-by-id`; a backup job in `run_backup` before
+anything reaches its host - a dry run lists it as `refused` - and a backup entry's own fields in its
+jobs' runs and its offload pass), and **`upgrade-config`
+(`stated-integrity`) writes the value it ran on**, so an upgraded node runs as it did. `restore-add`
+and `backup-add` write every one into a new record (a new staging folder gets this version's marker).
+
+| Record | Field | An unstated record ran on |
+| --- | --- | --- |
+| backup job, restore entry | `active` | `true` |
+| backup job, restore entry | `time_window.repeat_interval` | `300` (`schedule.DEFAULT_REPEAT_SECONDS`) |
+| backup job, restore entry | `time_window.retry_interval` | the window's `repeat_interval`; `60` with none |
+| restore entry | `time_window.timeout` | `0` - no limit, never reaped |
+| backup job | `time_window.timeout` | `3600` - the bound its script ran under (see below) |
+| backup job, restore entry | `notify.logging_on_run` / `notify.alert_on_error`: `enabled`, `telegram_chat` | `true`, `""` (the event's severity); a job its entry's rule, chat included |
+| backup job, script-driven restore | `env` | `{}` |
+| backup entry, script-driven restore | `env_secrets` | `{}` |
+| backup entry | `active`, `scrub_files_per_run` | `true`, `20` |
+| backup entry (SQL Server), restore entry (SQL Server) | `server_metadata.enabled` | `false` |
+| restore entry | `space_check.enabled`; `factor`, `on_unknown` while it is on | `true`; `2.0`, `refuse` |
+| restore entry | `checkdb_timeout_seconds`, `checkdb_jobs` | `3600`, `1` |
+| restore entry | `tier` | `null` - stated null is a drill nobody tiered |
+| restore entry with an `integrity` block | `algorithm`, `copy_retry_interval_seconds`, `verify_source_before_copy`, `uncatalogued`, `engine_verify_before_restore` | `sha256`, `30`, `true`, `compare_copy`, `false` |
+| script-driven restore | `target_container` | `""` - the engine on the target host itself |
+| script-driven restore onto another machine | `target_visible_dir`, `copy_mode` | its `target_backup_dir`, `auto` |
+| script-driven restore that stages | `staging_marker` | `.dbops-staging` (`earlier-defaults` writes it first) |
+| script-driven restore copying a `window` | `copy_recent_hours` | `24` |
+| share-driven restore (or its block) | `copy_file_patterns`, `copy_recent_hours`, `full_backup_subdir`, `execution_mode` | `*.bak, *.trn`, `24`, `FULL`, `sync` |
+| share-driven restore's `target` | `vm_platform`, `sql_instance`, `sql_container`, `restore_data_dir` | `windows`, `localhost`, `""`, `D:\MSSQL\DATA` |
+| share-driven restore's `target` | `sql_login_timeout_seconds`, `sql_query_timeout_seconds`, `remote_command_timeout_seconds`, `restore_command_timeout_seconds` | `60`, `0`, `60`, `0` |
+| share-driven restore with a certificate API | `source.certificate_api_verify_tls` | `true` |
+
+A share-driven entry states a field on itself or leaves it to the `backup_restore` block above it,
+as its loader reads it (the parser's own table of defaults never counts); a flat or legacy spelling
+the parser reads (`restore_sql_instance_on_vm`, `vm_platform` on the entry) states it too. Where the
+upgrade completes a window or a notify object an entry takes from the block, it copies the block's
+object first: the entry's own replaces the block's whole.
+
+**`time_window`.** The object stays shared, parsed one way for every app; the requirement is on
+these records only. Three of its fields are required here, because their `null` meant *the
+caller's default*: `repeat_interval` (300 s), `retry_interval` (the repeat interval, else the due
+rule's 60 s) and `timeout`. `null` timeout meant three things in three readers - the reaper never
+closed the run, a restore script's SSH run had no limit, a backup's spec bounded the script at
+3600 s - and `0` means exactly those three. The one reader that tells them apart is the due verdict
+on a run still RUNNING (with `0` it turns due after `retry_interval` instead of 300 s); there the
+store's claim on that row refuses a second start either way. The master's and the worker's records
+all state a timeout, so the upgrade writes none. The ten bounds and `weekdays` stay optional: one
+left out is the field's own meaning, no restriction on that dimension.
+
+**What stays optional, and why** (one line each):
+
+- `note` - free text; it decides nothing.
+- a backup job's `env_secrets`, `backup_dir`, `server_metadata`, `cleanup_retention` - each replaces
+  the value its entry states, which is required.
+- a backup entry's `notify` - only what a job that states none would inherit, and every job states
+  its own.
+- a share-driven entry's logins (`credential_target`, `username`, `password_ref`, `sql_username`,
+  `sql_password_ref`) - which apply follows the platform and access it states; a SQL login a run
+  needs is already refused when absent (`lib.stated_facts`).
+- the legacy single-database spellings (`source_database_name`, `restore_database_name`,
+  `restore_data_file_on_vm`, `restore_log_file_on_vm`) - the databases are stated by
+  `database_mappings` or `restore_all_databases`.
+- `backup_certificate`, `certificate_api_url`, `certificate_api_token_ref`, `certificate_api_ca_file`
+  - one certificate source for an encrypted backup, chosen by which one is given (a token ref is
+  already required with an API).
+- `sqlcmd_path`, `robocopy_path` - a program on the host's PATH; inside a container `sqlcmd_path` is
+  already required.
+- `vm_log_unc`, `vm_log_local`, `vm_import_linux_log_path` - where the copy writes its own log.
+- `space_check.measure_restore` - an opt-in only the share-driven SQL Server restore offers.
+- `server_metadata` on an engine other than SQL Server - it cannot apply there.
+- `restore_all_databases` with `database_mappings` stated - the entry names its databases one way.
+
+**No fallback for a backup's timeout either** (the operator, 2026-11-14: *remove it*). The request
+builder handed a backup script `timeout or 3600`, so a job whose window stated `0` ran under an hour
+written nowhere in its configuration, and `backup-database` took 3600 when a request stated none. Now
+`backup-database` requires `timeout` in its request (`0` = no limit), the builder hands the job's own
+stated value (an unstated one is refused with the job), and `upgrade-config` writes `3600` into a backup
+job that stated none - the bound it actually ran under - so nothing it does changes. Every backup job
+of this estate already states one (900 to 14,400 s).
+
+### A failed restore is continued (1.372)
+
+The operator, 2026-11-13: *like backup - can a failed restore go on?* It could not. A SQL Server
+restore that failed after its full left the database RESTORING, and the next run - which replaces
+nothing that exists - was refused by that very database; with `overwrite_existing: true` it started
+again from the full; and a chain from the encrypted repository was decrypted again whole.
+
+Now a run goes on from where the last one stopped:
+
+- **The copy.** A plain copy has always skipped a file already staged at its size. A decryption
+  does too now: the staging says which plain files it holds at their plain size, each is hashed
+  where it lies (`file-checksum`) and kept only when its sha256 is the plaintext's the store
+  recorded - the proof a fresh decryption ends with. Anything else is decrypted over
+  (`restore_script._already_decrypted`). The copy's message says *N already there and proven*.
+- **The chain.** A database this entry's own unfinished run left RESTORING is continued after the
+  last backup the **target** says it applied. Two records are held to each other
+  (`restore_by_id.continuation`): the chain rows of this entry's runs onto this target since its
+  last finished restore (`BackupCatalogStore.unfinished_chain` - a run that failed, or one that was
+  killed and never closed its row), which is what makes the database *this entry's*; and the
+  target's own `restorehistory` (`verify-restore`'s `restored_to`), which is the truth about where
+  it stopped - one command carries a step's files, so a log step that failed on its seventeenth
+  file is recorded failed whole and has applied sixteen. Only where they agree: the full is never
+  restored again, the plan starts at the file after that one, and its last step still recovers.
+- **A database that run had finished** - restored to its end and open - is kept as it is, held to
+  the stop point *that* run was given, and checked with the others; so in an entry of several
+  databases the ones that were done stay and the rest go on.
+- **What is not taken up.** A RESTORING database no run of this entry recorded is somebody's
+  standby: refused, like any name that exists, and the refusal says it is not an unfinished restore
+  of this entry. A chain that has moved on (a newer full or differential since) or has nothing left
+  to apply is refused by name after the copy - *drop the unfinished database, or state
+  `overwrite_existing: true`* - never guessed. With `overwrite_existing: true` nothing is asked and
+  the restore goes over what is there from the full, as before.
+
+The dry run says it per database (*CONTINUED after <file> - run N of this entry stopped there* /
+*KEPT - run N restored it to its end*), the restore's start message and its END carry
+`continued`. **SQL Server only, an entry that names its databases** (`database_mappings`): an entry
+with `restore_all_databases` learns its names from the folder and is still refused by the step's
+guard; PostgreSQL and Oracle lay down a whole instance and start over.
+
+### The dry run says where it lands
+
+`restore-workflow --restore-id <id> --dry-run` (and `/spbot_restore_plan`) adds, per database, the
+name it lands under and what the target holds there now, asked read only: *created*, *REPLACES the
+database there now (ONLINE)*, or *REFUSED* - which is also listed with the other things that would
+refuse the restore. A PostgreSQL / Oracle entry says it lands as the whole instance, and that its
+step reads the target when it runs.
+
+### A restore is held to where it was asked to stop
+
+Open and consistent is not the same as *where it was asked to be*: 1.363's restore stopped seven
+hours early and passed every check. After the consistency check, `verify-restore` reads what the
+target's own `msdb.dbo.restorehistory` recorded of each database (`restored_to`: the STOPAT it was
+given, when the last backup applied ended) and the restore compares it with its plan:
+
+- a moment carried by a STOPAT: the target's `stop_at` is that moment;
+- the newest backup, a moment at or past the newest log, a chain with no log: the last backup the
+  target applied ended when the last file of the plan's chain ended.
+
+Both sides are in the **source's** clock. A difference fails the restore by name (*restored and
+checked, but not to what was asked*); a record that could not be read is said (`not read`) and fails
+nothing. What was read is kept on the run (`restore_runs.landed_json`) and in the END message
+(`landed=APP: stopped at 2026-11-13 13:10:00 (stopped at the moment asked)`). SQL Server only:
+PostgreSQL and Oracle have no such reading yet.
+
+### Every file a restore applied, in order
+
+`restore_chain_files` (catalog schema 8; `skipped` since 9): one row per backup file the restore **applied**, numbered
+in the order they went in - the full, the differential, each log; for PostgreSQL each base backup and
+then the WAL folder; for Oracle the folder RMAN was given (which pieces it read is RMAN's to say).
+Each row carries the database the backup holds, the name it was restored as, the step
+(`restore-full` / `restore-diff` / `restore-log`), the backup file it is (`file_id`, when the catalog
+knows the file by its server and name), the backup's own end, whether it carried the recovery and
+the STOPAT, and what came of it. The whole chain is written `planned` **before the first step
+runs**, so a restore that dies leaves the chain it meant to apply; each step then marks its files
+`applied`, or `failed` with the step's error (files after it stay `planned`). `restore_run_files`
+keeps saying what was **copied**; a file decrypted from the repository is now tied to its backup
+file too, so the backup's own row says which restore last used it.
+
+```sql
+-- which restores applied one backup file
+SELECT rr.restore_id, rr.point_in_time, rr.started_at, rr.phase, cf.position, cf.restored_as, cf.result
+FROM restore_chain_files cf JOIN restore_runs rr ON rr.restore_run_id = cf.restore_run_id
+WHERE cf.file_id = 27068 ORDER BY rr.started_at DESC;
+-- the chain one restore applied
+SELECT position, step, database_name, restored_as, file_name, backup_ended_at, stopat, result
+FROM restore_chain_files WHERE restore_run_id = 1097 ORDER BY position;
+```
+
+A chain that could not be recorded (no catalog, a store that is down) does not fail the restore - the
+record is not the restore - but the run ends *done with a warning* saying its files are not recorded.
+
+### The share-driven restore records its chain, and a log it passes over is `skipped` (1.367)
+
+The share-driven SQL Server path (`restore-workflow` on an entry with `source` / `target`: full, diff
+and each log applied by `sqlcmd` from a share) wrote no chain. It does now, on the copy's run row -
+one per source (`run_copy_backup(...).restore_run_id`): `restore_database.ChainRecord`, built by
+`cli` for each source, is handed through `run_restore_all_latest` -> `run_restore_server` ->
+`run_restore_database`, and each database **adds** its own chain as it is reached
+(`BackupCatalogStore.append_chain`, positions after the ones the run holds) - full, diff, each log, by
+the path the target's SQL Server reads it at, tied to its catalogued backup file by the source server
+and the file's name - `planned` before its first RESTORE, then `applied` / `skipped` / `failed`. A dry
+run records nothing; a store that cannot be written is a warning in the log (`chain not-recorded`) and
+the restore goes on.
+
+**`skipped`** (catalog schema 9; the operator chose it on 2026-11-14 over `failed` - a restore that
+worked would show a failed file every night and teach its reader to look past one - and over
+`planned`, which reads as never reached). SQL Server refuses two kinds of log this path passes over,
+and the row keeps the reason in `error_text`:
+
+- **Msg 4326** - the log ends before the database's restore point (a log taken the same minute as,
+  just before, the full): it holds nothing the database needs. `skipped`.
+- **Msg 4305** - the log begins after the restore point: a file out of the chain, or a log missing
+  before it. `skipped` only when a LATER log of the same database then goes in.
+
+**A Msg 4305 nothing went in after fails the database** (0.39.0, read for 1.367 on 2026-11-14). Every
+4305 was passed over and the database came out SUCCESS as long as one log had gone in: behind a real
+gap every later log is 4305 too, all were passed over, and the database was recovered at the gap -
+hours short of what was asked - and said done. The LSN check before the restore catches a gap only
+when it can read the backups' headers (*not judged* otherwise). Now `run_restore_log` holds each
+4305 until a later log goes in; if none does, those logs are `failed` (*a log is missing before
+<file>*) and the database fails - *missing required earlier LOG backup / LSN gap ... short of what was
+asked*.
+
+**Held to where it stopped, in the source's clock** (0.39.0, 1.363 / 1.367). The LSN check's header
+batch (`restore_chain_check.build_header_sql`) now also reads each file's `BackupFinishDate` - its
+column made `datetime` before the insert, or SQL Server writes it without seconds - and
+`restore_database._where_to_stop` reads two things off it per database:
+
+- **the source's clock for STOPAT.** STOPAT is read against the log's own times, the SOURCE
+  server's, and this path handed it UTC - 1.363's defect, fixed on the repository path, still here:
+  from a +07 source a point in time landed seven hours early. The offset is read the same way
+  (`restore_by_id.source_offset_minutes`: a file named by its UTC start, `_YYYYMMDD_HHMMSSZ`, against
+  its header's end) and the moment handed in that clock (`stopat_source`). A name without the `Z` (a
+  backup another tool wrote) or headers that could not be read leave it as it was; the log line
+  `restore-db point-in-time clock` says which.
+- **what the target is held to** (`expect`): the moment of a STOPAT; a moment at or past the newest
+  log, or a latest restore, the end of the chain's last file.
+
+After the check opens each database, the workflow compares (`cli._held_to_the_plan` ->
+`restore_by_id.where_it_stopped`, the one rule) with the target's own record (`verify-restore`'s
+`restored_to`, from `msdb.restorehistory`), writes `restore_runs.landed_json`, and a database that
+opened clean somewhere else fails the run - *restored and checked, but not to what was asked* -
+before the retention cleanup. A record nobody could read is *not read*, never a difference.
+
+The schema step: the live store (PostgreSQL) holds the table with version 8's column CHECK; version 9
+drops it and adds `ck_restore_chain_files_result` with today's list (`WIDENED_CHECKS`). No SQLite
+catalog had version 8 outside this tree's tests, so its table is made with the named CHECK. As every
+0.39.0 catalog change: not on the live store while the worker runs 0.38.0.
+
+### Run on the lab, 2026-11-13
+
+On a SQL Server 2022 lab container, from the repository's encrypted copies, with an entry that maps
+one database to another name and states `overwrite_existing: false`: a dry run (*APPDB as
+APPDB_AS_COPY - created*, 48 files - only that database's chain of the two in the folder); the
+restore, `done` in 63 s, *restored to the end of its chain*, 48 chain rows all tied to their backup
+files and all `applied`; the same entry again, refused in one second before any copy
+(*APPDB_AS_COPY exists on the target (ONLINE) and overwrite_existing is false*); the RESTORE
+batch's own guard run by hand on the same name, raising
+*exists on this server (state ONLINE)*; and a point in time through the other lab entry, both
+databases *stopped at the moment asked*. The PostgreSQL and Oracle guards are held by tests and have
+not run on a host.
 
 ## Where a backup actually runs (since 2026-08-07)
 
@@ -1347,6 +1857,51 @@ Three things about it that were wrong first, and are now tests:
   fulls are each "not older than the newest", every one is kept, and the share fills up.
 - **One anchor per chain, not per directory** — above. Dry-run output is what caught it, not the
   suite: every test until then used a flat folder holding one database.
+
+### The plain files of an encrypted restore go as soon as it has worked (1.371)
+
+The operator, 2026-11-13: *a successful restore must delete the plain files too (both at the
+repository and on the target server_id)*. The repository keeps a backup encrypted; a restore lays
+its chain down in the clear in the target's staging - on the repository host itself when the drill
+runs there (`decrypt-on-host`), on the target server otherwise (`fetch-decrypted-file`, which
+streams and leaves no plain file on the node). Until 0.39.0 those copies stayed for the entry's
+whole `cleanup_retention`: days of a backup anyone who can read the folder can read, beside the
+encrypted one.
+
+Now, in the restore's DELETE step and before the retention sweep, `delete_decrypted_staging`
+deletes every file **this run** laid down from the encrypted repository - the ones it decrypted and
+the ones it found already proven (1.372) - each by `delete-verified-files` held to the bytes and
+sha256 its decryption proved, only under the staging folder; the run's own `restore_run_files` rows
+then say `target_on_disk` 0.
+
+- **Only after a success**: the databases restored, opened and checked, where each stopped held to
+  the plan. A failed restore keeps what it staged - it is what a continued run reads - and so does
+  a copy-only run, whose staging is the product.
+- **Never the restore's failure.** A file that could not be deleted is named - *still in the clear
+  on <target>* - as a warning on a restore that worked, and stays for the retention sweep.
+- **Nothing encrypted is touched** - the repository's `.age` copies and the backups at their source
+  are the backup's to keep; what goes is the restore's own staged copy on its target.
+
+**Every copy the entry staged, plain or decrypted, this run's or an earlier one's** (0.39.0; the
+operator, 2026-11-14 - asked whether a failed restore's plain files should go after a time limit:
+*each restore checks, and deletes them once it has restored the DB successfully*; asked whether the
+copies from a source that was never encrypted go the same way: *delete them too*). A failed run keeps
+what it staged, and a later run that succeeds needed only part of it, or none (another moment, a
+newer full); a plain copy from the server or a plain repository waited for the whole retention. So
+the DELETE step asks the catalog (`BackupCatalogStore.staged_by_entry`) for every copy **this entry's**
+runs put in its staging on this target that no row records as gone - `restore_script.staged_copies_of_entry`
+- and deletes them with this run's decrypted chain, each by the verified delete held to the bytes and
+sha256 its copy measured on the target; their rows say `target_on_disk` 0. A copy is every proven
+verdict - `match`, and `copied` / `recopied` for a file the run copied fresh (read as `match` alone,
+a plain copy from the server was never listed and stayed); and the newest row of a path decides,
+so a file deleted once is not listed again from an older run's row of the same path. Never by folder alone:
+another entry's files in a shared staging and a file nobody recorded stay for the retention sweep. A
+catalog that cannot be read is a warning; this run's decrypted files are deleted all the same.
+Nothing is looked for after a restore that failed, or after a copy-only run (its staging is the
+product). The share-driven path keeps its own clean-up (`delete-backup`, by retention).
+
+The END message says `plain files deleted: N of M staged copy(ies), B bytes`; the clean-up's message
+adds *K of them left by an earlier run*.
 
 ## Useful Manual Queries
 
@@ -1986,7 +2541,12 @@ files. Past its type's window, it was the
 window's: it is marked `state = 'pruned'`, with `pruned_by` naming the window, and it is neither
 an alert nor a lockdown. Only a file gone while still inside its window, or one that is kept,
 counts as gone. Without this, three ordinary retention removals engaged the lockdown on a
-correct install. The run's metadata counts them (`scrub.pruned`). A PostgreSQL WAL segment is cut
+correct install. The run's metadata counts them (`scrub.pruned`). **A gone file's age is held to
+the start of its backup** (`backup_started_at`, else its run's `started_at`; the end and the row's
+own time only where neither is held - 0.39.0). A script cuts by the file's write time on the
+server, which lies between the backup's start and end; held to the end, files cut on the window's
+last seconds read as a few seconds inside it - gone. That engaged the lockdown of 2026-11-13 12:08Z
+(five LOG files, cut at 14 days by the script at 12:07:39, their run ended 12:07:46). A PostgreSQL WAL segment is cut
 by position, not by age: `pg_archivecleanup` removes everything before the oldest kept base
 backup's START WAL. So a gone WAL segment that ended before the oldest present full base began
 is the cleanup's (`pg_archivecleanup: before the oldest base backup kept`). On 2026-11-03,
@@ -2038,6 +2598,14 @@ found changed, gone or pruned makes it not), `ended_at`, the copies off the host
 lockdown) and `candidate` - both. `first_signal` and where it came from head the answer. Read-only:
 it lists, the operator chooses; a point-in-time restore inside a candidate is `restore-by-id` as
 always.
+
+**The new flow** (0.39.0, 1.358): a server's FULL, DIFF and LOG are three entries there, so the chains are
+read across every entry of the backup_id's server (`backup_ids` names them) - one entry alone held only
+fulls. A member released at its source counts as sound when its repository copy is proven
+(`offload_state` verified; `on_the_server` beside `offloaded` says where each chain is) - read as before,
+every offloaded chain was *not verified*. A chain is read by time - a full, then its database's files
+until the next full - since `chain_parent_file_id` named an older full, or none, for a file written after
+its full had left the server.
 
 ### The backups taken before the catalog: `catalog-backfill` (1.215)
 
@@ -2178,6 +2746,83 @@ SRV01_MSSQL_FULL · 2-5. Repository done
   `missing` (`files_to_check`), so the next runs of its entry are not CRITICAL for the same loss.
 - Which runs send at all is the entry's `notify`: FULL and DIFF send their run message, LOG / WAL /
   archivelog only their errors (the operator, 2026-11-11).
+
+## A Restore's Messages Follow Its Flow (1.370)
+
+The operator, 2026-11-13: *restore is like backup - it must message every step of its flow the
+same way; restore has restore full -> diff -> log as well, a message for each*. A script-driven
+restore's messages were still the older shape - a fixed header and `key=value` lines - with one
+line for the whole of full, differential and logs. They are flow messages now, in the backup's
+format (`restore_messages.py` builds `flow_title` / `flow_lines`; `events._format_telegram_message`
+asks for a flow before it asks whether the command is `restore-workflow`):
+
+```
+APP_TO_DRILL · Restore started
+SRC-01 -> DRILL-01 · from the repository · to the newest backup
+next: 1. copy, 2. restore full -> diff -> log, 3. check, 4. clean up
+
+APP_TO_DRILL · 1. Copy done
+✅ 1. Copy 48 file(s) · 104.5 MB -> DRILL-01 · decrypted from the repository's encrypted copies · bytes + SHA-256 proven
+
+APP_TO_DRILL · 2. Restore full done (1 of 3)
+✅ APPDB as APPDB_COPY: full APPDB_FULL.bak (backup finished 2026-11-12 04:35:48) - left restoring for the next step · 41 s
+
+APP_TO_DRILL · 2. Restore log done (3 of 48)
+✅ APPDB as APPDB_COPY: log APPDB_LOG_0700.trn (1 of 46 logs) (backup finished ...) - left restoring for the next step · 1 s
+
+... one message per log file ...
+
+APP_TO_DRILL · 2. Restore log done (48 of 48)
+✅ APPDB as APPDB_COPY: log APPDB_LOG_2300.trn (46 of 46 logs) (backup finished ...) - recovered, the database is open · 1 s
+
+APP_TO_DRILL · 3. Check done
+✅ 3. Check 1 database(s) checked, 0 unusable
+
+APP_TO_DRILL · 4. Clean up done
+✅ 4. Clean up: plain files 48/48 deleted on DRILL-01 (104.5 MB)
+- staged backups past retention: 0 removed
+
+APP_TO_DRILL · Restore done
+✅ restored: APPDB as APPDB_COPY: full APPDB_FULL.bak + diff ... + 46 log(s)
+✅ checked: 1 database(s) checked, 0 unusable
+✅ stopped: APPDB as APPDB_COPY: last backup applied ended ... (restored to the end of its chain)
+✅ plain files deleted: 48 of 48 decrypted file(s), 109576192 bytes
+```
+
+- **Each step of the chain is a message of its own** as it finishes (`RESTORE_STEP`): the full,
+  the differential, **each log file** - per database, numbered across the run - with the backup it
+  applied, when that backup finished, a STOPAT it carried, whether it left the database open, and how
+  long it took (`restore_by_id.step_said`). The certificate import and the check are not numbered
+  among them.
+- **One log file, one step** (SQL Server; the operator, 2026-11-14: *one message for each log
+  file*). The planner wrote a database's logs as one `restore-log` command carrying every file - one
+  message for 46 logs, and a failure on the seventeenth recorded on all 46 in `restore_chain_files`.
+  Each log is its own step now (`backup_path`, `log_number` / `log_total`): its own message, *log
+  <file> (k of n logs)*, and its own chain row `applied` or `failed`. The statements are the ones the
+  single command sent - NORECOVERY on each, the recovery and the STOPAT on the last only. The plan
+  still says *46 log(s)*; a single log is named. PostgreSQL's WAL is replayed by the server at start
+  and Oracle's archived logs are RMAN's to pick: each stays one step.
+- **A step that fails is named the same way in the error**: *step 2 of 3 failed - APPDB as
+  APPDB_COPY: diff APPDB_DIFF.bak ...: <the engine's error>*. Until now the chat had the engine's
+  error and no word of which backup was going in.
+- **A short step one line, a long step a start and a done** - the backup's rule: the copy, the
+  restore and the check send their start; the clean-up's start and the restore's own closing line
+  (the last step said it) stay on the run row and in the log file, off Telegram (`telegram: False`,
+  honoured by the workflow's `on_phase`).
+- **The END message** says what went in, what the check found, where each database stopped, what a
+  continued run took up (1.372) and the plain files deleted (1.371); each warning a line; an ERROR
+  the reason.
+
+**The share-driven SQL Server path too** (`restore-workflow` on an entry with `source` / `target`;
+0.39.0, built 2026-11-14 at the operator's word *finish all of 0.39*): its START and END/ERROR
+(`workflow.run_scheduled_restores`; `_share_restored` gives the END what was restored, the check and
+where each database stopped), its copy, *2. Restore started* (the databases, the moment), **each file
+of each database as it goes in** (`restore_database.run_restore_database` -> `announce` with
+`restore_messages.share_step`: *2. Restore log done (3 of 48)*, numbered within the database; a log
+SQL Server refused that the restore passed over is *skipped* with the reason, a failure *failed*
+with the engine's error), the check and the clean-up (`share_cleanup_done`) carry the flow fields. A
+short step's start (`telegram: False`) stays off Telegram on this path's two announcers as well. A
+`restore-by-id` run by hand announces to whoever calls it.
 
 ## Per-Job Telegram Routing (`notify`)
 
@@ -2555,6 +3200,7 @@ covers PostgreSQL, Oracle and container SQL Server, whether the scheduler, `/spb
 | `START` | the run | - |
 | `COPY_START` / `COPY_DONE` | the staging copy, remote restores only: pieces, bytes, already there, removed | `prepare-staging`, `copy-files`, `finish-staging` (0.38.0; `backup-chain`, `copy-backup-dir` until then) |
 | `METADATA_*` | instance logins, roles and Agent jobs before the databases; an entry without `server_metadata` says why, once. The app states the instance's `connection`, the instance `policy` and the bundle's `secrets` (`lib.data_sources.request_fill`) - `common.cli` reads no configuration | `sqlserver-replay-instance` |
+| `RESTORE_STEP` | (0.39.0, 1.370) one per step of the chain as it finishes - the full, the differential, each SQL Server log file, per database: its number, the backup it applied, whether the database is left open, the seconds it took | `restore-full` / `-diff` / `-log` |
 | `RESTORE_START` / `RESTORE_DONE` | what goes in (`base backup X + 2 incremental(s), then WAL replay`, `APPDB: full X + 4 log(s)`, `RMAN DUPLICATE of FREE from ...`) and to which point; how long it took | `restore-full` / `-diff` / `-log` |
 | `VERIFY_START` / `VERIFY_DONE` | whether the restored databases open: *N checked, M unusable* | `verify-restore` |
 | `METADATA_*` | the post-database phase, only after a restore that worked | `sqlserver-replay-instance` |
@@ -2816,6 +3462,35 @@ Both phases announce themselves to the store (`DELETE_START` / `DELETE_DONE`) wi
 
 ---
 
+## A Restore Started by Hand Takes Its Run Claim (0.39.0, 1.342)
+
+Every restore claims its entry's RUNNING row (`job_runs`, the claim key is the job code
+`backup_restore.restore_job.<restore_id>`) before it touches anything: the scheduler's `workflow`
+does, and so does `restore-workflow --restore-id` on a script-driven entry, which runs through the
+same runner. One door did not: `restore-workflow` on a **share-driven** entry - what
+`/spbot_restore` runs for one. Started by hand it ran beside the scheduled restore of the same
+entry (two restores into one database, the failure of 2026-09-14), the next due check did not see
+it, and a run that died left no row for the reaper to close.
+
+It claims now (`cli._claim_hand_started`), before the START is said and before the instance
+metadata is replayed:
+
+- **An entry already running is not started.** `NOT STARTED: restore_id=<id> is already running`
+  on stderr, exit code 1, a warning in the log - no START, no ERROR event: it is not a failure and
+  is not reported as one. Asked of every selected entry before any is claimed; a claim lost in a
+  race releases the ones taken.
+- **Closed with what the restore came to** (`_close_hand_started`), by the scheduled run's rule:
+  `done` only when the engine said so and no database was left unrestored or unclean; a restore
+  that raised closes its rows with the error. The catalog's run row points at the claimed row
+  (`job_run_id`) when one entry runs.
+- **A dry run claims nothing**, and an entry with no `restore_id` has nothing to be claimed under.
+- **A store that cannot be reached is not a refusal**: a restore by hand is what is run when things
+  are broken, so it goes on unclaimed and the log says so.
+
+The same door now makes the refusals the scheduled run makes for an entry
+(`workflow._entry_action`): `overwrite_existing` stated, and the fields that decide a run (1.366).
+It asked for `restore_from` and `action` only.
+
 ## Timeout: an Abandoned Run Is Closed and Reported
 
 `time_window.timeout` on a backup job or restore entry does two things:
@@ -2925,6 +3600,14 @@ Two properties are deliberate:
   `"allow_production_target": true`. Checked by both paths before anything is copied. The existing
   guard only caught a target that is the entry's own source; this one catches an id typed for
   another. Only a real recovery onto production states it, never a drill.
+- *the target ... is not in db_instances.json* / *has no environment in db_instances.json ...
+  Refused* (0.39.0, D-39.6): nothing says whether the target is production, and unknown is not
+  "not production" - until 0.39.0 such a target passed the check above as if it were known to be
+  safe. State `"environment"` on the target's record in `db_instances.json` (or register it there:
+  `instance-add` requires `site` and `environment`); `"allow_production_target": true` lets it
+  through as it lets a production target. `upgrade-config` writes nothing for this - only the
+  machine's owner knows its environment. Both paths (`assert_target_is_allowed`) and the runbook's
+  `will_be_refused` read it from `lib.integrity.production_target_refusal`.
 - *env.MSSQL_USER is not stated, so the restore logs in as sa* (a warning in the answer, 0.26.0): a
   script-driven SQL Server entry still logs in as `sa` when it names no login, and the next release
   refuses it (G2.11). State `"env": {"MSSQL_USER": "..."}`.

@@ -46,6 +46,57 @@ def _virus(row: dict) -> dict | None:
             "text": row.get("av_scan_result_text")}
 
 
+#: How a run that did not finish ends (``lib.integrity.RESTORE_PHASES``).
+FAILED_PHASES = ("error", "refused")
+#: A reason is shown whole in the opened row; a run's error can carry a driver's whole message.
+REASON_LIMIT = 400
+
+
+def _short(text: Any) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= REASON_LIMIT else text[:REASON_LIMIT - 3] + "..."
+
+
+def restore_outcome(*, action: Any, phase: Any, chain_result: Any = None, chain_error: Any = "",
+                    run_error: Any = "") -> dict:
+    """What happened to ONE file in the restore that used it last, in words (0.39.0).
+
+    The operator, 2026-11-14, on a log the page showed as ``error``: the run it was in had stopped at
+    its first file - a lockdown refused the full's REPLACE - and never reached this log, whose copy was
+    proven. The run's phase is not the file's: *show restore done, fail with its reason* - and the
+    reason says where the file stood in that run, read from its line of the chain
+    (``restore_chain_files``): it failed itself, went in before the run failed, was never reached, or
+    was passed over. ``{"state": done | fail | skipped | running, "label", "reason"}``.
+    """
+    run_error, chain_error = _short(run_error), _short(chain_error)
+    if action == integrity.ACTION_COPY_ONLY:
+        if phase in ("done", "copied"):
+            return {"state": "done", "label": "copy done", "reason": ""}
+        if phase in FAILED_PHASES:
+            return {"state": "fail", "label": "copy fail", "reason": run_error or "no reason was recorded"}
+        return {"state": "running", "label": "copy running", "reason": ""}
+    if phase == "done":
+        if chain_result == "skipped":
+            # A log the restore passed over and still reached its end (SQL Server's 4326 / 4305).
+            return {"state": "skipped", "label": "skipped",
+                    "reason": chain_error or "passed over; the restore reached its end"}
+        return {"state": "done", "label": "restore done", "reason": ""}
+    if phase in FAILED_PHASES:
+        if chain_result == "failed":
+            reason = chain_error or run_error
+        elif chain_result == "applied":
+            reason = "this file went in; the restore failed after it - " + run_error
+        elif chain_result == "planned":
+            reason = "the restore stopped before this file - " + run_error
+        elif chain_result == "skipped":
+            reason = f"this file was passed over ({chain_error}); the restore failed - {run_error}"
+        else:
+            reason = run_error
+        return {"state": "fail", "label": "restore fail",
+                "reason": reason.rstrip(" -") or "no reason was recorded"}
+    return {"state": "running", "label": "restore running", "reason": ""}
+
+
 def _restored_ok(row: dict) -> bool:
     return (row.get("verdict") in integrity.PROVEN_VERDICTS and row.get("action") == "restore"
             and row.get("run_phase") == "done")
@@ -349,11 +400,19 @@ def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id:
             # Counted by the store over every restore, not only the rows read here.
             "usedCount": int(row.get("used_count") or 0),
             "restoredOk": int(row.get("restored_ok_count") or 0),
+            # The restores that used it, by how they ended (0.39.0): done and fail.
+            "restoreDone": int(row.get("restore_done_count") or 0),
+            "restoreFail": int(row.get("restore_fail_count") or 0),
             # The file's own mark, written by every restore that used it: when, onto which target,
-            # the run's result, this file's copy verdict.
+            # the run's result, this file's copy verdict - and what happened to this file in it.
             "mark": ({"at": row.get("last_restore_at"), "action": row.get("last_restore_action"),
                       "target": row.get("last_restore_target_server_id"),
-                      "result": row.get("last_restore_result"), "verdict": row.get("last_restore_verdict")}
+                      "result": row.get("last_restore_result"), "verdict": row.get("last_restore_verdict"),
+                      "outcome": restore_outcome(action=row.get("last_restore_action"),
+                                                 phase=row.get("last_restore_result"),
+                                                 chain_result=row.get("last_chain_result"),
+                                                 chain_error=row.get("last_chain_error"),
+                                                 run_error=row.get("last_run_error"))}
                      if row.get("last_restore_run_id") is not None else None),
             "lastRestore": _restore(restores[0]) if restores else None,
             "repo": repository.get(int(row["file_id"])),
@@ -388,8 +447,15 @@ def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id:
             "container": "",
             "usedCount": 1,
             "restoredOk": 1 if restore["testedOk"] else 0,
+            "restoreDone": 1 if restore["action"] == integrity.ACTION_RESTORE and restore["phase"] == "done" else 0,
+            "restoreFail": 1 if restore["action"] == integrity.ACTION_RESTORE and restore["phase"] in FAILED_PHASES
+            else 0,
             "mark": {"at": restore["at"], "action": restore["action"], "target": restore["target"],
-                     "result": restore["phase"], "verdict": restore["verdict"]},
+                     "result": restore["phase"], "verdict": restore["verdict"],
+                     "outcome": restore_outcome(action=restore["action"], phase=restore["phase"],
+                                                chain_result=row.get("chain_result"),
+                                                chain_error=row.get("chain_error"),
+                                                run_error=row.get("run_error"))},
             "lastRestore": restore,
             "repo": None, "onServer": None,
         })
@@ -544,6 +610,63 @@ def build_drills(runs: list[dict], *, now, entries: list[dict] | None = None) ->
         })
     rows.sort(key=lambda row: row["restore_id"])
     return rows
+
+
+#: What each restore command is called on the page.
+CHAIN_STEP_WORDS = {"restore-full": "full", "restore-diff": "diff", "restore-log": "log"}
+
+
+def build_restores(runs: list[dict]) -> list[dict]:
+    """Each restore as the page lists it (0.39.0, 1.365), from ``BackupCatalogStore.restore_history``.
+
+    The operator, 2026-11-13: *dbabrain must keep the full chain of files a restore used, so it can be
+    shown which file was used for which restore* - and of this page: *it may have to be fixed when 0.39
+    is done (its restore and backup parts)*. The chain has been recorded since 1.367 and no page read
+    it. Per run: what the catalog holds, as it holds it - the files in the order they went in, each
+    with its step, the database it holds and the name it was restored as, its result; and where the
+    TARGET said each database stopped (``landed_json``, in the source's clock). Nothing is derived
+    that the store does not state: a run from before 0.39.0 has no chain and no stop point, and the
+    page says so rather than leaving a blank that reads as *none*.
+    """
+    import json as _json
+
+    out = []
+    for run in runs:
+        chain = run.get("chain") or []
+        try:
+            landed = _json.loads(run.get("landed_json") or "[]")
+        except ValueError:
+            landed = []
+        steps: dict[str, int] = {}
+        results: dict[str, int] = {}
+        for row in chain:
+            word = CHAIN_STEP_WORDS.get(str(row.get("step") or ""), str(row.get("step") or "?"))
+            steps[word] = steps.get(word, 0) + 1
+            result = str(row.get("result") or "?")
+            results[result] = results.get(result, 0) + 1
+        out.append({
+            "run": run.get("restore_run_id"), "restoreId": str(run.get("restore_id") or ""),
+            "source": str(run.get("source_server_id") or ""), "target": str(run.get("target_server_id") or ""),
+            "started": run.get("started_at"), "ended": run.get("ended_at"), "phase": str(run.get("phase") or ""),
+            "moment": str(run.get("point_in_time") or "") or "LATEST", "tier": run.get("tier"),
+            "databasesOk": run.get("databases_ok"), "databasesFailed": run.get("databases_failed"),
+            "error": str(run.get("error_text") or run.get("refused_reason") or ""),
+            "landed": [{"database": str(item.get("source_database") or item.get("database_name") or ""),
+                        "restoredAs": str(item.get("database_name") or ""), "state": item.get("state"),
+                        "stopAt": item.get("stop_at"), "lastBackupFinished": item.get("last_backup_finished"),
+                        "byStopat": bool(item.get("by_stopat")), "verdict": str(item.get("verdict") or "")}
+                       for item in landed if isinstance(item, dict)],
+            "files": len(chain), "steps": steps, "results": results,
+            "chain": [{"position": row.get("position"),
+                       "step": CHAIN_STEP_WORDS.get(str(row.get("step") or ""), str(row.get("step") or "")),
+                       "database": str(row.get("database_name") or ""), "restoredAs": str(row.get("restored_as") or ""),
+                       "file": str(row.get("file_name") or ""), "fileType": str(row.get("file_type") or ""),
+                       "inCatalog": row.get("file_id") is not None,
+                       "backupEnded": row.get("backup_ended_at"), "result": str(row.get("result") or ""),
+                       "appliedAt": row.get("applied_at"), "stopat": row.get("stopat"),
+                       "recovers": bool(row.get("with_recovery")), "error": str(row.get("error_text") or "")}
+                      for row in chain]})
+    return out
 
 
 def build_coverage(rows: list[dict]) -> list[dict]:

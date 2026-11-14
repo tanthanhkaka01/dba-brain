@@ -759,6 +759,16 @@ def build_mapping(*, data_dir: str | Path | None = None, pages_text: str = "",
         printed = page_code_words()
         styled += sorted(name for name in from_pages if name not in styled
                          and _PLAIN_WORD_RE.fullmatch(name) and name.casefold() in printed)
+        # Nor is a plain word the host's operating system named its own things with - an adapter,
+        # a service, a process - before it is anyone's table. Found on the 0.38.0 showcase (1.352):
+        # a table called `Adapter` (read off `...Connector.Adapter.PK_Adapters`) turned the network
+        # interface "VMware Network Adapter VMnet8" into "VMware Network SettlementQueue VMnet8".
+        # Database objects only: a service is also named after an INSTANCE ("SQL Server (PAYROLL)"),
+        # and an instance or a login is the estate's identity, which the pages must never keep.
+        system = _operating_system_words(pages_text)
+        styled += sorted(name for name, kind in from_pages.items() if name not in styled
+                         and kind in _OBJECT_KINDS and _PLAIN_WORD_RE.fullmatch(name)
+                         and name.casefold() in system)
         for name in styled:
             from_pages.pop(name)
         skipped_as_ordinary = sorted(set(skipped_as_ordinary) | set(styled))
@@ -846,6 +856,31 @@ def build_mapping(*, data_dir: str | Path | None = None, pages_text: str = "",
 
 #: One plain word - `Item`, `machine`, `SYSTEM` - and not a name built from several (`ShiftRoster`).
 _PLAIN_WORD_RE = re.compile(r"[A-Za-z][a-z]*|[A-Z]+")
+
+#: The kinds a database names: a plain word of one of these may be left where the operating system
+#: uses it too; a host, an instance, a login or a job never is.
+_OBJECT_KINDS = frozenset({"table", "schema", "index"})
+
+#: OS metrics whose `item` is a name the host itself carries rather than one the operating system
+#: ships: `OS_INFO` states the host's own name and identity.
+_HOST_IDENTITY_ITEM_CODES = frozenset({"OS_INFO"})
+
+
+def _operating_system_words(pages_text: str) -> set[str]:
+    """The words, casefolded, in the `item` of the pages' OS metrics: an interface, a service, a
+    process, a log, a volume - what the host's operating system names its own things with.
+
+    Read off the pages rather than listed, for `page_code_words`' reason: it follows what the hosts
+    report, on any estate, rather than the words one estate's tables happened to collide with.
+    """
+    words: set[str] = set()
+    for match in _ITEM_BY_CODE_RE.finditer(str(pages_text or "")):
+        code = match.group(1)
+        if not code.startswith("OS_") or code in _HOST_IDENTITY_ITEM_CODES:
+            continue
+        words.update(word.casefold() for word in re.findall(r"[A-Za-z]{3,}", _json_string(match.group(2))))
+    return words
+
 
 #: The code that writes the published pages, relative to the package: what its strings print is
 #: the product's prose.

@@ -215,7 +215,7 @@ resolves to the chat you meant, and a message arrives there.
 ```powershell
 '{"server_id": "ACME-192-0-2-10-SQL01", "db_type": "sqlserver", "ip": "192.0.2.10",
   "port": 1433, "major_version": 16, "service_name": "MSSQLSERVER", "platform": "windows",
-  "environment": "prod", "username": "monitor_user", "password": "<password>"}' | dbabrain common instance-add -
+  "site": "ACME", "environment": "prod", "username": "monitor_user", "password": "<password>"}' | dbabrain common instance-add -
 ```
 
 It writes the inventory record, the credential in `users.json`, and the password **encrypted only** —

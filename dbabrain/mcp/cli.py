@@ -14,7 +14,7 @@
 so the config names the root - in Claude's config as ``"env": {"DBABRAIN_HOME": "D:/dbabrain"}``.
 The secret key is NEVER in Claude's config: the server reads ``DBABRAIN_SECRET_KEY`` from the user's
 own environment, as every dbabrain command does. ``serve`` needs the ``mcp`` extra
-(``pip install "dba-brain[mcp]"``) and says so without it. See ``docs/16_mcp_app.md``.
+and says which ``pip install`` adds it when it is missing. See ``docs/16_mcp_app.md``.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-EXTRA = "pip install \"dba-brain[mcp]\""
+from dbabrain.lib.packaging import install_hint
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
 
             connect_node(node, server=args.server.rstrip("/"), relink=args.relink)
         except ImportError as exc:
-            print(f"dbabrain mcp connect needs the MCP extra: {EXTRA} ({exc})", file=sys.stderr)
+            print(f"dbabrain mcp connect needs the MCP extra: {install_hint('mcp')} ({exc})", file=sys.stderr)
             return 2
         except KeyboardInterrupt:
             return 0
@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
 
         server = build_server(node)
     except ImportError as exc:
-        print(f"dbabrain mcp serve needs the MCP SDK: {EXTRA} ({exc})", file=sys.stderr)
+        print(f"dbabrain mcp serve needs the MCP SDK: {install_hint('mcp')} ({exc})", file=sys.stderr)
         return 2
     if not node.settings.enabled:
         print("dbabrain mcp: enabled is false in data/mcp_tools.json - no tool is offered.", file=sys.stderr)

@@ -122,8 +122,12 @@ def _sqlserver(request: dict[str, Any]) -> dict[str, Any]:
                     answered, detail = _sqlserver_checkdb(cursor, name, detail)
             else:
                 detail = f"state is {state}"
-            rows.append({"database_name": name, "state": state, "recovery_model": recovery,
-                         "ok": answered, "detail": detail})
+            row = {"database_name": name, "state": state, "recovery_model": recovery,
+                   "ok": answered, "detail": detail}
+            stopped = _sqlserver_restored_to(cursor, name)
+            if stopped:
+                row["restored_to"] = stopped
+            rows.append(row)
     finally:
         connection.close()
 
@@ -134,6 +138,44 @@ def _sqlserver(request: dict[str, Any]) -> dict[str, Any]:
         rows.append({"database_name": name, "state": "ABSENT", "ok": False,
                      "detail": "not present on the instance"})
     return _verdict(rows)
+
+
+def _sqlserver_restored_to(cursor: Any, name: str) -> dict[str, Any] | None:
+    """Where the target ITSELF says this database's last restore stopped (0.39.0, 1.362).
+
+    ``msdb.dbo.restorehistory`` holds a row per RESTORE statement; its newest row for the database is
+    the last file that went in: ``stop_at`` is the STOPAT it was given (NULL when none was), and the
+    backup set it names says when that backup ended. Both are in the SOURCE instance's clock - a
+    backup's header times and STOPAT are - which is the clock a caller compares them in. Open and
+    consistent is not the same as *where it was asked to be*: a restore handed its moment in the
+    wrong clock stopped seven hours early and passed every other check (1.363).
+
+    ``None`` when the database was never restored here, or msdb would not answer - a reading that
+    could not be made is not a verdict.
+    """
+    from dbabrain.common import sql_run
+
+    literal = str(name).replace("'", "''")
+    try:
+        found = sql_run.query_rows(
+            cursor,
+            "SELECT TOP (1) CONVERT(varchar(19), rh.stop_at, 120) AS stop_at, "
+            "CONVERT(varchar(19), b.backup_finish_date, 120) AS last_backup_finished, "
+            "b.type AS last_backup_type, CONVERT(varchar(19), rh.restore_date, 120) AS restored_at "
+            "FROM msdb.dbo.restorehistory rh "
+            "LEFT JOIN msdb.dbo.backupset b ON b.backup_set_id = rh.backup_set_id "
+            f"WHERE rh.destination_database_name = N'{literal}' ORDER BY rh.restore_history_id DESC")
+    except Exception:  # noqa: BLE001 - msdb that will not answer leaves the row without it.
+        return None
+    if not found:
+        return None
+    kinds = {"D": "full", "I": "diff", "L": "log"}
+    row = found[0]
+    return {"stop_at": row.get("stop_at") or None,
+            "last_backup_finished": row.get("last_backup_finished") or None,
+            "last_backup_type": kinds.get(str(row.get("last_backup_type") or "").strip().upper(),
+                                          str(row.get("last_backup_type") or "") or None),
+            "restored_at": row.get("restored_at") or None}
 
 
 def _sqlserver_checkdb(cursor: Any, name: str, detail: str) -> tuple[bool, str]:

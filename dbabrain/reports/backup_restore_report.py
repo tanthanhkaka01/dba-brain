@@ -23,7 +23,9 @@ from pathlib import Path
 from dbabrain.lib import page_banner, page_kit
 from dbabrain.lib.html_json import json_for_html
 from dbabrain.lib.timezone import format_offset, offset_minutes
-from dbabrain.reports import backup_catalog_sections
+from dbabrain.reports import backup_catalog_sections, restores_table
+# One moment's text, and the number of restores listed, for both pages' tables.
+from dbabrain.reports.restores_table import RESTORE_ROWS, utc_text as _utc
 
 PAGE_NAME = "backup-restore.html"
 TEMPLATE_HTML = Path(__file__).resolve().parent / "templates" / "backup_restore_report.html"
@@ -41,7 +43,7 @@ def report_css() -> str:
 
 
 def render_page(*, files: dict, snapshot_date: str, report_dir: str | Path | None = None,
-                recoverability: str = "") -> str:
+                recoverability: str = "", restores: str = "") -> str:
     """The page, its rows baked in (one JSON; the fleet's tables are small next to a server's series)."""
     html = TEMPLATE_HTML.read_text(encoding="utf-8")
     replacements = {
@@ -57,17 +59,13 @@ def render_page(*, files: dict, snapshot_date: str, report_dir: str | Path | Non
         "__UTC_OFFSET_MINUTES__": str(offset_minutes()),
         "__UTC_OFFSET_LABEL__": format_offset(offset_minutes()),
         "__RECOVERABILITY__": recoverability,
+        "__RESTORES__": restores,
         "__FILES__": json_for_html(files, separators=(",", ":")),
         "__BACKUP_FILES_JS__": BACKUP_FILES_JS.read_text(encoding="utf-8"),
     }
     for key, value in replacements.items():
         html = html.replace(key, value)
     return page_kit.inline(html)
-
-
-def _utc(value) -> str:
-    text = str(value or "").strip()
-    return escape(text[:16].replace("T", " ") + " UTC") if text else "-"
 
 
 def render_recoverability(catalog, *, now=None, entries: list[dict] | None = None) -> str:
@@ -124,6 +122,23 @@ def render_recoverability(catalog, *, now=None, entries: list[dict] | None = Non
         f"<tbody>{reach_rows}</tbody></table></section>")
 
 
+def render_restores(catalog, *, limit: int = RESTORE_ROWS) -> str:
+    """The *Restores* section (0.39.0, 1.365): each of the newest restores - how it ended, the moment
+    asked, where the target says each database stopped, and under it the files it applied, in the
+    order they went in. From the catalog alone (``restore_history``); what a run did not record is
+    said, not left blank. The table is :func:`restores_table.restores_table`, the one a server page
+    folds under its backup section."""
+    restores = backup_catalog_sections.build_restores(catalog.restore_history(limit=limit))
+    return (
+        "<section class='recover restores'><h2>Restores</h2>"
+        f"<p class='subtitle'>The newest {int(limit)} restores, newest first: how each ended, the moment it was asked "
+        "to restore to, where the target itself says each database stopped (in the source server's clock, as the "
+        "backups' own headers are), and the files it applied in the order they went in. <i>not recorded</i>: "
+        "a restore from before 0.39.0, one that failed before its first file, or an engine that lays down a "
+        "whole instance.</p>"
+        f"{restores_table.restores_table(restores, empty='The catalog holds no restore yet.')}</section>")
+
+
 def build_page(*, sqlite_path, output_dir: str | Path, stamp: str, snapshot_date: str) -> str:
     """Write ``backup-restore.html`` (and its dated copy) from the catalog; ``""`` when the catalog
     cannot be opened - no page, so no banner offers a link to one that is not there."""
@@ -141,6 +156,7 @@ def build_page(*, sqlite_path, output_dir: str | Path, stamp: str, snapshot_date
         # Read through lib.data_sources - the one reader of data/ - never the backup app.
         from dbabrain.lib import data_sources
         recoverability = render_recoverability(catalog, entries=data_sources.load_restore_entries())
+        restores = render_restores(catalog)
         repository = backup_catalog_sections.load_repository(
             catalog, [row for rows, _restores in per_server.values() for row in rows])
         chains: dict[int, dict] = {}
@@ -151,6 +167,6 @@ def build_page(*, sqlite_path, output_dir: str | Path, stamp: str, snapshot_date
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     html = render_page(files=backup_catalog_sections.build_fleet(per_server, repository, chains), snapshot_date=snapshot_date,
-                       report_dir=out_dir, recoverability=recoverability)
+                       report_dir=out_dir, recoverability=recoverability, restores=restores)
     _write(out_dir, PAGE_NAME, html, stamp=stamp, archive_only=False)
     return str(out_dir / PAGE_NAME)

@@ -18,7 +18,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import landing_of
 from dbabrain.lib import data_sources
+
+# Its restore targets are lab machines the tests do not list in an inventory; a target whose
+# environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
+pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")
 
 GROUPS = [{"server_id": "S1", "db_type": "sqlserver", "service_name": "SALES-DEV", "instance_name": "MSSQLSERVER",
            "credentials": [{"credential_name": "sqlserver_s1_dba", "username": "dba"}]},
@@ -95,7 +100,8 @@ def test_a_piece_named_like_a_backup_that_is_not_one_is_reported(monkeypatch):
 def test_the_restore_finishes_with_a_warning_naming_it(monkeypatch):
     from dbabrain.backup_restore import restore_by_id, restore_script
 
-    job = SimpleNamespace(restore_id="R", db_type="sqlserver", env_secrets={}, is_remote=False, label="L")
+    job = SimpleNamespace(restore_id="R", db_type="sqlserver", env_secrets={}, is_remote=False, label="L",
+                          landing=landing_of())
     monkeypatch.setattr(restore_script, "load_script_restores", lambda _p=None: [job])
     monkeypatch.setattr(restore_by_id, "_host_block", lambda j, **_: {"host": "h"})
     monkeypatch.setattr(restore_by_id, "assert_target_is_not_source", lambda *a, **k: None)

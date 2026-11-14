@@ -215,6 +215,41 @@
   details.fold .in{padding:0 13px 13px}
   .foot{margin-top:16px; padding:9px 12px; background:var(--surface-2); border:1px solid var(--line);
         border-radius:8px; font-size:11.5px; color:var(--muted)}
+
+  /* ---------- Recoverability and Restores (backup-restore.html; Restores also here, 0.39.0) ----------
+     Drawn in Python (reports/restores_table.py) and folded on this page under the backup files;
+     the fleet page reads this whole block as its own stylesheet, so the two draw one table alike.
+     In the page's colour tokens, so the table reads in the dark theme as well. */
+  section.recover{margin:10px 0 18px}
+  section.recover table{border-collapse:collapse; width:100%; font-size:13px; margin:6px 0 12px}
+  section.recover th,section.recover td{border-bottom:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top}
+  section.recover .st-OK,section.recover .st-complete{color:var(--ok); font-weight:600}
+  section.recover .st-OVERDUE,section.recover .st-NEVER{color:var(--crit); font-weight:600}
+  section.recover .st-incomplete{color:var(--warn); font-weight:600}
+  section.recover .st-REMOVED{color:var(--muted)}
+  section.restores .st-done,section.restores .st-applied{color:var(--ok); font-weight:600}
+  section.restores .st-failed,section.restores .st-refused{color:var(--crit); font-weight:600}
+  /* A skipped log is passed over by the engine and the restore still reached its end: neither
+     applied nor an error. */
+  section.restores .st-planned,section.restores .st-skipped{color:var(--muted)}
+  section.restores .rs-run,section.restores .rs-note,section.restores .rs-none{color:var(--muted); font-size:12px; font-weight:400}
+  section.restores .rs-db+.rs-db{margin-top:4px}
+  section.restores .rs-why{color:var(--crit); font-size:12px; font-weight:400; max-width:44ch; overflow-wrap:anywhere}
+  section.restores .rs-when,section.restores td.rs-route div{white-space:nowrap}
+  section.restores tr.has-chain>td{border-bottom:0}
+  section.restores tr.chain-row>td{padding-top:0}
+  section.restores summary{cursor:pointer; color:var(--muted); font-size:12px}
+  /* Never wider than the page: a chain of long file names pushed the table and its Files applied
+     column past a 1366 px screen (looked at in a browser, 2026-11-14). Scrolling is the last resort. */
+  section.restores{max-width:100%; overflow-x:auto}
+  section.restores table.chain{font-size:12px; margin:6px 0 2px; width:auto}
+  section.restores table.chain td{white-space:nowrap}
+  /* The two long names wrap: "database as restored name" at its spaces, a file name anywhere but
+     never letter by letter. */
+  section.restores table.chain td.db{white-space:normal}
+  section.restores table.chain td.file{font-family:var(--mono); white-space:normal; overflow-wrap:anywhere; min-width:180px}
+  /* The engine's reason for a failed or a skipped file is a sentence: it wraps rather than widen the table. */
+  section.restores table.chain td.st-failed,section.restores table.chain td.st-skipped{white-space:normal; max-width:60ch}
 __BANNER_CSS__
 </style>
 </head>
@@ -369,6 +404,14 @@ function chartGrid(list){
 }
 
 /* ---------------- sections ---------------- */
+/* The operating system, first on the host line (the operator, 2026-11-13: "it does not say which OS
+   the host is - show the OS at the very top"). What the OS collector read on the host; marked when
+   it is the inventory's word instead; and said when neither read it - never a guess. */
+function osLine(server){
+  if (!server.os) return "OS not read";
+  return server.osStatic ? `${server.os} (inventory - not read from the host)` : server.os;
+}
+
 function verdict(h, server){
   const c = cls(h.status);
   const bar = h.score >= 80 ? COLOR.ok : h.score >= 50 ? COLOR.warn : COLOR.crit;
@@ -2313,7 +2356,7 @@ async function select(slug){
      the page is - while the inventory page beside it kept showing it. It is re-appended here
      rather than moved: the host facts are what the reader came for and stay first. */
   document.getElementById("hostMeta").textContent =
-    [server.role && server.role !== server.name ? server.role : "",
+    [osLine(server), server.role && server.role !== server.name ? server.role : "",
      server.ip, server.platform, `last ${WINDOW_DAYS} days`,
      SNAPSHOT_DATE ? `snapshot ${SNAPSHOT_DATE}` : ""].filter(Boolean).join(" · ");
   document.getElementById("body").innerHTML = '<div class="empty">Loading…</div>';
@@ -2334,7 +2377,7 @@ async function select(slug){
      is the first thing looked up about a server, and it was on no line of this page. */
   if (d.serverDetail && d.serverDetail.summary){
     document.getElementById("hostMeta").textContent =
-      [server.role && server.role !== server.name ? server.role : "",
+      [osLine(server), server.role && server.role !== server.name ? server.role : "",
        server.ip, d.serverDetail.summary, server.platform, `last ${WINDOW_DAYS} days`,
        SNAPSHOT_DATE ? `snapshot ${SNAPSHOT_DATE}` : ""].filter(Boolean).join(" · ");
   }
@@ -2386,6 +2429,9 @@ async function select(slug){
     /* The backup verdict says whether the policy is met; this says, file by file, what was
        written, whether it can still be trusted, and which restores used it. */
     + backupFilesBlock(d.backupFiles)
+    /* And the restores of or onto this server, each with the files it applied in order (0.39.0,
+       1.365): the files table says which restores used a file, this says what each restore did. */
+    + restoresBlock(d.restores)
     /* What the storage is, then when it runs out: the forecast's "12 days" is unreadable
        without the size and free space it was projected from. */
     + volumesBlock(d.volumes)
@@ -2416,6 +2462,29 @@ async function select(slug){
     + omittedFoot(d.omitted);
   bindFileFilters();
   showBackupFilesLink(d.backupFiles);
+}
+
+/* Restores (0.39.0, 1.365): the restores that read this server's backups or restored onto it, newest
+   first, each with the files it applied in the order they went in. The table is the fleet page's own
+   (reports/restores_table.py), carried as HTML with every value escaped there - a second drawing of
+   it here would drift from that one. Opens by itself when one of them failed or was refused, as the
+   files above do on a problem. Nothing when the catalog holds none. */
+function restoresBlock(r){
+  if (!r || !r.shown) return "";
+  const summary = [`${r.shown} restore(s) of or onto this server`, r.failed ? `${r.failed} failed` : "",
+    r.refused ? `${r.refused} refused` : ""].filter(Boolean).join(" · ");
+  return `<details class="fold" id="restores"${r.failed || r.refused ? " open" : ""}>
+    <summary>Restores — ${esc(summary)}</summary>
+    <div class="in">
+    <p class="sec-note">The newest ${esc(r.limit)} at most, newest first: how each ended, the moment it was
+      asked to restore to, where the target itself says each database stopped, and - opened - the files
+      it applied in the order they went in: each one's step, database and the name it was restored as,
+      when its backup finished, its result (a skipped or failed file with the engine's reason), when it
+      was applied, and the STOPAT or the recovery the last one carried. A backup's end, a STOPAT and a
+      stop point are the source server's clock, as the backups' own headers state them; the run's own
+      times are UTC. <i>not recorded</i>: a restore from before 0.39.0, one that failed before its first
+      file, or an engine that lays down a whole instance.</p>
+    ${r.html}</div></details>`;
 }
 
 /* The header link to the backup & restore files: the count, or no link when there are none. */

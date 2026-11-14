@@ -41,7 +41,7 @@ from dbabrain.lib import backup_policy, capacity_forecast
 from dbabrain.lib import engine_sections, health_model, interval_rates
 from dbabrain.db.metric_store import MetricStore
 from dbabrain.db.metric_store import _parse_as_of as metric_store_as_of
-from dbabrain.reports import backup_catalog_sections
+from dbabrain.reports import backup_catalog_sections, restores_table
 from dbabrain.reports import inventory_health
 from dbabrain.reports import workload as workload_block
 from dbabrain.reports import workload_attribution
@@ -59,7 +59,7 @@ from dbabrain.reports.server_series import (  # noqa: F401 - re-exported: every 
     MAX_ITEMS_PER_METRIC,
     MAX_POINTS,
     METRIC_DEFINITIONS,
-    METRIC_LABELS,
+    metric_labels,
     MIN_POINTS,
     PRIMARY_CODES,
     QUERY_STORE_CODE,
@@ -91,7 +91,6 @@ from dbabrain.reports.server_series import (  # noqa: F401 - re-exported: every 
     sparse_item_metric_codes,
 )
 from dbabrain.reports.server_health import (  # noqa: F401 - re-exported: every name kept its address
-    ACTIONS,
     AREAS,
     AREA_CODES,
     STALE_AFTER_SECONDS,
@@ -105,6 +104,8 @@ from dbabrain.reports.server_health import (  # noqa: F401 - re-exported: every 
     build_problems,
     build_timeline,
     metric_action,
+    metric_action_for,
+    metric_actions,
     series_downgraded,
     series_severity,
 )
@@ -241,7 +242,9 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
                   retention_rows: list[dict] | None = None,
                   restore_file_rows: list[dict] | None = None,
                   backup_repository: dict[int, dict] | None = None,
-                  backup_chains: dict[int, dict] | None = None) -> dict:
+                  backup_chains: dict[int, dict] | None = None,
+                  restore_runs: list[dict] | None = None,
+                  platform: str = "", db_type: str = "") -> dict:
     """Everything the page renders for one server.
 
     ``backup`` and ``freshness`` are computed from the raw store rows rather than from ``series``
@@ -250,7 +253,8 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
     has no series to be late.
     """
     now = now if now is not None else int(datetime.datetime.now(datetime.timezone.utc).timestamp())
-    problems = build_problems(series, now=now)
+    # What to do is worded for this server's operating system and engine (metric_action_for).
+    problems = build_problems(series, now=now, platform=platform, db_type=db_type)
     # Worst first inside every group: with 23 database files a "disk latency" section is 23
     # charts, and the one at 94 ms must not be the twentieth one down the page.
     def worst_first(entry):
@@ -268,7 +272,8 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
     workload = workload_block.build_workload(workload_rows or [])
     return {
         "health": build_health(series, problems, now=now, freshness=freshness),
-        "areas": build_areas(series, backup=backup, freshness=freshness, workload=workload),
+        "areas": build_areas(series, backup=backup, freshness=freshness, workload=workload,
+                             db_type=db_type, platform=platform),
         "problems": problems,
         "timeline": build_timeline(series),
         "cards": cards,
@@ -290,6 +295,9 @@ def build_payload(series: list[dict], omitted: list[dict], *, now: int | None = 
                                                               server_id=server_id, repository=backup_repository,
                                                               chains=backup_chains),
                         "retention": backup_catalog_sections.build_retention(retention_rows or [])},
+        # The restores of or onto this server, each with the files it applied in order (0.39.0, 1.365):
+        # the fleet page's own Restores table (restores_table), carried as HTML so it is drawn once.
+        "restores": restores_table.for_server(restore_runs or []),
         "databases": _per_engine(build_databases(database_code_map or {}, backup),
                                  database_code_map or {}, freshness),
         "tablespaces": build_tablespaces(tablespace_rows or []),
@@ -573,7 +581,13 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
                                 backup_chains=(backup_catalog_sections.load_chains(catalog, catalog_rows)
                                                if catalog else {}),
                                 restore_file_rows=(catalog.server_restore_files(
-                                    server_id, limit=backup_catalog_sections.ROW_LIMIT) if catalog else []))
+                                    server_id, limit=backup_catalog_sections.ROW_LIMIT) if catalog else []),
+                                # By the run's own source and target, not server_restore_chains: that
+                                # lists chain files by their source only, so a restore onto this server
+                                # and one that failed before its first file would be missing.
+                                restore_runs=(catalog.restore_history(
+                                    server_id=server_id, limit=restores_table.RESTORE_ROWS) if catalog else []),
+                                platform=str(model.get("osFamily") or ""), db_type=str(model.get("dbType") or ""))
         file_name = series_file_name(server_id)
         # archive_only is a backfill: it produces the dated copy of a past day and must leave the
         # live file alone. Writing the stable name would publish 1 August's data as "now".
@@ -589,6 +603,12 @@ def build_server_pages(*, sqlite_path: str | Path, models: list[dict], output_di
             "role": str(model.get("role") or ""),
             "ip": str(model.get("ip") or ""),
             "platform": str(model.get("platform") or ""),
+            # The operating system, first on the page's host line (the operator, 2026-11-13: *it does
+            # not say which OS the host is - show the OS at the very top*). What the OS collector
+            # read on the host; `osStatic` when it is the inventory's word instead; "" when neither
+            # says - the page then prints that it was not read, never a guess.
+            "os": "" if model.get("os") in (None, "", "\u2014") else str(model.get("os")),
+            "osStatic": "os" in (model.get("staticFields") or []),
             # The picker's section. One flat row of every target - SQL Server instances, Oracle and
             # PostgreSQL databases, bare hosts - made "the Oracle servers" a search; the operator
             # asked for one row per engine (2026-10-02), grouped by the rule every page shares.

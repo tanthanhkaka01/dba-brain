@@ -113,6 +113,7 @@ ALL_COMMANDS = [
 #: and has checks of its own (below), and the drift guard counts these too.
 STDIN_ONLY_COMMANDS = [
     "secret-set",       # 2026-09-11: one secret into the encrypted store, never in clear
+    "ai-key",           # 0.39.0: the AI assistant's key - stdin, or the prompt when bare on a terminal
     # 0.23.0, moved from the sre app: a database password and one or two SSH passwords, resolved
     # by the caller, travel in the request.
     "create-db-docker",

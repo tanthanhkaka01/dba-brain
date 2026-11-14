@@ -333,18 +333,44 @@ def test_oracle_window_adds_every_piece_of_the_window_to_the_chain():
 
 
 # --------------------------------------------------------------------------- #
-# Every engine: a point in time copies everything, in either mode
+# A point in time: the chain that reaches the moment (0.39.0, 1.360), in either mode
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("selection", ["chain", "window"])
-@pytest.mark.parametrize("engine,layout", [("postgresql", POSTGRESQL), ("sqlserver", SQLSERVER),
-                                           ("oracle", ORACLE)])
-def test_a_point_in_time_copies_everything(engine, layout, selection):
-    """A moment before the newest full needs an older chain, so every engine takes the whole
-    directory for one - whichever copy the entry chose - but never the certificate (0.37.0)."""
-    moved = _copied(engine, layout, selection=selection,
-                    point_in_time="2026-10-03 03:45:00 +00:00")
+MOMENT = "2026-10-03 03:45:00 +00:00"
+#: Before the newest full: the 03:00Z chain. SQL Server's logs run to the first one past the moment.
+CHAIN_AT_THE_MOMENT = {
+    "postgresql": {"base/20261003T030018Z_FULL/backup_manifest", "base/20261003T030018Z_FULL/global/pg_control",
+                   "base/20261003T031022Z_INCR/backup_manifest", "base/20261003T031022Z_INCR/global/pg_control",
+                   "wal/000000010000000000000041", "wal/000000010000000000000042",
+                   "wal/000000010000000000000043"},
+    "sqlserver": {"LABTEST/FULL/LABTEST_FULL_20261003_030012Z.bak", "LABTEST/LOG/LABTEST_LOG_20261003_032001Z.trn",
+                  "LABTEST/LOG/LABTEST_LOG_20261003_043006Z.trn"},
+}
 
-    assert moved == sorted(rel for rel in layout if not rel.startswith("_cert/"))
+
+@pytest.mark.parametrize("selection", ["chain", "window"])
+@pytest.mark.parametrize("engine,layout", [("postgresql", POSTGRESQL), ("sqlserver", SQLSERVER)])
+def test_a_point_in_time_copies_the_chain_that_reaches_the_moment(engine, layout, selection):
+    """It copied the whole directory - from the repository every file of every chain, where one newest
+    log not yet sealed refused the run. Now the newest full at or before the moment and what follows
+    it up to the moment; a window still adds its own files. Never the certificate (0.37.0)."""
+    moved = set(_copied(engine, layout, selection=selection, point_in_time=MOMENT))
+
+    expected = CHAIN_AT_THE_MOMENT[engine] | (_within(layout, WINDOW) if selection == "window" else set())
+    assert moved == expected
+    assert not any(rel.startswith("_cert/") for rel in moved)
+
+
+@pytest.mark.parametrize("selection", ["chain", "window"])
+def test_an_oracle_point_in_time_still_copies_the_whole_directory(selection):
+    """RMAN decides what a moment needs; the copy cannot read it from names."""
+    moved = _copied("oracle", ORACLE, selection=selection, point_in_time=MOMENT)
+
+    assert moved == sorted(ORACLE)
+
+
+def test_a_moment_before_every_full_has_no_chain_to_copy():
+    with pytest.raises(backup_copy.ChainUnknownError, match="at or before the moment"):
+        _copied("postgresql", POSTGRESQL, selection="chain", point_in_time="2026-10-03 02:00:00 +00:00")
 
 
 @pytest.mark.parametrize("engine,layout", [("postgresql", POSTGRESQL), ("sqlserver", SQLSERVER),
@@ -425,3 +451,12 @@ def test_the_copy_asks_common_for_the_chain_and_the_window_the_entry_chose(
     assert staged["include"] == out["include"] == (chain if asks_chain else [])
     assert plan.get("window_hours") == staged.get("window_hours") == window_hours
     assert out["copy_selection"] == selection
+
+
+def test_a_sql_server_moment_before_every_full_is_refused_with_the_earliest_point():
+    """It copied the whole directory instead (198 files on the first try, 2026-11-13) and the dry run
+    said it would run; the restore then failed on the first database. The answer names where each
+    database's restorable time begins (0.39.0, 1.363)."""
+    with pytest.raises(backup_copy.ChainUnknownError,
+                       match=r"no FULL at or before the moment for LABTEST .* oldest FULL ends 2026-10-03T03:00:12Z"):
+        _copied("sqlserver", SQLSERVER, selection="chain", point_in_time="2026-10-03 02:00:00 +00:00")

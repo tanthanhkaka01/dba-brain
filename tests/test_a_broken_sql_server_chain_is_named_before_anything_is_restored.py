@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import landing_of
 from dbabrain.lib import integrity as I
 
 FULL = {"path": "/b/SALESDB/FULL/SALESDB_FULL_1.bak", "first_lsn": 900, "last_lsn": 1000, "checkpoint_lsn": 950}
@@ -73,7 +74,7 @@ def test_the_restore_plan_refuses_a_broken_chain_before_any_step(monkeypatch):
     monkeypatch.setattr(restore_by_id, "_list_backup_files", listed)
     monkeypatch.setattr(restore_by_id, "_visible_dir", lambda job: "/b")
     monkeypatch.setattr(restore_by_id, "_sqlserver_port", lambda job, data_dir=None: 1433)
-    job = SimpleNamespace(restore_id="SALES_DRILL", env={"MSSQL_DATABASES": "SALESDB", "MSSQL_USER": "dba"},
+    job = SimpleNamespace(restore_id="SALES_DRILL", env={"MSSQL_USER": "dba"}, landing=landing_of("SALESDB"),
                           env_secrets={}, overwrite_existing=False)
     with pytest.raises(restore_by_id.RestoreByIdError,
                        match="SALESDB: the backup chain is broken - a log backup is missing before SALESDB_LOG_3.trn"):

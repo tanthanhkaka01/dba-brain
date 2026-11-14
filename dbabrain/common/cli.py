@@ -71,6 +71,7 @@ from dbabrain.common.cli_usage import (  # noqa: F401 - re-exported: every name 
     RUN_CMD_USAGE,
     RUN_SQL_USAGE,
     SECRET_SET_USAGE,
+    AI_KEY_USAGE,
     SELF_STATUS_USAGE,
     SQLSERVER_INSTANCE_USAGE,
     SQLSERVER_PATCH_USAGE,
@@ -169,6 +170,106 @@ def _secret_set_command(argv: list[str]) -> int:
         data={"ref": ref, "written": bool(written),
               "store": str(Path(DEFAULT_DATA_DIR) / "encrypted_secret_text.json"),
               "plaintext_source": plaintext}))
+
+
+#: The secret's name when neither the request nor data/ai_assist.json names one (``ai-key``).
+AI_KEY_REF = "AI_ASSIST_API_KEY"
+
+
+def _ai_key_command(argv: list[str]) -> int:
+    """``ai-key`` - the AI assistant's API key stored and the assistant switched on, in one command (0.39.0).
+
+    The operator, 2026-11-14: *a node just installed, the AI key added by a CLI command - write that
+    command, and write it in the full guide, first*. Until then it was two steps nobody was told in
+    one place: ``secret-set`` for the key, then ``data/ai_assist.json`` edited by hand - ``enabled``
+    and ``api_key_ref`` - while the assistant that could have said so was the thing being set up.
+
+    Bare on a terminal it asks for the key (``getpass``: not echoed, not in the shell's history); a
+    request is stdin only, as ``secret-set``'s - inline puts the key on the command line and ``@file``
+    is the plaintext this avoids. The key is stored first, then the settings point at it, so an
+    assistant switched on never names a key the store does not hold.
+    """
+    import getpass
+    import os
+
+    from dbabrain.lib import ai_assist as ai_rules
+    from dbabrain.lib import response
+    from dbabrain.lib import secret_text as _secret_text
+    from dbabrain.lib.json_io import atomic_write_text, dump_json_text, indent_of, load_json_file
+    from dbabrain.lib.paths import DEFAULT_DATA_DIR
+
+    if argv and argv[0] in {"-h", "--help"}:
+        print(AI_KEY_USAGE)
+        return 0
+    if not argv:
+        if not sys.stdin.isatty():
+            print(AI_KEY_USAGE, file=sys.stderr)
+            return response.emit(response.fail(
+                "ai-key", "no terminal to ask the key on: pipe the request on stdin with '-'"))
+        request: dict[str, Any] = {"value": getpass.getpass("Anthropic API key (it is not shown): ")}
+    elif argv[0] != "-":
+        print(AI_KEY_USAGE, file=sys.stderr)
+        return response.emit(response.fail(
+            "ai-key", "the key must arrive on stdin (-) or at the prompt: a key given inline is visible on "
+                      "the command line, and one in a file is the plaintext this avoids"))
+    else:
+        read, code = _read_json_request("-", AI_KEY_USAGE)
+        if read is None:
+            return code
+        request = read
+    value = str(request.get("value") or "").strip()
+    if not value:
+        return response.emit(response.fail("ai-key", "'value' is required: the Anthropic API key"))
+
+    data_dir = Path(DEFAULT_DATA_DIR)
+    settings_path = data_dir / ai_rules.FILE_NAME
+    try:
+        document = load_json_file(settings_path) if settings_path.is_file() else ai_rules.shipped_document()
+    except Exception as exc:  # noqa: BLE001 - a broken file is said, never replaced
+        return response.emit(response.fail(
+            "ai-key", f"{settings_path} cannot be read ({exc}); fix or remove it and run ai-key again - "
+                      "nothing was stored"))
+    own_ref = str(document.get("api_key_ref") or "").strip()
+    named = str(request.get("ref") or "").strip()
+    ref = named or own_ref or AI_KEY_REF
+    # The ref the settings already name is the assistant's own: a new key there is the point (a key
+    # rotated). A ref the request names may be another secret's - refused unless it says overwrite.
+    overwrite = bool(request.get("overwrite")) or ref == own_ref or (not named and ref == AI_KEY_REF)
+    key = os.environ.get("DBABRAIN_SECRET_KEY") or None
+    try:
+        held = _secret_text.load_secret_text(data_dir, key=key).get(ref)
+    except Exception:  # noqa: BLE001 - an empty node has no store yet; set_secret_text says what is wrong
+        held = None
+    try:
+        written = _secret_text.set_secret_text(data_dir, ref, value, key=key, overwrite=overwrite)
+    except Exception as exc:  # noqa: BLE001 - reported as a response like every other command
+        return response.emit(response.fail("ai-key", str(exc).replace(value, "<value>")))
+
+    warnings: list[str] = []
+    if not value.startswith("sk-ant-"):
+        warnings.append("the key does not begin with sk-ant- - an Anthropic API key does; it was stored as given")
+    document["enabled"] = True
+    document["api_key_ref"] = ref
+    try:
+        atomic_write_text(settings_path, dump_json_text(document, indent=indent_of(settings_path, 4)))
+    except Exception as exc:  # noqa: BLE001
+        return response.emit(response.fail(
+            "ai-key", f"the key is stored as {ref}, but {settings_path} could not be written ({exc}): set "
+                      f"enabled true and api_key_ref {ref} there"))
+    try:
+        ai_rules.parse_ai_assist(document)
+    except Exception as exc:  # noqa: BLE001 - a file from before a field was added: said, not fixed here
+        warnings.append(f"{ai_rules.FILE_NAME} is not complete ({exc}) - run: dbabrain common upgrade-config")
+    replaced = bool(written) and held is not None
+    return response.emit(response.ok(
+        "ai-key",
+        message=(f"{'replaced' if replaced else 'stored'} the AI key as {ref} and switched the assistant on"
+                 if written else f"{ref} already holds that key; the assistant is switched on"),
+        data={"ref": ref, "written": bool(written), "replaced": replaced, "enabled": True,
+              "settings_file": str(settings_path),
+              "store": str(data_dir / "encrypted_secret_text.json"),
+              "next": 'dbabrain telegram ai-ask "What do I set up next?"',
+              "warnings": warnings}))
 
 
 def _instance_add_command(argv: list[str]) -> int:
@@ -1194,6 +1295,8 @@ def _dispatch(argv: list[str]) -> int:
         return _remote_credential_add_command(argv[1:])
     if argv[0] == "secret-set":
         return _secret_set_command(argv[1:])
+    if argv[0] == "ai-key":
+        return _ai_key_command(argv[1:])
     if argv[0] == "probe-host":
         return _probe_host_command(argv[1:])
     if argv[0] == "db-status":

@@ -59,3 +59,55 @@ def test_with_no_sign_every_verified_chain_is_a_candidate(monkeypatch, catalog):
     monkeypatch.setattr(backup_module.BackupCatalogStore, "from_config", classmethod(lambda cls, c: catalog))
     answer = backup_module.restore_candidates(app_config=None, backup_id="ACME_250_APPDB")
     assert answer["first_signal"] is None and answer["candidates"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# The new flow (0.39.0, 1.358): three entries per server, files released to the repository
+# --------------------------------------------------------------------------- #
+def _new_flow(catalog, *, full_id_link_lost=False):
+    """FULL, DIFF and LOG as three entries of one server, as the new flow writes them."""
+    full, diff, log = (receipts._job(backup_id=f"ACME_250_APPDB_{level.upper()}", job=level)
+                       for level in ("full", "diff", "log"))
+    backup_module.record_in_catalog(catalog, full, receipts._result(full, [receipts._line("APPDB", "FULL", "/b/f.bak")]),
+                                    job_run_id=1, started_at="2026-11-10T01:00:00Z", finished_at="2026-11-10T01:10:00Z")
+    backup_module.record_in_catalog(catalog, diff, receipts._result(diff, [receipts._line("APPDB", "DIFF", "/b/d.bak")]),
+                                    job_run_id=2, started_at="2026-11-11T20:00:00Z", finished_at="2026-11-11T20:01:00Z")
+    backup_module.record_in_catalog(catalog, log, receipts._result(
+        log, [receipts._line("APPDB", "LOG", "/b/l.trn", sha=receipts.SHA_B)]),
+        job_run_id=3, started_at="2026-11-11T20:15:00Z", finished_at="2026-11-11T20:15:05Z")
+    rows = {r["file_name"]: r for r in catalog.chain_files(server_id="ACME-192-0-2-250")}
+    if full_id_link_lost:
+        # A file written after its full left the server named no full (fixed for new rows in 0.38.0).
+        for name in ("d.bak", "l.trn"):
+            with catalog.connect() as conn:
+                conn.execute("UPDATE backup_files SET chain_parent_file_id = NULL WHERE file_id = ?",
+                             (rows[name]["file_id"],))
+    return rows
+
+
+def test_a_chain_is_read_across_a_servers_full_diff_and_log_entries(monkeypatch, catalog):
+    _new_flow(catalog)
+    monkeypatch.setattr(backup_module.BackupCatalogStore, "from_config", classmethod(lambda cls, c: catalog))
+    answer = backup_module.restore_candidates(app_config=None, backup_id="ACME_250_APPDB_FULL")
+    assert answer["backup_ids"] == ["ACME_250_APPDB_DIFF", "ACME_250_APPDB_FULL", "ACME_250_APPDB_LOG"]
+    (chain,) = answer["chains"]
+    assert (chain["full"], chain["files"], chain["candidate"]) == ("f.bak", 3, True)
+
+
+def test_a_chain_released_to_the_repository_is_still_a_candidate(monkeypatch, catalog):
+    rows = _new_flow(catalog)
+    for row in rows.values():
+        catalog.set_backup_file(row["file_id"], state="pruned", on_disk=0, offload_state="verified",
+                                offload_server_id="ACME-192-0-2-118-HOST", offload_path=f"/r/{row['file_name']}",
+                                offload_run_id=1, offload_verified_at="2026-11-12T00:00:00Z")
+    monkeypatch.setattr(backup_module.BackupCatalogStore, "from_config", classmethod(lambda cls, c: catalog))
+    (chain,) = backup_module.restore_candidates(app_config=None, backup_id="ACME_250_APPDB_LOG")["chains"]
+    assert chain["verified"] is True and chain["candidate"] is True
+    assert (chain["offloaded"], chain["on_the_server"]) == (3, 0)
+
+
+def test_a_chain_is_read_by_time_when_its_link_to_the_full_is_lost(monkeypatch, catalog):
+    _new_flow(catalog, full_id_link_lost=True)
+    monkeypatch.setattr(backup_module.BackupCatalogStore, "from_config", classmethod(lambda cls, c: catalog))
+    (chain,) = backup_module.restore_candidates(app_config=None, backup_id="ACME_250_APPDB_DIFF")["chains"]
+    assert chain["files"] == 3, "the diff and the log belong to the full before them"

@@ -421,6 +421,7 @@ The path form is deliberate: ~20 call sites in `dbabrain/` and the whole test su
 | `repository_encrypted_rows` | Backup Restore App (offload) | A catalog row whose every file is encrypted, proven and its plain file gone on the repository. |
 | `restore_run_files` | Backup Restore App | One row per file a run copied: both `server_id`s, file name and type, the checksums before and after the copy, the verdict, the virus scan of the copy (0.34.0). |
 | `copy_attempts` | Backup Restore App | One row per copy attempt of one file, with the hash it produced (0.34.0). |
+| `restore_chain_files` | Backup Restore App | One row per backup file a restore **applied**, in the order it applied them: the database it holds, the name it was restored as, the step, the backup file it is, and what came of it - `planned` before the first step, then `applied`, `skipped` (a log SQL Server refused that the restore passed over and still reached its end, the reason kept) or `failed` (0.39.0). |
 | `sla_runs` | SLA/SLO App | One row per SLA validation run (per-status counts and window end). |
 | `sla_results` | SLA/SLO App | One row per policy **per instance**: SLI, SLO, error budget, and status. |
 | `config_sources` | Runtime Store / Web Host | One row per synced `data/*.json` file, with the app that owns it. |
@@ -665,6 +666,7 @@ restore or a copy-only run used, with its checksum, so every run is verified (th
 | `restore_runs` | restore or copy-only run | PK `restore_run_id`; UNIQUE `(restore_id, source_server_id, target_server_id, started_at)` |
 | `restore_run_files` | file a run copied | PK `run_file_id`; FK to `restore_runs` and `backup_files`; UNIQUE `(restore_run_id, source_path)` |
 | `copy_attempts` | copy attempt of one file | PK `attempt_id`; FK to `restore_run_files`; UNIQUE `(run_file_id, attempt_no)` |
+| `restore_chain_files` | file a restore applied (0.39.0, schema 8; `skipped` and the named result CHECK, schema 9) | PK `chain_file_id`; FK to `restore_runs` and `backup_files`; UNIQUE `(restore_run_id, position)` |
 
 What the shape guarantees:
 
@@ -752,6 +754,13 @@ What the shape guarantees:
 
 `copy_max_retry` comes from the restore entry's `integrity` block and is required on every run row:
 the store never fills it in (`docs/08_backup_restore_app.md`, *The copy gate*).
+
+**Schema 8 (0.39.0).** `restore_chain_files`, and `restore_runs.landed_json` - what the target
+itself recorded of where each restored database stopped (the name it landed under, its state, the
+STOPAT, the end of the last backup applied, the verdict). Both additive: a store of schema 7 gains
+them on the first run of 0.39.0. While a node of an earlier build shares the store, each side re-runs
+its own DDL when it finds the other's version recorded - nothing is lost, the rows of the new table
+are simply not read by the older build.
 
 ## AI Assistant (`ai_*`) - 0.34.0
 

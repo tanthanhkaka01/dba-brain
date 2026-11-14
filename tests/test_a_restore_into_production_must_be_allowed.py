@@ -4,8 +4,9 @@ A restore REPLACEs what it lands on. An entry mis-edited to name a production in
 - one id typed for another - would overwrite it at the next scheduled drill, and the existing guard
 only catches a target that is the entry's own *source*. R47's spirit: the target is named *and*
 allowed. The inventory's ``environment`` says what an instance is; a target it calls ``prod`` /
-``production`` needs ``allow_production_target: true`` on the entry. Both restore paths check it
-before anything is copied: ``restore-by-id`` and the share-driven workflow.
+``production`` - or one whose environment it does not state (0.39.0, D-39.6) - needs
+``allow_production_target: true`` on the entry. Both restore paths check it before anything is
+copied: ``restore-by-id`` and the share-driven workflow.
 """
 
 from __future__ import annotations
@@ -28,9 +29,13 @@ def inventory(monkeypatch):
     monkeypatch.setattr(data_sources, "load_db_instances", lambda data_dir=None: INVENTORY)
 
 
+# An unmarked target ("" - its record states none; None - no record) passed here until 0.39.0 and is
+# refused since D-39.6: unknown is not "not production". tests/test_an_unmarked_restore_target_is_refused.py
+# holds what that refusal says.
 @pytest.mark.parametrize("environment, allowed, refused", [
     ("prod", False, True), ("Production", False, True), ("prod", True, False),
-    ("lab", False, False), ("dev", False, False), ("", False, False), (None, False, False),
+    ("lab", False, False), ("dev", False, False), ("", False, True), (None, False, True),
+    ("", True, False), (None, True, False),
 ])
 def test_only_a_production_target_without_its_word_is_refused(environment, allowed, refused):
     why = I.production_target_refusal(environment, allowed=allowed, restore_id="R", target="T")
@@ -47,9 +52,8 @@ def test_the_refusal_names_the_entry_the_target_and_the_word_that_allows_it():
     assert isinstance(raised.value, errors.Refused) and isinstance(raised.value, ValueError)
 
 
-@pytest.mark.parametrize("target", ["ACME-LAB-1", "ACME-UNMARKED-1", "NOT-IN-THE-INVENTORY", ""])
-def test_a_target_not_marked_production_passes(target):
-    restore_config.assert_target_is_allowed(restore_id="R", target_server_id=target, allowed=False)
+def test_a_target_the_inventory_marks_as_not_production_passes():
+    restore_config.assert_target_is_allowed(restore_id="R", target_server_id="ACME-LAB-1", allowed=False)
 
 
 def test_the_entry_word_allows_it():

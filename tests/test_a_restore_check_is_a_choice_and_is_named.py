@@ -28,6 +28,10 @@ from dbabrain.lib.config import DbaBrainConfig
 from dbabrain.lib import shared_objects
 from test_backup_restore import make_config
 
+# Its restore targets are lab machines the tests do not list in an inventory; a target whose
+# environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
+pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")
+
 MINIMAL = {
     "cleanup_retention": 691200, "prod_backup_share": r"\\192.0.2.250\SQLBK",
     "vm_import_unc": "x", "vm_import_local": r"E:\SQLBK_IMPORT", "vm_log_unc": "y",

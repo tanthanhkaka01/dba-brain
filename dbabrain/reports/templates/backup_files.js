@@ -23,7 +23,20 @@ const tri = (v, yes, no) => v == null ? `<span class="sev">not checked</span>`
   : v ? `<span class="sev ok">${yes}</span>` : `<span class="sev crit">${no}</span>`;
 const VERIFY_CLS = {passed:"ok", failed:"crit", not_run:""};
 const COPY_VERDICT_CLS = {match:"ok", copied:"ok", recopied:"warn", copying:"warn"};
-const RESULT_CLS = {done:"ok", copied:"ok", verified:"ok", refused:"crit", error:"crit"};
+/* What happened to the file in the restore that used it last (0.39.0): restore done, restore fail
+   with its reason - where the file stood in that run - skipped, running. Never the run's bare phase. */
+const OUTCOME_CLS = {done:"ok", fail:"crit", skipped:"", running:"warn"};
+function outcomeLabel(m){
+  const o = m.outcome || {state:"", label: m.result || ""};
+  return `<span class="sev ${OUTCOME_CLS[o.state] ?? "warn"}">${esc(o.label)}</span>`;
+}
+const outcomeReason = (m, cut) => {
+  const why = m.outcome && m.outcome.reason ? String(m.outcome.reason) : "";
+  if (!why) return "";
+  const shown = cut && why.length > cut ? why.slice(0, cut - 1) + "…" : why;
+  return `<div class="detail" title="${esc(why)}">${esc(shown)}</div>`;
+};
+const restoreTally = f => `used ${esc(f.usedCount)}× · restore done ${esc(f.restoreDone ?? 0)} · fail ${esc(f.restoreFail ?? 0)}`;
 const KIND_LABEL = {backup:"backup", restored_here:"restored here", restore_out:"copied out"};
 function virusCell(v){
   if (!v) return `<span class="sev">not scanned</span>`;
@@ -36,19 +49,16 @@ function virusCell(v){
 function restoreUseCell(f){
   if (!f.mark) return `<span class="sev">never used</span>`;
   const m = f.mark, r = f.lastRestore;
-  const tested = r && r.testedOk ? `<span class="sev ok">RESTORE OK</span>`
-    : m.action === "copy_only" ? `<span class="sev">copy only</span>`
-    : `<span class="sev ${RESULT_CLS[m.result] || "warn"}">${esc(m.result || "")}</span>`;
   const copy = `<span class="sev ${COPY_VERDICT_CLS[m.verdict] || "crit"}">${esc(m.verdict || "")}</span>`;
   const proof = r ? `<div class="detail">target ${shaCell(r.sha256TargetAfter)} · ${
       tri(r.targetOnDisk, "on disk", "MISSING")} ${tri(r.targetMatches, "= catalog", "CHANGED")}${
       r.attempts != null ? ` · ${esc(r.attempts)} attempt(s), retry max ${esc(r.maxRetry)}` : ""}${
       r.refusedReason ? `<br>${esc(r.refusedReason)}` : ""}</div>` : "";
-  return `${tested} ${copy}
+  return `${outcomeLabel(m)} ${copy}${outcomeReason(m, 0)}
     <div class="detail">${when(m.at)} · <span class="mono">${esc(m.action || "")}</span>
       ${f.kind === "restored_here" ? "from " + esc(f.server) : "→ " + esc(m.target || "")}${
       r && r.restoreId ? " · " + esc(r.restoreId) : ""}</div>${proof}
-    <div class="detail">used ${esc(f.usedCount)}× · restored OK ${esc(f.restoredOk)}×</div>`;
+    <div class="detail">${restoreTally(f)}</div>`;
 }
 
 /* Encrypted: what the backup script wrote the file with (its FILE line, 0.34.0) - "yes" / "no" -
@@ -103,12 +113,9 @@ function bfOnServerCell(f){
 /* Used for restore, in the row: its result and when; the proof opens with the row. */
 function bfRestoreUseShort(f){
   if (!f.mark) return `<span class="sev">never used</span>`;
-  const m = f.mark, r = f.lastRestore;
-  const tested = r && r.testedOk ? `<span class="sev ok">RESTORE OK</span>`
-    : m.action === "copy_only" ? `<span class="sev">copy only</span>`
-    : `<span class="sev ${RESULT_CLS[m.result] || "warn"}">${esc(m.result || "")}</span>`;
-  return `${tested}<div class="detail">${when(m.at)} → ${esc(m.target || "")}</div>
-    <div class="detail">used ${esc(f.usedCount)}×</div>`;
+  const m = f.mark;
+  return `${outcomeLabel(m)}${outcomeReason(m, 90)}<div class="detail">${when(m.at)} → ${esc(m.target || "")}</div>
+    <div class="detail">${restoreTally(f)}</div>`;
 }
 
 /* The opened row: the backup's own facts in full, then each of its files from the server to the
@@ -304,7 +311,7 @@ function backupFilesBlock(b, opts = {}){
   const summary = [`${b.shown} file(s)`, b.notOk ? `${b.notOk} not ok` : "",
     b.changed ? `${b.changed} changed` : "", b.missing ? `${b.missing} missing` : "",
     b.infected ? `${b.infected} infected` : "", `${b.used} used for a restore`,
-    `${b.restoredOk} restored OK`, b.notProven ? `${b.notProven} copy not proven` : ""]
+    `${b.restoredOk} with a restore done`, b.notProven ? `${b.notProven} copy not proven` : ""]
     .filter(Boolean).join(" · ");
   const typeOpts = (b.types || []).map(t=>`<option>${esc(t)}</option>`).join("");
   const serverOpts = (b.servers || []).map(s=>`<option>${esc(s)}</option>`).join("");
@@ -324,9 +331,11 @@ function backupFilesBlock(b, opts = {}){
       means the file's last check hashed to that same value. Repository: the copy off the server,
       verified by its bytes and SHA-256, then encrypted with the server's age key and proven by
       decrypting it back to the same bytes. On the server: still there, or deleted once that copy was
-      verified. Each restore marks the files it used - when, onto which target, its result - and
-      "RESTORE OK" means a restore copied this exact file intact, restored it and verified the
-      databases. Open a row for its files, sizes and checksums before and after encryption.</p>
+      verified. Each restore marks the files it used - when, onto which target - and says what
+      happened to this file in the last one: "restore done" (copied intact, restored, the databases
+      verified), "restore fail" with its reason (the file failed, went in before the restore failed, or
+      was never reached), "skipped" with the engine's reason; then how many restores were done and how
+      many failed. Open a row for its files, sizes and checksums before and after encryption.</p>
     ${retentionLine(b.retention)}
     <div class="ffilters">
       ${fleet ? `<label class="ffilter">Server <select class="ffsel" data-key="server">
@@ -337,7 +346,7 @@ function backupFilesBlock(b, opts = {}){
         <option value="">All</option>${typeOpts}</select></label>
       <label class="ffilter">Used for a restore <select class="ffsel" data-key="use">
         <option value="">All</option><option value="any">Used</option>
-        <option value="ok">Restored OK</option><option value="used">Used, not restored OK</option>
+        <option value="ok">Restore done</option><option value="used">Used, no restore done</option>
         <option value="never">Never used</option></select></label>
       <label class="ffilter">Repository <select class="ffsel" data-key="repo">
         <option value="">All</option><option value="verified">On the repository</option>

@@ -99,7 +99,7 @@ def test_instance_add_registers_a_machine_with_no_database_on_it():
 
 def test_a_host_record_takes_no_port_and_no_database_credential(tmp_path):
     outcome = instance_admin.add_instance(
-        {"server_id": "ACME-HOST-1", "ip": "192.0.2.60", "db_type": "host",
+        {"server_id": "ACME-HOST-1", "ip": "192.0.2.60", "site": "ACME", "environment": "lab", "db_type": "host",
          "platform": "windows"}, data_dir=tmp_path)
 
     assert outcome["port"] is None
@@ -114,7 +114,7 @@ def test_a_database_login_on_a_host_record_is_refused_and_names_the_right_comman
     """It would be stored where nothing reads it, and it would look configured."""
     with pytest.raises(instance_admin.InstanceAdminError, match="remote-credential-add"):
         instance_admin.add_instance(
-            {"server_id": "ACME-HOST-2", "ip": "192.0.2.61", "db_type": "host",
+            {"server_id": "ACME-HOST-2", "ip": "192.0.2.61", "site": "ACME", "environment": "lab", "db_type": "host",
              "username": "sa", "password": "x"}, data_dir=tmp_path, key=KEY)
 
 
@@ -123,7 +123,7 @@ def test_a_database_login_on_a_host_record_is_refused_and_names_the_right_comman
 def test_an_os_login_is_written_where_resolve_cmd_credential_looks_for_it(tmp_path):
     """The proof that matters: what the command wrote is what the collector reads back."""
     instance_admin.add_instance(
-        {"server_id": "ACME-HOST-3", "ip": "192.0.2.62", "db_type": "host",
+        {"server_id": "ACME-HOST-3", "ip": "192.0.2.62", "site": "ACME", "environment": "lab", "db_type": "host",
          "platform": "linux"}, data_dir=tmp_path)
 
     outcome = remote_credential_admin.add_remote_credential(
@@ -147,7 +147,7 @@ def test_an_os_login_is_written_where_resolve_cmd_credential_looks_for_it(tmp_pa
 def test_the_platform_goes_on_the_record_and_never_inside_the_block(tmp_path):
     """`resolve_cmd_access` writes platform into the resolved block from the record. A copy in the
     raw block is either redundant or a second, disagreeing answer."""
-    instance_admin.add_instance({"server_id": "ACME-HOST-4", "ip": "192.0.2.63",
+    instance_admin.add_instance({"server_id": "ACME-HOST-4", "ip": "192.0.2.63", "site": "ACME", "environment": "lab",
                                  "db_type": "host"}, data_dir=tmp_path)
     remote_credential_admin.add_remote_credential(
         {"server_id": "ACME-HOST-4", "username": "admin", "password": "p",
@@ -165,7 +165,7 @@ def test_the_platform_goes_on_the_record_and_never_inside_the_block(tmp_path):
 def test_method_local_on_a_remote_host_is_refused(tmp_path):
     """It runs inside the dbabrain container and reports the container's CPU under the host's name.
     A wrong answer is worse than a failure, because nothing about it looks wrong."""
-    instance_admin.add_instance({"server_id": "ACME-HOST-5", "ip": "192.0.2.64",
+    instance_admin.add_instance({"server_id": "ACME-HOST-5", "ip": "192.0.2.64", "site": "ACME", "environment": "lab",
                                  "db_type": "host"}, data_dir=tmp_path)
 
     with pytest.raises(remote_credential_admin.InstanceAdminError, match="container"):
@@ -177,7 +177,7 @@ def test_method_local_on_a_remote_host_is_refused(tmp_path):
 def test_an_ssh_password_without_an_explicit_auth_type_is_refused(tmp_path):
     """auth_type defaults to `key`, and a key-auth block resolves to NO credential - so the
     password would be encrypted, stored, and never read by anything."""
-    instance_admin.add_instance({"server_id": "ACME-HOST-6", "ip": "192.0.2.65",
+    instance_admin.add_instance({"server_id": "ACME-HOST-6", "ip": "192.0.2.65", "site": "ACME", "environment": "lab",
                                  "db_type": "host"}, data_dir=tmp_path)
 
     with pytest.raises(remote_credential_admin.InstanceAdminError, match="auth_type"):
@@ -189,7 +189,7 @@ def test_an_ssh_password_without_an_explicit_auth_type_is_refused(tmp_path):
 def test_a_second_login_on_one_machine_does_not_delete_the_first(tmp_path):
     """A machine legitimately carries several OS logins - an admin account and a service account.
     Replacing the group to add one would take the others with it."""
-    instance_admin.add_instance({"server_id": "ACME-HOST-7", "ip": "192.0.2.66",
+    instance_admin.add_instance({"server_id": "ACME-HOST-7", "ip": "192.0.2.66", "site": "ACME", "environment": "lab",
                                  "db_type": "host"}, data_dir=tmp_path)
     for user in ("admin", "svc_monitor"):
         remote_credential_admin.add_remote_credential(
@@ -203,7 +203,7 @@ def test_a_second_login_on_one_machine_does_not_delete_the_first(tmp_path):
 
 
 def test_registering_the_same_login_twice_is_refused_without_replace(tmp_path):
-    instance_admin.add_instance({"server_id": "ACME-HOST-8", "ip": "192.0.2.67",
+    instance_admin.add_instance({"server_id": "ACME-HOST-8", "ip": "192.0.2.67", "site": "ACME", "environment": "lab",
                                  "db_type": "host"}, data_dir=tmp_path)
     request = {"server_id": "ACME-HOST-8", "username": "admin", "password": "p"}
     remote_credential_admin.add_remote_credential(request, data_dir=tmp_path, key=KEY)
@@ -219,7 +219,7 @@ def test_registering_the_same_login_twice_is_refused_without_replace(tmp_path):
 
 def test_a_credential_without_a_method_says_that_nothing_reaches_the_host_yet(tmp_path):
     """Half a configuration that reports success is how a target ends up registered and silent."""
-    instance_admin.add_instance({"server_id": "ACME-HOST-9", "ip": "192.0.2.68",
+    instance_admin.add_instance({"server_id": "ACME-HOST-9", "ip": "192.0.2.68", "site": "ACME", "environment": "lab",
                                  "db_type": "host"}, data_dir=tmp_path)
 
     outcome = remote_credential_admin.add_remote_credential(
@@ -231,7 +231,7 @@ def test_a_credential_without_a_method_says_that_nothing_reaches_the_host_yet(tm
 
 
 def test_a_password_with_no_passphrase_writes_nothing_at_all(tmp_path):
-    instance_admin.add_instance({"server_id": "ACME-HOST-10", "ip": "192.0.2.69",
+    instance_admin.add_instance({"server_id": "ACME-HOST-10", "ip": "192.0.2.69", "site": "ACME", "environment": "lab",
                                  "db_type": "host"}, data_dir=tmp_path)
 
     with pytest.raises(remote_credential_admin.InstanceAdminError, match="passphrase"):
@@ -377,7 +377,7 @@ def test_a_replaced_entry_stays_where_it_was_in_the_file(tmp_path):
 
 
 def test_db_type_is_taken_from_the_inventory_rather_than_retyped(tmp_path):
-    instance_admin.add_instance({"server_id": "ACME-192-0-2-10", "ip": "192.0.2.10",
+    instance_admin.add_instance({"server_id": "ACME-192-0-2-10", "ip": "192.0.2.10", "site": "ACME", "environment": "lab",
                                  "db_type": "postgresql", "db_name": "postgres"},
                                 data_dir=tmp_path)
 
@@ -563,7 +563,7 @@ def test_instance_add_keeps_a_server_s_other_database_logins(tmp_path):
     """
     for username, name in (("monitor", "sqlserver_S1_monitor"), ("dba", "sqlserver_S1_dba")):
         instance_admin.add_instance(
-            {"server_id": "S1", "db_type": "sqlserver", "ip": "192.0.2.1",
+            {"server_id": "S1", "db_type": "sqlserver", "ip": "192.0.2.1", "site": "ACME", "environment": "lab",
              "username": username, "password_ref": f"REF_{username.upper()}",
              "credential_name": name, "replace": True}, data_dir=tmp_path)
 
@@ -579,7 +579,7 @@ def test_re_adding_the_same_credential_replaces_only_that_one(tmp_path):
     """The counterweight: `replace` must still mean replace, not accumulate duplicates."""
     for password_ref in ("REF_OLD", "REF_NEW"):
         instance_admin.add_instance(
-            {"server_id": "S1", "db_type": "sqlserver", "ip": "192.0.2.1",
+            {"server_id": "S1", "db_type": "sqlserver", "ip": "192.0.2.1", "site": "ACME", "environment": "lab",
              "username": "monitor", "password_ref": password_ref,
              "credential_name": "sqlserver_S1_monitor", "replace": True}, data_dir=tmp_path)
 
@@ -603,7 +603,7 @@ def test_a_postgres_target_without_a_database_is_refused(tmp_path):
     and `instance-add`'s own help says service_name is a LABEL and not a database.
     """
     request = {"server_id": "ACME-192-0-2-50-PG-5432", "db_type": "postgresql",
-               "ip": "192.0.2.50", "service_name": "ACME-STORE"}
+               "ip": "192.0.2.50", "site": "ACME", "environment": "lab", "service_name": "ACME-STORE"}
 
     with pytest.raises(instance_admin.InstanceAdminError) as caught:
         instance_admin.add_instance(request, data_dir=tmp_path)
@@ -616,7 +616,7 @@ def test_a_postgres_target_without_a_database_is_refused(tmp_path):
 
 def test_the_refusal_falls_back_to_the_server_id_when_there_is_no_label(tmp_path):
     """With no service_name either, the database the server would be asked for is the server_id."""
-    request = {"server_id": "ACME-192-0-2-50-PG-5432", "db_type": "postgresql", "ip": "192.0.2.50"}
+    request = {"server_id": "ACME-192-0-2-50-PG-5432", "db_type": "postgresql", "ip": "192.0.2.50", "site": "ACME", "environment": "lab"}
 
     with pytest.raises(instance_admin.InstanceAdminError,
                        match="ACME-192-0-2-50-PG-5432"):
@@ -625,7 +625,7 @@ def test_the_refusal_falls_back_to_the_server_id_when_there_is_no_label(tmp_path
 
 def test_a_named_database_is_accepted(tmp_path):
     outcome = instance_admin.add_instance(
-        {"server_id": "ACME-192-0-2-50-PG-5432", "db_type": "postgresql", "ip": "192.0.2.50",
+        {"server_id": "ACME-192-0-2-50-PG-5432", "db_type": "postgresql", "ip": "192.0.2.50", "site": "ACME", "environment": "lab",
          "service_name": "ACME-STORE", "database_name": "acmedb"}, data_dir=tmp_path)
 
     assert outcome["server_id"] == "ACME-192-0-2-50-PG-5432"
@@ -637,7 +637,7 @@ def test_the_old_database_spellings_are_accepted_and_written_as_database_name(tm
     spelling is still taken, and what reaches the file is the one name the connection reads."""
     for old in ("db_name", "database"):
         instance_admin.add_instance(
-            {"server_id": f"ACME-PG-{old}", "db_type": "postgresql", "ip": "192.0.2.50",
+            {"server_id": f"ACME-PG-{old}", "db_type": "postgresql", "ip": "192.0.2.50", "site": "ACME", "environment": "lab",
              "service_name": "ACME-STORE", old: "acmedb"}, data_dir=tmp_path)
         record = next(item for item in json.loads(
             (tmp_path / "db_instances.json").read_text(encoding="utf-8"))["db_instances"]
@@ -650,7 +650,7 @@ def test_sqlserver_and_oracle_are_not_asked_for_one(tmp_path):
     Oracle connects BY service and ignores the database. Requiring it would be noise on both."""
     for db_type, ip in (("sqlserver", "192.0.2.51"), ("oracle", "192.0.2.52")):
         outcome = instance_admin.add_instance(
-            {"server_id": f"ACME-{db_type.upper()}", "db_type": db_type, "ip": ip,
+            {"server_id": f"ACME-{db_type.upper()}", "db_type": db_type, "ip": ip, "site": "ACME", "environment": "lab",
              "service_name": "A LABEL"}, data_dir=tmp_path)
         assert outcome["server_id"] == f"ACME-{db_type.upper()}"
 
@@ -664,7 +664,7 @@ def test_a_cmd_access_block_that_is_deliberately_off_stays_off(tmp_path):
     collectors in every scan, on a node whose whole purpose was to show a clean one.
     """
     instance_admin.add_instance(
-        {"server_id": "ACME-192-0-2-60", "db_type": "host", "ip": "192.0.2.60",
+        {"server_id": "ACME-192-0-2-60", "db_type": "host", "ip": "192.0.2.60", "site": "ACME", "environment": "lab",
          "platform": "windows",
          "cmd_access": {"enabled": False, "method": "winrm", "host": "192.0.2.60",
                         "port": 5985, "credential_name": "remote_2.60_admin"}},
@@ -687,7 +687,7 @@ def test_a_cmd_access_block_that_is_deliberately_off_stays_off(tmp_path):
 def test_a_first_cmd_access_block_is_on(tmp_path):
     """Defaulting a NEW block to off would write access nothing reaches."""
     instance_admin.add_instance(
-        {"server_id": "ACME-192-0-2-61", "db_type": "host", "ip": "192.0.2.61",
+        {"server_id": "ACME-192-0-2-61", "db_type": "host", "ip": "192.0.2.61", "site": "ACME", "environment": "lab",
          "platform": "linux"}, data_dir=tmp_path)
 
     remote_credential_admin.add_remote_credential(
@@ -704,7 +704,7 @@ def test_a_first_cmd_access_block_is_on(tmp_path):
 def test_enabled_true_still_turns_one_back_on_when_asked(tmp_path):
     """Preserving the decision is not refusing to change it."""
     instance_admin.add_instance(
-        {"server_id": "ACME-192-0-2-62", "db_type": "host", "ip": "192.0.2.62",
+        {"server_id": "ACME-192-0-2-62", "db_type": "host", "ip": "192.0.2.62", "site": "ACME", "environment": "lab",
          "platform": "linux",
          "cmd_access": {"enabled": False, "method": "ssh", "host": "192.0.2.62",
                         "port": 22, "credential_name": "remote_2.62_dev"}},
@@ -805,7 +805,9 @@ def test_a_sqlserver_entry_that_declares_a_script_is_script_driven_too(tmp_path)
     # drill reuses the Oracle/PostgreSQL machinery and carries none of the SMB/.bak fields.
     registration.add_restore(
         _script_restore(restore_id="ACME_MSSQL_TO_DRILL", db_type="sqlserver",
-                        env={"MSSQL_PORT": "11433", "MSSQL_USER": "sa"}),
+                        env={"MSSQL_PORT": "11433", "MSSQL_USER": "sa"},
+                        # Which databases, stated (0.39.0, 1.362): every one the folder holds.
+                        restore_all_databases=True),
         data_dir=tmp_path, key=KEY)
 
     written = json.loads((tmp_path / "restore_config.json")

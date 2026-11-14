@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import landing_of
 from dbabrain.db import lockdown_store as L
 
 pytestmark = pytest.mark.real_lockdown
@@ -84,7 +85,7 @@ def test_a_sql_server_restore_loses_its_overwrite(monkeypatch):
         "files": [full] if request["kinds"] == ["full"] else [], "newest_finished_at": "2026-11-01 01:00:00"})
     monkeypatch.setattr(restore_by_id, "_visible_dir", lambda job: "/b")
     monkeypatch.setattr(restore_by_id, "_sqlserver_port", lambda job, data_dir=None: 1433)
-    job = SimpleNamespace(restore_id="R", env={"MSSQL_DATABASES": "S", "MSSQL_USER": "dba"}, env_secrets={},
+    job = SimpleNamespace(restore_id="R", env={"MSSQL_USER": "dba"}, landing=landing_of("S"), env_secrets={},
                           overwrite_existing=True, checkdb=True)
     for on, expected in ((False, True), (True, False)):
         monkeypatch.setattr(L, "lockdown_on", lambda app_config=None, on=on: on)

@@ -6,6 +6,9 @@ A copy somebody edited is saved to `runtime/agents_guide/` first - keep your own
 file. Before a root exists, `dbabrain guide` prints it. Read it before running anything: this
 toolkit reaches real databases and sends to real chats.
 
+**Have an Anthropic API key? Set the AI assistant up first** (section 2, after the passphrase): it then
+walks you through every later step, reading only, and proposes each command for you to run.
+
 ## 0. The ten rules
 
 1. **Run every command from the tool root** - the directory holding `config.json`, `data/`,
@@ -51,8 +54,7 @@ dbabrain common upgrade-config '{}'                     # plan; writes nothing
 dbabrain common upgrade-config '{"dry_run": false}'     # apply; copies each file to runtime/ first
 ```
 
-**Windows console:** set `PYTHONIOENCODING=utf-8` - the console is cp1252 and some output carries
-emoji.
+**Windows console:** set `PYTHONIOENCODING=utf-8` - the console is cp1252; some output carries emoji.
 
 ## 2. The secret key
 
@@ -66,6 +68,17 @@ export DBABRAIN_SECRET_KEY='<passphrase>'     # PowerShell: $env:DBABRAIN_SECRET
 Commands also take `--key` or `--key-base64` (base64 is safer in shells where `$`, `#` or `^` mean
 something). Without the key, anything that needs a password fails, and the daemon exits.
 
+### The AI assistant - set it up first
+
+`ai-key` stores the Anthropic API key encrypted and switches the assistant on (`data/ai_assist.json`:
+`enabled`, `api_key_ref`); it asks for the key and does not echo it. Its name is `assistant_name` there.
+
+```bash
+pip install "dbabrain[ai]"
+dbabrain ai-key                                     # paste the key; run it again to replace it
+dbabrain telegram ai-ask "What do I set up next?"   # ask here; in Telegram: section 12
+```
+
 ## 3. The clock
 
 ```bash
@@ -73,9 +86,8 @@ dbabrain db --config config.json timezone --format txt      # what this node res
 dbabrain db --config config.json timezone --set Asia/Ho_Chi_Minh
 ```
 
-`init` writes `UTC`. Stored timestamps are always UTC; the timezone decides what is **shown** and
-what a `time_window`'s `from_hour` / `to_hour` mean. Change it **before** the first scheduled run:
-changing it later moves every schedule that names an hour.
+`init` writes `UTC`. Stored times are always UTC; the timezone decides what is **shown** and what
+`from_hour` / `to_hour` mean - set it **before** the first scheduled run, or every such schedule moves.
 
 ## 4. Add a database to monitor
 
@@ -83,7 +95,7 @@ One call writes the inventory record, the login and the encrypted password:
 
 ```json
 {"server_id": "ACME-SQL01", "db_type": "sqlserver", "ip": "192.0.2.50", "port": 1433,
- "major_version": 16, "service_name": "ACME-SQL01", "environment": "prod",
+ "major_version": 16, "service_name": "ACME-SQL01", "site": "ACME", "environment": "prod",
  "username": "monitor_user", "password": "<the password>"}
 ```
 
@@ -116,9 +128,8 @@ USE msdb; CREATE USER monitor_user FOR LOGIN monitor_user;
 ALTER ROLE db_datareader ADD MEMBER monitor_user;     -- backup age reads msdb.dbo.backupset
 ```
 
-The older path still works: add the record to `data/db_instances.json`, the password to
-`secrets/secret_text.json`, then `dbabrain encrypt-secret`. That command **replaces** the store with
-that file, so never run it once `secret-set` or `instance-add` has stored anything the file lacks.
+The older path (record by hand, password in `secrets/secret_text.json`, `dbabrain encrypt-secret`)
+**replaces** the whole store with that file - never once `secret-set` or `instance-add` has stored one.
 
 Then prove it before trusting it:
 
@@ -173,7 +184,6 @@ Both exit 1 on a violation. `deprecated` and `unlisted` are notices, not failure
 | a feature switch inside a block (`metrics`, `telegram_config`, a `notify` rule) | `enabled` | - it stays |
 | position in a list | `sort_order` | `ord`, `app_ord`, `menu_order` |
 | the database to connect to | `database_name` | `database`, `db_name` |
-| a list of database names | `database_names` | - |
 | a restore's source -> target pairs | `database_mappings` | `databases` |
 | a restore's machines, on the entry | `server_id`, `target_server_id` | `source.id`, `target.id` |
 | a password, as a key into the encrypted store | `password_ref` | `password_env` (which now means only an environment variable's name: SSH auth, `--remote-password-env`) |
@@ -202,13 +212,8 @@ Every scheduled record carries one:
 - An app command's interval is a **floor** under everything inside that app: a SQL task declaring
   60 s inside an app running every 300 s runs every ~300 s.
 
-Explain a verdict instead of waiting for it (`local_now` is required, or only the interval is
-checked):
-
-```json
-{"time_window": {"from_hour": 1, "to_hour": 5, "repeat_interval": 72000, "weekdays": [7]},
- "local_now": "2026-09-27T01:30:00+07:00"}
-```
+Explain a verdict instead of waiting for it - `due.json` holds the `time_window` and a `local_now`
+such as `"2026-09-27T01:30:00+07:00"` (required, or only the interval is checked):
 
 ```bash
 dbabrain common due-check @due.json
@@ -229,9 +234,8 @@ runs everything whatever its role. Once commands are split between nodes, a node
 none of them runs nothing and still looks like a healthy idle process - `self-status` lists what
 this node schedules.
 
-Nothing restarts the daemon if it stops. Run it under a service manager (systemd, Windows Task
-Scheduler, or `restart: unless-stopped` in a container). When stopping it, stop its children too
-(the web host and the app runs it started) - they outlive the parent.
+Nothing restarts the daemon if it stops: run it under a service manager (systemd, Task Scheduler,
+`restart: unless-stopped`); stopping it, stop its children (web host, app runs) too - they outlive it.
 
 Change an app's schedule with a command, not an editor:
 
@@ -253,8 +257,7 @@ dbabrain common app-command-set '{"app_code": "APP-METRICS", "time_window": {"re
 | Which SQL tasks exist and when they run | `dbabrain sql-tasks list-tasks --all` |
 | What an SLA says | `dbabrain sla validate` |
 
-Logs are in `logs/`; `logs/errors.log` holds only errors. Read them after the questions above,
-not instead of them.
+Logs: `logs/` (`logs/errors.log` holds only errors) - read after the questions above, not instead.
 
 ## 9. What changes things - ask a person first
 
@@ -318,8 +321,8 @@ dbabrain backup-restore backup --backup-id <id> --job <job> --force    # one run
 - A restore names its machines as `server_id` (read from) and `target_server_id` (restored onto),
   both server_ids in `db_instances.json` - `check-references` fails one that names neither. A target
   nobody monitors is registered anyway, switched off: `instance-add` with `"active": false`.
-- `database_mappings` lists `{source_database, target_database}` pairs; absent means every database
-  in the backup set, under its own name.
+- A SQL Server restore states `database_mappings` (`{source_database, target_database}`) or
+  `"restore_all_databases": true`, and `overwrite_existing` - `false` never replaces a database that exists.
 - **Every database a restore brings back gets `DBCC CHECKDB` afterwards** unless the entry says
   `"checkdb": false`. A failed check fails the run, reported as *restored and recovered, but the
   integrity check failed*, with SQL Server's message numbers. On a SQL Server container, Msg 1823 /
@@ -342,7 +345,8 @@ dbabrain telegram route critical                            # which chat a level
 ```
 
 **One bot token, one poller.** Two nodes polling one token get HTTP 409 and send twice. A test
-node gets its own bot. Message bodies cap at 4096 characters.
+node gets its own bot. Message bodies cap at 4096 characters. The AI assistant answers in a group
+given the `ai_assist` level, to each person `ai_assist.json` `users[]` lists with `"active": true`.
 
 ## 13. Web console and reports
 
@@ -356,10 +360,9 @@ The console reads reports and edits configuration; adding a database is `instanc
 
 ## 14. Results store
 
-SQLite in `runtime/` by default. PostgreSQL: fill the `postgresql` block in
-`data/store_config.json`, then `dbabrain db use-store postgresql` and `dbabrain db init`. Several nodes
-may share one PostgreSQL database **only on different schemas**, and still only one scheduler per
-estate.
+SQLite in `runtime/` by default. PostgreSQL: fill the `postgresql` block in `data/store_config.json`,
+then `dbabrain db use-store postgresql` and `dbabrain db init`. Several nodes may share one PostgreSQL
+database **only on different schemas**, and still only one scheduler per estate.
 
 ## 15. Moving or copying an estate
 
@@ -369,11 +372,8 @@ dbabrain import-data '{"bundle": "estate-bundle.json", "plan_only": true, "forma
 dbabrain import-data '{"bundle": "estate-bundle.json", "force": true, "format": "txt"}'
 ```
 
-Each takes one JSON object (0.24.0): an option is a key, and the old `--plan` / `--force` / `--root`
-flags are refused by name.
-
-The bundle carries `store_config.json`: point the new node at its own store before starting it,
-and stop the old scheduler first.
+Each takes one JSON object (the old `--plan` / `--force` / `--root` flags are refused by name). The
+bundle carries `store_config.json`: point the new node at its own store, and stop the old scheduler first.
 
 ## 16. When something is wrong
 

@@ -73,74 +73,32 @@ CRITICAL_STATUSES = health_model.CRITICAL_STATUSES
 WARNING_STATUSES = health_model.WARNING_STATUSES
 SEVERITY_RANK = health_model.SEVERITY_RANK
 
-# Metric codes are what the collector calls things. A DBA scanning a page should read English.
-METRIC_LABELS: dict[str, str] = {
-    "INSTANCE_STATUS": "Instance up",
-    "DATABASE_STATUS": "Database state",
-    "DATABASE_CONFIG": "Database settings",
-    "DATABASE_CHECKDB": "Last CHECKDB",
-    "DATABASE_SUSPECT_PAGES": "Suspect pages",
-    "INSTANCE_CONNECTIONS": "Sessions",
-    "QUERY_LONG_RUNNING": "Long-running queries",
-    "QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS": "Waiting / rolling back",
-    "QUERY_STORE_QUERY_ISSUES": "Query Store — heavy queries",
-    "QUERY_STORE_COVERAGE": "Query Store — not capturing",
-    "LOCK_BLOCKING_SESSIONS": "Blocking",
-    "LOCK_DEADLOCK_RECENT": "Deadlocks",
-    "LOCK_TRANSACTION_HOLDERS": "Open transactions",
-    "LOCK_SLEEPING_OPEN_TRANSACTION": "Sleeping sessions with open transaction",
-    "BACKUP_AGE": "Backup age",
-    "BACKUP_LAST_RESULT": "Last backup result",
-    "BACKUP_JOB_STATUS": "Backup jobs",
-    "JOB_FAILED": "Failed jobs",
-    "SQL_AGENT_JOB_INVENTORY": "SQL Agent jobs",
-    "SQL_AGENT_JOB_RUNTIME": "SQL Agent job runtime",
-    "STORAGE_DISK_FREE_SPACE": "Disk free space",
-    "STORAGE_DATA_FILE_SPACE": "Data file space",
-    "LOG_FILE_SPACE": "Log file space",
-    "DATABASE_DATA_SIZE": "Database data size",
-    "DATABASE_LOG_SIZE": "Database log size",
-    "STORAGE_TEMP_SPACE": "TempDB space",
-    "STORAGE_FILE_PLACEMENT": "File placement",
-    "LOG_REUSE_WAIT": "Log reuse wait",
-    "LOG_RECENT_CRITICAL": "Recent error log entries",
-    "LINKED_SERVER_STATUS": "Linked servers",
-    "PERFORMANCE_IO_LATENCY": "Disk latency",
-    "PERFORMANCE_WAIT_STATS": "Wait statistics",
-    "PAGE_LIFE_EXPECTANCY": "Page life expectancy",
-    "SYSTEM_CPU_MEMORY": "CPU & memory (engine)",
-    "SQL_CONFIGURATION": "Instance configuration",
-    "AVAILABILITY_DATABASE_HEALTH": "Availability (AG, mirroring, log shipping)",
-    "POSTGRES_REPLICATION": "Replication",
-    "POSTGRES_REPLICATION_SLOTS": "Replication slots",
-    "POSTGRES_WAL_ARCHIVE": "WAL archiving",
-    "POSTGRES_LONG_TRANSACTIONS": "Long transactions",
-    "POSTGRES_VACUUM_HEALTH": "Vacuum",
-    "POSTGRES_XID_WRAPAROUND": "Transaction ID wraparound",
-    "POSTGRES_DATABASE_HEALTH": "Database health",
-    "POSTGRES_INVALID_INDEXES": "Invalid indexes",
-    "POSTGRES_IDENTITY_ROLE": "Replication role",
-    "TABLESPACE_FREE_SPACE": "Tablespace free space",
-    "PROCESS_LIMIT": "Process limit",
-    "SHARED_POOL_FREE": "Shared pool",
-    "LIBRARY_CACHE": "Library cache",
-    "BUFFER_CACHE_HIT": "Buffer cache hit ratio",
-    "TOP_DISK_READ_SQL": "Top disk-read SQL",
-    "OS_INFO": "OS",
-    "OS_CPU_USAGE": "CPU",
-    "OS_MEMORY_USAGE": "Memory",
-    "OS_DISK_USAGE": "Disk usage",
-    "OS_NETWORK": "Network",
-    "OS_UPTIME": "Uptime",
-    "OS_SERVICE_STATUS": "Services",
-    "OS_PROCESS_TOP_CPU": "Top process by CPU",
-    "OS_PROCESS_TOP_MEMORY": "Top process by memory",
-    "OS_CPU_COUNTERS": "CPU totals (host and database process)",
-    "OS_EVENTLOG_CRITICAL": "Event log errors",
-    "OS_REBOOT_PENDING": "Pending reboot",
-    "OS_TIME_SYNC": "Time sync",
-    "OS_TCP_PORT_STATUS": "TCP ports",
-}
+# Metric codes are what the collector calls things. A DBA scanning a page should read English -
+# and the English is each metric's own, `report_policy.label` in metric_definitions.json. It was a
+# table here until 0.39.0 (the operator, 2026-11-13: *fix what is hard-coded, the texts too*): one
+# more place a new metric had to be remembered in, and one that called a Linux journal the event log.
+_METRIC_LABELS: dict[str, str] | None = None
+
+
+def metric_labels(path: Path | None = None) -> dict[str, str]:
+    """``{metric_code: label}`` from each metric's ``report_policy.label``, cached. Best-effort like
+    :func:`metric_intervals`: without the catalog a metric is called by its code in words."""
+    global _METRIC_LABELS
+    if _METRIC_LABELS is not None and path is None:
+        return _METRIC_LABELS
+    labels: dict[str, str] = {}
+    try:
+        for definition in data_sources.load_metric_definition_records(Path(path or METRIC_DEFINITIONS)):
+            policy = definition.get("report_policy") if isinstance(definition.get("report_policy"), dict) else {}
+            code, label = str(definition.get("metric_code") or ""), str(policy.get("label") or "").strip()
+            if code and label:
+                labels[code] = label
+    except (OSError, ValueError, AttributeError):
+        labels = {}
+    if path is None:
+        _METRIC_LABELS = labels
+    return labels
+
 
 # What is worth looking at first, second, and only when digging. Anything not listed is 'detail'.
 PRIMARY_CODES = {
@@ -787,7 +745,9 @@ def _apply_report_window(entry: dict, item_rows: list, code_items: dict) -> None
 
 
 def metric_label(code: str) -> str:
-    return METRIC_LABELS.get(code) or code.replace("_", " ").capitalize()
+    """What a page calls ``code``: the metric's own label, else the code in words - never a raw code
+    with underscores."""
+    return metric_labels().get(code) or code.replace("_", " ").capitalize()
 
 
 severity_of = health_model.severity_of

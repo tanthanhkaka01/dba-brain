@@ -326,7 +326,9 @@ def _format_restore_workflow_telegram_message(*, level: str, message: str, metad
         # The header above is fixed text, so without these lines a script-driven restore's END
         # said only `status=done` - and the warning that raised it to `warning` level was in the
         # message this function does not print (1.23's warning, 2026-09-25).
-        for field in ("restored", "verified"):
+        # `landed`: where each database stopped, as the target recorded it (0.39.0, 1.362).
+        # `continued`: taken up from an unfinished run (1.372); `plain_deleted`: the decrypted staging gone (1.371).
+        for field in ("restored", "verified", "landed", "continued", "plain_deleted"):
             if metadata.get(field):
                 lines.append(f"{field}={metadata[field]}")
         for warning in metadata.get("warnings") or []:
@@ -363,10 +365,13 @@ def _format_flow_message(*, level: str, metadata: dict[str, Any]) -> str:
 
 
 def _format_telegram_message(*, level: str, message: str, metadata: dict[str, Any]) -> str:
-    if metadata.get("command") == "restore-workflow":
-        return _format_restore_workflow_telegram_message(level=level, message=message, metadata=metadata)
+    # A message that states its flow is rendered as one - a backup's since 1.306, a script-driven
+    # restore's since 0.39.0 (1.370, restore_messages). Asked first: a restore's messages carry
+    # command restore-workflow, and went to the older key=value shape below whatever they stated.
     if metadata.get("flow_title"):
         return _format_flow_message(level=level, metadata=metadata)
+    if metadata.get("command") == "restore-workflow":
+        return _format_restore_workflow_telegram_message(level=level, message=message, metadata=metadata)
     # Own line for the run id: it used to be reachable only inside the JSON payload, which was
     # clipped at 3900 characters — so the id was cut off exactly when the message mattered most.
     # The clip is gone (the send layer splits instead) but the line stays: an id on its own line

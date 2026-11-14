@@ -307,6 +307,28 @@ def require_restore_action(action: str | None, *, label: str = "restore") -> str
     return action
 
 
+def stated_overwrite(value: Any) -> bool | None:
+    """An entry's ``overwrite_existing`` as it stated it: ``True`` / ``False``, or ``None`` when it states
+    none - or something that is not one of the two, which says nothing either (0.39.0, 1.362)."""
+    return value if isinstance(value, bool) else None
+
+
+def require_overwrite_stated(value: bool | None, *, label: str = "restore") -> bool:
+    """Whether a restore may replace a database that exists on its target - as the entry STATED it.
+
+    The operator, 2026-11-13 (translated): *overwriting a DB must be a required field in the config, set
+    explicitly, off by default (no overwriting).* Until 0.39.0 an entry that said nothing was read as
+    false, and PostgreSQL and Oracle never read the field at all. Refused inside the entry's own run, as
+    an unstated ``action`` is (R50), so one entry cannot stop the others loading.
+    """
+    if value is None:
+        raise IntegrityConfigError(
+            f"{label} states no overwrite_existing (true or false), so nothing says whether this restore may "
+            "replace a database that exists on its target. State it - false: never over an existing database; "
+            "true: replace it. upgrade-config writes false into every entry that states none.")
+    return bool(value)
+
+
 def state_restore_integrity(document: dict[str, Any]) -> list[dict[str, str]]:
     """Write the stated block, and the stated ``action``, into every restore entry of a
     ``restore_config.json`` that has none.
@@ -325,6 +347,13 @@ def state_restore_integrity(document: dict[str, Any]) -> list[dict[str, str]]:
             entry["action"] = STATED_ACTION
             changes.append({"where": f"backup_restore.restores[{label}]", "field": "action",
                             "value": f"{STATED_ACTION}, stated - what the entry has always done"})
+        if not isinstance(entry.get("overwrite_existing"), bool):
+            # Off, never the old reading of a missing field: replacing what exists is stated, not
+            # inherited (the operator, 2026-11-13). A non-boolean value is the operator's to read.
+            if "overwrite_existing" not in entry:
+                entry["overwrite_existing"] = False
+                changes.append({"where": f"backup_restore.restores[{label}]", "field": "overwrite_existing",
+                                "value": "false, stated - never over a database that exists on the target"})
         if "integrity" in entry:
             continue
         entry["integrity"] = stated_restore_integrity()
@@ -458,7 +487,8 @@ def script_file_type(db_type: str, relative: str) -> str:
     return sqlserver_file_type(path)
 
 
-#: The inventory's `environment` values that mean a production instance (1.223).
+#: The inventory's `environment` values that mean a production instance (1.223). A restore target
+#: with no `environment` at all is refused too (D-39.6) - see :func:`production_target_refusal`.
 PRODUCTION_ENVIRONMENTS = ("prod", "production")
 
 
@@ -467,14 +497,40 @@ def production_target_refusal(environment: str | None, *, allowed: bool, restore
 
     A restore REPLACEs what it lands on, and an entry mis-edited to name a production instance as its
     target would overwrite it at the next scheduled drill. R47's spirit: the target is named *and*
-    allowed - a production target needs the entry's own ``allow_production_target: true``. An
-    instance the inventory does not mark (no ``environment``) is not judged here.
+    allowed - a production target needs the entry's own ``allow_production_target: true``.
+
+    ``environment`` is the target's inventory ``environment``: ``None`` when the inventory has no
+    record of the target, ``""`` when its record states none. Both are refused (0.39.0, D-39.6):
+    until then an unmarked target passed as if it were known not to be production, so the guard held
+    only where somebody had remembered the label - and ``instance-add`` wrote records without one.
+    Unknown is not "not production"; nobody but the machine's owner knows which it is, so the refusal
+    asks for the label rather than guessing one. ``allow_production_target: true`` still lets any
+    target through, as it always has.
     """
-    if allowed or str(environment or "").strip().lower() not in PRODUCTION_ENVIRONMENTS:
+    stated = str(environment or "").strip()
+    if allowed or (stated and stated.lower() not in PRODUCTION_ENVIRONMENTS):
         return ""
-    return (f"{restore_id}: the target {target} is a production instance (environment "
-            f"{environment!r} in db_instances.json). Refused: a restore overwrites what it lands on. "
-            "If this target is meant, the entry says \"allow_production_target\": true.")
+    if stated:
+        return (f"{restore_id}: the target {target} is a production instance (environment "
+                f"{environment!r} in db_instances.json). Refused: a restore overwrites what it lands on. "
+                "If this target is meant, the entry says \"allow_production_target\": true.")
+    if not str(target or "").strip():
+        unknown = "names no target, so nothing says whether what it lands on is a production instance"
+        to_do = ("Name the target with target_server_id - a server_id of db_instances.json whose record "
+                 "states its environment")
+    elif environment is None:
+        unknown = (f"the target {target} is not in db_instances.json, so nothing says whether it is a "
+                   "production instance")
+        to_do = (f"Register {target} in db_instances.json with its environment (instance-add requires "
+                 "site and environment)")
+    else:
+        unknown = (f"the target {target} has no environment in db_instances.json, so nothing says whether "
+                   "it is a production instance")
+        to_do = (f"State \"environment\" on {target}'s record in db_instances.json (prod, uat, test, dev or "
+                 "the estate's own label)")
+    return (f"{restore_id}: {unknown}. Refused: a restore overwrites what it lands on, and an unknown "
+            f"target is not a non-production one. {to_do}; an entry meant to restore onto production "
+            "says \"allow_production_target\": true.")
 
 
 def sqlserver_chain_break(full: dict[str, Any], diff: dict[str, Any] | None,

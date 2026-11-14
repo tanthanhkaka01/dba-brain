@@ -7,7 +7,7 @@ every run is verified; a copy stores the checksum before and after; the DB must 
 source and target server_id, file name, file type, the checksum before and after the copy; the same
 for every backup run without the target half; nullable columns for the virus scan.*
 
-Six tables:
+Seven tables:
 
 * ``backup_runs``         one row per backup run.
 * ``backup_files``        one row per file a backup wrote: server, database, name, type, path, size,
@@ -19,6 +19,10 @@ Six tables:
 * ``restore_run_files``   one row per file a run copied: both ``server_id``s, the file name and type,
   and the checksums before and after the copy, plus the virus scan of the copy.
 * ``copy_attempts``       one row per copy attempt of one file, with the hash each attempt produced.
+* ``restore_chain_files`` one row per backup file a restore APPLIED, in the order it applied them -
+  the full, the differential, each log - with the database it holds, the name it was restored as,
+  and whether that file went in (0.39.0). ``restore_run_files`` says what was copied; this says what
+  the engine was given, which a restore in place (nothing copied) has too.
 
 **A row reads on its own.** The server ids, file name and file type are repeated on the per-file
 and per-attempt rows, though a join could find them: a row read alone, or exported, still says where
@@ -56,12 +60,27 @@ from dbabrain.db.store import utc_now_text
 #: Bumped when these tables or their additive migrations change. 2 (0.34.0): the repository copy
 #: (1.240) - backup_files' offload columns, the ``offload`` run, the ``repository`` check location -
 #: and a proven copy's size held to its source's (1.245). 3 (0.34.0): the repository's retention -
-#: ``expired``, ``offload_expired_at``, and offload_state's list CHECK by a name of ours. See
-#: :func:`_migrate`.
-CATALOG_SCHEMA_VERSION = 7
+#: ``expired``, ``offload_expired_at``, and offload_state's list CHECK by a name of ours. 8 (0.39.0):
+#: ``restore_chain_files`` - the files a restore applied, in order - and ``restore_runs.landed_json``,
+#: what the target itself recorded of where each database stopped. 9 (0.39.0): ``skipped`` joins a chain
+#: file's results, the list CHECK by a name of ours (:data:`WIDENED_CHECKS`). See :func:`_migrate`.
+CATALOG_SCHEMA_VERSION = 9
 
 TABLES = ("backup_runs", "backup_files", "backup_file_checks", "restore_runs", "restore_run_files",
-          "copy_attempts")
+          "copy_attempts", "restore_chain_files")
+
+#: What a file of a restore's chain came to: written ``planned`` before the first step runs, so a
+#: restore that dies leaves the chain it meant to apply; ``applied`` once its step returned; ``failed``
+#: when its step raised - every file of that step (a SQL Server log is a step of its own since 1.370).
+#: ``skipped`` (0.39.0, 1.367; the operator chose it, 2026-11-14): a log SQL Server refused that the
+#: restore passed over and still reached its end - Msg 4326, a log that ends before the database's
+#: restore point (a log taken just before the full holds nothing it needs), or Msg 4305, a log that
+#: begins after it when a LATER log of the same database then went in (a file out of the chain, not
+#: a gap). Its ``error_text`` says which. Neither ``failed`` - nothing broke, and a restore that worked
+#: would show a failed file every night - nor ``planned``, which reads as never reached.
+CHAIN_RESULTS = ("planned", "applied", "skipped", "failed")
+#: The restore steps a chain file is applied by - the ``common.cli`` command names.
+CHAIN_STEPS = ("restore-full", "restore-diff", "restore-log")
 
 _NOW = "(strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
 
@@ -130,6 +149,10 @@ WIDENED_CHECKS = (
     ("backup_file_checks", "checked_by", I.CHECKED_BY),
     ("backup_file_checks", "location", I.CHECK_LOCATIONS),
     ("backup_files", "offload_state", I.OFFLOAD_STATES),
+    # Version 9 (0.39.0): ``skipped``. The live store holds the table with version 8's column CHECK
+    # (the lab restores of 1.367 wrote it); a SQLite catalog never had version 8 outside this tree's
+    # tests - no wheel shipped it - so its table is made with the named CHECK from the start.
+    ("restore_chain_files", "result", CHAIN_RESULTS),
 )
 
 
@@ -311,6 +334,9 @@ CREATE TABLE IF NOT EXISTS restore_runs
     databases_ok INTEGER NULL,
     databases_failed INTEGER NULL,
     error_text TEXT NOT NULL DEFAULT '',
+    -- What the TARGET recorded of each restored database, read back after the restore (0.39.0): the
+    -- name it landed under, its state, where the restore stopped and the last backup applied.
+    landed_json TEXT NULL,
     created_at TEXT NOT NULL DEFAULT {_NOW},
     {_named_check('restore_runs', 'action', I.RUN_ACTIONS)}
     CONSTRAINT uq_restore_runs UNIQUE (restore_id, source_server_id, target_server_id, started_at)
@@ -410,6 +436,46 @@ CREATE TABLE IF NOT EXISTS copy_attempts
     CONSTRAINT uq_copy_attempts UNIQUE (run_file_id, attempt_no),
     CONSTRAINT fk_copy_attempts_run_file FOREIGN KEY (run_file_id) REFERENCES restore_run_files (run_file_id)
 );
+
+CREATE TABLE IF NOT EXISTS restore_chain_files
+(
+    chain_file_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    restore_run_id INTEGER NOT NULL,
+    -- The order the restore applied its files in, across the whole run: 1, 2, 3 ...
+    position INTEGER NOT NULL CHECK (position >= 1),
+    source_server_id TEXT NOT NULL,
+    target_server_id TEXT NOT NULL,
+    -- The database the backup holds, and the name it was restored as (the same, unless the entry
+    -- maps it to another). '' for an engine whose backup is the whole instance.
+    database_name TEXT NOT NULL DEFAULT '',
+    restored_as TEXT NOT NULL DEFAULT '',
+    step TEXT NOT NULL CHECK ({I.check_list('step', CHAIN_STEPS)}),
+    -- The catalogued backup file, when the catalog knows it by its server and name. No file is
+    -- invented for one it does not know: the name and path below are then all that is held.
+    file_id INTEGER NULL,
+    file_name TEXT NOT NULL,
+    file_type TEXT NOT NULL DEFAULT '',
+    -- The path the target's engine read it at.
+    file_path TEXT NOT NULL,
+    -- The backup's own end as its header states it - the SOURCE's clock.
+    backup_ended_at TEXT NULL,
+    with_recovery INTEGER NOT NULL DEFAULT 0 CHECK (with_recovery IN (0, 1)),
+    -- The moment the step was told to stop at, on the file that carries it; the source's clock.
+    stopat TEXT NULL,
+    result TEXT NOT NULL DEFAULT 'planned',
+    error_text TEXT NOT NULL DEFAULT '',
+    applied_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT {_NOW},
+    updated_at TEXT NOT NULL DEFAULT {_NOW},
+    {_named_check('restore_chain_files', 'result', CHAIN_RESULTS)}
+    CONSTRAINT uq_restore_chain_files UNIQUE (restore_run_id, position),
+    CONSTRAINT fk_restore_chain_files_run FOREIGN KEY (restore_run_id) REFERENCES restore_runs (restore_run_id),
+    CONSTRAINT fk_restore_chain_files_file FOREIGN KEY (file_id) REFERENCES backup_files (file_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_restore_chain_files_file ON restore_chain_files (file_id);
+CREATE INDEX IF NOT EXISTS ix_restore_chain_files_source
+    ON restore_chain_files (source_server_id, database_name, created_at DESC);
 """
 
 
@@ -494,7 +560,9 @@ RUN_COLUMNS = (("restore_runs", "tier", "TEXT NULL"),
                ("backup_files", "pruned_by", "TEXT NULL"),
                # Version 7 (1.233): each run's retention and point-in-time reach.
                ("backup_runs", "retention_json", "TEXT NULL"),
-               ("backup_runs", "pitr_reach_seconds", "INTEGER NULL"))
+               ("backup_runs", "pitr_reach_seconds", "INTEGER NULL"),
+               # Version 8 (0.39.0): what the target recorded of where each restored database stopped.
+               ("restore_runs", "landed_json", "TEXT NULL"))
 
 
 def _migrate(conn: Any, backend: str) -> None:
@@ -683,7 +751,12 @@ _COLUMNS = {
     "restore_runs": ("action", "restore_id", "job_run_id", "source_server_id", "target_server_id",
                      "target_folder", "point_in_time", "tier", "node_host", "app_version", "started_at",
                      "ended_at", "phase", "chain_files", "files_matched", "files_recopied",
-                     "copy_max_retry", "refused_reason", "databases_ok", "databases_failed", "error_text"),
+                     "copy_max_retry", "refused_reason", "databases_ok", "databases_failed", "error_text",
+                     "landed_json"),
+    "restore_chain_files": ("restore_run_id", "position", "source_server_id", "target_server_id",
+                            "database_name", "restored_as", "step", "file_id", "file_name", "file_type",
+                            "file_path", "backup_ended_at", "with_recovery", "stopat", "result",
+                            "error_text", "applied_at"),
     "restore_run_files": ("restore_run_id", "file_id", "source_server_id", "target_server_id",
                           "database_name", "engine", "file_name", "file_type", "source_path",
                           "target_path", "source_host_path", "target_host_path", "backup_taken_at",
@@ -868,18 +941,21 @@ class BackupCatalogStore:
         broken = [e for e in entries.values() if e["broken_at"] is not None]
         return {"entries": sorted(entries.values(), key=lambda e: e["backup_id"]), "broken": len(broken)}
 
-    def chain_files(self, *, backup_id: str) -> list[dict[str, Any]]:
-        """Every file of an entry, whatever its state, with what makes a chain of it - the full it belongs
-        to (``chain_parent_file_id``, NULL on the full itself) - and its verification (1.244). Not only
-        the files still ``present``: a file the scrub found changed would drop out of its chain, and the
-        chain would read as verified."""
+    def chain_files(self, *, backup_id: str = "", server_id: str = "") -> list[dict[str, Any]]:
+        """Every file of an entry - or of every entry of a server (0.39.0) - whatever its state, with what
+        makes a chain of it - the full it belongs to (``chain_parent_file_id``, NULL on the full itself) -
+        and its verification (1.244). Not only the files still ``present``: a file the scrub found changed
+        would drop out of its chain, and the chain would read as verified."""
+        if not (backup_id or server_id):
+            raise ValueError("chain_files needs a backup_id or a server_id.")
         self.initialize()
+        column, value = ("server_id", server_id) if server_id else ("backup_id", backup_id)
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(
-                "SELECT file_id, database_name, file_type, file_name, chain_parent_file_id, "
+                "SELECT file_id, backup_id, server_id, database_name, file_type, file_name, chain_parent_file_id, "
                 "COALESCE(backup_ended_at, created_at) AS ended_at, verdict, state, on_disk, checksum_matches, "
                 "last_checked_at, last_check_result, offload_state, last_restore_at, last_restore_result "
-                "FROM backup_files WHERE backup_id = ? ORDER BY file_id", (backup_id,)).fetchall()]
+                f"FROM backup_files WHERE {column} = ? ORDER BY file_id", (value,)).fetchall()]
 
     def chain_rows(self, server_id: str, *, levels: tuple[str, ...], since: str = "") -> list[dict[str, Any]]:
         """A server's files of ``levels`` (``full``, ``diff``, ``log``) that ended at or after ``since``,
@@ -1304,8 +1380,12 @@ class BackupCatalogStore:
         if backup_id:
             where.append("backup_id = ?")
             params.append(backup_id)
-        sql = (f"SELECT * FROM backup_files WHERE {' AND '.join(where)} "
-               "ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END, last_checked_at, file_id LIMIT ?")
+        # With its run's start (0.39.0): the earliest a file can have been written, which a scrub holds
+        # a gone file's age to - its backup_started_at is empty on the rows written before that column.
+        where = [f"f.{clause}" for clause in where]
+        sql = (f"SELECT f.*, r.started_at AS run_started_at FROM backup_files f "
+               f"LEFT JOIN backup_runs r ON r.backup_run_id = f.backup_run_id WHERE {' AND '.join(where)} "
+               "ORDER BY CASE WHEN f.last_checked_at IS NULL THEN 0 ELSE 1 END, f.last_checked_at, f.file_id LIMIT ?")
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql, (*params, int(limit)))]
 
@@ -1395,6 +1475,189 @@ class BackupCatalogStore:
             return _insert(conn, "copy_attempts", values)
 
     # ------------------------------------------------------------------ #
+    # The chain a restore applied (0.39.0)
+    # ------------------------------------------------------------------ #
+    def backup_file_facts(self, *, server_id: str, file_names: list[str]) -> dict[str, dict[str, Any]]:
+        """``file_name`` -> ``{file_id, database_name, file_type, backup_ended_at}`` for a server's
+        catalogued backup files, **whatever their state**: a file released at its source once its
+        repository copy was proven reads ``pruned`` there, and it is exactly the file a restore from
+        the repository applies (:meth:`stored_files` leaves those out - it answers for a copy read
+        from the server). The newest row of a name wins."""
+        if not file_names:
+            return {}
+        self.initialize()
+        found: dict[str, dict[str, Any]] = {}
+        with self.connect() as conn:
+            for start in range(0, len(file_names), 400):
+                chunk = file_names[start:start + 400]
+                marks = ", ".join("?" for _ in chunk)
+                for row in conn.execute(
+                        "SELECT file_id, file_name, database_name, file_type, backup_ended_at FROM backup_files "
+                        f"WHERE server_id = ? AND file_name IN ({marks}) ORDER BY file_id DESC",
+                        (server_id, *chunk)):
+                    found.setdefault(str(row["file_name"]), dict(row))
+        return found
+
+    def backup_ended_at_of(self, file_ids: list[int]) -> dict[int, str]:
+        """``file_id`` -> when that backup finished (``backup_ended_at``, else the row's own time) - the
+        time a file decrypted from the repository is given on the target (0.39.0), as a plain copy
+        keeps its source's. A decrypted file is otherwise dated by the decryption."""
+        ids = sorted({int(one) for one in file_ids if one is not None})
+        if not ids:
+            return {}
+        self.initialize()
+        found: dict[int, str] = {}
+        with self.connect() as conn:
+            for start in range(0, len(ids), 400):
+                chunk = ids[start:start + 400]
+                marks = ", ".join("?" for _ in chunk)
+                for row in conn.execute(
+                        "SELECT file_id, COALESCE(backup_ended_at, created_at) AS ended FROM backup_files "
+                        f"WHERE file_id IN ({marks})", tuple(chunk)):
+                    if row["ended"]:
+                        found[int(row["file_id"])] = str(row["ended"])
+        return found
+
+    def plan_chain(self, restore_run_id: int, files: list[dict[str, Any]]) -> int:
+        """Write the chain a restore is about to apply - every file, in order, ``planned`` - before
+        its first step runs. A run's chain is written once: a second call for the same run changes
+        nothing and answers 0 (a retried step must not double the record). Returns the rows written."""
+        self.initialize()
+        with self.connect() as conn:
+            held = conn.execute("SELECT 1 FROM restore_chain_files WHERE restore_run_id = ? LIMIT 1",
+                                (int(restore_run_id),)).fetchone()
+            if held is not None:
+                return 0
+            for position, item in enumerate(files, start=1):
+                values = _known("restore_chain_files", {**item, "restore_run_id": int(restore_run_id),
+                                                        "position": position, "result": "planned"})
+                _require(values, "source_server_id", "target_server_id", "step", "file_name", "file_path")
+                _one_of(values, "step", CHAIN_STEPS)
+                _insert(conn, "restore_chain_files", values)
+        return len(files)
+
+    def append_chain(self, restore_run_id: int, files: list[dict[str, Any]]) -> list[int]:
+        """Add files to a run's chain after the ones it holds, ``planned``, and answer their positions
+        (0.39.0, 1.367). For a restore that chooses each database's chain as it reaches it - the
+        share-driven SQL Server path: one run per source, each database its own full, diff and logs -
+        where :meth:`plan_chain` writes a run's whole chain once, before the first step."""
+        self.initialize()
+        positions: list[int] = []
+        with self.connect() as conn:
+            row = conn.execute("SELECT MAX(position) AS last FROM restore_chain_files WHERE restore_run_id = ?",
+                               (int(restore_run_id),)).fetchone()
+            last = int(row["last"] or 0) if row is not None else 0
+            for offset, item in enumerate(files, start=1):
+                values = _known("restore_chain_files", {**item, "restore_run_id": int(restore_run_id),
+                                                        "position": last + offset, "result": "planned"})
+                _require(values, "source_server_id", "target_server_id", "step", "file_name", "file_path")
+                _one_of(values, "step", CHAIN_STEPS)
+                _insert(conn, "restore_chain_files", values)
+                positions.append(last + offset)
+        return positions
+
+    def set_chain_step(self, restore_run_id: int, positions: list[int], *, result: str,
+                       error_text: str = "") -> None:
+        """What became of the files one restore step carried: ``applied``; ``skipped`` with the
+        engine's reason (a log the restore passed over and still reached its end); or ``failed`` with
+        the step's own error. Files after a failed step stay ``planned`` - never reached."""
+        if result not in CHAIN_RESULTS:
+            raise BackupCatalogError(f"result must be one of {', '.join(CHAIN_RESULTS)}; got {result!r}.")
+        if not positions:
+            return
+        self.initialize()
+        now = utc_now_text()
+        marks = ", ".join("?" for _ in positions)
+        with self.connect() as conn:
+            conn.execute(
+                f"UPDATE restore_chain_files SET result = ?, error_text = ?, applied_at = ?, updated_at = ? "
+                f"WHERE restore_run_id = ? AND position IN ({marks})",
+                (result, str(error_text or "")[:2000], now if result == "applied" else None, now,
+                 int(restore_run_id), *[int(p) for p in positions]))
+
+    def chain_of(self, restore_run_id: int) -> list[dict[str, Any]]:
+        """One restore's chain, in the order it was applied."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT * FROM restore_chain_files WHERE restore_run_id = ? ORDER BY position",
+                (int(restore_run_id),))]
+
+    def unfinished_chain(self, *, restore_id: str, target_server_id: str) -> list[dict[str, Any]]:
+        """The chain rows of this entry's restores onto that target SINCE ITS LAST FINISHED ONE, oldest
+        first (0.39.0, 1.372): what a failed run - or one that was killed and never closed its row -
+        planned and applied. A later run holds what the target says it holds to these rows before it
+        goes on from a database left RESTORING. Empty when the newest restore with a chain ended ``done``."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT cf.*, rr.phase AS run_phase, rr.started_at AS run_started_at "
+                "FROM restore_chain_files cf JOIN restore_runs rr ON rr.restore_run_id = cf.restore_run_id "
+                "WHERE rr.restore_id = ? AND rr.target_server_id = ? AND rr.phase <> 'done' "
+                "AND rr.restore_run_id > COALESCE((SELECT MAX(d.restore_run_id) FROM restore_runs d "
+                "WHERE d.restore_id = ? AND d.target_server_id = ? AND d.phase = 'done' AND EXISTS "
+                "(SELECT 1 FROM restore_chain_files c WHERE c.restore_run_id = d.restore_run_id)), 0) "
+                "ORDER BY cf.restore_run_id, cf.position",
+                (str(restore_id), str(target_server_id), str(restore_id), str(target_server_id)))]
+
+    def restore_history(self, *, since: str = "", limit: int = 60, server_id: str = "") -> list[dict[str, Any]]:
+        """The newest restores and what each applied (0.39.0, 1.365), newest first: each run's own row -
+        its entry, where from and onto, the moment asked, how it ended, where each database stopped
+        (``landed_json``) - with its chain files in the order they went in under ``chain``. A copy-only
+        run restores nothing and is not listed; a restore from before 0.39.0 has an empty chain.
+
+        ``server_id``: only the restores that read that server's backups or restored onto it - a
+        server page's. By the run's own source and target, not by its chain files, so a run that
+        failed before its first file is still that server's."""
+        self.initialize()
+        with self.connect() as conn:
+            runs = [dict(row) for row in conn.execute(
+                "SELECT restore_run_id, restore_id, source_server_id, target_server_id, point_in_time, tier, "
+                "phase, started_at, ended_at, databases_ok, databases_failed, error_text, refused_reason, "
+                "landed_json FROM restore_runs WHERE action = ? AND (? = '' OR started_at >= ?) "
+                "AND (? = '' OR source_server_id = ? OR target_server_id = ?) "
+                "ORDER BY started_at DESC, restore_run_id DESC LIMIT ?",
+                (I.ACTION_RESTORE, since, since, server_id, server_id, server_id, int(limit))).fetchall()]
+            by_run = {int(run["restore_run_id"]): run for run in runs}
+            for run in runs:
+                run["chain"] = []
+            ids = list(by_run)
+            for start in range(0, len(ids), 200):
+                chunk = ids[start:start + 200]
+                marks = ", ".join("?" for _ in chunk)
+                for row in conn.execute(
+                        f"SELECT * FROM restore_chain_files WHERE restore_run_id IN ({marks}) "
+                        "ORDER BY restore_run_id, position", tuple(chunk)):
+                    by_run[int(row["restore_run_id"])]["chain"].append(dict(row))
+        return runs
+
+    def restores_using(self, file_id: int, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Every restore that applied one backup file, newest first - the run, its entry, its target,
+        the moment it restored to, how it ended, and this file's place and result in it."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT rr.restore_run_id, rr.restore_id, rr.source_server_id, rr.target_server_id, "
+                "rr.point_in_time, rr.started_at, rr.ended_at, rr.phase, cf.position, cf.step, "
+                "cf.database_name, cf.restored_as, cf.result, cf.stopat, cf.applied_at "
+                "FROM restore_chain_files cf JOIN restore_runs rr ON rr.restore_run_id = cf.restore_run_id "
+                "WHERE cf.file_id = ? ORDER BY rr.started_at DESC, cf.position LIMIT ?",
+                (int(file_id), int(limit)))]
+
+    def server_restore_chains(self, server_id: str, *, since: str = "", limit: int = 2000) -> list[dict[str, Any]]:
+        """Every chain file of the restores that read ``server_id``'s backups, newest run first and in
+        chain order inside a run - what a page lists under each restore."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT cf.*, rr.restore_id, rr.point_in_time, rr.started_at AS run_started_at, "
+                "rr.ended_at AS run_ended_at, rr.phase AS run_phase "
+                "FROM restore_chain_files cf JOIN restore_runs rr ON rr.restore_run_id = cf.restore_run_id "
+                "WHERE cf.source_server_id = ? AND (? = '' OR rr.started_at >= ?) "
+                "ORDER BY rr.started_at DESC, cf.restore_run_id DESC, cf.position LIMIT ?",
+                (server_id, since, since, int(limit)))]
+
+    # ------------------------------------------------------------------ #
     # Reads
     # ------------------------------------------------------------------ #
     def backup_history(self, *, server_id: str, since: str = "", database_name: str = "",
@@ -1473,6 +1736,14 @@ class BackupCatalogStore:
         a proven copy (``match`` / ``copied`` / ``recopied``) in a ``restore`` run that ended ``done``
         (``restored_ok_count``, with the last such run's time and target). Matched by ``file_id``, or
         by the source server and the file name for a copy made before the file was catalogued.
+
+        And (0.39.0) the restores that used it by how they ended - ``restore_done_count``,
+        ``restore_fail_count`` (``error`` / ``refused``) - and what happened to THIS file in its last
+        one: its line of that run's chain (``last_chain_result`` - applied / skipped / failed / planned,
+        never reached - and ``last_chain_error``) and the run's own reason (``last_run_error``). The
+        operator, 2026-11-14, reading a log the page showed as ``error``: the run had stopped at its
+        first file, a lockdown's refusal, and never reached this one - *show restore done, fail with
+        its reason; how many done, how many failed*.
         """
         self.initialize()
         proven = "(" + ", ".join(f"'{v}'" for v in I.PROVEN_VERDICTS) + ")"
@@ -1481,12 +1752,23 @@ class BackupCatalogStore:
         restored = (f"FROM restore_run_files rf JOIN restore_runs rr ON rr.restore_run_id = rf.restore_run_id "
                     f"WHERE {of_file} AND rf.verdict IN {proven} "
                     f"AND rr.action = 'restore' AND rr.phase = 'done'")
+        runs_of = (f"FROM restore_run_files rf JOIN restore_runs rr ON rr.restore_run_id = rf.restore_run_id "
+                   f"WHERE {of_file} AND rr.action = '{I.ACTION_RESTORE}'")
+        chain_line = ("FROM restore_chain_files c WHERE c.restore_run_id = bf.last_restore_run_id "
+                      "AND (c.file_id = bf.file_id OR (c.file_id IS NULL AND c.file_name = bf.file_name)) "
+                      "ORDER BY c.position LIMIT 1")
         sql = (f"SELECT bf.*, "
                f"(SELECT COUNT(*) FROM restore_run_files rf JOIN restore_runs ru ON ru.restore_run_id = rf.restore_run_id "
                f"WHERE {of_file} AND ru.action <> '{I.ACTION_OFFLOAD}') AS used_count, "
                f"(SELECT COUNT(*) {restored}) AS restored_ok_count, "
                f"(SELECT MAX(rr.ended_at) {restored}) AS last_restored_ok_at, "
-               f"(SELECT rr.target_server_id {restored} ORDER BY rr.ended_at DESC LIMIT 1) AS last_restored_to "
+               f"(SELECT rr.target_server_id {restored} ORDER BY rr.ended_at DESC LIMIT 1) AS last_restored_to, "
+               f"(SELECT COUNT(*) {runs_of} AND rr.phase = 'done') AS restore_done_count, "
+               f"(SELECT COUNT(*) {runs_of} AND rr.phase IN ('error', 'refused')) AS restore_fail_count, "
+               f"(SELECT c.result {chain_line}) AS last_chain_result, "
+               f"(SELECT c.error_text {chain_line}) AS last_chain_error, "
+               "(SELECT COALESCE(lr.error_text, lr.refused_reason) FROM restore_runs lr "
+               "WHERE lr.restore_run_id = bf.last_restore_run_id) AS last_run_error "
                f"FROM backup_files bf WHERE bf.server_id = ? "
                f"ORDER BY COALESCE(bf.backup_ended_at, bf.created_at) DESC, bf.file_id DESC LIMIT ?")
         with self.connect() as conn:
@@ -1498,7 +1780,12 @@ class BackupCatalogStore:
         restore (or copy) that finished and was verified; its proven files are the tested ones."""
         self.initialize()
         sql = ("SELECT rf.*, rr.action, rr.restore_id, rr.phase AS run_phase, rr.started_at AS run_started_at, "
-               "rr.ended_at AS run_ended_at, rr.point_in_time, rr.refused_reason "
+               "rr.ended_at AS run_ended_at, rr.point_in_time, rr.refused_reason, "
+               "COALESCE(rr.error_text, rr.refused_reason) AS run_error, "
+               "(SELECT c.result FROM restore_chain_files c WHERE c.restore_run_id = rf.restore_run_id "
+               "AND c.file_name = rf.file_name ORDER BY c.position LIMIT 1) AS chain_result, "
+               "(SELECT c.error_text FROM restore_chain_files c WHERE c.restore_run_id = rf.restore_run_id "
+               "AND c.file_name = rf.file_name ORDER BY c.position LIMIT 1) AS chain_error "
                "FROM restore_run_files rf JOIN restore_runs rr ON rr.restore_run_id = rf.restore_run_id "
                "WHERE rf.source_server_id = ? OR rf.target_server_id = ? "
                "ORDER BY rr.started_at DESC, rf.chain_position, rf.run_file_id DESC LIMIT ?")
@@ -1509,15 +1796,18 @@ class BackupCatalogStore:
         """What a restore's copy proved about each staged file - ``{path: {"size_bytes", "sha256"}}``
         for the paths a proven copy put on ``target_server_id`` (0.38.0, 1.329).
 
-        The facts a staging cleanup deletes by: the newest run file with verdict ``match`` at that
-        path, whose ``checksum_target_after_copy`` and ``size_target_bytes`` are what the copy gate
-        measured ON the target. A path no proven copy recorded is absent - the cleanup keeps and
+        The facts a staging cleanup deletes by: the newest run file with a proven verdict (``match``,
+        ``copied``, ``recopied`` - 0.39.0: read as ``match`` alone, a file a run copied fresh and nobody
+        found again was kept past its retention as *not in the catalog*) at that path, whose
+        ``checksum_target_after_copy`` and ``size_target_bytes`` are what the copy gate measured ON
+        the target. A path no proven copy recorded is absent - the cleanup keeps and
         names such a file. Matched on the path the target host itself uses (``target_host_path``),
         else the entry's own ``target_path``.
         """
         if not paths:
             return {}
         self.initialize()
+        proven = "(" + ", ".join(f"'{v}'" for v in I.PROVEN_VERDICTS) + ")"
         found: dict[str, dict[str, Any]] = {}
         with self.connect() as conn:
             for start in range(0, len(paths), 200):
@@ -1525,7 +1815,7 @@ class BackupCatalogStore:
                 marks = ", ".join("?" for _ in chunk)
                 for row in conn.execute(
                         "SELECT target_path, target_host_path, size_target_bytes, checksum_target_after_copy "
-                        "FROM restore_run_files WHERE target_server_id = ? AND verdict = 'match' "
+                        f"FROM restore_run_files WHERE target_server_id = ? AND verdict IN {proven} "
                         "AND checksum_target_after_copy IS NOT NULL AND size_target_bytes IS NOT NULL "
                         f"AND (target_path IN ({marks}) OR target_host_path IN ({marks})) "
                         "ORDER BY run_file_id DESC", (target_server_id, *chunk, *chunk)):
@@ -1535,6 +1825,57 @@ class BackupCatalogStore:
                         if path and path in chunk:
                             found.setdefault(str(path), facts)
         return found
+
+    def staged_by_entry(self, *, restore_id: str, target_server_id: str, folder: str,
+                        exclude_run_ids: tuple[int, ...] = ()) -> list[dict[str, Any]]:
+        """The files one restore entry's runs put in its staging ``folder`` on that target and nobody has
+        recorded as gone - the newest proven row per path, oldest first (0.39.0, 1.371).
+
+        What a successful restore checks for plain files an earlier run of the same entry decrypted and
+        left there - a run that failed keeps its files for a continued run, and nobody may run it again.
+        A row the copy did not prove (not ``match`` / ``copied`` / ``recopied``, no size or sha256) is
+        not listed: a verified delete has nothing to hold it to. Read by the entry's own ``restore_id``,
+        never by folder alone: a staging another entry shares is that entry's to clear.
+
+        Every proven verdict, not ``match`` alone: a file copied fresh by this run is ``copied`` (the
+        store holds its sha256 to the source's, as it does ``match``). Read as ``match`` only, a plain
+        copy from a source that was never encrypted was never listed - the Oracle overwrite test on
+        the lab host (2026-11-14) left its 11 files, 2.35 GB, in the target's staging after a restore that
+        worked: *0 staged file(s) removed*.
+
+        The newest row of a path decides, gone included: a delete marks the rows it was handed, and an
+        older run's row of the same path - a failed run's copy the next run found there - still said
+        *on disk*. Read past the newest, the deleted file came back as staged (the same test: 80 files
+        of the SQL Server entry and 11 of the Oracle one, all deleted, listed again).
+        """
+        self.initialize()
+        proven = "(" + ", ".join(f"'{v}'" for v in I.PROVEN_VERDICTS) + ")"
+        prefix = folder.rstrip("/") + "/"
+        skip = {int(one) for one in exclude_run_ids if one is not None}
+        found: dict[str, dict[str, Any]] = {}
+        with self.connect() as conn:
+            for row in conn.execute(
+                    "SELECT f.run_file_id, f.restore_run_id, f.source_server_id, f.source_path, f.target_path, "
+                    "f.target_host_path, f.size_target_bytes, f.checksum_target_after_copy, f.target_on_disk "
+                    "FROM restore_run_files f JOIN restore_runs r ON r.restore_run_id = f.restore_run_id "
+                    f"WHERE r.restore_id = ? AND f.target_server_id = ? AND f.verdict IN {proven} "
+                    "AND f.checksum_target_after_copy IS NOT NULL AND f.size_target_bytes IS NOT NULL "
+                    "ORDER BY f.run_file_id",
+                    (str(restore_id), str(target_server_id))):
+                if int(row["restore_run_id"]) in skip:
+                    continue
+                path = str(row["target_host_path"] or row["target_path"] or "")
+                if not path.startswith(prefix):
+                    continue
+                found.pop(path, None)
+                found[path] = {"path": path, "run_file_id": int(row["run_file_id"]),
+                               "on_disk": row["target_on_disk"],
+                               "restore_run_id": int(row["restore_run_id"]),
+                               "source_server_id": str(row["source_server_id"]), "source_path": str(row["source_path"]),
+                               "size_bytes": int(row["size_target_bytes"]),
+                               "sha256": str(row["checksum_target_after_copy"])}
+        return [{key: value for key, value in one.items() if key != "on_disk"}
+                for one in found.values() if one["on_disk"] is None or int(one["on_disk"]) != 0]
 
     def run_files(self, restore_run_id: int) -> list[dict[str, Any]]:
         """One run's files in chain order - what ``db.cli copy-history`` prints."""

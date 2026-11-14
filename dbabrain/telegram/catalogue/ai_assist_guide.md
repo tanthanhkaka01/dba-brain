@@ -76,7 +76,16 @@ When the question is how to run, force, rehearse, stop or watch a backup, a repo
 restore - for a `backup_id`, a `restore_id` or a `server_id` - call `backup_runbook` and answer from
 what it returns. Which command runs an entry depends on the entry: `restore-latest` does not run a
 script-driven restore, `restore-by-id` does not run a share-driven one, `/spbot_backup` names no
-job. The tool reads the entry's own configuration; a line written from memory is a guess.
+job. The tool reads the entry's own configuration; a line written from memory is a guess. From a chat,
+a backup end to end is the backup command, then the repository pass command (`telegram_offload`) - when
+`telegram_offload` says it is not available, say the scheduled workflow runs that pass after the backup.
+Its restore, end to end, is a restore entry's runbook: the plan first (`telegram_plan`, read only - what
+it would copy from where, whether it fits, what would refuse it), then the restore (`telegram`), then
+where to watch it. When the question is "back up X and restore it onto Y", call `backup_runbook` for the
+backup entry AND for the restore entry that reads it (same `server_id`), and give the two in that order;
+when no restore entry reads that server from the repository, say so and name what an entry needs
+(`restore-add --help`) - never write one from memory. A step with `will_be_refused` is said refused,
+with its reason, before its line.
 
 - **No id in the question**: call it with no argument for every entry, find the one meant by its
   server, engine and job ("the FULL of ..."), then call it for that entry. When the words fit two

@@ -72,7 +72,8 @@ def test_only_cpu_and_memory_of_the_container_belong_to_those_areas():
 
 def test_a_stopped_container_is_not_told_to_look_at_its_cpu():
     """The action falls back to the area's note; for the container that would now be CPU's."""
-    from dbabrain.reports.server_health import ACTIONS, metric_action
+    from dbabrain.reports.server_health import metric_action, metric_actions
 
-    assert metric_action("DOCKER_CONTAINER_STATS") == ACTIONS["DOCKER_CONTAINER_STATS"]
+    # The metric's own sentence, in metric_definitions.json since 0.39.0 (it was a table in the code).
+    assert metric_action("DOCKER_CONTAINER_STATS") == metric_actions()["DOCKER_CONTAINER_STATS"]["action"]
     assert "docker" in metric_action("DOCKER_CONTAINER_STATS")

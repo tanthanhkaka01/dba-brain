@@ -56,7 +56,8 @@ def test_no_module_hard_codes_a_distribution_name_in_an_install_hint(path: Path)
     if path.name == "packaging.py":
         return  # where the name is resolved, and where it is explained
     text = path.read_text(encoding="utf-8")
-    hard_coded = re.findall(r"pip install '[a-z_]+\[", text)
+    # Either quote, escaped or not: a double-quoted hint passed a single-quote pattern until 0.39.0.
+    hard_coded = re.findall(r"""pip install \\?["'][a-z_]+\[""", text)
     assert not hard_coded, (
         f"{path.name} hard-codes a distribution name in an install hint ({hard_coded}); "
         f"use dbabrain.lib.packaging.install_hint(extra) so it is right whatever the build is called")

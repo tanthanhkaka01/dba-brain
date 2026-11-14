@@ -190,7 +190,7 @@ def test_instance_add_refuses_an_oracle_target_with_no_service(tmp_path):
     root = _root(tmp_path)
 
     with pytest.raises(instance_admin.InstanceAdminError, match="service_name is not stated"):
-        instance_admin.add_instance({"server_id": "ORA-1", "db_type": "oracle", "ip": "192.0.2.12"},
+        instance_admin.add_instance({"server_id": "ORA-1", "db_type": "oracle", "ip": "192.0.2.12", "site": "ACME", "environment": "lab"},
                                     data_dir=root)
     assert json.loads((root / "db_instances.json").read_text(encoding="utf-8"))["db_instances"] == []
 
@@ -199,14 +199,14 @@ def test_instance_add_refuses_a_host_block_with_no_platform(tmp_path):
     root = _root(tmp_path)
 
     with pytest.raises(instance_admin.InstanceAdminError, match="platform is not stated"):
-        instance_admin.add_instance({"server_id": "H-1", "db_type": "host", "ip": "192.0.2.13",
+        instance_admin.add_instance({"server_id": "H-1", "db_type": "host", "ip": "192.0.2.13", "site": "ACME", "environment": "lab",
                                      "cmd_access": {**SSH, "auth_type": "key"}}, data_dir=root)
 
 
 def test_instance_add_writes_an_inactive_record_to_be_completed_later(tmp_path):
     root = _root(tmp_path)
 
-    instance_admin.add_instance({"server_id": "ORA-1", "db_type": "oracle", "ip": "192.0.2.12",
+    instance_admin.add_instance({"server_id": "ORA-1", "db_type": "oracle", "ip": "192.0.2.12", "site": "ACME", "environment": "lab",
                                  "active": False}, data_dir=root)
 
     assert json.loads((root / "db_instances.json").read_text(encoding="utf-8"))["db_instances"]

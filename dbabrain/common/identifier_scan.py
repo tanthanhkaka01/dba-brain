@@ -115,6 +115,10 @@ GENERIC_TERMS: dict[str, str] = {
     "mssqlserver": "how Windows registers a *default* SQL Server instance - a vendor constant",
     "sqlexpress": "the default instance name of SQL Server Express - a vendor constant",
     "freepdb1": "Oracle Free's default PDB name - a vendor constant",
+    # A name any install gives its instance (0.39.0; the operator, 2026-11-14: *a name that collides
+    # easily goes on the allow list*): SQL Server named after its version reads as an estate name and
+    # is every estate's.
+    "mssql2025": "a SQL Server instance named after its version - what any install may call one",
     # Oracle Free's SID and instance name. An Oracle Free lab's record carries it as `sid` and
     # `instance_name`, and the 0.23.0 export was refused over it: 855 hits in 192 files, every one
     # an ordinary word (`TABLESPACE_FREE_SPACE`, "free space") and not one an estate name.

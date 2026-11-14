@@ -62,7 +62,8 @@ class BackupSpec:
     label: str = ""
     level: str = ""
     env: dict[str, str] = field(default_factory=dict)
-    timeout: int = 3600
+    #: Seconds the script may run; ``None`` - stated as 0 - no limit. Always stated by the request.
+    timeout: int | None = None
     dry_run: bool = False
     #: Where the script came from, for the answer. Not used to run anything.
     script_source: str = ""
@@ -94,13 +95,18 @@ def parse_backup_spec(request: dict[str, Any]) -> BackupSpec:
         # engine that has no such level is refused before anything is shipped anywhere.
         env[LEVEL_ENV] = backup_level_for(db_type, level)
 
+    # Stated on every request, 0 meaning no limit (0.39.0; the operator, 2026-11-14: *no fallback
+    # anywhere*). An absent timeout was 3600 s, so a job whose window said 0 - no limit - was cut at an
+    # hour by a number written nowhere in its configuration.
     timeout = request.get("timeout")
+    if timeout in (None, "") or isinstance(timeout, bool):
+        raise BackupSpecError("timeout is required: the seconds the script may run, or 0 for no limit.")
     try:
-        timeout_seconds = int(timeout) if timeout not in (None, "") else 3600
+        timeout_seconds = int(timeout)
     except (TypeError, ValueError) as exc:
         raise BackupSpecError(f"timeout must be a whole number of seconds; got {timeout!r}.") from exc
-    if timeout_seconds <= 0:
-        raise BackupSpecError("timeout must be greater than zero.")
+    if timeout_seconds < 0:
+        raise BackupSpecError("timeout must be 0 (no limit) or more seconds.")
 
     return BackupSpec(
         db_type=db_type,
@@ -110,7 +116,7 @@ def parse_backup_spec(request: dict[str, Any]) -> BackupSpec:
         label=str(request.get("label") or "").strip(),
         level=level,
         env=env,
-        timeout=timeout_seconds,
+        timeout=timeout_seconds or None,
         dry_run=bool(request.get("dry_run")),
     )
 

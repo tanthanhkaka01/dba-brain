@@ -886,7 +886,20 @@ def _notify_vocabulary_is_declared_not_inherited(monkeypatch):
 DEFAULT_PATHS_TO_REDIRECT: tuple[tuple[str, str], ...] = (
     ("dbabrain.reports.metrics_reports.DEFAULT_METRIC_DEFINITIONS_PATH", "metric_definitions.json"),
     ("dbabrain.reports.push.DEFAULT_REPORTS_CONFIG_PATH", "reports_config.json"),
+    # The pages' own texts (page_texts: the areas, the fleet cards - 0.39.0) are read from it too.
+    ("dbabrain.reports.page_texts.REPORTS_CONFIG", "reports_config.json"),
     ("dbabrain.telegram.command_processor.DEFAULT_COMMANDS_PATH", "telegram_support_commands.json"),
+    # A metric's label and its *What to do* sentence are the metric's own since 0.39.0
+    # (report_policy.label / action): read here, a page test passed on the operator's file and
+    # failed in the export, where data/ holds only the examples.
+    ("dbabrain.reports.server_series.METRIC_DEFINITIONS", "metric_definitions.json"),
+)
+
+#: What the readers of a redirected file keep in a module global: emptied for each test, or the
+#: first test's file - whichever path it read - would answer for every later one.
+CACHES_OF_REDIRECTED_FILES: tuple[str, ...] = (
+    "dbabrain.reports.server_series._METRIC_LABELS",
+    "dbabrain.reports.server_health._METRIC_ACTIONS",
 )
 
 
@@ -911,6 +924,14 @@ def _defaults_read_the_shipped_examples(monkeypatch):
             continue
         if hasattr(module, attribute):
             monkeypatch.setattr(target, shipped_config(example))
+    for target in CACHES_OF_REDIRECTED_FILES:
+        module_name, _, attribute = target.rpartition(".")
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:  # noqa: BLE001 - the package is not in this distribution.
+            continue
+        if hasattr(module, attribute):
+            monkeypatch.setattr(target, None)
 
 
 @pytest.fixture(autouse=True)
@@ -955,6 +976,25 @@ def _the_display_timezone_starts_at_its_default(monkeypatch):
     monkeypatch.setattr(display_timezone, "_display_declaration", display_timezone.DEFAULT_TIMEZONE)
     monkeypatch.setattr(display_timezone, "_display_zone", display_timezone.resolve(
         display_timezone.DEFAULT_TIMEZONE))
+
+
+@pytest.fixture
+def restore_targets_are_lab(monkeypatch):
+    """Every restore target a test names is one the inventory marks ``lab``.
+
+    A restore onto a target whose ``environment`` the inventory does not state - or that it does
+    not list - is refused before anything runs (0.39.0, D-39.6). Most restore tests build their
+    entry with no inventory at all: they are about the copy, the steps or the chain, not about
+    which machine is production, and until D-39.6 an unlisted target passed. This stands in for the
+    inventory's answer only (``backup_restore.config.target_environment``); the refusal itself
+    still runs, and ``tests/test_an_unmarked_restore_target_is_refused.py`` holds it. Opt in with
+    ``pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")`` - never autouse, or the
+    tests of the guard would be testing this stand-in.
+    """
+    from dbabrain.backup_restore import config as restore_config
+
+    monkeypatch.setattr(restore_config, "target_environment",
+                        lambda target_server_id, *, data_dir=None: "lab")
 
 
 @pytest.fixture
@@ -1028,6 +1068,46 @@ def answer_metric_items(monkeypatch, answer):
 #: lives in whichever of these holds the caller - ``restore_database`` re-exports every name, but a
 #: re-export is a second binding, and a patch on it reaches only the callers in that module.
 RESTORE_MODULES = ("restore_database", "restore_base", "restore_find", "restore_sql", "restore_sqlcmd")
+
+
+def landing_of(*names: str):
+    """What a stand-in SQL Server restore job states it restores: each database under its own name.
+
+    Since 0.39.0 (1.362) the plan reads the entry's ``database_mappings`` / ``restore_all_databases``
+    (:mod:`dbabrain.lib.restore.landing`), not ``env.MSSQL_DATABASES``; a job that states neither is
+    refused. ``landing_of()`` with no name is ``restore_all_databases: true``.
+    """
+    from dbabrain.lib.restore.landing import Landing
+
+    return Landing(names=tuple((name, name) for name in names), all_databases=not names)
+
+
+def stated(record: dict[str, Any], **where: Any) -> dict[str, Any]:
+    """``record`` - a restore entry, a backup entry or a backup job a test builds - with every field
+    that decides its run stated, at the value a record that said nothing had been running on.
+
+    Since 0.39.0 (1.366, :mod:`dbabrain.lib.restore.stated`) a record that leaves one out still loads
+    and is refused inside its own run, by name: the time window's three intervals, the switch, the
+    notify rules, a restore's checks and copy, a backup's scrub. Most tests build their record for
+    something else - a copy, a chain, a message - and stated nothing of the kind before; this states
+    it the way ``upgrade-config`` would, so the test still runs what it is about. What the record
+    states is kept. ``where`` is :func:`~dbabrain.lib.restore.stated.state_record`'s: ``kind``
+    (a restore entry's own when not given), ``above`` (a share-driven entry's block), ``parent`` (a
+    backup job's entry). Changed in place, and returned.
+    """
+    from dbabrain.lib.restore import stated as record_stated
+
+    record_stated.state_record(record, **where)
+    return record
+
+
+def stated_document(document: dict[str, Any]) -> dict[str, Any]:
+    """A whole ``restore_config.json`` document with every record :func:`stated` - each restore
+    entry, each backup entry and each of its jobs, as ``upgrade-config`` writes them."""
+    from dbabrain.lib.restore import stated as record_stated
+
+    record_stated.state_restore_fields(document)
+    return document
 
 
 def patch_restore(monkeypatch, name: str, value) -> None:

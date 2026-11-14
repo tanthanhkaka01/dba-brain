@@ -32,6 +32,7 @@ from dbabrain.telegram.send_queue import (
     send_pending_messages,
 )
 from dbabrain.telegram import bot_info, get_updates, send_message
+from dbabrain.telegram.menu import set_menu
 from dbabrain.telegram.command_permissions import set_command_level
 from dbabrain.telegram.updates import add_group, migrate_group_record, set_group_level, set_user_level
 from dbabrain.telegram.updates import fetch_and_save_updates
@@ -61,6 +62,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Who this token belongs to (id, username) and whether privacy mode lets "
              "the bot read a group. The two values data/bot_telegram.json asks for.")
     info_parser.set_defaults(telegram_function=bot_info)
+
+    # 0.39.0 (1.348): the menu was pasted into BotFather by hand, and two commands were never
+    # pasted. It is set from the node's own commands instead.
+    menu_parser = subparsers.add_parser(
+        "set-menu",
+        help="Set the bot's command menu (what Telegram offers under /) to the commands this node has: "
+             "each command's menu_description in telegram_support_commands.json, in sort_order. "
+             "Reads the live menu first and changes it only when it differs.")
+    menu_parser.add_argument("--commands-path", default="data/telegram_support_commands.json",
+                             help="This node's commands: the menu's only source.")
+    menu_parser.add_argument("--dry-run", action="store_true", help="Say what would change; set nothing.")
+    menu_parser.set_defaults(telegram_function=set_menu)
 
     use_bot_parser = subparsers.add_parser(
         "use-bot",

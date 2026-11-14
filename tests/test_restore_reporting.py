@@ -14,6 +14,10 @@ import pytest
 from dbabrain.backup_restore import workflow
 from conftest import shipped_config
 
+# Its restore targets are lab machines the tests do not list in an inventory; a target whose
+# environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
+pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")
+
 
 class _Recorder:
     """Captures the events the workflow emits instead of writing them anywhere."""

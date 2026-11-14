@@ -235,7 +235,7 @@
                         }
                     },
                     "measured_against": "the previous run's START (job_runs.started_at / sql_runs.started_at)",
-                    "rule": "a run may start up to min(interval*0.05, 30) seconds early so a sweep boundary does not cost a whole cycle, which is why 1800 is observed as ~1770",
+                    "rule": "a run may start up to min(interval*0.05, 30) seconds early so a sweep boundary does not cost a whole cycle, which is why 1800 is observed as ~1770. On a backup job and a restore entry it is required since 0.39.0 (1.366), null too being the caller's default there; every other app reads it as before",
                     "purpose": "Seconds between STARTS after a run that did not fail. 300 with a task that takes 240 means the next start is about 60 seconds after it finishes - 45 in fact, because of the grace in the rule above."
                 },
                 {
@@ -253,7 +253,7 @@
                         }
                     },
                     "measured_against": "the previous run's START (job_runs.started_at / sql_runs.started_at)",
-                    "rule": "it can only bring a retry FORWARD, never postpone one: the rule checks 'still running', then 'repeat_interval elapsed', then 'failed', so a failed run is due the moment repeat_interval elapses whatever this says - and a retry_interval LARGER than repeat_interval therefore does nothing at all",
+                    "rule": "it can only bring a retry FORWARD, never postpone one: the rule checks 'still running', then 'repeat_interval elapsed', then 'failed', so a failed run is due the moment repeat_interval elapses whatever this says - and a retry_interval LARGER than repeat_interval therefore does nothing at all. On a backup job and a restore entry it is required since 0.39.0 (1.366), null too being the caller's default there; every other app reads it as before",
                     "purpose": "Seconds between starts after a run that ended in error/timeout/fail/failed/failure. Set it BELOW repeat_interval to retry a failure sooner than the normal schedule."
                 },
                 {
@@ -271,7 +271,7 @@
                         }
                     },
                     "measured_against": "the previous run's START (job_runs.started_at / sql_runs.started_at)",
-                    "rule": "also the grace on a 'running' row: a row still open after timeout is reaped instead of a second copy being started",
+                    "rule": "also the grace on a 'running' row: a row still open after timeout is reaped instead of a second copy being started. On a backup job and a restore entry it is required since 0.39.0 (1.366), null too being the caller's default there; every other app reads it as before",
                     "purpose": "Seconds a run may take before it is killed. Set it above the SLOWEST thing inside the command and below repeat_interval."
                 },
                 {
@@ -1248,8 +1248,8 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 33,
-            "required_field_count": 29,
+            "field_count": 34,
+            "required_field_count": 32,
             "fields": [
                 {
                     "field": "backup_id",
@@ -1331,17 +1331,17 @@
                 {
                     "field": "env_secrets",
                     "type": "object",
-                    "required": false,
-                    "default": "empty - no secret is passed",
+                    "required": true,
+                    "default": "none - required: {} names no secret (upgrade-config and backup-add write {})",
                     "range_text": "name -> secret ref",
                     "constraint": {
                         "kind": "object",
-                        "nullable": true,
+                        "nullable": false,
                         "free_form": true
                     },
                     "measured_against": "not a time value",
                     "purpose": "Values passed to the script through the environment that must not be written down, resolved from the encrypted store at run time.",
-                    "rule": "BACKUP_ENCRYPTION_PASSWORD belongs here and never in a job's env, which is plain config read back through Telegram"
+                    "rule": "BACKUP_ENCRYPTION_PASSWORD belongs here and never in a job's env, which is plain config read back through Telegram. Stated on every backup entry since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name; a job may name its own, which replaces the entry's"
                 },
                 {
                     "field": "offload_enabled",
@@ -1714,16 +1714,31 @@
                 {
                     "field": "active",
                     "type": "boolean",
-                    "required": false,
-                    "default": "true",
+                    "required": true,
+                    "default": "none - required (upgrade-config and backup-add write true)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether this registration is scheduled at all.",
-                    "rule": "false stops every job inside it whatever their own flags say. It is also how an entry is held on a master that must not run it: deploy gives the master a shared key, so a master saying false switches it off on the worker - 'master keeps ... STOPS A JOB THAT IS ACTIVE ON THE WORKER' is the line that says so"
+                    "rule": "false stops every job inside it whatever their own flags say. It is also how an entry is held on a master that must not run it: deploy gives the master a shared key, so a master saying false switches it off on the worker - 'master keeps ... STOPS A JOB THAT IS ACTIVE ON THE WORKER' is the line that says so. Stated on every backup entry since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
+                },
+                {
+                    "field": "server_metadata",
+                    "type": "object",
+                    "required": false,
+                    "default": "none on a SQL Server entry - enabled stated (upgrade-config and backup-add write {\"enabled\": false}); absent on any other engine, where it cannot apply",
+                    "range_text": "{enabled, artifacts, note}",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether a successful backup also exports the instance's server-level state - logins with their SIDs, roles, Agent jobs - beside it (SQL Server only), for a restore to replay.",
+                    "rule": "A job may state its own, which replaces the entry's. Required (enabled stated) on every SQL Server entry since 0.39.0 (1.366): a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "note",
@@ -1742,17 +1757,18 @@
                 {
                     "field": "scrub_files_per_run",
                     "type": "integer",
-                    "required": false,
-                    "default": "20",
+                    "required": true,
+                    "default": "none - required (upgrade-config and backup-add write 20; 0 switches the scrub off)",
                     "range_text": "0 to 1000",
                     "constraint": {
                         "kind": "integer",
-                        "nullable": true,
+                        "nullable": false,
                         "min": 0,
                         "max": 1000
                     },
                     "measured_against": "files",
-                    "purpose": "How many of the entry's older files each backup run re-hashes where they lie, checked longest ago first (0.35.0, 1.218): ransomware encrypts last week's backups, not tonight's. A file changed or gone makes the run's alert CRITICAL and names it; the backup itself stands. 0 is off."
+                    "purpose": "How many of the entry's older files each backup run re-hashes where they lie, checked longest ago first (0.35.0, 1.218): ransomware encrypts last week's backups, not tonight's. A file changed or gone makes the run's alert CRITICAL and names it; the backup itself stands. 0 is off.",
+                    "rule": "Stated on every backup entry since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 }
             ]
         },
@@ -1773,7 +1789,7 @@
             ],
             "legacy_fields": {},
             "field_count": 10,
-            "required_field_count": 3,
+            "required_field_count": 7,
             "fields": [
                 {
                     "field": "job",
@@ -1835,37 +1851,38 @@
                 {
                     "field": "env",
                     "type": "object",
-                    "required": false,
-                    "default": "empty - the script's own defaults apply",
+                    "required": true,
+                    "default": "none - required: {} tells the script nothing more (upgrade-config and backup-add write {})",
                     "range_text": "name -> value, all strings",
                     "constraint": {
                         "kind": "object",
-                        "nullable": true,
+                        "nullable": false,
                         "free_form": true
                     },
                     "measured_against": "not a time value",
                     "purpose": "What the script is told: the level, which databases, which container, which port or SID.",
-                    "rule": "BACKUP_LEVEL states the level and is the JOB's decision, never the script's - a weekday literal inside a script reads the container HOST's clock while its window is read on the node's, which cost five nights on 2026-09-19. DOCKER_CONTAINER is optional since 0.21.0: unset means the engine is on the host. PG_PORT, ORACLE_SID, ORACLE_OS_USER and RMAN_CONFIGURE are the rest, all defaulting to today's behaviour. Nothing secret: use the entry's env_secrets"
+                    "rule": "BACKUP_LEVEL states the level and is the JOB's decision, never the script's - a weekday literal inside a script reads the container HOST's clock while its window is read on the node's, which cost five nights on 2026-09-19. DOCKER_CONTAINER is optional since 0.21.0: unset means the engine is on the host. PG_PORT, ORACLE_SID, ORACLE_OS_USER and RMAN_CONFIGURE are the rest, all defaulting to today's behaviour. Nothing secret: use the entry's env_secrets. Stated on every backup job since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "time_window",
                     "type": "time_window",
-                    "required": false,
-                    "default": "{}",
+                    "required": true,
+                    "default": "none - required, with repeat_interval, retry_interval and timeout stated inside (upgrade-config writes what the record ran on: 300, the repeat interval or else 60, and 0 - no limit, never reaped)",
                     "range_text": "see the time_window entry",
                     "constraint": {
                         "kind": "object",
-                        "checked_by": "time_window"
+                        "checked_by": "time_window",
+                        "nullable": false
                     },
                     "measured_against": "its own fields",
                     "purpose": "When this job runs: the hours, the interval, and since 0.21.0 the days.",
-                    "rule": "weekdays gates due-ness without granting it, so repeat_interval must stay well under a day on a weekday-gated job or the due moment walks out of the window and skips whole cycles. Measured: a full job at repeat_interval 72000 against a four-hour window drifts through it"
+                    "rule": "weekdays gates due-ness without granting it, so repeat_interval must stay well under a day on a weekday-gated job or the due moment walks out of the window and skips whole cycles. Measured: a full job at repeat_interval 72000 against a four-hour window drifts through it. Stated on every backup job since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name; the ten bounds and weekdays stay optional - one left out is no restriction on that dimension, the field's own meaning"
                 },
                 {
                     "field": "cleanup_retention",
                     "type": "integer",
                     "required": false,
-                    "default": "0 - no age gate",
+                    "default": "none - stated once, on the entry (for the folder all its jobs write) or on the job; a job that finds neither is refused when the file is read",
                     "range_text": "seconds, >= 0; see the cleanup_retention entry",
                     "constraint": {
                         "kind": "integer",
@@ -1880,30 +1897,31 @@
                 {
                     "field": "notify",
                     "type": "notify",
-                    "required": false,
-                    "default": "{}",
+                    "required": true,
+                    "default": "none - required: both rules, each with enabled and telegram_chat (upgrade-config writes what the record ran on - both on, routed by the event's severity, or a job's entry's rule)",
                     "range_text": "see the notify entry",
                     "constraint": {
                         "kind": "object",
-                        "checked_by": "notify"
+                        "checked_by": "notify",
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which chat hears about this job, per level.",
-                    "rule": "Parsed once in dbabrain/lib/notify.py; a per-app copy is a bug"
+                    "rule": "Parsed once in dbabrain/lib/notify.py; a per-app copy is a bug. Stated on every backup job since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name; the entry's own notify is only what a job that states none would inherit; chat_id stays optional"
                 },
                 {
                     "field": "active",
                     "type": "boolean",
-                    "required": false,
-                    "default": "true",
+                    "required": true,
+                    "default": "none - required (upgrade-config and backup-add write true)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether this one job is scheduled.",
-                    "rule": "Independent of the entry's own active and ANDed with it: turning one level off leaves its siblings running"
+                    "rule": "Independent of the entry's own active and ANDed with it: turning one level off leaves its siblings running. Stated on every backup job since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "note",
@@ -1939,8 +1957,8 @@
             "legacy_fields": {
                 "databases": "database_mappings"
             },
-            "field_count": 26,
-            "required_field_count": 4,
+            "field_count": 34,
+            "required_field_count": 16,
             "fields": [
                 {
                     "field": "restore_id",
@@ -2018,140 +2036,142 @@
                     "field": "database_mappings",
                     "type": "array",
                     "required": false,
-                    "default": "empty - with restore_all_databases: true, every database on the share; a script-driven entry restores its instance",
+                    "default": "none - a SQL Server entry states this or restore_all_databases: true (upgrade-config moves a script-driven entry's env.MSSQL_DATABASES here); a PostgreSQL or Oracle entry restores its instance and states neither",
                     "range_text": "mappings {source_database, target_database}",
                     "constraint": {
                         "kind": "array",
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Which databases this drill restores, and under what names - one {source_database, target_database} mapping each. Named for what it holds: a restore REQUEST's `databases` is a list of names.",
-                    "rule": "A physical restore carries the SOURCE's logins with it, so the target answers to the source's password afterwards and its own stored credential goes stale"
+                    "purpose": "Which databases this restore takes, and the name each is restored AS - one {source_database, target_database} mapping each. The same name twice is the plain restore; another target_database restores it under that name, beside whatever the target holds (0.39.0: read on a script-driven SQL Server entry too, where the list used to be env.MSSQL_DATABASES and, with none named, whatever FULL the folder held). Named for what it holds: a restore REQUEST's `databases` is a list of names.",
+                    "rule": "A SQL Server entry that states neither this nor restore_all_databases is refused inside its own run (R50). Two databases may not land under one name; naming the list in env.MSSQL_DATABASES as well is refused. The name it lands under is the name overwrite_existing is asked about. A physical restore carries the SOURCE's logins with it, so the target answers to the source's password afterwards and its own stored credential goes stale"
                 },
                 {
                     "field": "server_metadata",
                     "type": "object",
                     "required": false,
-                    "default": "empty",
-                    "range_text": "free-form facts about the target",
+                    "default": "none on a SQL Server entry - enabled stated (upgrade-config writes {\"enabled\": false}); absent on any other engine, where it cannot apply",
+                    "range_text": "{enabled, artifacts, phases, note}",
                     "constraint": {
                         "kind": "object",
                         "nullable": true,
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What a report needs to say about the machine without connecting to it.",
-                    "rule": "Descriptive only: nothing schedules or connects from this"
+                    "purpose": "Whether the source instance's server-level metadata - logins with their SIDs, roles, Agent jobs, linked servers - is replayed around the restore (SQL Server only), and which of it.",
+                    "rule": "Required on every SQL Server entry (enabled stated) since 0.39.0 (1.366): it decides what such a run does, so a record that leaves it out is refused inside its own run, by name; upgrade-config writes the value it ran on"
                 },
                 {
                     "field": "time_window",
                     "type": "time_window",
-                    "required": false,
-                    "default": "{}",
+                    "required": true,
+                    "default": "none - required, with repeat_interval, retry_interval and timeout stated inside (upgrade-config writes what the record ran on: 300, the repeat interval or else 60, and 0 - no limit, never reaped)",
                     "range_text": "see the time_window entry",
                     "constraint": {
                         "kind": "object",
-                        "checked_by": "time_window"
+                        "checked_by": "time_window",
+                        "nullable": false
                     },
                     "measured_against": "its own fields",
                     "purpose": "When this drill runs.",
-                    "rule": "DIRECTLY on the entry, which is the difference from a backup_entry - there the window sits on each job. Reading one shape and assuming the other is the mistake these two descriptions exist to prevent"
+                    "rule": "DIRECTLY on the entry, which is the difference from a backup_entry - there the window sits on each job. Reading one shape and assuming the other is the mistake these two descriptions exist to prevent. Stated on every restore entry since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name; the ten bounds and weekdays stay optional - one left out is no restriction on that dimension, the field's own meaning"
                 },
                 {
                     "field": "cleanup_retention",
                     "type": "integer",
-                    "required": false,
-                    "default": "0 - no age gate",
+                    "required": true,
+                    "default": "none - required: an entry that states none is refused when the file is read (691200, eight days, is the usual value)",
                     "range_text": "seconds, >= 0; see the cleanup_retention entry",
                     "constraint": {
                         "kind": "integer",
-                        "nullable": true,
+                        "nullable": false,
                         "min": 0,
                         "checked_by": "cleanup_retention"
                     },
                     "measured_against": "seconds",
                     "purpose": "How long the copied-in pieces are kept on the target.",
-                    "rule": "Seconds. A drill that keeps every copy fills the target host, which killed a daemon 26 minutes into a soak by leaving 42 MB free"
+                    "rule": "Seconds. A drill that keeps every copy fills the target host, which killed a daemon 26 minutes into a soak by leaving 42 MB free. 0 is a real setting and means no age gate - every proven staged file is a candidate - not keep everything. Only a marked staging folder is cleaned, and only a file a proven copy recorded"
                 },
                 {
                     "field": "notify",
                     "type": "notify",
-                    "required": false,
-                    "default": "{}",
+                    "required": true,
+                    "default": "none - required: both rules, each with enabled and telegram_chat (upgrade-config writes what the record ran on - both on, routed by the event's severity, or a job's entry's rule)",
                     "range_text": "see the notify entry",
                     "constraint": {
                         "kind": "object",
-                        "checked_by": "notify"
+                        "checked_by": "notify",
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which chat hears the drill's verdict.",
-                    "rule": "Parsed once in dbabrain/lib/notify.py"
+                    "rule": "Parsed once in dbabrain/lib/notify.py. Stated on every restore entry since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name; chat_id stays optional - empty sends to telegram_chat's group"
                 },
                 {
                     "field": "active",
                     "type": "boolean",
-                    "required": false,
-                    "default": "true",
+                    "required": true,
+                    "default": "none - required (upgrade-config and restore-add write true)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether this drill is scheduled.",
-                    "rule": "A drill writes to a real instance, so false is the safe state on any node not meant to run it"
+                    "rule": "A drill writes to a real instance, so false is the safe state on any node not meant to run it. Stated on every restore entry since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "checkdb",
                     "type": "boolean",
-                    "required": false,
-                    "default": "true",
+                    "required": true,
+                    "default": "none - required (upgrade-config and restore-add write true)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether DBCC CHECKDB runs on each database after it is restored and recovered. A failed check fails that database (reported as restored, check failed); false skips the check and says so.",
-                    "rule": "Off only where the check cannot run or is not wanted - e.g. a target that cannot create the check's snapshot (Msg 1823 / 7928)"
+                    "rule": "Off only where the check cannot run or is not wanted - e.g. a target that cannot create the check's snapshot (Msg 1823 / 7928). Stated on every entry since 0.39.0 (1.366): it decides what a run does, so an entry that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "checkdb_timeout_seconds",
                     "type": "integer",
-                    "required": false,
-                    "default": "3600",
+                    "required": true,
+                    "default": "none - required (upgrade-config and restore-add write 3600)",
                     "range_text": "60 to 86400",
                     "constraint": {
                         "kind": "integer",
-                        "nullable": true,
+                        "nullable": false,
                         "min": 60,
                         "max": 86400
                     },
                     "measured_against": "seconds",
                     "purpose": "How long the consistency check after the restore may run on the target (0.37.0): pg_amcheck is stopped on the host at this limit and the drill is reported not checked; RMAN VALIDATE waits as long. SQL Server's DBCC CHECKDB has no limit.",
-                    "rule": "The store's 60 GB copy took over an hour on one job and 47 minutes on four; size it from a measured run, with room"
+                    "rule": "The store's 60 GB copy took over an hour on one job and 47 minutes on four; size it from a measured run, with room. Stated on every restore entry since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "checkdb_jobs",
                     "type": "integer",
-                    "required": false,
-                    "default": "1",
+                    "required": true,
+                    "default": "none - required (upgrade-config and restore-add write 1)",
                     "range_text": "1 to 16",
                     "constraint": {
                         "kind": "integer",
-                        "nullable": true,
+                        "nullable": false,
                         "min": 1,
                         "max": 16
                     },
                     "measured_against": "not a time value",
                     "purpose": "Connections pg_amcheck checks on at once (--jobs, PostgreSQL only; 0.37.0).",
-                    "rule": "Up to the target's CPU count: the check is disk-bound, more jobs only help while the disk keeps up"
+                    "rule": "Up to the target's CPU count: the check is disk-bound, more jobs only help while the disk keeps up. Stated on every restore entry since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "tier",
                     "type": "string",
-                    "required": false,
-                    "default": "absent: the drill has no tier",
+                    "required": true,
+                    "default": "none - required: null states no tier (upgrade-config and restore-add write null)",
                     "range_text": "daily | weekly | monthly",
                     "constraint": {
                         "kind": "string",
@@ -2165,35 +2185,36 @@
                         "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "How often this drill must succeed (0.35.0, 1.248). Recorded on each run; the reports call the drill OVERDUE past its tier's deadline - 26 hours, 7.5 days, 32 days. The schedule is the time_window's: monthly is from_day 1 to_day 1, the first Sunday from_day 1 to_day 7 with weekdays [7]."
+                    "purpose": "How often this drill must succeed (0.35.0, 1.248). Recorded on each run; the reports call the drill OVERDUE past its tier's deadline - 26 hours, 7.5 days, 32 days. The schedule is the time_window's: monthly is from_day 1 to_day 1, the first Sunday from_day 1 to_day 7 with weekdays [7].",
+                    "rule": "Stated on every restore entry since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "overwrite_existing",
                     "type": "boolean",
-                    "required": false,
-                    "default": "false",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes false)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
                         "nullable": false
                     },
                     "measured_against": "not a time value",
-                    "purpose": "SQL Server: allow a full restore over a database that is ONLINE on the target. Without it such a restore is refused before anything runs - REPLACE overwrites the database, users and all (0.26.0, owner decision G2.10). A drill that runs again over its own last restore states true.",
-                    "rule": "Only ONLINE is refused; a database RESTORING from an earlier run, or absent, is restored as before"
+                    "purpose": "Whether this restore may replace what its target already holds - stated on every entry, false the safe word (0.39.0: required; the operator, 2026-11-13: off unless set). false: SQL Server - a database of the name it lands under, in ANY state, stops the restore before anything is restored, and the RESTORE carries no REPLACE; PostgreSQL - a data directory holding a cluster with a database or relation of its own stops it; Oracle - a database that holds a segment owned by a schema of its own, or that is not open to say, stops it. true: it is replaced - never on a production target, never while a lockdown is on. An entry stating none is refused inside its own run; upgrade-config writes false.",
+                    "rule": "What cannot be read is refused, never assumed empty. A database left RESTORING by an unfinished run is a database that exists: drop it, or state true (a drill run again over its own last restore states true). Until 0.39.0 only a SQL Server database ONLINE was refused, and PostgreSQL and Oracle never read the field"
                 },
                 {
                     "field": "allow_production_target",
                     "type": "boolean",
-                    "required": false,
-                    "default": "false",
+                    "required": true,
+                    "default": "none - required (upgrade-config and restore-add write false)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether this entry may restore into an instance db_instances.json calls production (environment prod / production). Without it such a target is refused before anything is copied or restored (1.223).",
-                    "rule": "Only on an entry whose purpose is to restore onto production - a real recovery, never a drill"
+                    "rule": "Only on an entry whose purpose is to restore onto production - a real recovery, never a drill. Stated on every entry since 0.39.0 (1.366): it decides what a run does, so an entry that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "restore_all_databases",
@@ -2206,7 +2227,7 @@
                         "nullable": false
                     },
                     "measured_against": "not a time value",
-                    "purpose": "SQL Server, an SMB entry: restore EVERY database whose FULL backup is on the share, each under its backup's own name, and open each one after the restore. Stated, never implied: an entry states either its database_mappings or this (0.27.0, 1.101) - an empty list restored whatever it found, and the check after it had no name to ask about.",
+                    "purpose": "SQL Server: restore EVERY database whose FULL backup is on the share - or, a script-driven entry, in the staged folder - each under its backup's own name, and open each one after the restore. Stated, never implied: an entry states either its database_mappings or this (0.27.0, 1.101; a script-driven entry since 0.39.0) - an empty list restored whatever it found, and the check after it had no name to ask about.",
                     "rule": "Not with database_mappings, and not with restore_database_name (it would restore every database under one name). PostgreSQL and Oracle restore the instance and do not take it."
                 },
                 {
@@ -2227,7 +2248,7 @@
                     "field": "copy_file_patterns",
                     "type": "array",
                     "required": false,
-                    "default": "*.bak, *.trn",
+                    "default": "none on a share-driven entry - stated on it or on the backup_restore block (upgrade-config writes *.bak, *.trn); not read by a script-driven one",
                     "range_text": "file patterns",
                     "constraint": {
                         "kind": "array",
@@ -2236,13 +2257,13 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Which files this entry's SQL Server restore copies; overrides the section's copy_file_patterns.",
-                    "rule": "An entry may set it for itself: the parser lets any key on the entry override the backup_restore block's (config.py _merge_source_config), so a section default an entry can override is an entry field too"
+                    "rule": "An entry may set it for itself: the parser lets any key on the entry override the backup_restore block's (config.py _merge_source_config), so a section default an entry can override is an entry field too. Required on a share-driven entry, or on the block above it since 0.39.0 (1.366): it decides what such a run does, so a record that leaves it out is refused inside its own run, by name; upgrade-config writes the value it ran on"
                 },
                 {
                     "field": "copy_recent_hours",
                     "type": "integer",
                     "required": false,
-                    "default": "24",
+                    "default": "none on a share-driven entry (on it or its block) or a script-driven one whose copy_selection is window - upgrade-config writes 24",
                     "range_text": "hours, 1 and up",
                     "constraint": {
                         "kind": "integer",
@@ -2251,18 +2272,18 @@
                     },
                     "measured_against": "hours before the run",
                     "purpose": "With copy_selection window, how far back every file is copied beside the chain; the fallback window of a share copy for a database whose chain cannot be settled; and how old a staged FULL the share restore step still takes. Overrides the section's copy_recent_hours.",
-                    "rule": "Long enough to reach the newest FULL: a source whose FULL is weekly needs a week and a day (192) - 24 copied only LOGs and a DIFF of 100.250 on 2026-09-29, and there was no chain to restore"
+                    "rule": "Long enough to reach the newest FULL: a source whose FULL is weekly needs a week and a day (192) - 24 copied only LOGs and a DIFF of 100.250 on 2026-09-29, and there was no chain to restore. Required on a share-driven entry (or its block) and on a script-driven one that copies a window since 0.39.0 (1.366): it decides what such a run does, so a record that leaves it out is refused inside its own run, by name; upgrade-config writes the value it ran on"
                 },
                 {
                     "field": "copy_selection",
                     "type": "string",
-                    "required": false,
-                    "default": "chain",
+                    "required": true,
+                    "default": "none - required: stated on the entry, or on the restore block for its share-driven entries (upgrade-config and restore-add write chain on the entry)",
                     "range_text": "chain | window",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true,
+                        "nullable": false,
+                        "allow_empty": false,
                         "enum": [
                             "chain",
                             "window"
@@ -2271,22 +2292,22 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "What this entry's restore copies from its source - for every engine since 2026-10-03, and so what its space check counts. chain: the backups the restore applies (SQL Server each database's newest FULL at or before the moment, its newest DIFF and the LOGs after, with _cert/; PostgreSQL the newest _FULL, its _INCRs and wal/; Oracle the pieces RMAN names). window: the chain AND every other file the source wrote in copy_recent_hours - every restore point of the window, never fewer backups than chain. A point in time copies everything either way. A database or layout whose chain cannot be read is copied whole (to another machine) or by its window (from a share).",
-                    "rule": "chain unless the target must hold the whole range - every restore point of the window, not only the latest chain - and has the room: on 2026-10-01 the window of the 100.250 drill was 527.9 GiB, its chain 56.8 GiB"
+                    "rule": "chain unless the target must hold the whole range - every restore point of the window, not only the latest chain - and has the room: on 2026-10-01 the window of the 100.250 drill was 527.9 GiB, its chain 56.8 GiB. Stated on every entry since 0.39.0 (1.366): it decides what a run does, so an entry that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "space_check",
                     "type": "object",
-                    "required": false,
-                    "default": "on, factor 2.0, refuse when unmeasured",
+                    "required": true,
+                    "default": "none - required (upgrade-config and restore-add write enabled true, factor 2.0, on_unknown refuse)",
                     "range_text": "enabled / factor / on_unknown",
                     "constraint": {
                         "kind": "object",
-                        "nullable": true,
+                        "nullable": false,
                         "checked_by": "restore_space_check"
                     },
                     "measured_against": "not a time value",
                     "purpose": "Whether the staged copy must fit the target's free space before anything is copied, and with how much to spare.",
-                    "rule": "Absent means ON: a check that has to be switched on protects only the entries somebody remembered"
+                    "rule": "Absent means ON: a check that has to be switched on protects only the entries somebody remembered. Stated on every entry since 0.39.0 (1.366): it decides what a run does, so an entry that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "integrity",
@@ -2342,6 +2363,137 @@
                     "measured_against": "not a time value",
                     "rule": "mandatory (0.34.0): an entry without it is a check-objects violation, and upgrade-config writes the value that keeps the entry's flow (rules R50)",
                     "purpose": "Where the restore reads its backups: server - the source's own backup folder, as before; repository - only the copies an offload proved, each held to the checksum and size its offload proved (the script-driven PostgreSQL and SQL Server restores onto another server; a share-driven SQL Server entry, Oracle and an in-place entry are refused by name)."
+                },
+                {
+                    "field": "env",
+                    "type": "object",
+                    "required": false,
+                    "default": "none on a script-driven entry - {} states nothing more (upgrade-config writes {}); not read by a share-driven one",
+                    "range_text": "name -> value, all strings",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": false,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What a script-driven restore's script is told beyond what the tool hands it: a port, a user, a SID.",
+                    "rule": "Nothing secret - that is env_secrets. Required on every script-driven entry since 0.39.0 (1.366): a record that leaves it out is refused inside its own run, by name"
+                },
+                {
+                    "field": "env_secrets",
+                    "type": "object",
+                    "required": false,
+                    "default": "none on a script-driven entry - {} names no secret (upgrade-config writes {}); not read by a share-driven one",
+                    "range_text": "name -> secret ref",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": false,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The secrets a script-driven restore's script reads from its environment - a backup's passphrase - resolved from the encrypted store at run time.",
+                    "rule": "Required on every script-driven entry since 0.39.0 (1.366): a record that leaves it out is refused inside its own run, by name"
+                },
+                {
+                    "field": "target_container",
+                    "type": "string",
+                    "required": false,
+                    "default": "none on a script-driven entry - \"\" states the engine on the target host itself (upgrade-config writes \"\"); not read by a share-driven one",
+                    "range_text": "a container name, or \"\"",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The container a script-driven restore goes into on its target, or none: the engine installed on the host.",
+                    "rule": "Never the source's container. Required on every script-driven entry since 0.39.0 (1.366); one restoring onto its own source machine has always had to name it; a record that leaves it out is refused inside its own run, by name"
+                },
+                {
+                    "field": "target_visible_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none on a script-driven entry - on one restoring onto another machine upgrade-config writes its target_backup_dir, the path it was read as",
+                    "range_text": "a path as the target's database sees it",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The staged backup folder as the target's database sees it - the same folder as target_backup_dir, reached through a mount when the target is a container.",
+                    "rule": "Required on a script-driven entry restoring in place (since 0.26.0) and on one restoring onto another machine (0.39.0, 1.366) - there it was read as target_backup_dir when left out; a record that leaves it out is refused inside its own run, by name"
+                },
+                {
+                    "field": "copy_mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "none on a script-driven entry restoring onto another machine (upgrade-config writes auto)",
+                    "range_text": "auto | cat | sftp",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false,
+                        "enum": [
+                            "auto",
+                            "cat",
+                            "sftp"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How the backup's files cross to a target on another machine - copy-files' transfer: cat, sftp, or auto (cat).",
+                    "rule": "A pinned way that cannot be used is an error, never a reason to try the other. Required on a script-driven entry restoring onto another machine since 0.39.0 (1.366); a record that leaves it out is refused inside its own run, by name"
+                },
+                {
+                    "field": "staging_marker",
+                    "type": "string",
+                    "required": false,
+                    "default": "none on a script-driven entry with a target_backup_dir - upgrade-config writes the name the folder carries since before 0.29.0 (.dbops-staging); restore-add writes .dbabrain-staging",
+                    "range_text": "one file name beginning with a dot",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The file that marks target_backup_dir as this tool's staging folder - the copy and the prune act only where it is.",
+                    "rule": "A folder emptied by retention down to its marker is known by that file alone, so the name never changes under it. Required on a script-driven entry that stages since 0.39.0 (1.366); a record that leaves it out is refused inside its own run, by name"
+                },
+                {
+                    "field": "full_backup_subdir",
+                    "type": "string",
+                    "required": false,
+                    "default": "none on a share-driven entry - stated on it or on the backup_restore block (upgrade-config writes FULL); not read by a script-driven one",
+                    "range_text": "a folder name",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The folder of the share a share-driven restore finds its FULL backups in.",
+                    "rule": "Required on a share-driven entry since 0.39.0 (1.366): a record that leaves it out is refused inside its own run, by name"
+                },
+                {
+                    "field": "execution_mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "none on a share-driven entry - stated on it or on the backup_restore block (upgrade-config writes sync); not read by a script-driven one",
+                    "range_text": "sync | unsync",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false,
+                        "enum": [
+                            "sync",
+                            "unsync"
+                        ],
+                        "case_insensitive": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether a share-driven restore's steps run one after another (sync) or apart (unsync).",
+                    "rule": "Required on a share-driven entry since 0.39.0 (1.366): a record that leaves it out is refused inside its own run, by name"
                 }
             ]
         },
@@ -2361,7 +2513,7 @@
             ],
             "legacy_fields": {},
             "field_count": 6,
-            "required_field_count": 1,
+            "required_field_count": 6,
             "fields": [
                 {
                     "field": "copy_max_retry",
@@ -2382,42 +2534,42 @@
                 {
                     "field": "copy_retry_interval_seconds",
                     "type": "integer",
-                    "required": false,
-                    "default": "30",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes 30, what a block without it ran on)",
                     "range_text": "0-3600, in SECONDS",
                     "constraint": {
                         "kind": "integer",
-                        "nullable": true,
+                        "nullable": false,
                         "min": 0,
                         "max": 3600
                     },
                     "measured_against": "seconds between the end of one copy attempt and the start of the next",
-                    "rule": "not waited after the last attempt",
+                    "rule": "not waited after the last attempt. Stated on every integrity block since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name",
                     "purpose": "The pause before a copy is tried again - room for a link that dropped to come back."
                 },
                 {
                     "field": "verify_source_before_copy",
                     "type": "boolean",
-                    "required": false,
-                    "default": "true",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes true, what a block without it ran on)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
-                    "rule": "true: a source whose sha256 differs from what its backup recorded is not copied - source_mismatch, CRITICAL. That is a backup changed after it was written, which copying again cannot fix",
+                    "rule": "true: a source whose sha256 differs from what its backup recorded is not copied - source_mismatch, CRITICAL. That is a backup changed after it was written, which copying again cannot fix. Stated on every integrity block since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name",
                     "purpose": "Hash the source on its own server before the copy and hold it to the catalog."
                 },
                 {
                     "field": "uncatalogued",
                     "type": "string",
-                    "required": false,
-                    "default": "compare_copy",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes compare_copy, what a block without it ran on)",
                     "range_text": "compare_copy | refuse",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true,
+                        "nullable": false,
                         "allow_empty": true,
                         "enum": [
                             "compare_copy",
@@ -2426,32 +2578,32 @@
                         "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "rule": "compare_copy: a file the catalog has no row for is still hashed before and after the copy, with nothing to hold the source to; refuse: it is not used (uncatalogued_refused); restore-add writes refuse for a new entry (0.35.0), upgrade-config keeps compare_copy for an existing one",
+                    "rule": "compare_copy: a file the catalog has no row for is still hashed before and after the copy, with nothing to hold the source to; refuse: it is not used (uncatalogued_refused); restore-add writes refuse for a new entry (0.35.0), upgrade-config keeps compare_copy for an existing one. Stated on every integrity block since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name",
                     "purpose": "What a file no dbabrain backup recorded is - every backup taken before 0.34.0, or by another tool."
                 },
                 {
                     "field": "engine_verify_before_restore",
                     "type": "boolean",
-                    "required": false,
-                    "default": "false",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes false, what a block without it ran on)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
-                    "rule": "the engine reads the staged copy too - RESTORE VERIFYONLY WITH CHECKSUM, pg_verifybackup, RMAN RESTORE VALIDATE - after every checksum matched and before the restore",
+                    "rule": "the engine reads the staged copy too - RESTORE VERIFYONLY WITH CHECKSUM, pg_verifybackup, RMAN RESTORE VALIDATE - after every checksum matched and before the restore. Stated on every integrity block since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name",
                     "purpose": "A second, engine-level proof of the staged files; it costs a full read of each."
                 },
                 {
                     "field": "algorithm",
                     "type": "string",
-                    "required": false,
-                    "default": "sha256",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes sha256, what a block without it ran on)",
                     "range_text": "sha256",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true,
+                        "nullable": false,
                         "allow_empty": true,
                         "enum": [
                             "sha256"
@@ -2459,7 +2611,7 @@
                         "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "rule": "the only one; stated so another is a choice, not a surprise",
+                    "rule": "the only one; stated so another is a choice, not a surprise. Stated on every integrity block since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name",
                     "purpose": "The checksum every hash of this entry's files is taken with."
                 }
             ]
@@ -3583,7 +3735,7 @@
                     "note": "the whole record, one per command"
                 }
             ],
-            "field_count": 14,
+            "field_count": 15,
             "required_field_count": 3,
             "fields": [
                 {
@@ -3614,6 +3766,21 @@
                     "measured_against": "not a time value",
                     "purpose": "What a person types, without the slash.",
                     "rule": "Unique across the file"
+                },
+                {
+                    "field": "menu_description",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - the command is left out of the menu, and set-menu names it",
+                    "range_text": "1-256 characters",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The command's line in the bot's menu - what Telegram shows beside it under '/'.",
+                    "rule": "0.39.0: the menu's only source. telegram set-menu sets the menu to these lines, in sort_order, for the commands this node may run (command_type 0 and up); the md document's block describes the shipped ones and is held to them by a test. upgrade-config (menu-descriptions) writes the shipped line into a command that states none"
                 },
                 {
                     "field": "command_type",
@@ -4437,15 +4604,15 @@
                     "type": "object",
                     "required": false,
                     "default": "none",
-                    "range_text": "{severity, thresholds, suppress, collapse, severity_policy, collect_only, render_policy, condition_grouping, top_n, sparse_items, chart_summary_only, cost, minimum_version, role, enabled, technical_error, backup_health, edition_rule}",
+                    "range_text": "{severity, thresholds, suppress, collapse, severity_policy, collect_only, render_policy, condition_grouping, top_n, sparse_items, chart_summary_only, cost, minimum_version, role, enabled, technical_error, backup_health, edition_rule, label, action, action_by_platform, action_by_db_type}",
                     "constraint": {
                         "kind": "object",
                         "nullable": true,
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "How the reports grade and show this metric.",
-                    "rule": "Free-form in 0.22.0: eighteen keys across the estate, and describing them wrong would be worse than listing them. Its full description is its own item"
+                    "purpose": "How the reports grade and show this metric - and, since 0.39.0, what they call it and tell the reader to do about it: `label` is the name a page prints for the metric (the code in words when absent); `action` is the What to do sentence that is right wherever the metric is collected; `action_by_platform` {windows, linux} and `action_by_db_type` {sqlserver, postgresql, oracle, mysql} hold the words that differ by operating system or engine. The server page and the fleet page read them for the server in front of them (the engine's sentence, then the operating system's, then `action`, then the area's note).",
+                    "rule": "Free-form in 0.22.0: eighteen keys across the estate, and describing them wrong would be worse than listing them. Its full description is its own item. A sentence is written only for a platform or engine a variant of the metric collects on, and never names the other platform's tools; the sentences were a table in the report's code until 0.39.0, one per metric code for every platform"
                 },
                 {
                     "field": "retired_reason",
@@ -5707,14 +5874,15 @@
                     "field": "certificate_api_verify_tls",
                     "type": "boolean",
                     "required": false,
-                    "default": "false",
+                    "default": "none while certificate_api_url is stated (upgrade-config writes true)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
                         "nullable": false
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Whether the certificate API's TLS certificate is verified."
+                    "purpose": "Whether the certificate API's TLS certificate is verified.",
+                    "rule": "Required while certificate_api_url is stated since 0.39.0 (1.366): it decides what such a run does, so a record that leaves it out is refused inside its own run, by name; upgrade-config writes the value it ran on"
                 },
                 {
                     "field": "backup_certificate",
@@ -5759,17 +5927,17 @@
                 "id": "target_server_id"
             },
             "field_count": 20,
-            "required_field_count": 1,
+            "required_field_count": 8,
             "fields": [
                 {
                     "field": "vm_platform",
                     "type": "string",
-                    "required": false,
-                    "default": "windows",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes windows, what a target without it ran on)",
                     "range_text": "windows | linux",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true,
+                        "nullable": false,
                         "enum": [
                             "windows",
                             "linux"
@@ -5777,7 +5945,8 @@
                         "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The target machine's OS."
+                    "purpose": "The target machine's OS.",
+                    "rule": "Stated on every share-driven entry's target since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "credential_target",
@@ -5825,16 +5994,16 @@
                 {
                     "field": "sql_instance",
                     "type": "string",
-                    "required": false,
-                    "default": "localhost",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes localhost, what a target without it ran on)",
                     "range_text": "host[,port] or host\\instance, as the TARGET sees it",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true
+                        "nullable": false
                     },
                     "measured_against": "not a time value",
                     "purpose": "The SQL Server the databases are restored into.",
-                    "rule": "`localhost` means the target machine itself; the port decides WHICH instance on it"
+                    "rule": "`localhost` means the target machine itself; the port decides WHICH instance on it. Stated on every share-driven entry's target since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "sql_username",
@@ -5868,17 +6037,17 @@
                 {
                     "field": "sql_container",
                     "type": "string",
-                    "required": false,
-                    "default": "none - optional",
+                    "required": true,
+                    "default": "none - required: \"\" states the target host's own sqlcmd (upgrade-config writes \"\")",
                     "range_text": "text",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true,
+                        "nullable": false,
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
                     "purpose": "The container the target's SQL Server runs in: every sqlcmd of the restore runs inside it (docker exec), for a target host with no sqlcmd of its own.",
-                    "rule": "Its backup folder must be bound at the same path inside, so a staged path is the path RESTORE reads."
+                    "rule": "Its backup folder must be bound at the same path inside, so a staged path is the path RESTORE reads. Stated on every share-driven entry's target since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "sqlcmd_path",
@@ -5995,8 +6164,8 @@
                 {
                     "field": "sql_login_timeout_seconds",
                     "type": "integer",
-                    "required": false,
-                    "default": "60",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes 60, what a target without it ran on)",
                     "range_text": "seconds, 1 and up",
                     "constraint": {
                         "kind": "integer",
@@ -6004,13 +6173,14 @@
                         "min": 1
                     },
                     "measured_against": "seconds",
-                    "purpose": "How long to wait for the SQL login."
+                    "purpose": "How long to wait for the SQL login.",
+                    "rule": "Stated on every share-driven entry's target since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "sql_query_timeout_seconds",
                     "type": "integer",
-                    "required": false,
-                    "default": "0 - no limit",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes 0 - no limit, what a target without it ran on)",
                     "range_text": "seconds, 0 and up",
                     "constraint": {
                         "kind": "integer",
@@ -6018,13 +6188,14 @@
                         "min": 0
                     },
                     "measured_against": "seconds",
-                    "purpose": "How long one SQL statement may run."
+                    "purpose": "How long one SQL statement may run.",
+                    "rule": "Stated on every share-driven entry's target since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "remote_command_timeout_seconds",
                     "type": "integer",
-                    "required": false,
-                    "default": "60",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes 60, what a target without it ran on)",
                     "range_text": "seconds, 1 and up",
                     "constraint": {
                         "kind": "integer",
@@ -6032,13 +6203,14 @@
                         "min": 1
                     },
                     "measured_against": "seconds",
-                    "purpose": "How long one remote OS command may run."
+                    "purpose": "How long one remote OS command may run.",
+                    "rule": "Stated on every share-driven entry's target since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "restore_command_timeout_seconds",
                     "type": "integer",
-                    "required": false,
-                    "default": "0 - no limit",
+                    "required": true,
+                    "default": "none - required (upgrade-config writes 0 - no limit, what a target without it ran on)",
                     "range_text": "seconds, 0 and up",
                     "constraint": {
                         "kind": "integer",
@@ -6046,7 +6218,8 @@
                         "min": 0
                     },
                     "measured_against": "seconds",
-                    "purpose": "How long the RESTORE itself may run."
+                    "purpose": "How long the RESTORE itself may run.",
+                    "rule": "Stated on every share-driven entry's target since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 }
             ],
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported."
@@ -6138,8 +6311,8 @@
                 {
                     "field": "enabled",
                     "type": "boolean",
-                    "required": false,
-                    "default": "true",
+                    "required": true,
+                    "default": "none - required (upgrade-config and restore-add write true)",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
@@ -6147,7 +6320,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Measure before copying.",
-                    "rule": "Switching it off is allowed and has to be said: {\"enabled\": false}"
+                    "rule": "Switching it off is allowed and has to be said: {\"enabled\": false}. Stated on every restore entry's space_check since 0.39.0 (1.366, the operator: no fallback anywhere): it decides what a run does, so a record that leaves it out is refused inside its own run, by name"
                 },
                 {
                     "field": "factor",
@@ -6162,7 +6335,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Free space needed = bytes to copy x factor.",
-                    "rule": "2.0 for every engine since 0.26.0 (it was 1.5): the restored database usually lives on the filesystem the staged files are on; below 1 is refused - it asks for less room than the files themselves"
+                    "rule": "2.0 for every engine since 0.26.0 (it was 1.5): the restored database usually lives on the filesystem the staged files are on; below 1 is refused - it asks for less room than the files themselves. Required while enabled is true since 0.39.0 (1.366): it decides what such a run does, so a record that leaves it out is refused inside its own run, by name; upgrade-config writes the value it ran on"
                 },
                 {
                     "field": "on_unknown",
@@ -6181,7 +6354,7 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "What to do when a number could not be read.",
-                    "rule": "refuse: an unmeasured restore is the one that filled the disk on 2026-09-17"
+                    "rule": "refuse: an unmeasured restore is the one that filled the disk on 2026-09-17. Required while enabled is true since 0.39.0 (1.366): it decides what such a run does, so a record that leaves it out is refused inside its own run, by name; upgrade-config writes the value it ran on"
                 },
                 {
                     "field": "measure_restore",
@@ -6199,7 +6372,7 @@
                 }
             ],
             "field_count": 4,
-            "required_field_count": 0,
+            "required_field_count": 1,
             "whole_record_note": "whole_record: every key on the record is this entry's business, so a key it does not describe is reported as unknown. Keys starting with '_' are the estate's own comments and are never reported."
         },
         {
@@ -13984,7 +14157,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 28,
+            "field_count": 29,
             "required_field_count": 0,
             "fields": [
                 {
@@ -14369,6 +14542,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "PostgreSQL: the pieces were copied into the container."
+                },
+                {
+                    "field": "target_held",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "PostgreSQL, Oracle: what the target held before the step replaced it, in one sentence - read from the data directory / the open database (0.39.0)."
                 }
             ]
         },
@@ -14586,7 +14773,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "One row per database: database_name, state, recovery_model, ok, detail."
+                    "purpose": "One row per database: database_name, state, recovery_model, ok, detail - and, SQL Server, restored_to: what the target's own msdb recorded of its last restore (stop_at, last_backup_finished, last_backup_type, restored_at; the source's clock), absent for a database never restored there (0.39.0)."
                 },
                 {
                     "field": "checked",
@@ -15864,7 +16051,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "sudo chmod -R a+rX on the source first (a live archivelog job writes 0640). Default true."
+                    "purpose": "When something under source_dir is not readable by the login: sudo -n chmod -R a+rX on it first (a live archivelog job writes 0640). Never asks for a password - where sudo needs one it is refused at once and the listing names what stays unreadable (0.39.0: it was a bare sudo chmod on every copy, two PAM errors in the host's journal each time). Default true; a restore from the repository states false."
                 },
                 {
                     "field": "open_for_engine",
@@ -15974,14 +16161,14 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 12,
-            "required_field_count": 2,
+            "field_count": 14,
+            "required_field_count": 0,
             "fields": [
                 {
                     "field": "source",
                     "type": "object",
-                    "required": true,
-                    "default": "none - optional",
+                    "required": false,
+                    "default": "none - required unless incoming is given",
                     "range_text": "an object",
                     "constraint": {
                         "kind": "object",
@@ -15989,13 +16176,13 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The source host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing."
+                    "purpose": "The source host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing; platform: linux (also when absent) or windows - a Windows host reached over Windows OpenSSH: its folder a drive path, PowerShell for the free space, nothing made readable with sudo (0.39.0)."
                 },
                 {
                     "field": "source_dir",
                     "type": "string",
-                    "required": true,
-                    "default": "none - optional",
+                    "required": false,
+                    "default": "none - required unless incoming is given",
                     "range_text": "text",
                     "constraint": {
                         "kind": "string",
@@ -16017,7 +16204,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The target host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing.",
+                    "purpose": "The target host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing; platform: linux (also when absent) or windows - a Windows host reached over Windows OpenSSH: its folder a drive path, PowerShell for the free space, nothing made readable with sudo (0.39.0).",
                     "rule": "Not opened when plan_only is true."
                 },
                 {
@@ -16032,7 +16219,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The staging directory on the target host."
+                    "purpose": "The staging directory on the target host - on a windows login a drive path (C:/dbabrain_restore/<restore_id>, either separator); a drive path on any other login is refused."
                 },
                 {
                     "field": "chain",
@@ -16046,8 +16233,8 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Read the chain from the source: {db_type (postgresql | oracle | sqlserver), backup_dir (oracle: the path RMAN's catalog names), container (oracle: where RMAN runs), point_in_time (set: the whole directory)}.",
-                    "rule": "0.38.0: what backup-chain answered. Used when `include` is absent; the answer carries `include` and `narrowed`, and the caller states `include` from then on."
+                    "purpose": "Read the chain from the source: {db_type (postgresql | oracle | sqlserver), backup_dir (oracle: the path RMAN's catalog names), container (oracle: where RMAN runs), point_in_time (set: the chain that reaches the moment; oracle: the whole directory), databases (sqlserver: only these databases' chains - absent: every database of the folder; 0.39.0)}.",
+                    "rule": "0.38.0: what backup-chain answered. Used when `include` is absent; the answer carries `include` and `narrowed`, and the caller states `include` from then on. chain.databases names the databases a restore takes: one the folder does not hold is refused by name, and naming any for postgresql or oracle is refused - a physical backup holds a whole cluster / instance."
                 },
                 {
                     "field": "include",
@@ -16088,7 +16275,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "sudo chmod -R a+rX on the source first (a live archivelog job writes 0640). Default true."
+                    "purpose": "When something under source_dir is not readable by the login: sudo -n chmod -R a+rX on it first (a live archivelog job writes 0640). Never asks for a password - where sudo needs one it is refused at once and the listing names what stays unreadable (0.39.0: it was a bare sudo chmod on every copy, two PAM errors in the host's journal each time). Default true; a restore from the repository states false."
                 },
                 {
                     "field": "space_check",
@@ -16146,6 +16333,33 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "true: answer only the files the request selects (and the chain, when asked), read from the source; the target is not opened and nothing is prepared."
+                },
+                {
+                    "field": "incoming",
+                    "type": "array",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "a list of {path, size_bytes}",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "object"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Instead of a source (0.39.0): the files the caller already knows, relative to target_dir with their sizes - the target half alone: the folder made, marked and proven writable, the room for the files not there yet at that size. source, source_dir, chain, include, window_hours, replace and plan_only are then refused."
+                },
+                {
+                    "field": "dry_run",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "With incoming (0.39.0): read only - whether target_dir is there and whose, which files are there already, and whether the rest fit, each a verdict; nothing is made or written. Refused without incoming."
                 }
             ]
         },
@@ -16179,7 +16393,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The target host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing."
+                    "purpose": "The target host's SSH login: host, port, username and a RESOLVED password or key_file (an absolute path), open_timeout_seconds - never a secret ref: common resolves nothing; platform: linux (also when absent) or windows - a Windows host reached over Windows OpenSSH: its folder a drive path, PowerShell for the free space, nothing made readable with sudo (0.39.0)."
                 },
                 {
                     "field": "target_dir",
@@ -16193,7 +16407,7 @@
                         "allow_empty": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The staging directory on the target host."
+                    "purpose": "The staging directory on the target host - on a windows login a drive path (C:/dbabrain_restore/<restore_id>, either separator); a drive path on any other login is refused."
                 },
                 {
                     "field": "files",
@@ -16220,7 +16434,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "chmod -R a+rX on the target after, for the engine's own uid. Default true."
+                    "purpose": "chmod -R a+rX on the target after, for the engine's own uid. Default true. On a windows target nothing is changed: SQL Server's service account reads the folder through its ACL, granted once by the operator."
                 }
             ]
         },
@@ -16412,7 +16626,7 @@
                         "nullable": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Whether every staged piece was made readable."
+                    "purpose": "Whether every staged piece was made readable - false on a windows target, where nothing is changed (the folder's ACL decides)."
                 }
             ]
         },
@@ -17241,6 +17455,135 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Where a plaintext copy was read from, if any."
+                }
+            ]
+        },
+        {
+            "object": "output_ai_key",
+            "kind": "output",
+            "required": false,
+            "one_line": "The AI assistant's key stored, and the assistant switched on.",
+            "parsed_in": "dbabrain/common/cli.py",
+            "produced_in": [
+                "dbabrain/common/cli.py"
+            ],
+            "commands": [
+                "ai-key"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 8,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The secret's name, now in ai_assist.json api_key_ref."
+                },
+                {
+                    "field": "written",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether the store changed (false: the ref already held that key)."
+                },
+                {
+                    "field": "replaced",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether a key that was there was replaced."
+                },
+                {
+                    "field": "enabled",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The assistant is switched on."
+                },
+                {
+                    "field": "settings_file",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The ai_assist.json written."
+                },
+                {
+                    "field": "store",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The encrypted store written."
+                },
+                {
+                    "field": "next",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The command to run next: ask the assistant."
+                },
+                {
+                    "field": "warnings",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true,
+                        "item_kind": "string"
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What the key or the settings file leave to do."
                 }
             ]
         },
@@ -21129,7 +21472,7 @@
                         "item_kind": "object"
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The files, each {source, target, file_name, size_bytes, sha256} - all five required (0.37.0): source as the source host (or the share) names it, target an absolute path on the target host, file_name the last part of both, and the bytes and sha256 the file must stream as; a file is put in place only when they match. Required, at least one."
+                    "purpose": "The files, each {source, target, file_name, size_bytes, sha256} - all five required (0.37.0): source as the source host (or the share) names it, target an absolute path on the target host (a drive path on a windows target), file_name the last part of both, and the bytes and sha256 the file must stream as; a file is put in place only when they match. Required, at least one."
                 },
                 {
                     "field": "overwrite",
@@ -21184,7 +21527,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The SSH host the files go to: {host, port, username, password|key_file}. Nothing there is ever removed but this copy's own partial file."
+                    "purpose": "The SSH host the files go to: {host, port, username, password|key_file, platform}. Nothing there is ever removed but this copy's own partial file. platform windows (0.39.0): a Windows OpenSSH host - each file written over SFTP whatever transfer says (no cat there); absent means linux."
                 },
                 {
                     "field": "timeout_seconds",
@@ -22310,7 +22653,7 @@
                         "free_form": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "The restore target's An SSH login: {host, port, username, password | key_file}."
+                    "purpose": "The restore target's An SSH login: {host, port, username, password | key_file, platform}. platform windows (0.39.0): a Windows OpenSSH host - the plaintext written over SFTP whatever transfer says (no cat there); absent means linux."
                 },
                 {
                     "field": "target_path",
@@ -22324,7 +22667,7 @@
                         "allow_empty": false
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Where the plaintext goes on the target, in full."
+                    "purpose": "Where the plaintext goes on the target, in full - a drive path (C:/...) on a windows target."
                 },
                 {
                     "field": "file_name",
@@ -23578,7 +23921,7 @@
             "legacy_fields": {
                 "database": "database_name"
             },
-            "field_count": 26,
+            "field_count": 27,
             "required_field_count": 1,
             "fields": [
                 {
@@ -23693,6 +24036,20 @@
                     "purpose": "SQL Server full: {data, log} - where the two files go; the logical names are read on the server (RESTORE FILELISTONLY), and the database goes SINGLE_USER first."
                 },
                 {
+                    "field": "relocate",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "{} | {data_dir, log_dir}",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SQL Server full onto another server: every file RESTORE FILELISTONLY names goes to the target's default data / log folder - or data_dir / log_dir - as <database>_<file name>; {} for both defaults; the database goes SINGLE_USER first."
+                },
+                {
                     "field": "replace",
                     "type": "boolean",
                     "required": false,
@@ -23716,7 +24073,7 @@
                         "nullable": false
                     },
                     "measured_against": "not a time value",
-                    "purpose": "SQL Server full restore with replace: run even when the database is ONLINE on the target. Without it the batch raises before it touches the database (0.26.0, G2.10)."
+                    "purpose": "Whether the step may replace what the target holds; without true it stops first (0.26.0, G2.10; every engine and any state since 0.39.0). SQL Server full: a database of that name in any state raises before the batch touches it, and the statement carries no REPLACE. PostgreSQL full / diff: a data directory holding a cluster with user data, or one that cannot be read, stops the step before the target is stopped. Oracle full: a database holding user segments, or not open to say, stops it before the instance is touched."
                 },
                 {
                     "field": "stats",
@@ -25919,10 +26276,11 @@
             "legacy_fields": {
                 "database": "database_name",
                 "db_name": "database_name",
-                "enabled": "active"
+                "enabled": "active",
+                "env": "environment"
             },
-            "field_count": 14,
-            "required_field_count": 3,
+            "field_count": 16,
+            "required_field_count": 5,
             "fields": [
                 {
                     "field": "server_id",
@@ -25965,6 +26323,35 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Its address."
+                },
+                {
+                    "field": "site",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - a registration that states none is refused (D-39.6)",
+                    "range_text": "a short site or company code",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which site or company the machine belongs to. Required to register; a keep_default request writes no inventory field and carries none."
+                },
+                {
+                    "field": "environment",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - a registration that states none is refused (D-39.6)",
+                    "range_text": "prod | uat | test | dev, or the estate's own label",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "satisfied_by": [
+                            "env"
+                        ]
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether the machine is production, and how a person groups it. Required to register - a restore onto a target whose record states no environment is refused, and only the owner knows it; a keep_default request carries none."
                 },
                 {
                     "field": "port",
@@ -28012,6 +28399,67 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Also write the plaintext source file."
+                }
+            ]
+        },
+        {
+            "object": "input_ai_key",
+            "kind": "input",
+            "required": false,
+            "one_line": "The AI assistant's API key. Stdin only (or the prompt): never on a command line.",
+            "parsed_in": "dbabrain/common/cli.py",
+            "parsers": [
+                "dbabrain/common/cli.py"
+            ],
+            "commands": [
+                "ai-key"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 1,
+            "fields": [
+                {
+                    "field": "value",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - required (the bare command asks for it)",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The Anthropic API key. Never echoed back."
+                },
+                {
+                    "field": "ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "the api_key_ref ai_assist.json names, else AI_ASSIST_API_KEY",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The secret's name. Default: the api_key_ref ai_assist.json names, else AI_ASSIST_API_KEY - and it is written into api_key_ref."
+                },
+                {
+                    "field": "overwrite",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Replace a different value under a ref the request names. The ref ai_assist.json already names is the assistant's own and is replaced."
                 }
             ]
         },
@@ -30470,7 +30918,7 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 3,
+            "field_count": 4,
             "required_field_count": 1,
             "fields": [
                 {
@@ -30515,6 +30963,21 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The reports produced."
+                },
+                {
+                    "field": "page_texts",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - upgrade-config (report-texts) writes the shipped texts a node does not state",
+                    "range_text": "{areas: {<area key>: {label, threshold, note, by_db_type, by_platform}}, fleet_cards: {<card key>: {title, body, action}}}",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The texts a report page shows that belong to the page and not to one metric (0.39.0): each health area's label, the rule its tile prints (threshold) and its note - sayable per engine (by_db_type) or operating system (by_platform) - and the fleet page's cards (title, body, action, with the {placeholders} the page fills). They were literals in the report builders.",
+                    "rule": "An area or card the node does not state is given the shipped text by upgrade-config; one it states is left as it is. A per-metric text (label, What to do) is the metric's own, in metric_definitions.json -> report_policy"
                 }
             ],
             "document_keys": [
@@ -30545,7 +31008,7 @@
                     "field": "copy_file_patterns",
                     "type": "array",
                     "required": false,
-                    "default": "*.bak, *.trn",
+                    "default": "none on a share-driven entry - stated on it or on the backup_restore block (upgrade-config writes *.bak, *.trn); not read by a script-driven one",
                     "range_text": "file patterns",
                     "constraint": {
                         "kind": "array",
@@ -30553,13 +31016,14 @@
                         "item_kind": "string"
                     },
                     "measured_against": "not a time value",
-                    "purpose": "Which files a SQL Server restore copies."
+                    "purpose": "Which files a SQL Server restore copies.",
+                    "rule": ". Since 0.39.0 (1.366) a share-driven entry states it, or this block does for all of them - one or the other, refused inside the entry's own run otherwise"
                 },
                 {
                     "field": "copy_recent_hours",
                     "type": "integer",
                     "required": false,
-                    "default": "24",
+                    "default": "none on a share-driven entry (on it or its block) or a script-driven one whose copy_selection is window - upgrade-config writes 24",
                     "range_text": "hours, 1 and up",
                     "constraint": {
                         "kind": "integer",
@@ -30567,18 +31031,19 @@
                         "min": 1
                     },
                     "measured_against": "hours before the run",
-                    "purpose": "With copy_selection window, how far back every file is copied beside the chain; the fallback window of a share copy for a database whose chain cannot be settled; and how old a staged FULL the share restore step still takes. Overrides the section's copy_recent_hours."
+                    "purpose": "With copy_selection window, how far back every file is copied beside the chain; the fallback window of a share copy for a database whose chain cannot be settled; and how old a staged FULL the share restore step still takes. Overrides the section's copy_recent_hours.",
+                    "rule": ". Since 0.39.0 (1.366) a share-driven entry states it, or this block does for all of them - one or the other, refused inside the entry's own run otherwise"
                 },
                 {
                     "field": "copy_selection",
                     "type": "string",
                     "required": false,
-                    "default": "chain",
+                    "default": "none - required: stated on the entry, or on the restore block for its share-driven entries (upgrade-config and restore-add write chain on the entry)",
                     "range_text": "chain | window",
                     "constraint": {
                         "kind": "string",
-                        "nullable": true,
-                        "allow_empty": true,
+                        "nullable": false,
+                        "allow_empty": false,
                         "enum": [
                             "chain",
                             "window"
@@ -30586,7 +31051,8 @@
                         "case_insensitive": true
                     },
                     "measured_against": "not a time value",
-                    "purpose": "What this entry's restore copies from its source - for every engine since 2026-10-03, and so what its space check counts. chain: the backups the restore applies (SQL Server each database's newest FULL at or before the moment, its newest DIFF and the LOGs after, with _cert/; PostgreSQL the newest _FULL, its _INCRs and wal/; Oracle the pieces RMAN names). window: the chain AND every other file the source wrote in copy_recent_hours - every restore point of the window, never fewer backups than chain. A point in time copies everything either way. A database or layout whose chain cannot be read is copied whole (to another machine) or by its window (from a share)."
+                    "purpose": "What this entry's restore copies from its source - for every engine since 2026-10-03, and so what its space check counts. chain: the backups the restore applies (SQL Server each database's newest FULL at or before the moment, its newest DIFF and the LOGs after, with _cert/; PostgreSQL the newest _FULL, its _INCRs and wal/; Oracle the pieces RMAN names). window: the chain AND every other file the source wrote in copy_recent_hours - every restore point of the window, never fewer backups than chain. A point in time copies everything either way. A database or layout whose chain cannot be read is copied whole (to another machine) or by its window (from a share).",
+                    "rule": "No default since 0.39.0 (1.366): stated here it is every share-driven entry's that states none of its own; an entry that finds it neither on itself nor here is refused inside its own run, by name. A script-driven entry reads no block and states its own"
                 },
                 {
                     "field": "backups",

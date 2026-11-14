@@ -20,6 +20,7 @@ from typing import Any
 
 from dbabrain.lib.coerce import as_utc_datetime
 from dbabrain.lib.time_window import TimeWindow, due_from_row, is_time_window_open, run_anchor
+from dbabrain.lib.restore.stated import DEFAULT_REPEAT_SECONDS
 from dbabrain.lib.timezone import display_now
 from dbabrain.lib import node_identity, process_liveness, run_claim
 from dbabrain.db.job_runs import JobRun
@@ -32,8 +33,9 @@ RESTORE_JOB_PREFIX = "backup_restore.restore_job"
 #: A backup entry's repository copy (0.34.0, 1.240) - its own run, never counted as a backup job.
 OFFLOAD_JOB_PREFIX = "backup_restore.offload_job"
 
-# Matches the sql_tasks default: work with no repeat_interval is reconsidered every 5 minutes.
-DEFAULT_REPEAT_SECONDS = 300
+# DEFAULT_REPEAT_SECONDS (300, the sql_tasks default: work with no repeat_interval is reconsidered every
+# 5 minutes) is lib.restore.stated's since 0.39.0 (1.366): it is what a backup job or a restore entry
+# that states no repeat_interval ran on, and upgrade-config writes it into such a record from there.
 
 
 def backup_job_code(backup_id: str, job: str) -> str:

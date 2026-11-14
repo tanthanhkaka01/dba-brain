@@ -6,7 +6,7 @@ The Reports App builds manual or scheduled reports from collected metric data an
 
 ## Package / Files
 
-- `dbabrain/reports/` - `server-metrics.html` is built by `server_report.py` (the payload, the page, the publish) over four layers split out of it on 2026-10-03: `server_series.py` (the catalog, one server's series, freshness - imports nothing else of the page), `server_health.py` (areas, problems, timeline, health), `server_sections.py` (linked servers, volumes, capacity, Query Store, databases, jobs, access) and `server_oracle.py` (tablespaces and the Oracle sections). `server_report` re-exports every name, so `server_report.build_volumes` and the other names below still resolve; the catalog's caches are `server_series`'s
+- `dbabrain/reports/` - `server-metrics.html` is built by `server_report.py` (the payload, the page, the publish) over four layers split out of it on 2026-10-03: `server_series.py` (the catalog, one server's series, freshness - imports nothing else of the page), `server_health.py` (areas, problems, timeline, health), `server_sections.py` (linked servers, volumes, capacity, Query Store, databases, jobs, access) and `server_oracle.py` (tablespaces and the Oracle sections). `server_report` re-exports every name, so `server_report.build_volumes` and the other names below still resolve; the catalog's caches are `server_series`'s. `restores_table.py` draws the *Restores* table that `backup-restore.html` and each server's page both show (0.39.0)
 - `data/reports_config.json`
 - the runtime store declared in `data/store_config.json` (PostgreSQL in this tree; `runtime/dbabrain.sqlite` when the backend is `sqlite`)
 
@@ -520,6 +520,39 @@ the catalog, and the configured restore entries read through `lib.data_sources.l
   recorded them (`backup_runs.retention_json`, `pitr_reach_seconds`). Each server page prints
   its own entries' in one line above its backup files (`backup_files.js`, `retentionLine`).
 
+**Restores** (0.39.0, 1.365), under Recoverability (`backup_restore_report.render_restores`, from
+`BackupCatalogStore.restore_history` through `backup_catalog_sections.build_restores`, drawn by
+`restores_table.restores_table` - the same table a server page folds under its backup files). The
+operator, 2026-11-13: *dbabrain must keep the full chain of files a restore used, so it can be shown
+which file was used for which restore* - the chain has been in the catalog since 1.367 and where
+each database stopped since 1.362, and no page read either. The newest 60 restores, newest first,
+one row each:
+
+- the entry and its run, from where onto where, when it started, **how it ended** (*done*,
+  *failed* with the reason, or the phase a run that never closed its row was left in) and the
+  moment it was asked to restore to;
+- **where each database stopped**, in the target's own word (`restore_runs.landed_json`): *stopped
+  at <moment>* for a STOPAT, else *last backup applied ended <moment>*, with the verdict the restore
+  reached (*stopped at the moment asked*, *restored to the end of its chain*, *NOT ...*). These
+  moments are the SOURCE server's clock - the clock of the backups' own headers - and are printed
+  as recorded, not moved to the page's zone;
+- **the files it applied**: how many, by step and by result, and - in a row of its own that opens -
+  each file in the order it went in: its step, the database it holds and the name it was restored
+  as, when its backup finished, its result - *applied*, *skipped* with the engine's reason (a log the
+  restore passed over and still reached its end, Msg 4326 / 4305), *failed* with the step's error, or
+  *planned* (never reached) - when it was applied (`-` for a file that was not), and the STOPAT or
+  the recovery the last one carried. A file the backup catalog does not know is marked.
+
+What a run did not record reads *not recorded* - a restore from before 0.39.0, one that failed
+before its first file, an engine that lays down a whole instance, a file whose backup's end the run
+did not read - never a blank that reads as none. A copy-only run restored nothing and is not listed.
+The section's class names are its own (`rs-*`): the page shares the server page's stylesheet, where
+`verdict` is the big verdict block. Its rules (and Recoverability's) are in that stylesheet,
+`server_report.html`, in the page's colour tokens so they read in the dark theme too - the fleet page
+reads them from there. A long file name wraps inside its cell (never letter by letter, `min-width`)
+and the section scrolls sideways only as a last resort: at 1366 px a chain kept on one line pushed
+the table past the screen (looked at in a browser, 2026-11-14).
+
 - **One table.** Each row is what a backup wrote and where it is now (0.37.0, the operator
   2026-11-11: *encrypted or not, with which key, until when; the checksum and bytes before and after
   encryption; the three files of one FULL as one backup*). The row: when, server, database, type,
@@ -708,6 +741,87 @@ collected says *not collected for this server*, never *no interval yet*.
   six minutes. Refusing that pair blanked all six plan-cache figures because one of them lost a
   plan, so the field that fell is dropped, named on the page, and the rest are shown as what they
   always are: an undercount of unknown size.
+
+## The words a page shows are data (0.39.0)
+
+Until 0.39.0 the pages' words were tables in the report builders: one *What to do* sentence per
+metric code for every operating system and engine, one label per metric, one note per health area
+whatever the engine, the fleet page's cards written out in the code. An Ubuntu host with errors in
+its journal was told to *read the Windows event log* on both pages; the Memory tile explained page
+life expectancy to a PostgreSQL host; the temporary-space tile was called TempDB on Oracle (the
+operator, 2026-11-13: *fix what is hard-coded, the texts too - look at the other places as well*).
+They are data now, in two files, and `reports/` only fills in the numbers.
+
+**A metric's own words** - `metric_definitions.json`, on each metric:
+
+```json
+"report_policy": {
+  "label": "System log errors",
+  "action": "Read the errors in the system's own log - they usually name the cause.",
+  "action_by_platform": {
+    "windows": "Read the errors in the Windows event log (Event Viewer, or Get-WinEvent) - they usually name the cause.",
+    "linux":   "Read the errors in the journal (journalctl -p err --since -24h) - they usually name the cause."
+  }
+}
+```
+
+`label` is what a page calls the metric (the code in words when a metric states none).
+`action` is the *What to do* sentence that is right wherever the metric is collected;
+`action_by_platform` (`windows`, `linux`) and `action_by_db_type` (`sqlserver`, `postgresql`,
+`oracle`, `mysql`) hold the words that differ (*max server memory*, *TempDB*, *the alert log*). A
+page takes, for the server in front of it, the engine's sentence, then the operating system's, then
+`action`, then its area's note (`server_health.metric_action_for`). The operating system is what
+the `OS_INFO` collector read on the host, else the inventory's stated `platform`; a server whose
+platform nobody read gets `action`, which names no operating system. A sentence is written only for
+a platform or engine that collects the metric, and never names the other platform's tools
+(`tests/test_the_advice_is_worded_for_the_platform_it_is_shown_on.py`).
+
+**A page's own words** - `reports_config.json`, `page_texts` (`reports/page_texts.py` reads it):
+
+```json
+"page_texts": {
+  "areas": {
+    "tempdb": {"label": "Temporary space", "threshold": "WARN ...", "note": "Temporary space filling up fails sorts and hashes ...",
+               "by_db_type": {"sqlserver": {"label": "TempDB", "note": "TempDB filling up fails sorts, hashes and version store ..."}}}
+  },
+  "fleet_cards": {
+    "metrics_failing": {"title": "Metrics currently failing on {count} server(s)",
+                        "body": "The newest run of these metrics did not return a usable result ...: {detail}.",
+                        "action": "Read the collector error on the server page ..."}
+  }
+}
+```
+
+- `areas`: each health area's `label`, the rule its tile prints (`threshold`) and its `note`. A text
+  can be said differently for an engine (`by_db_type`) or an operating system (`by_platform`); the
+  engine's wins, then the operating system's, then the general one. A SQL Server page reads every
+  word it read before; the areas every engine shares (Memory, Disk space, the temporary space, HA,
+  Availability) have a general wording that names no engine. What stays in
+  `server_health.AREAS` is structure only: which items answer each area's question.
+- `fleet_cards`: the title, body and action of each of the fleet page's 22 cards, with the
+  `{placeholders}` the page fills (`{count}`, `{detail}`, ...). The card built from one metric
+  across servers takes its action from the metric's own sentences: when its servers' sentences
+  differ it says each, named by whom it is for - *Windows: ... Linux: ...* - where it used to print
+  the first server's for all. A placeholder the page did not fill is printed as written, so a typo
+  in the data shows on the page instead of failing it.
+
+**A node installed before 0.39.0** has files of its own that state none of this. `upgrade-config`
+(`report-texts`, `lib/report_texts.py`) writes the shipped texts where the node states none - a
+metric's sentences and its label, each area and each card - and leaves what it states exactly as it
+is. Until it has run: an area or a card the node's `reports_config.json` does not state is read
+from the file as it ships inside the package (`reports/catalogue/reports_config.json`) - whole
+entries, the same rule the upgrade writes by, so a card is never drawn with no words - and a metric
+whose label or sentence the node's `metric_definitions.json` does not state is called by its code
+in words and given its area's note.
+
+**The operating system is first on the server page's host line**: *Ubuntu 26.04.1 LTS ·
+192.0.2.118 · host · last 7 days · snapshot ...* - what `OS_INFO` read on the host; marked
+*(inventory - not read from the host)* when it is the inventory's word; *OS not read* when neither
+says.
+
+Still tables in the code: the row labels of the Workload section (SQL Server's own counters, named
+as SQL Server names them - one that said *Windows* for the operating system's low-memory signal was
+reworded) and the fifteen metrics that have no sentence of their own yet.
 
 ## Transaction log and Top queries — who did the work (on `server-metrics.html`)
 
@@ -923,18 +1037,48 @@ Columns:
   unknown is never shown as `no`; a copy row has none of its own;
 - on disk, and "= catalog";
 - the virus scan;
-- **used for restore**: the last use, and `used N×` / `restored OK N×` - **each restore or copy
-  that uses the file adds one** (one `restore_run_files` row per run and file, counted by the store
-  over every run; the retries of one copy are that run's attempts, not more uses).
+- **used for restore**: what happened to THIS file in the last restore that used it, and `used N× ·
+  restore done D · fail F` - **each restore or copy that uses the file adds one** (one
+  `restore_run_files` row per run and file, counted by the store over every run; the retries of one
+  copy are that run's attempts, not more uses; done and fail count the restores that ended `done` and
+  `error` / `refused`). The word is the file's, never the run's bare phase (0.39.0; the operator,
+  2026-11-14, on a log shown as `error` whose run had stopped at its first file, a lockdown's refusal,
+  and never reached it: *restore done, fail with its reason; how many done, how many failed*):
+  `restore done`; `restore fail` with its reason, read from the file's line of that run's chain
+  (`restore_chain_files`) and the run's error - the file failed itself (its own error), *this file
+  went in; the restore failed after it*, or *the restore stopped before this file*; `skipped` with
+  the engine's reason (a log passed over in a restore that reached its end); `copy done` /
+  `copy fail` for a copy-only run; `restore running`.
 
 Three selects filter the rows already drawn:
 - **database**;
 - **file type**;
-- **used for a restore**: used / restored OK / used but not restored OK / never used.
+- **used for a restore**: used / restore done / used, no restore done / never used.
 
 The section opens by itself when a file is not ok, changed, missing, infected, or its last copy was
 not proven. A page rebuilt for a past day (`as_of`) shows no files rather than today's. A store
 without the catalog yet shows nothing, and the page is still built.
+
+### Restores - what each restore of or onto this server applied (0.39.0, 1.365)
+
+The files table says which restores used a file; this fold, right under it, says what each restore
+did. **Which restores:** those that read this server's backups or restored onto it - by the run's
+own source and target, `BackupCatalogStore.restore_history(server_id=...)`, the newest 60
+(`restores_table.RESTORE_ROWS`), newest first, a copy-only run left out. Not
+`server_restore_chains`: that lists chain files by their source only, so a restore onto this server
+(a lab's page) and one that failed or was refused before its first file would be missing.
+
+**The table is the fleet page's** *Restores* (above): the run - entry, from where onto where,
+started, how it ended and why, the moment asked, where the target says each database stopped - and,
+opened, each file in the order it went in with its step, database and restored name, its backup's
+end, its result (a skipped or failed file with the engine's reason), when it was applied, and the
+STOPAT or recovery of the last. `restores_table.for_server` puts it in the payload as `restores`
+(`shown`, `failed`, `refused`, `limit`, `html`): **escaped HTML drawn by the same Python as the fleet
+page**, not a second drawing in the page's script, which would drift from it. `restoresBlock` in
+`server_report.html` only folds it: *Restores - N restore(s) of or onto this server · k failed · m
+refused*, open by itself when one failed or was refused, nothing when the catalog holds none. A run's
+own times are UTC and say so; a backup's end, a STOPAT and a stop point are the source server's
+clock, as recorded. A page rebuilt for a past day shows none, as for the files.
 
 ## Server detail — everything the inventory says about this server, and more (on `server-metrics.html`, 0.34.0)
 
@@ -1568,7 +1712,7 @@ cannot tell the two apart.
 throughput in KB/s decide an area measured in percent, and SQL memory % stand in for CPU.
 
 **A metric that only failed to collect is told to fix the collection (2026-10-27).** A Problems row
-(and a fleet card) says what to do from its metric's `ACTIONS` entry - *find the top process*, *free
+(and a fleet card) says what to do from its metric's own sentence (`report_policy.action`, below) - *find the top process*, *free
 space* - and that answers a reading. When every finding of the metric is the `__collector__` row,
 there was none, and the row takes `health_model.COLLECTOR_FAILURE_ACTION` instead: fix what the
 error names. Thirteen OS rows on a host whose SSH login was refused had read as a server short of

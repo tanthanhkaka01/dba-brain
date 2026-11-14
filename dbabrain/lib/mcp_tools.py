@@ -65,6 +65,19 @@ READ_ONLY_PREFIXES = ("list-", "check-", "probe-", "db-status", "host-facts", "f
                       "restore-drill-status", "sql-run-history")
 
 
+#: **No secret enters through MCP** (0.39.0) - the twin of *no secret crosses* (every answer redacted). The
+#: operator, 2026-11-14: a request over MCP is written by the model, so a password, a key or a token in it
+#: came through the chat - and on way 2 through the relay. These keys hold a secret wherever they sit in a
+#: request (a login's ``password`` inside ``connection`` / ``access`` too); a request carrying one is
+#: refused, and the person types the secret on the node instead (``secret-set``, ``ai-key``), then names
+#: it here by its reference (``password_ref``). A login the node completes from its own store is not
+#: one: the model never sees it.
+SECRET_KEYS = frozenset({"password", "sudo_password", "encryption_password", "passwords", "secrets", "identity",
+                         "passphrase", "api_key", "token"})
+
+#: Commands whose purpose is a secret the caller gives - ``value`` is it.
+SECRET_VALUE_COMMANDS = frozenset({"secret-set", "ai-key"})
+
 #: Commands that only read, whose names say otherwise.
 READ_ONLY_COMMANDS = frozenset({"due-check", "read-file", "self-status", "smb-list", "metric-batch",
                                 "sqlserver-precheck", "sqlserver-verify-build", "sqlserver-verify-instance"})
@@ -166,6 +179,40 @@ def command_entries(reference: list[dict[str, Any]]) -> dict[str, dict[str, Any]
 def is_destructive(command: str, operations: set[str]) -> bool:
     """True for a command the emergency-operations catalogue prices, or one whose name takes away."""
     return command in operations or command.startswith(DESTRUCTIVE_PREFIXES)
+
+
+def secrets_carried(command: str, request: Any) -> list[str]:
+    """Where a request holds a secret value - ``password``, ``connection.password``, ``secret-set``'s
+    ``value`` ... - as dotted paths; empty when it holds none. An empty value is not one."""
+    found: list[str] = []
+    if command in SECRET_VALUE_COMMANDS and isinstance(request, dict) and request.get("value") not in (None, ""):
+        found.append("value")
+
+    def walk(value: Any, path: str) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                where = f"{path}.{key}" if path else str(key)
+                if str(key).lower() in SECRET_KEYS and item not in (None, "", [], {}):
+                    found.append(where)
+                else:
+                    walk(item, where)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]")
+
+    walk(request, "")
+    return found
+
+
+def takes_a_secret_only(command: str, entry: dict[str, Any], *, filled: Any = ()) -> bool:
+    """A command that over MCP could only be refused - its purpose is a secret, or it cannot run without
+    one the node does not fill (``filled``: what ``request_fill`` completes for it): not offered as a tool
+    (as a refused command is not). The caller says what is filled - this module reads no data folder."""
+    if command in SECRET_VALUE_COMMANDS:
+        return True
+    filled = set(filled or ())
+    return any(str(field.get("field")) in SECRET_KEYS and field.get("required") and field.get("field") not in filled
+               for field in entry.get("fields") or [])
 
 
 def is_read_only(command: str, operations: set[str]) -> bool:

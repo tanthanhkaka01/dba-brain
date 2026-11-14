@@ -37,8 +37,10 @@ lands.
 from __future__ import annotations
 
 from dbabrain.lib import errors
+import datetime as dt
 import errno
 import posixpath
+import re
 import shlex
 import stat
 from dataclasses import dataclass, field
@@ -46,6 +48,7 @@ from typing import Any
 
 
 from dbabrain.lib import restore_space
+from dbabrain.lib.restore import windows as windows_target
 
 
 class CopySpaceError(errors.Refused):
@@ -222,25 +225,50 @@ def marker_name(value: Any) -> str:
     return name
 
 
-def _not_a_staging_dir(target_dir: str, marker: str = STAGING_MARKER) -> StagingDirError:
+def _not_a_staging_dir(target_dir: str, marker: str = STAGING_MARKER, *, windows: bool = False) -> StagingDirError:
     path = posixpath.join(target_dir, marker)
+    if windows:
+        # Said in the host's own words: `touch /C:/...` is a command for no shell there.
+        target_dir = windows_target.sql_server_path(target_dir, field="target_dir")
+        path = f"{target_dir}\\{marker}"
+        mark = f"New-Item -ItemType File -Path '{path}'"
+    else:
+        mark = f"touch {path}"
     return StagingDirError(
         f"{target_dir} already holds files, none of which is at the source, and has no "
         f"{marker} marker, so it is not known to be a dbabrain staging directory - nothing "
         f"was copied or deleted there. If it is one (a "
-        f"staging folder from before 0.25.0), mark it: `touch {path}`. Otherwise give the entry "
+        f"staging folder from before 0.25.0), mark it: `{mark}`. Otherwise give the entry "
         f"its own, empty target_backup_dir.")
 
 
+def _is_windows(session: Any) -> bool:
+    """Is ``session`` a Windows host's (its login said ``platform: windows``)? Read off the session the
+    command opened, so every step below asks the one statement the request made."""
+    access = getattr(session, "access", None)
+    return str(getattr(access, "platform", "") or "").strip().lower() == windows_target.PLATFORM
+
+
 def _target_free_bytes(target_session, directory: str) -> int | None:
-    """Free bytes on the filesystem ``directory`` is on, as the target answers - ``None`` if not."""
+    """Free bytes on the filesystem ``directory`` is on, as the target answers - ``None`` if not.
+
+    On a Windows target (0.39.0) PowerShell asks the drive: Windows OpenSSH hands a command to cmd.exe,
+    where ``df`` answered nothing, and the check then refused every copy as unmeasured.
+    """
+    windows = _is_windows(target_session)
+    if windows:
+        from dbabrain.common.hostcmd import WINDOWS, Host, wrap
+
+        command = wrap(Host(runtime=WINDOWS), restore_space.windows_free_space_script(directory))
+    else:
+        command = restore_space.free_space_command(directory)
     try:
-        _stdin, out, _err = target_session.open_stream(restore_space.free_space_command(directory))
+        _stdin, out, _err = target_session.open_stream(command)
         text = out.read().decode("utf-8", "replace")
         out.channel.recv_exit_status()
     except Exception:  # noqa: BLE001 - whatever stopped the reading, the free space is not known.
         return None
-    return restore_space.parse_df_free_bytes(text)
+    return restore_space.parse_windows_free_bytes(text) if windows else restore_space.parse_df_free_bytes(text)
 
 
 def check_room(target_session, target_dir: str, pending: list[tuple[str, int]],
@@ -289,6 +317,10 @@ def check_room(target_session, target_dir: str, pending: list[tuple[str, int]],
             "factor": verdict.factor, "detail": verdict.text}
 
 
+#: An encryption's partial on the repository: ``<file>.age.<pid>.partial``.
+_AGE_PARTIAL = re.compile(r"\.age\.\d+\.partial$")
+
+
 def _selected(files: list[tuple[str, int]], dirs: list[str], mtimes: dict[str, int], *,
               include: tuple[str, ...], window_since: float | None) -> tuple[list[tuple[str, int]], list[str]]:
     """The files and directories a request selects from a source listing: ``include``'s prefixes,
@@ -302,7 +334,10 @@ def _selected(files: list[tuple[str, int]], dirs: list[str], mtimes: dict[str, i
 
     from dbabrain.lib.integrity import is_certificate_file
 
-    files = [(rel, size) for rel, size in files if not rel.endswith(PARTIAL_SUFFIX)]
+    # Nor an encryption's partial (`<file>.age.<pid>.partial`, 0.38.0 1.331): a killed one is left on
+    # the repository for the operator, and selected it refused the restore as a file nobody proved.
+    files = [(rel, size) for rel, size in files
+             if not rel.endswith(PARTIAL_SUFFIX) and not _AGE_PARTIAL.search(rel)]
     # A backup certificate or key is never copied, whole-directory copy or chain (0.37.0): it is
     # kept in dbabrain's vault and imported from there - see lib.integrity.is_certificate_file.
     files = [(rel, size) for rel, size in files if not is_certificate_file(rel)]
@@ -397,7 +432,7 @@ def prepare_staging(
         # Anything else is refused: what the source does not have is named for deletion, and a
         # folder sharing nothing with the source is someone else's (B4.7).
         if existing and not any(rel.replace("\\", "/") in at_source for rel in existing):
-            raise _not_a_staging_dir(target_dir, marker)
+            raise _not_a_staging_dir(target_dir, marker, windows=_is_windows(target_session))
         if existing and log:
             log(f"{target_dir}: adopted as this source's staging directory (marked {marker})")
         with target_sftp.open(posixpath.join(target_dir, marker), "w") as handle:
@@ -451,6 +486,86 @@ def prepare_staging(
     return result
 
 
+def prepare_target(*, target_session, target_dir: str, incoming: list[tuple[str, int]], log: Any = None,
+                   space_check: restore_space.SpaceCheck | None = None,
+                   marker: str = STAGING_MARKER) -> TransferResult:
+    """:func:`prepare_staging`'s target half, for files the caller names (0.39.0, 1.355).
+
+    A restore from an encrypted repository copy does not read a source folder for its files: each
+    ``.age`` is decrypted on its way, and the plain file's name and bytes are the store's. It used to
+    skip the staging's preparation altogether - no room checked, no marker written (so its cleanup kept
+    the folder and said why), the engine's access never opened. This is the same preparation for a
+    list stated as ``(relative path, plain size)``: the folder made and proven writable, marked by the
+    same rule (an unmarked folder holding files, none of them among ``incoming``, is someone else's),
+    every parent folder made, and the files not already there at that size held to the free space.
+    Nothing is copied and nothing is removed.
+    """
+    result = TransferResult()
+    names = {rel.replace("\\", "/"): int(size) for rel, size in incoming}
+    result.files = sorted(names.items())
+    target_sftp = target_session.sftp()
+    _mkdirs(target_sftp, target_dir)
+    _assert_writable(target_sftp, target_dir)
+    existing_files, _dirs = _walk_remote(target_sftp, target_dir)
+    existing = {rel.replace("\\", "/"): size for rel, size in existing_files}
+    if marker not in existing:
+        if existing and not any(rel in names for rel in existing):
+            raise _not_a_staging_dir(target_dir, marker, windows=_is_windows(target_session))
+        with target_sftp.open(posixpath.join(target_dir, marker), "w") as handle:
+            handle.write(b"dbabrain restore staging directory - filled and cleaned by dbabrain.\n")
+    for folder in sorted({posixpath.dirname(rel) for rel in names if posixpath.dirname(rel)}):
+        _mkdirs(target_sftp, posixpath.join(target_dir, folder))
+    pending = [(rel, size) for rel, size in sorted(names.items()) if existing.get(rel) != size]
+    result.skipped = len(names) - len(pending)
+    if pending and space_check is not None:
+        result.space = check_room(target_session, target_dir, pending, space_check, log=log)
+    result.pending = [(rel, size, None) for rel, size in pending]
+    return result
+
+
+def measure_target(*, target_session, target_dir: str, incoming: list[tuple[str, int]],
+                   space_check: restore_space.SpaceCheck | None = None,
+                   marker: str = STAGING_MARKER) -> dict[str, Any]:
+    """What :func:`prepare_target` would find, read and nothing written (0.39.0, 1.356).
+
+    A restore's dry run on a target that has never been restored to: whether the staging folder is
+    there and whose it is, which of the files are there already, and whether the rest fit - each a
+    verdict, not an exception, so the dry run can say every one of them.
+    """
+    names = {rel.replace("\\", "/"): int(size) for rel, size in incoming}
+    sftp = target_session.sftp()
+    try:
+        existing_files, _dirs = _walk_remote(sftp, target_dir)
+        there = True
+    except Exception:  # noqa: BLE001 - a folder that is not there yet is the usual answer here.
+        existing_files, there = [], False
+    existing = {rel.replace("\\", "/"): size for rel, size in existing_files}
+    if not there:
+        staging = "not there yet - made and marked by the restore"
+    elif marker in existing:
+        staging = "a staging folder of this tool's (marked)"
+    elif not existing:
+        staging = "there and empty - marked by the restore"
+    elif any(rel in names for rel in existing):
+        staging = "an earlier staging of these files, unmarked - adopted and marked by the restore"
+    else:
+        staging = (f"REFUSED: it holds files, none of them among these, and no {marker} marker - it is "
+                   "not known to be a staging folder; give the entry its own, empty target_backup_dir")
+    pending = [(rel, size) for rel, size in sorted(names.items()) if existing.get(rel) != size]
+    room: dict[str, Any] | None = None
+    if pending and space_check is not None:
+        try:
+            room = check_room(target_session, target_dir, pending, space_check)
+        except CopySpaceError as exc:
+            room = {"checked": True, "ok": False, "detail": str(exc)}
+    return {"staging": staging, "refused": staging.startswith("REFUSED"),
+            "files": [{"path": rel, "size_bytes": size} for rel, size in sorted(names.items())],
+            "pending": [{"path": rel, "size_bytes": size} for rel, size in pending],
+            "skipped": len(names) - len(pending),
+            "pending_bytes": sum(size for _rel, size in pending),
+            **({"space_check": room} if room is not None else {})}
+
+
 def finish_staging(target_session, target_dir: str, times: list[tuple[str, int | None]], *,
                    log: Any = None) -> dict[str, Any]:
     """Give each copied file its source's time. ``{"timed": n, "not_timed": [{"path", "reason"}]}``.
@@ -491,7 +606,15 @@ def open_for_the_engine(target_session, directory: str, *, log: Any = None) -> b
     2026-09-24 lab drill. The SSH user owns what it has just written, so no sudo is needed. Not
     fatal when it fails - a piece left from an older run may belong to another user - but said,
     because the engine's own error then names the file.
+
+    **On Windows nothing is changed** (0.39.0): SQL Server's service account reads the staging through
+    the folder's ACL, granted once by the operator and inherited by every file written under it; a
+    ``chmod`` sent there reached cmd.exe. ``False`` - nothing was opened - and the reason said.
     """
+    if _is_windows(target_session):
+        if log:
+            log(f"{directory}: {windows_target.ENGINE_ACCESS}")
+        return False
     _stdin, out, err = target_session.open_stream(f"chmod -R a+rX {shlex.quote(directory)}")
     code = out.channel.recv_exit_status()
     if code != 0 and log:
@@ -501,7 +624,8 @@ def open_for_the_engine(target_session, directory: str, *, log: Any = None) -> b
 
 
 def chain_include(db_type: str, source_session, *, source_dir: str, backup_dir: str = "",
-                  container: str = "", point_in_time: str = "", log: Any = None) -> tuple[str, ...]:
+                  container: str = "", point_in_time: str = "", databases: tuple[str, ...] = (),
+                  log: Any = None) -> tuple[str, ...]:
     """Which parts of the source backup directory a restore needs, as path prefixes.
 
     An empty tuple means "everything" - a point in time, or a SQL Server layout the names cannot be
@@ -517,21 +641,38 @@ def chain_include(db_type: str, source_session, *, source_dir: str, backup_dir: 
     controlfile autobackups and spfiles all sit side by side under generated names - so Oracle is
     narrowed by *asking RMAN*, never by parsing those names (:func:`oracle_chain_include`).
 
-    **A point in time copies everything.** Both narrowings take the chain of the NEWEST full, and a
-    moment before that full needs an older one: the staging folder would have held a chain that
-    cannot reach the moment (found splitting the copy into its own command, 2026-09-25 - the lab
-    drills had all picked moments after the newest full).
+    **A point in time takes the chain that reaches the moment** (0.39.0, 1.360). The newest chain
+    cannot: a moment before the newest full needs an older one (found splitting the copy into its own
+    command, 2026-09-25), so a point in time used to copy the whole directory - from the repository,
+    every file of every chain, and one newest log not yet sealed there refused the run. SQL Server
+    takes, per database, the newest FULL at or before the moment, the newest DIFF after it and before
+    the moment, and the LOGs from there up to the first that reaches it; PostgreSQL the newest
+    ``_FULL`` at or before the moment, its ``_INCR`` s before it, and ``wal/``. Oracle copies the whole
+    directory still: RMAN decides what a moment needs.
+
+    **``databases`` narrows a SQL Server chain to the databases the restore takes** (0.39.0, 1.362).
+    The folder holds every database the server backs up; a restore entry names the ones it restores,
+    and the copy took them all - the others' chains copied (and, from an encrypted repository,
+    decrypted) for nothing, and a point in time refused the whole copy when a database nobody asked
+    for had no full before the moment. PostgreSQL and Oracle hold a whole cluster / instance: naming
+    databases there is refused, never read and ignored.
     """
     engine = str(db_type or "").strip().lower()
-    if point_in_time:
+    if databases and engine not in {"sqlserver", "mssql"}:
+        raise ChainUnknownError(f"chain.databases names {len(databases)} database(s), and a {engine or 'backup'} "
+                                "directory holds a whole cluster / instance - there is no chain of one database "
+                                "to choose in it.")
+    until = _moment_epoch(point_in_time) if point_in_time else None
+    if point_in_time and engine not in {"postgresql", "postgres", "sqlserver", "mssql"}:
         if log:
-            log(f"point in time {point_in_time}: copying the whole backup directory - the chain it "
-                "needs may start before the newest full")
+            log(f"point in time {point_in_time}: copying the whole backup directory - RMAN decides what "
+                "the moment needs")
         return ()
     if engine in {"postgresql", "postgres"}:
-        return postgresql_chain_include(source_session, source_dir=source_dir, log=log)
+        return postgresql_chain_include(source_session, source_dir=source_dir, log=log, until=until)
     if engine in {"sqlserver", "mssql"}:
-        return sqlserver_chain_include(source_session, source_dir=source_dir, log=log)
+        return sqlserver_chain_include(source_session, source_dir=source_dir, log=log, until=until,
+                                       databases=databases)
     if engine == "oracle":
         if not container:
             # RMAN is asked inside the source container; without it the chain is unknown, and
@@ -542,6 +683,17 @@ def chain_include(db_type: str, source_session, *, source_dir: str, backup_dir: 
     return ()
 
 
+def _utc_text(epoch: float) -> str:
+    return dt.datetime.fromtimestamp(epoch, tz=dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _moment_epoch(point_in_time: str) -> float:
+    """A restore's moment as epoch seconds: an offset is honoured, a bare moment read as UTC."""
+    from dbabrain.lib.restore.moment import parse_moment
+
+    return parse_moment(point_in_time).replace(tzinfo=dt.timezone.utc).timestamp()
+
+
 class ChainUnknownError(errors.OperationFailed):
     """The source cannot say which pieces form the restore chain, so nothing is copied.
 
@@ -550,7 +702,8 @@ class ChainUnknownError(errors.OperationFailed):
     """
 
 
-def sqlserver_chain_include(source_session, *, source_dir: str, log: Any = None) -> tuple[str, ...]:
+def sqlserver_chain_include(source_session, *, source_dir: str, log: Any = None,
+                            until: float | None = None, databases: tuple[str, ...] = ()) -> tuple[str, ...]:
     """Each database's restore chain, as relative paths.
 
     Read from the layout the backup jobs write - ``<database>/FULL|DIFF|LOG/<file>``, the time in
@@ -581,10 +734,41 @@ def sqlserver_chain_include(source_session, *, source_dir: str, log: Any = None)
             item=rel, database=parts[-3], kind=chain_rule.kind_from_folder(parts[-2]),
             timestamp=chain_rule.backup_time_from_name(parts[-1]) or mtime))
     if not candidates:
+        if databases:
+            # Named, and the layout cannot say which files are theirs: a whole-directory copy would
+            # take every database the caller did not ask for.
+            raise ChainUnknownError(f"no FULL / DIFF / LOG folders under {source_dir}: the backups of "
+                                    f"{', '.join(databases)} cannot be told from the others there.")
         if log:
             log(f"no FULL / DIFF / LOG folders under {source_dir}: copying the whole directory")
         return ()
-    choice = chain_rule.restore_chain(candidates)
+    if databases:
+        # Only the databases the restore takes (0.39.0, 1.362). One it names and the folder does not
+        # hold is said here, by name - not found later as "no full backup" after the others travelled.
+        wanted = {name.lower(): name for name in databases}
+        held = {str(c.database).lower() for c in candidates}
+        absent = sorted(name for key, name in wanted.items() if key not in held)
+        if absent:
+            raise ChainUnknownError(f"no backup of {', '.join(absent)} under {source_dir} - the folder holds "
+                                    f"{', '.join(sorted({str(c.database) for c in candidates})) or 'no database'}.")
+        left_out = len({str(c.database).lower() for c in candidates} - set(wanted))
+        candidates = [c for c in candidates if str(c.database).lower() in wanted]
+        if log and left_out:
+            log(f"{left_out} other database(s) under {source_dir} are not part of this restore: not copied")
+    choice = chain_rule.restore_chain(candidates, until=until)
+    if until is not None and choice.unresolved:
+        # A point in time before a database's first full has no chain (0.39.0, 1.363): copied whole, the
+        # restore read 198 files to fail on the first database - and its dry run said it would run. The
+        # moment a person can ask for begins at each database's oldest full, so that is what is said.
+        oldest = {}
+        for c in candidates:
+            if c.kind == "FULL" and c.database in choice.unresolved:
+                oldest[c.database] = min(oldest.get(c.database, c.timestamp), c.timestamp)
+        when = "; ".join(
+            f"{name}: its oldest FULL ends {_utc_text(oldest[name])}" if name in oldest else f"{name}: no FULL at all"
+            for name in sorted(choice.unresolved))
+        raise ChainUnknownError(f"no FULL at or before the moment for {', '.join(sorted(choice.unresolved))} - "
+                                f"the earliest point it can be restored to is after its oldest full ({when}).")
     folders = {str(c.item).rsplit("/", 2)[0]: c.database for c in candidates}
     whole = sorted(f"{folder}/" for folder, database in folders.items()
                    if database in choice.unresolved)
@@ -594,7 +778,8 @@ def sqlserver_chain_include(source_session, *, source_dir: str, log: Any = None)
     return tuple(sorted(str(item) for item in choice.selected)) + tuple(whole)
 
 
-def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None) -> tuple[str, ...]:
+def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None,
+                             until: float | None = None) -> tuple[str, ...]:
     """``("base/<newest _FULL>", "base/<each _INCR after it>", "wal/")``.
 
     The restore combines exactly this set (``pg_combinebackup`` over the newest ``_FULL`` plus
@@ -610,11 +795,15 @@ def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None
     _stdin, stdout, _stderr = source_session.open_stream(command)
     names = [line.strip().rsplit("/", 1)[-1]
              for line in stdout.read().decode("utf-8", "replace").splitlines() if line.strip()]
+    if until is not None:
+        # A point in time (0.39.0, 1.360): only what was taken at or before the moment can lead to it.
+        names = [name for name in names if (_pg_stamp(name) or 0.0) <= until]
     fulls = [name for name in names if name.endswith("_FULL")]
     if not fulls:
         raise ChainUnknownError(
-            f"no _FULL backup under {base} on the source - there is no chain to restore from. "
-            "Run the full backup job first.")
+            f"no _FULL backup under {base} on the source"
+            + (" taken at or before the moment" if until is not None else "")
+            + " - there is no chain to restore from. Run the full backup job first.")
     newest_full = fulls[-1]
     chain = [newest_full] + [name for name in names
                              if name.endswith("_INCR") and name > newest_full]
@@ -625,6 +814,14 @@ def postgresql_chain_include(source_session, *, source_dir: str, log: Any = None
         log(f"transfer narrowed to the restore chain: {len(chain)} backup(s) + wal/ "
             f"(source holds {len(names)} backup directories)")
     return include
+
+
+def _pg_stamp(name: str) -> float | None:
+    """``20260925T004710Z_FULL`` -> epoch seconds; ``None`` for a name that carries no stamp."""
+    try:
+        return dt.datetime.strptime(name[:16], "%Y%m%dT%H%M%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+    except ValueError:
+        return None
 
 
 # The restore needs every piece from the newest usable level 0 onward: that level 0, the level 1s

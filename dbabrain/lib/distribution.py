@@ -205,10 +205,19 @@ PRIVATE_PATHS: dict[str, str] = {
     "tests_estate": "exists to assert against real servers by name. That is its whole purpose, so "
                     "it can never be scrubbed and must never ship",
     "secrets": "the plaintext source of the secret store; only secrets/*.example.json crosses",
+    # 0.39.0: undecided since 0.38.0 put it here, so every export said so and left it out. It is the
+    # hosted connector of one deployment - its Worker, its demo node, its audit reader - not the
+    # package; `dbabrain mcp serve --http` is the product half and ships in dbabrain/mcp.
+    "connector": "the hosted MCP connector of one deployment (the Worker, its demo node and audit "
+                 "reader); the package's own half is dbabrain/mcp, which ships",
     "CLAUDE.md": "the maintainer's local working notes for this repository; never part of the product",
     "docker-compose.runtime.yml": "the worker's compose: bind mounts and a pinned bridge subnet "
                                   "that describe this operator's host, not the product",
     ".vscode": "editor settings, of no use to anyone else",
+    # 0.39.0: both were named by every export since 0.38.0 as placed nowhere, and left out.
+    ".claude": "the maintainer's local Claude Code settings for this tree, like CLAUDE.md",
+    ".secret": "one deployment's credentials (the connector's Cloudflare login) - gitignored, never part "
+               "of the product",
     "deploy": "build output",
     "logs": "generated",
     "runtime": "generated",
@@ -326,4 +335,4 @@ PRIVATE_TESTS: dict[str, str] = {
 #: version is immutable** — it cannot be re-uploaded after deletion, so the mistake is permanent.
 #: The public tree starts where a first release starts.
 PUBLIC_DISTRIBUTION_NAME = "dbabrain"
-PUBLIC_VERSION = "0.38.0"
+PUBLIC_VERSION = "0.39.0"

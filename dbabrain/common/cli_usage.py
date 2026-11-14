@@ -68,6 +68,7 @@ USAGE = (
     "  sql-target-add   Register WHERE a SQL task runs: one server, one schedule (see --help)\n"
     "  remote-credential-add  Register one host's OS login + the cmd_access naming it (see --help)\n"
     "  secret-set       Store one secret encrypted, never in clear; request on stdin (see --help)\n"
+    "  ai-key           Store the AI assistant's API key and switch the assistant on (see --help)\n"
     "  probe-host       What a host listens on, and what dbabrain can do with it (see --help)\n"
     "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING; or a list (see --help)\n"
     "  instance-active  Switch one server_id on or off for every app: its active flag (see --help)\n"
@@ -313,6 +314,32 @@ INVENTORY_SUMMARY_USAGE = (
     "  date         YYYYMMDD stamp for the output name (default: today)\n"
     "\n"
     "Prints JSON: {ok, inventory, file}. Exit 0 on success, 1 on failure.\n"
+)
+
+AI_KEY_USAGE = (
+    "usage: dbabrain ai-key                 (asks for the key; it is not shown as you paste it)\n"
+    "       <request> | python -m dbabrain.common.cli ai-key -\n"
+    "\n"
+    "The first step on a new install, right after `dbabrain init` and the passphrase: the AI assistant's\n"
+    "Anthropic API key stored in data/encrypted_secret_text.json - never in clear - and the assistant\n"
+    "switched on in data/ai_assist.json (enabled true, api_key_ref naming the key). Then ask it what to\n"
+    "set up next: dbabrain telegram ai-ask \"What do I set up next?\"\n"
+    "\n"
+    "Bare, on a terminal, it asks for the key. A request is a JSON object ON STDIN ONLY (-):\n"
+    "\n"
+    '  {"value": "sk-ant-..."}\n'
+    "\n"
+    "  value      required. The API key. Never echoed back\n"
+    "  ref        optional. The secret's name. Default: the api_key_ref data/ai_assist.json already\n"
+    "             names, else AI_ASSIST_API_KEY - and it is written into api_key_ref\n"
+    "  overwrite  optional. Replace a DIFFERENT value under a ref the request names (default: refuse).\n"
+    "             The ref ai_assist.json already names is the assistant's own: a new key replaces it\n"
+    "\n"
+    "Needs the store's passphrase in DBABRAIN_SECRET_KEY. A data/ai_assist.json that does not exist yet\n"
+    "is written with every field at its shipped value. The SDK is the package's `ai` extra: the same\n"
+    "pip install as the package, with [ai] after its name.\n"
+    "\n"
+    "Prints JSON: {success, data: {ref, written, replaced, enabled, settings_file, store, next, warnings}}.\n"
 )
 
 SECRET_SET_USAGE = (

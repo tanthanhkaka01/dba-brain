@@ -35,6 +35,7 @@ from pathlib import Path
 from dbabrain.lib import backup_policy
 from dbabrain.lib import health_model as _health_model
 from dbabrain.reports import inventory_health
+from dbabrain.reports import page_texts
 from dbabrain.reports.inventory_health import merged_drives, merged_sql_resources
 from dbabrain.lib.paths import TOOL_ROOT  # noqa: F401 - one definition, see that module
 from dbabrain.lib import page_banner, page_kit
@@ -619,6 +620,9 @@ def build_models(data: dict, *, exclude_ip_prefixes=EXCLUDE_IP_PREFIXES):
             "machine": db0.get("machine_name") or db0.get("server_name") or os_info.get("hostname") or "",
             "endpoint": db0.get("endpoint_name") or db0.get("server_name") or os_info.get("hostname") or "—",
             "platform": _platform(db0, os_info),
+            # Windows / Linux as the OS collector read it on the host, else the inventory's stated
+            # platform: what a metric's advice is worded for (server_health.metric_action_for).
+            "osFamily": str(os_info.get("os_family") or s.get("platform") or db0.get("platform") or ""),
             # The live OS metric wins over the static WinRM inventory and the DB's view of it.
             "os": os_info.get("os_name") or os_res.get("os_caption") or db0.get("os") or "—",
             "ramGB": os_mem.get("total_gb") or mem.get("host_physical_memory_gb") or os_res.get("physical_memory_gb"),
@@ -721,6 +725,40 @@ _TRIAGE_OWNED_CODES = {
 _SEV_FROM_SEVERITY = {"CRITICAL": "crit", "WARNING": "warn"}
 
 
+def _metric_action_across(code: str, models: list) -> str:
+    """What to do about ``code`` for the servers of one card: each server's sentence, worded for its
+    own operating system and engine (``metric_definitions.json``), merged as a card's are."""
+    from dbabrain.reports.server_report import metric_action_for  # noqa: PLC0415 - same app, avoids a cycle
+
+    actions: list[tuple[str, str]] = []
+    for model in models:
+        sentence = metric_action_for(code, platform=model.get("osFamily"), db_type=model.get("dbType"))
+        if sentence[0] and sentence not in actions:
+            actions.append(sentence)
+    return _merged_action(actions)
+
+
+def _merged_action(actions: list[tuple[str, str]]) -> str:
+    """One card's action from its servers' sentences: the sentence itself when they agree, else
+    each one named by the platform or engine it is for (``Windows: ... Linux: ...``)."""
+    if len(actions) <= 1:
+        return actions[0][0] if actions else ""
+    return " ".join(f"{whom}: {sentence}" if whom else sentence for sentence, whom in actions)
+
+
+def _card(key: str, *, sev: str, tags: list, action: str | None = None, **values) -> dict:
+    """One fleet card whose title, body and action are the page's texts (reports_config.json,
+    page_texts.fleet_cards) with the values this page computed; action given means the card's
+    action is computed, not a text."""
+    return {
+        "sev": sev,
+        "title": page_texts.card_text(key, "title", **values),
+        "body": page_texts.card_text(key, "body", **values),
+        "action": action if action is not None else page_texts.card_text(key, "action", **values),
+        "tags": tags,
+    }
+
+
 def _metric_problem_cards(models: list) -> list:
     """One card per metric condition that is true **now**, at the severity the classifier gave it.
 
@@ -741,10 +779,16 @@ def _metric_problem_cards(models: list) -> list:
                 continue
             entry = by_code.setdefault(code, {
                 "label": group.get("label") or code,
-                "action": group.get("action") or "",
+                "actions": [],
                 "severity": severity,
                 "lines": [], "tags": [], "items": 0,
             })
+            # Each server's action is worded for its own operating system and engine; one card can
+            # hold a Windows host and a Linux one, so every distinct sentence is kept, with whom it
+            # is for. It was the first server's sentence for all of them (2026-11-13).
+            sentence = (str(group.get("action") or ""), str(group.get("actionFor") or ""))
+            if sentence[0] and sentence not in entry["actions"]:
+                entry["actions"].append(sentence)
             if severity == "CRITICAL":
                 entry["severity"] = "CRITICAL"
             entry["items"] += int(group.get("count") or 0)
@@ -756,16 +800,18 @@ def _metric_problem_cards(models: list) -> list:
 
     cards = []
     for code, entry in by_code.items():
-        cards.append({
-            "sev": _SEV_FROM_SEVERITY[entry["severity"]],
-            "title": f"{entry['label']} — {entry['items']} item(s) on "
-                     f"{len(entry['lines'])} server(s)",
-            "body": "; ".join(entry["lines"][:8])
-                    + (f" (+{len(entry['lines']) - 8} more server(s))" if len(entry["lines"]) > 8 else "")
-                    + f". Metric: {code}.",
-            "action": entry["action"],
-            "tags": sorted(set(entry["tags"])),
-        })
+        cards.append(_card(
+            "metric_problem",
+            sev=_SEV_FROM_SEVERITY[entry["severity"]],
+            tags=sorted(set(entry["tags"])),
+            action=_merged_action(entry["actions"]),
+            label=entry["label"],
+            items=entry["items"],
+            servers=len(entry["lines"]),
+            detail="; ".join(entry["lines"][:8])
+                   + (f" (+{len(entry['lines']) - 8} more server(s))" if len(entry["lines"]) > 8 else ""),
+            code=code,
+        ))
     return cards
 
 
@@ -790,35 +836,30 @@ def _monitoring_gap_cards(models: list) -> list:
 
     cards = []
     if failing:
-        cards.append({"sev": "crit",
-                      "title": f"Metrics currently failing on {len(failing)} server(s)",
-                      "body": "The newest run of these metrics did not return a usable result, so "
-                              "whatever the page shows for them is the last value from before they "
-                              "broke: " + "; ".join(failing) + ".",
-                      "action": "Read the collector error on the server page, then fix the "
-                                "credential, permission or connectivity behind it. Until it "
-                                "returns, treat that area as unknown, not healthy.",
-                      "tags": [_ip_tag(m) for m in models if (m.get("freshness_detail") or {}).get("failed")]})
+        cards.append(_card(
+            "metrics_failing",
+            sev="crit",
+            tags=[_ip_tag(m) for m in models if (m.get("freshness_detail") or {}).get("failed")],
+            count=len(failing),
+            servers="; ".join(failing),
+        ))
     if late:
-        cards.append({"sev": "warn",
-                      "title": f"Metrics overdue on {len(late)} server(s)",
-                      "body": "No attempt for at least three of the metric's own intervals: "
-                              + "; ".join(late) + ".",
-                      "action": "Check the scheduler and the metric's time_window; a windowed "
-                                "metric outside its hours is expected, a five-minute metric hours "
-                                "behind is not.",
-                      "tags": [_ip_tag(m) for m in models if (m.get("freshness_detail") or {}).get("late")]})
+        cards.append(_card(
+            "metrics_overdue",
+            sev="warn",
+            tags=[_ip_tag(m) for m in models if (m.get("freshness_detail") or {}).get("late")],
+            count=len(late),
+            servers="; ".join(late),
+        ))
     if missing:
-        cards.append({"sev": "warn",
-                      "title": f"Catalog metrics with no evidence on {len(missing)} server(s)",
-                      "body": "Active in the metric catalog for this engine but no rows in the "
-                              "window — either never collected here, or switched off for this "
-                              "target: " + "; ".join(missing) + ".",
-                      "action": "Confirm each is deliberately disabled (metrics.metric_overrides "
-                                "in db_instances.json). Anything not deliberately off is a "
-                                "monitoring blind spot, not a healthy signal.",
-                      "tags": [_ip_tag(m) for m in models
-                               if (m.get("freshness_detail") or {}).get("notCollected")]})
+        cards.append(_card(
+            "metrics_no_evidence",
+            sev="warn",
+            tags=[_ip_tag(m) for m in models
+                  if (m.get("freshness_detail") or {}).get("notCollected")],
+            count=len(missing),
+            servers="; ".join(missing),
+        ))
     return cards
 
 
@@ -832,13 +873,13 @@ def build_triage(models: list) -> list:
         def _last(m):
             f = m.get("freshness") or {}
             return f"last {f['asOf'][:16]}" if f.get("asOf") else "no live metrics"
-        cards.append({"sev": "warn",
-                      "title": f"{len(stale)} server(s) show last known values, not current ones",
-                      "body": "Nothing was collected from these recently, so none of their figures is "
-                              "graded here: " + "; ".join(f"{m['role']} ({m['ip']}) — {_last(m)}" for m in stale) + ".",
-                      "action": "Bring collection back (metrics switched off, a login or host access lost), "
-                                "or take the server off the report.",
-                      "tags": [_ip_tag(m) for m in stale]})
+        cards.append(_card(
+            "stale_servers",
+            sev="warn",
+            tags=[_ip_tag(m) for m in stale],
+            count=len(stale),
+            servers="; ".join(f"{m['role']} ({m['ip']}) — {_last(m)}" for m in stale),
+        ))
         models = [m for m in models if m not in stale]
 
     stopped = [
@@ -849,76 +890,67 @@ def build_triage(models: list) -> list:
     ]
     if stopped:
         down = [pair for pair in stopped if str(pair[1].get("status") or "").upper() == "CRITICAL"]
-        cards.append({"sev": "crit" if down else "warn",
-                      "title": f"{len(stopped)} monitored service(s) are not running",
-                      "body": "A service the host is monitored for is stopped or missing: "
-                              + "; ".join(f"{m['role']} ({m['ip']}) — {item.get('name')}: {item.get('state')}"
-                                          for m, item in stopped)
-                              + ". On an application host this is the workload itself being down.",
-                      "action": "Start the service and check why it stopped (event log, service recovery "
-                                "settings). If the name is wrong, fix OS_SERVICE_NAMES for that target.",
-                      "tags": sorted({_ip_tag(m) for m, _ in stopped})})
+        cards.append(_card(
+            "services_stopped",
+            sev="crit" if down else "warn",
+            tags=sorted({_ip_tag(m) for m, _ in stopped}),
+            count=len(stopped),
+            servers="; ".join(f"{m['role']} ({m['ip']}) — {item.get('name')}: {item.get('state')}"
+                              for m, item in stopped),
+            # The metric's own sentence, worded for each host's operating system - it said
+            # "event log, service recovery settings" to a Linux host too (2026-11-13).
+            metric_action=_metric_action_across("OS_SERVICE_STATUS", [m for m, _ in stopped]),
+        ))
 
     violated = [m for m in models if m["backup"].get("logStale")]
     if violated:
-        cards.append({"sev": "crit",
-                      "title": f"Transaction-log RPO violated on {len(violated)} server(s)",
-                      "body": "The newest LOG backup is past the RPO these databases are held to: "
-                              + "; ".join(
-                                  f"{m['role']} ({m['ip']}) — {m['backup']['note']}"
-                                  + (f" [{', '.join(m['backup']['worstDatabases'][:5])}]"
-                                     if m['backup'].get('worstDatabases') else "")
-                                  for m in violated)
-                              + ". Point-in-time recovery is unavailable for the period since that "
-                                "backup. Whether the log *chain* is intact is a separate question: "
-                                "it needs backup LSN and recovery-fork evidence, which is not collected.",
-                      "action": "Check the LOG backup job, its destination and its credentials, and "
-                                "confirm no database silently switched to SIMPLE. Verify LSN continuity "
-                                "before deciding a fresh FULL is required — taking one when the chain "
-                                "was intact discards a working restore path.",
-                      "tags": [_ip_tag(m) for m in violated]})
+        cards.append(_card(
+            "log_rpo_violated",
+            sev="crit",
+            tags=[_ip_tag(m) for m in violated],
+            count=len(violated),
+            servers="; ".join(
+                f"{m['role']} ({m['ip']}) — {m['backup']['note']}"
+                + (f" [{', '.join(m['backup']['worstDatabases'][:5])}]"
+                   if m['backup'].get('worstDatabases') else "")
+                for m in violated),
+        ))
 
     # Before the aging card, because a server that is not being graded cannot appear in either of
     # the two above it, and the reader has to know that the absence is silence rather than health.
     ungraded = [m for m in models if m["backup"].get("policyConfigured") is False]
     if ungraded:
-        cards.append({"sev": "warn",
-                      "title": f"Backup compliance is not being graded on {len(ungraded)} server(s)",
-                      "body": "Backup evidence was collected and there is no policy to judge it "
-                              "against — data/backup_policy.json is absent on this node, or "
-                              "carries no rule: "
-                              + "; ".join(f"{m['role']} ({m['ip']}) — "
-                                          f"{m['backup'].get('eligible') or 0} database(s) unjudged"
-                                          for m in ungraded[:8])
-                              + (f" (+{len(ungraded) - 8} more server(s))" if len(ungraded) > 8 else "")
-                              + ". These read Unverified rather than Compliant, and no RPO or "
-                                "backup-age finding on them can appear anywhere on this page. "
-                                "Until 2026-09-14 they read '15/15 DB within policy' instead.",
-                      "action": "Restore data/backup_policy.json on this node — 'dbabrain init' "
-                                "writes the shipped default, and a node configured from a bundle "
-                                "gets the estate's own copy. Then re-run the inventory workflow "
-                                "and read the Backup column again before trusting any 'OK' on it.",
-                      "tags": [_ip_tag(m) for m in ungraded]})
+        cards.append(_card(
+            "backup_not_graded",
+            sev="warn",
+            tags=[_ip_tag(m) for m in ungraded],
+            count=len(ungraded),
+            servers="; ".join(f"{m['role']} ({m['ip']}) — "
+                              f"{m['backup'].get('eligible') or 0} database(s) unjudged"
+                              for m in ungraded[:8]),
+            more=f" (+{len(ungraded) - 8} more server(s))" if len(ungraded) > 8 else "",
+        ))
 
     aging = [m for m in models
              if str(m["backup"].get("status") or "").upper() == "WARNING" and not m["backup"].get("logStale")]
     if aging:
-        cards.append({"sev": "warn",
-                      "title": f"Backups approaching their policy limit on {len(aging)} server(s)",
-                      "body": "; ".join(f"{m['role']} ({m['ip']}) — {m['backup']['note']}" for m in aging) + ".",
-                      "action": "Check the schedule before the next run misses; confirm the job is enabled.",
-                      "tags": [_ip_tag(m) for m in aging]})
+        cards.append(_card(
+            "backup_aging",
+            sev="warn",
+            tags=[_ip_tag(m) for m in aging],
+            count=len(aging),
+            servers="; ".join(f"{m['role']} ({m['ip']}) — {m['backup']['note']}" for m in aging),
+        ))
 
     idle = [m for m in models if m["status"] == "idle"]
     if idle:
-        cards.append({"sev": "warn",
-                      "title": f"{len(idle)} target(s) cannot be fully inventoried (auth / connectivity)",
-                      "body": "Backup and health posture is unverifiable on: "
-                              + "; ".join(f"{_ip_tag(m)} ({m['inv']})" for m in idle)
-                              + ". These are blind spots, not confirmed-healthy.",
-                      "action": "Fix monitoring credentials / firewall / legacy client so collection succeeds; "
-                                "re-run before trusting any 'OK'.",
-                      "tags": [_ip_tag(m) for m in idle]})
+        cards.append(_card(
+            "not_inventoried",
+            sev="warn",
+            tags=[_ip_tag(m) for m in idle],
+            count=len(idle),
+            servers="; ".join(f"{_ip_tag(m)} ({m['inv']})" for m in idle),
+        ))
 
     # "No LOG required" is a policy fact, not a defect — but on a production database it is a
     # decision worth re-reading, because it means the RPO is one whole FULL cycle.
@@ -927,14 +959,13 @@ def build_triage(models: list) -> list:
                  and m["backup"]["cov"].startswith("Full")
                  and "LOG not required" in m["backup"]["cov"]]
     if full_only:
-        cards.append({"sev": "warn",
-                      "title": f"{len(full_only)} server(s) have no LOG backup requirement",
-                      "body": "Policy requires no transaction-log backup on: "
-                              + ", ".join(f"{m['role']} ({m['ip']})" for m in full_only)
-                              + ". Worst-case data loss is a whole FULL cycle.",
-                      "action": "Confirm the recovery model is deliberately SIMPLE. If it is not, "
-                                "move the databases to FULL recovery and schedule log backups.",
-                      "tags": [_ip_tag(m) for m in full_only]})
+        cards.append(_card(
+            "no_log_requirement",
+            sev="warn",
+            tags=[_ip_tag(m) for m in full_only],
+            count=len(full_only),
+            servers=", ".join(f"{m['role']} ({m['ip']})" for m in full_only),
+        ))
 
     # Security. A login being hammered thousands of times a day is either an attack or an
     # integration holding a dead credential; both are findings, and both were invisible here.
@@ -949,45 +980,42 @@ def build_triage(models: list) -> list:
     hammered = [m for m in models if _hammered_logins(m)]
     if hammered:
         worst = "crit" if any(p.get("status") == "CRITICAL" for m in hammered for p in _hammered_logins(m)) else "warn"
-        cards.append({"sev": worst,
-                      "title": f"Failed logins on {len(hammered)} server(s)",
-                      "body": "Principals failing to authenticate, as the collector flags them: "
-                              + "; ".join(
-                                  f"{m['role']} ({m['ip']}) - " + ", ".join(
-                                      f"{p['login']}: {int(p.get('attempts') or 0):,} attempts/24h"
-                                      for p in _hammered_logins(m)[:3])
-                                  for m in hammered)
-                              + ". Either the credential is being guessed, or an integration is retrying "
-                                "a dead one, and the error log is being filled either way.",
-                      "action": "Identify the source host of the attempts, then disable/fix the principal "
-                                "or block the source. Do not simply raise the alert threshold.",
-                      "tags": [_ip_tag(m) for m in hammered]})
+        cards.append(_card(
+            "failed_logins",
+            sev=worst,
+            tags=[_ip_tag(m) for m in hammered],
+            count=len(hammered),
+            servers="; ".join(
+                f"{m['role']} ({m['ip']}) - " + ", ".join(
+                    f"{p['login']}: {int(p.get('attempts') or 0):,} attempts/24h"
+                    for p in _hammered_logins(m)[:3])
+                for m in hammered),
+        ))
 
     def _old_passwords(m):
         return [p for p in (m.get("security") or {}).get("passwordsOld") or [] if p.get("status") in flagged]
 
     stale_pw = [m for m in models if _old_passwords(m)]
     if stale_pw:
-        cards.append({"sev": "warn",
-                      "title": "SQL logins with old passwords",
-                      "body": "; ".join(
-                          f"{m['role']} ({m['ip']}) - {len(_old_passwords(m))} login(s) past "
-                          f"{(m.get('security') or {}).get('passwordThresholdDays') or 180} days, oldest "
-                          f"{int(max(p.get('age_days') or 0 for p in _old_passwords(m)))} days"
-                          for m in stale_pw) + ".",
-                      "action": "Rotate the service logins on a schedule; start with sa and anything with "
-                                "db_owner.",
-                      "tags": [_ip_tag(m) for m in stale_pw]})
+        cards.append(_card(
+            "passwords_old",
+            sev="warn",
+            tags=[_ip_tag(m) for m in stale_pw],
+            servers="; ".join(
+                f"{m['role']} ({m['ip']}) - {len(_old_passwords(m))} login(s) past "
+                f"{(m.get('security') or {}).get('passwordThresholdDays') or 180} days, oldest "
+                f"{int(max(p.get('age_days') or 0 for p in _old_passwords(m)))} days"
+                for m in stale_pw),
+        ))
 
     low_ple = [m for m in models if _ple_severity(m) != "OK"]
     if low_ple:
-        cards.append({"sev": "crit" if any(_ple_severity(m) == "CRITICAL" for m in low_ple) else "warn",
-                      "title": "Memory pressure — low PLE under session load",
-                      "body": "Page Life Expectancy is low (buffer pool churning) on: "
-                              + "; ".join(f"{m['role']} (PLE {m['ple']} · {m['sessions']} sessions)" for m in low_ple) + ".",
-                      "action": "Review max server memory vs. host RAM, top missing indexes, plan-cache bloat "
-                                "(enable optimize-for-ad-hoc).",
-                      "tags": [_ip_tag(m) for m in low_ple]})
+        cards.append(_card(
+            "low_ple",
+            sev="crit" if any(_ple_severity(m) == "CRITICAL" for m in low_ple) else "warn",
+            tags=[_ip_tag(m) for m in low_ple],
+            servers="; ".join(f"{m['role']} (PLE {m['ple']} · {m['sessions']} sessions)" for m in low_ple),
+        ))
 
     # Disk severity follows the status the metric layer already computed (CRITICAL/WARNING),
     # falling back to the collected free% only when a status is absent. A near-full volume
@@ -1007,62 +1035,64 @@ def build_triage(models: list) -> list:
             elif _disk_sev(d) == "warn":
                 warn_disk.append(label)
     if crit_disk:
-        cards.append({"sev": "crit",
-                      "title": f"Disk critically low (near full) on {len(crit_disk)} volume(s)",
-                      "body": "Volumes at/near 0% free — imminent risk of data/log write failure: "
-                              + "; ".join(crit_disk) + ".",
-                      "action": "Free space / extend the volume now; archive old backups.",
-                      "tags": crit_disk})
+        cards.append(_card(
+            "disk_critical",
+            sev="crit",
+            tags=crit_disk,
+            count=len(crit_disk),
+            detail="; ".join(crit_disk),
+        ))
     if warn_disk:
-        cards.append({"sev": "warn",
-                      "title": "Low disk headroom on production volumes",
-                      "body": "Approaching the danger zone for data/log growth: " + "; ".join(warn_disk) + ".",
-                      "action": "Plan capacity / archive old backups; set disk alerts at 15%.",
-                      "tags": warn_disk})
+        cards.append(_card(
+            "disk_low",
+            sev="warn",
+            tags=warn_disk,
+            detail="; ".join(warn_disk),
+        ))
 
     wrong_edition = [m for m in models if (m.get("protection") or {}).get("editionFinding")]
     if wrong_edition:
-        cards.append({"sev": "warn",
-                      "title": f"{len(wrong_edition)} production instance(s) on an edition not meant for production",
-                      "body": "; ".join(f"{m['role']} ({_ip_tag(m)}) — {m['protection']['editionFinding']}"
-                                        for m in wrong_edition) + ".",
-                      "action": "Move the instance to a licensed production edition, or correct its "
-                                "environment in the inventory if it is not production.",
-                      "tags": [_ip_tag(m) for m in wrong_edition]})
+        cards.append(_card(
+            "wrong_edition",
+            sev="warn",
+            tags=[_ip_tag(m) for m in wrong_edition],
+            count=len(wrong_edition),
+            servers="; ".join(f"{m['role']} ({_ip_tag(m)}) — {m['protection']['editionFinding']}"
+                              for m in wrong_edition),
+        ))
 
     plain = [(m, enc) for m in models
              for enc in [(m.get("protection") or {}).get("encryption") or {}]
              if enc.get("collected") and not enc.get("error") and enc.get("total")
              and enc.get("encrypted", 0) < enc["total"]]
     if plain:
-        cards.append({"sev": "info",
-                      "title": f"Data files not encrypted at rest on {len(plain)} server(s)",
-                      "body": "A copy of these files opens on another install, so whoever is an "
-                              "administrator on the host can take the data: "
-                              + "; ".join(f"{m['role']} ({_ip_tag(m)}) — {enc['encrypted']} of {enc['total']} encrypted"
-                                          for m, enc in plain) + ".",
-                      "action": "Detection only: each server's page lists the databases, who the host's "
-                                "administrators are, and the engine's way to encrypt.",
-                      "tags": [_ip_tag(m) for m, _enc in plain]})
+        cards.append(_card(
+            "not_encrypted",
+            sev="info",
+            tags=[_ip_tag(m) for m, _enc in plain],
+            count=len(plain),
+            servers="; ".join(f"{m['role']} ({_ip_tag(m)}) — {enc['encrypted']} of {enc['total']} encrypted"
+                              for m, enc in plain),
+        ))
 
     xpcmd = [m for m in models if (m["cfg"].get("xpcmd") == 1)]
     if xpcmd:
-        cards.append({"sev": "info",
-                      "title": "Security — xp_cmdshell enabled",
-                      "body": "xp_cmdshell is ON for: " + ", ".join(f"{m['role']} ({m['ip']})" for m in xpcmd)
-                              + ". Often needed by legacy jobs but widens the attack surface.",
-                      "action": "Confirm intentional / scope it; otherwise disable.",
-                      "tags": [_ip_tag(m) for m in xpcmd]})
+        cards.append(_card(
+            "xp_cmdshell",
+            sev="info",
+            tags=[_ip_tag(m) for m in xpcmd],
+            servers=", ".join(f"{m['role']} ({m['ip']})" for m in xpcmd),
+        ))
 
     standalone = [m for m in models if m["total"] and not m.get("oracle")
                   and "none_documented" in m["ha"] and "standalone" in m["ha"]]
     if standalone:
-        cards.append({"sev": "info",
-                      "title": "No documented HA/DR for standalone production",
-                      "body": "Core data on standalone servers without a documented DR strategy: "
-                              + ", ".join(f"{m['role']} ({_ip_tag(m)})" for m in standalone) + ".",
-                      "action": "Document or stand up a DR strategy for these servers.",
-                      "tags": [_ip_tag(m) for m in standalone]})
+        cards.append(_card(
+            "no_dr",
+            sev="info",
+            tags=[_ip_tag(m) for m in standalone],
+            servers=", ".join(f"{m['role']} ({_ip_tag(m)})" for m in standalone),
+        ))
 
     cards.extend(_metric_problem_cards(models))
     cards.extend(_monitoring_gap_cards(models))
@@ -1081,25 +1111,24 @@ def build_triage(models: list) -> list:
         if extra:
             documented.append(f"{m['role']} ({_ip_tag(m)}): " + "; ".join(extra))
     if documented:
-        cards.append({"sev": "info",
-                      "title": "Documented inventory notes (not live measurements)",
-                      "body": "Recorded in the inventory (incl. hosts without live DB metrics): "
-                              + " · ".join(documented) + ".",
-                      "action": "Review each; fix collection where a finding is 'not connected'.",
-                      "tags": [_ip_tag(m) for m in models if [f for f in m.get('findings', [])
-                                                              if not str(f).lower().startswith('low disk')]]})
+        cards.append(_card(
+            "inventory_notes",
+            sev="info",
+            tags=[_ip_tag(m) for m in models if [f for f in m.get('findings', [])
+                                                    if not str(f).lower().startswith('low disk')]],
+            detail=" · ".join(documented),
+        ))
 
     drift = [m for m in models if not m.get("oracle") and not m["cfg"].get("govMissing")
              and (m["cfg"].get("backupCompr") == 0 or m["cfg"].get("remoteDac") == 0
                   or m["cfg"].get("optAdhoc") == 0 or (m["cfg"].get("cost") or 99) < 30)]
     if drift:
-        cards.append({"sev": "info",
-                      "title": "Fleet-wide config baseline drift (quick wins)",
-                      "body": f"Across {len(drift)} server(s): backup compression OFF, remote DAC OFF, "
-                              "optimize-for-ad-hoc OFF, blocked-process-threshold 0, and/or "
-                              "cost-threshold-for-parallelism at the default 5.",
-                      "action": "Apply a documented SQL config baseline via script; re-scan to confirm.",
-                      "tags": [f"{len(drift)} servers", "baseline"]})
+        cards.append(_card(
+            "config_drift",
+            sev="info",
+            tags=[f"{len(drift)} servers", "baseline"],
+            count=len(drift),
+        ))
 
     # Order so the most severe items lead Priority Attention: crit, then warn, then info.
     return sorted(cards, key=lambda c: {"crit": 0, "warn": 1, "info": 2}.get(c["sev"], 3))

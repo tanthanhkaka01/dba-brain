@@ -174,10 +174,15 @@ def staging(monkeypatch, tmp_path):
 
     def run(command, request, **_k):
         calls.append((command, request))
+        if command == "prepare-staging" and "incoming" in request:
+            # The target half (0.39.0, 1.355): the staging made, marked and held to the room first.
+            return {"space_check": {"checked": True, "ok": True}}
         if command == "prepare-staging":
             # Which files the chain is, read from the repository alone: no target is opened for it.
             assert request["plan_only"] is True
             return {"files": [{"path": p} for p in staging_files]}
+        if command == "finish-staging":
+            return {"timed": 0, "not_timed": [], "opened_for_engine": True}
         if command == "fetch-decrypted-file":
             return {"target_path": request["target_path"], "plain_size_bytes": request["plain_size_bytes"],
                     "plain_sha256": request["plain_sha256"]}
@@ -239,7 +244,24 @@ def test_a_plan_the_restore_already_read_is_not_read_from_the_repository_again(s
     answer = _stage(staging, monkeypatch, plan=plan)
 
     assert answer["files_decrypted"] == 2
-    assert {c for c, _r in staging.calls} == {"fetch-decrypted-file"}
+    assert not [r for c, r in staging.calls if c == "prepare-staging" and r.get("plan_only")]
+
+
+def test_the_staging_is_made_ready_before_the_first_file_and_opened_for_the_engine_after(staging, monkeypatch):
+    """0.39.0 (1.355): the encrypted path skipped the staging's preparation - no room checked, no
+    marker (its cleanup then kept the folder), the engine's access never opened (a SQL Server
+    container reads the staging as its own uid)."""
+    answer = _stage(staging, monkeypatch)
+    commands = [c for c, _r in staging.calls]
+    ready = next(r for c, r in staging.calls if c == "prepare-staging" and "incoming" in r)
+    assert commands.index("prepare-staging", 1) < commands.index("fetch-decrypted-file")
+    assert ready["target_dir"] == "/stage" and ready["target"] == {"host": "vm"}
+    assert ready["incoming"] == [{"path": "base/X_FULL/base.tar.zst", "size_bytes": 10},
+                                 {"path": "base/X_FULL/backup_manifest", "size_bytes": 10}], "plain names and bytes"
+    finished = next(r for c, r in staging.calls if c == "finish-staging")
+    assert commands[-1] == "finish-staging" and finished["open_for_engine"] is True
+    assert [f["path"] for f in finished["files"]] == ["base/X_FULL/base.tar.zst", "base/X_FULL/backup_manifest"]
+    assert answer["space_check"] == {"checked": True, "ok": True} and answer["opened_for_engine"] is True
 
 
 # --------------------------------------------------------------------------- #
@@ -402,3 +424,29 @@ def test_on_the_host_a_plain_file_there_with_other_bytes_is_decrypted_over_when_
     target.write_bytes(b"x" * len(PLAIN))
     answer, target = _on_host(host, _sealed(recipient), identity, overwrite=True)
     assert answer["already_there"] is False and target.read_bytes() == PLAIN
+
+
+def test_each_decrypted_file_is_given_its_backups_time_not_the_decryptions(staging, monkeypatch):
+    """0.39.0: a decrypted file was dated by the decryption. A PostgreSQL base backup is dated by its
+    manifest, so a point in time before the restore found no full before it - the PIT test on the lab host
+    (2026-11-14: decrypted 07:24Z, asked 07:21:15Z, the full of 05:55Z) stopped at "no base backup
+    found". Each file now takes its backup's finish from the catalog, as a plain copy keeps its source's."""
+    import datetime
+
+    asked = []
+    catalog = SimpleNamespace(backup_ended_at_of=lambda ids: asked.append(sorted(ids)) or {1: "2026-11-14T05:55:35Z"})
+    monkeypatch.setattr(staging.R, "_record_decrypted", lambda *a, **k: None)  # the run's record is its own test
+
+    _stage(staging, monkeypatch, catalog=catalog)
+
+    finished = next(r for c, r in staging.calls if c == "finish-staging")
+    full_end = int(datetime.datetime(2026, 11, 14, 5, 55, 35, tzinfo=datetime.timezone.utc).timestamp())
+    assert [f["mtime"] for f in finished["files"]] == [full_end, full_end]
+    assert asked == [[1, 1]]
+
+
+def test_without_a_catalog_a_decrypted_file_keeps_the_decryptions_time_and_the_restore_goes_on(staging, monkeypatch):
+    _stage(staging, monkeypatch)
+
+    finished = next(r for c, r in staging.calls if c == "finish-staging")
+    assert [f["mtime"] for f in finished["files"]] == [None, None]

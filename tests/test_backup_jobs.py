@@ -248,7 +248,7 @@ def _job_and_target(**over):
     fields = dict(
         backup_id="CLOUD_MSSQL_HA_PRIMARY", job="full", db_type="sqlserver",
         server_id="S", script="assets/backup/sqlserver/mssql_backup_database.sh",
-        backup_dir="/b", cleanup_retention=14 * 86400, time_window=TimeWindow(),
+        backup_dir="/b", cleanup_retention=14 * 86400, time_window=TimeWindow(timeout=3600),
         # Every job states its databases (0.34.0); this one takes every user database.
         scope=BackupScope(databases=(), all_databases=True),
     )

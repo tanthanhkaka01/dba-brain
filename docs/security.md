@@ -283,6 +283,17 @@ Every capability except message delivery works with no route off the machines yo
   in the encrypted secret store** and of password/token shapes; files on `file_denied` and tables on
   `store_query_blocked_tables` are never read. Rows a `run_sql` or `store_query` returns do leave:
   that is the tool's purpose, and each tool has its own switch.
+- **No public IP, no inbound port, no server** for any way a model reaches the estate (0.39.0 - the
+  operator, 2026-11-14: *say clearly in the docs which path, whether a public IP or a server is
+  needed*). The assistant: outbound HTTPS to `api.anthropic.com:443` (or through `http_proxy` in
+  `ai_assist.json`). Telegram: polled outbound (`getUpdates`), no webhook. An MCP app on the same
+  machine: stdin/stdout of a child process, no network from dbabrain. claude.ai through
+  `mcp.dbabrain.dev`: one WebSocket the node opens outward (`dbabrain mcp connect`). Only
+  `dbabrain mcp serve --http` listens, behind a bearer token, for whoever chooses to serve MCP
+  themselves (`docs/16_mcp_app.md`).
+- **No secret enters through MCP, and none leaves** (R52, 0.39.0). A request written by a model that
+  carries a password, a key or a token is refused before it runs; the person types the secret on the
+  node (`secret-set`, `ai-key`) and the model names it by its reference. Every answer is redacted.
 
 An air-gapped install is therefore the default shape, not a special mode.
 

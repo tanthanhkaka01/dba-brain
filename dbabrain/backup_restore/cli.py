@@ -36,8 +36,10 @@ from dbabrain.backup_restore.config import (
 from dbabrain.backup_restore.copy_backup import newest_backup_hint, run_copy_backup
 from dbabrain.backup_restore.delete_backup import run_delete_backup
 from dbabrain.backup_restore.preflight import PreflightError, run_target_preflight
+from dbabrain.backup_restore import restore_messages
 from dbabrain.backup_restore.events import announce, emit_backup_restore_event, resolve_run_id
 from dbabrain.backup_restore.restore_database import (
+    ChainRecord,
     parse_point_in_time,
     run_restore_all_latest,
     run_restore_database,
@@ -705,6 +707,10 @@ def _run_script_restore_on_demand(args, app_config, config_path: str, restore_id
         # It was not passed (found 2026-11-10): `--dry-run` on a script-driven entry ran the restore
         # for real - stopped that day only because the target's cmd_access was not enabled yet.
         dry_run=bool(getattr(args, "dry_run", False)))
+    if getattr(args, "dry_run", False):
+        # One sentence for the chat that asked (/spbot_restore_plan, 0.39.0): its reply reads `said`.
+        summary["said"] = "; ".join(str(item.get("said") or "") for item in summary.get("restores") or []
+                                    if item.get("said")) or f"{restore_id}: no script restore entry ran a dry run"
     sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
     if getattr(args, "dry_run", False):
         return 0
@@ -777,6 +783,9 @@ def main(argv: list[str]) -> int:
     # the failure path) so no message about a run can be published without naming it — and so
     # a failure that happens before restore_configs resolve still says which ids it meant.
     _id_meta: dict[str, object] = {}
+    # The run rows a hand-started share-driven restore claimed (0.39.0, 1.342), closed where it ends.
+    _hand_store: object = None
+    _hand_claims: list[tuple[object, int]] = []
     # The id the operator typed, before anything resolves it: the refusal of an unknown id is the
     # message that most needs to name it, and it said `backup_id=<unknown>` for NO_SUCH_BACKUP
     # (the bot's refusal cases, 2026-09-25).
@@ -1157,6 +1166,19 @@ def main(argv: list[str]) -> int:
                 "source_ids": [config.source_id for config in restore_configs],
                 "target_ids": [config.target_id for config in restore_configs],
             }
+        if args.command == "restore-workflow" and not getattr(args, "dry_run", False):
+            # Claimed before the START is said and before anything on the target is touched (1.342):
+            # an entry whose restore is already running is told so and nothing else happens - it is
+            # not a failure and is not reported as one (RunAlreadyClaimed). A dry run changes nothing
+            # and claims nothing.
+            try:
+                _hand_store, _hand_claims = _claim_hand_started(
+                    app_config, restore_configs, action=str(_rw_meta.get("action") or "restore"), logger=logger)
+            except AlreadyRunning as busy:
+                log_event(logger, level="warning",
+                          message=sanitize_text(f"backup_restore.restore-workflow not started: {busy}"))
+                print(sanitize_text(f"NOT STARTED: {busy}"), file=sys.stderr)
+                return 1
         emit_backup_restore_event(
             app_config=app_config,
             command=args.command,
@@ -1282,10 +1304,13 @@ def main(argv: list[str]) -> int:
             def _rw_announce(phase: str, message: str, extra: dict[str, object] | None = None) -> None:
                 # Same events the scheduler emits. A run reports the same way whether an operator
                 # started it or the daemon did - that is the whole contract.
+                fields = dict(extra or {})
+                # A short step's start is not a message of its own (1.306): the run row and the log keep it.
+                on_telegram = fields.pop("telegram", True) is not False
                 emit_backup_restore_event(
                     app_config=app_config, command=args.command, phase=phase, level="logging",
                     message=message, logger=logger, started_at=utc_now_text(),
-                    metadata={**_id_meta, **_rw_meta, **(extra or {})}, notify=_notify,
+                    metadata={**_id_meta, **_rw_meta, **fields}, notify=_notify, telegram=on_telegram,
                 )
 
             # Instance metadata replays here too, not only on the scheduled path. It used to live
@@ -1315,6 +1340,8 @@ def main(argv: list[str]) -> int:
                 point_in_time_utc=pit_utc,
                 on_phase=_rw_announce,
                 copy_only=_copy_only,
+                # The catalog's run row points at the claimed row, as the scheduled run's does (1.214).
+                job_run_id=_hand_claims[0][1] if len(_hand_claims) == 1 else None,
             )
 
             # Only after a restore that worked: Agent job steps name databases that have to exist.
@@ -1325,6 +1352,8 @@ def main(argv: list[str]) -> int:
                 _meta_reports.update(_report)
             if _meta_reports:
                 output["server_metadata"] = _meta_reports
+            _close_hand_started(_hand_store, _hand_claims, output=output, started=start_monotonic)
+            _hand_claims = []
         else:
             raise ValueError(f"Unknown command: {args.command}")
 
@@ -1365,6 +1394,8 @@ def main(argv: list[str]) -> int:
             print(json.dumps(safe_output, ensure_ascii=False, indent=2))
         return 0
     except Exception as exc:  # noqa: BLE001 - command-line failure path.
+        # A hand-started restore's claimed rows are closed with its error, never left RUNNING (1.342).
+        _close_hand_started(_hand_store, _hand_claims, error=exc, started=start_monotonic)
         if logger:
             _failed_command = getattr(args, "command", "cli")
             _, _failed_id = resolve_run_id(_failed_command, _id_meta)
@@ -1594,9 +1625,14 @@ def run_restore_workflow(
                 log_event(logger, level="logging",
                           message=f"{_rid}restore-workflow dry run: the copy is not run")
             summary["copy-backup"] = {"status": "DRY_RUN", "sources": []}
+        # Every step in the flow format a backup's messages have (0.39.0, 1.370): the id and the step on
+        # the first line, a line per fact - the share-driven path sent the older key=value shape.
+        _flow_id = str(restore_configs[0].restore_id or restore_configs[0].source_id) if restore_configs else ""
         if not dry_run:
             _say("COPY_START", f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
-                               f"copy started ({len(restore_configs)} source(s)).")
+                               f"copy started ({len(restore_configs)} source(s)).",
+                 restore_messages.copy_started(_flow_id, source=", ".join(str(c.source_id) for c in restore_configs),
+                                               target=str(restore_configs[0].target_id), from_repository=False))
         with _workflow_phase(logger, f"{_rid}restore-workflow copy-backup", summary=summary, current_phase="copy-backup", source_count=len(restore_configs)):
             for config in ([] if dry_run else restore_configs):
                 copy_window_start = _window_start(config)
@@ -1645,7 +1681,9 @@ def run_restore_workflow(
             _say("COPY_DONE",
                  f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
                  f"copy finished - {_copied} file(s), {_skipped} already present.",
-                 {"copied": _copied, "skipped": _skipped})
+                 {"copied": _copied, "skipped": _skipped,
+                  **restore_messages.copy_done(_flow_id, {"copied": _copied, "skipped": _skipped},
+                                               target=str(restore_configs[0].target_id))})
 
         if copy_only:
             # Copied and proven, and nothing restored: the staged chain is what this run is for.
@@ -1666,10 +1704,31 @@ def run_restore_workflow(
             restore_inputs = list(restore_configs)
         for run_id in run_ids:
             record_run(catalog, run_id, phase="restoring")
+        if not dry_run:
+            from dbabrain.lib.timezone import format_display
+
+            _moment = (format_display(point_in_time_utc)
+                       if point_in_time_utc is not None and hasattr(point_in_time_utc, "strftime") else "")
+            _plan = "; ".join(
+                ", ".join(f"{m.source_database} as {m.target_database}" if m.target_database and
+                          m.target_database.lower() != m.source_database.lower() else m.source_database
+                          for m in c.databases) or "every database on the share" for c in restore_inputs)
+            _say("RESTORE_START", f"Restore {_flow_id}: restoring {_plan}, "
+                                  f"{('to ' + _moment) if _moment else 'to the newest backup'}.",
+                 {"plan": _plan, **restore_messages.restore_started(
+                     _flow_id, plan=_plan, moment=("to " + _moment) if _moment else "to the newest backup")})
+        _restore_started = time.monotonic()
         with _workflow_phase(logger, f"{_rid}restore-workflow restore-execution", summary=summary, current_phase="restore-execution", source_count=len(restore_inputs)):
+            # The chain each source's restore applies, on that source's copy run (1.367): run_ids is in
+            # the order of restore_configs, one per source; a dry run copied nothing and records nothing.
+            chains = [ChainRecord(catalog, run_id, str(config.source_id), str(config.target_id))
+                      if catalog is not None and run_id is not None and not dry_run else None
+                      for config, run_id in zip(restore_inputs, run_ids + [None] * (len(restore_inputs) - len(run_ids)))]
             restore_outputs = [
-                run_restore_all_latest(config=config, dbabrain_config=app_config, dry_run=dry_run, logger=logger, point_in_time_utc=point_in_time_utc)
-                for config in restore_inputs
+                run_restore_all_latest(config=config, dbabrain_config=app_config, dry_run=dry_run, logger=logger,
+                                       point_in_time_utc=point_in_time_utc, **({"chain": chain} if chain else {}),
+                                       **({"on_phase": on_phase} if on_phase is not None and not dry_run else {}))
+                for config, chain in zip(restore_inputs, chains)
             ]
         restore_counts = _count_restore_statuses(restore_outputs)
         failed_databases = _failed_restore_databases(restore_outputs)
@@ -1707,9 +1766,14 @@ def run_restore_workflow(
         if not dry_run:
             for run_id in run_ids:
                 record_run(catalog, run_id, phase="verifying_db")
+            _say("RESTORE_DONE",
+                 f"Restore {_flow_id}: the databases restored in {int(time.monotonic() - _restore_started)} s.",
+                 restore_messages.restore_done(_flow_id, steps=restore_counts.get("success") or 0,
+                                               seconds=int(time.monotonic() - _restore_started)))
             _say("VERIFY_START",
                  f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
-                 f"checking the restored database(s) can be opened.")
+                 f"checking the restored database(s) can be opened.",
+                 restore_messages.check_started(_flow_id))
             with _workflow_phase(logger, f"{_rid}restore-workflow verify-restore", summary=summary,
                                  current_phase="verify-restore", source_count=len(restore_configs)):
                 try:
@@ -1722,6 +1786,7 @@ def run_restore_workflow(
                     _verify_unavailable = sanitize_text(str(exc))
                 else:
                     _verify_unavailable = ""
+                stopped_short: list[str] = []
                 # Each entry with its own restore's answer: one that states restore_all_databases is
                 # checked on every database its run restored, by the backup's name (1.101).
                 for position, (config, restore_output) in enumerate(zip(restore_inputs, restore_outputs)):
@@ -1740,11 +1805,19 @@ def run_restore_workflow(
                     _failed_here = int(outcome.get("failed") or 0)
                     record_run(catalog, run_ids[position] if position < len(run_ids) else None,
                                databases_ok=max(_checked_here - _failed_here, 0), databases_failed=_failed_here)
+                    # Where each database stopped, as the TARGET recorded it, against what its restore
+                    # asked (0.39.0, 1.367) - the repository path's rule on this path too: a database
+                    # that opens and checks clean can still be hours short of what was asked.
+                    landed, off_target = _held_to_the_plan(restore_output, outcome)
+                    if landed:
+                        record_run(catalog, run_ids[position] if position < len(run_ids) else None,
+                                   landed_json=json.dumps(landed, default=str))
+                    stopped_short.extend(f"{config.restore_id}: {line}" for line in off_target)
                     verify_outputs.append({
                         "restore_id": config.restore_id, "target_id": config.target_id,
-                        "status": "SUCCESS" if outcome.get("ok") else "FAILED",
+                        "status": "SUCCESS" if outcome.get("ok") and not off_target else "FAILED",
                         "checked": outcome.get("checked"), "failed": outcome.get("failed"),
-                        "databases": outcome.get("databases"),
+                        "databases": outcome.get("databases"), "landed": landed,
                     })
             unusable = [
                 str(db.get("database_name"))
@@ -1764,13 +1837,19 @@ def run_restore_workflow(
                  f"{_checked} database(s) checked, {len(unusable)} unusable"
                  + (f", {_skipped_entries} entry(ies) skipped" if _skipped_entries else "") + ".",
                  {"checked": _checked, "failed": len(unusable),
-                  "skipped_entries": _skipped_entries})
+                  "skipped_entries": _skipped_entries,
+                  **restore_messages.check_done(_flow_id, checked=_checked, failed=len(unusable))})
             if unusable:
                 # Same reason the failed-restore count raises: the retention cleanup must not prune
                 # the backups when the drill that proves them restorable has just failed.
                 raise errors.OperationFailed(
                     f"restore finished but {len(unusable)} database(s) cannot be opened: "
                     f"{', '.join(sorted(unusable))}. Retention cleanup was not run.")
+            if stopped_short:
+                # Open and consistent, and not where it was asked to be: a success that is not one.
+                raise errors.OperationFailed(
+                    "restored and checked, but not to what was asked - " + "; ".join(stopped_short)
+                    + ". Retention cleanup was not run.")
 
         delete_outputs = []
         # Announced like every other phase. Until 2026-09-11 the retention cleanup was the one
@@ -1781,7 +1860,7 @@ def run_restore_workflow(
         _say("DELETE_START",
              f"Restore {restore_configs[0].restore_id or restore_configs[0].source_id}: "
              f"retention cleanup starting on {len(restore_configs)} source(s).",
-             {"cleanup_retention": delete_retention})
+             {"cleanup_retention": delete_retention, **restore_messages.cleanup_started(_flow_id)})
         with _workflow_phase(logger, f"{_rid}restore-workflow delete-backup", summary=summary, current_phase="delete-backup", source_count=len(restore_configs), cleanup_retention=delete_retention):
             for config in restore_configs:
                 # Seconds the whole way down now. This used to convert the configured seconds into
@@ -1812,7 +1891,9 @@ def run_restore_workflow(
              f"retention cleanup finished - {_considered} considered, {_deleted} deleted, "
              f"{_skipped} kept.",
              {"files_considered": _considered, "deleted": _deleted, "skipped": _skipped,
-              "cleanup_retention": delete_retention})
+              "cleanup_retention": delete_retention,
+              **restore_messages.share_cleanup_done(_flow_id, considered=_considered, deleted=_deleted,
+                                                    kept=_skipped)})
         summary["delete-backup"] = {"status": "SUCCESS", "sources": delete_outputs,
                                     "files_considered": _considered, "deleted": _deleted,
                                     "skipped": _skipped}
@@ -1838,6 +1919,107 @@ def run_restore_workflow(
         raise RestoreWorkflowError(str(exc), metadata=summary) from exc
 
 
+class AlreadyRunning(errors.Refused):
+    """A hand-started restore whose entry has a run in flight: nothing is started."""
+
+
+def _claim_hand_started(app_config: object, restore_configs: list[BackupRestoreConfig], *, action: str,
+                        logger: object = None) -> tuple[object, list[tuple[object, int]]]:
+    """The RUNNING row of each selected entry, taken before a hand-started restore touches anything
+    (0.39.0, 1.342). ``(store, [(entry, job run id)])``.
+
+    The scheduler's ``workflow`` and a script-driven restore claim their restore_id's row first. This
+    door - ``restore-workflow`` on a share-driven entry, which is what ``/spbot_restore`` runs for one
+    - took none: a restore started by hand ran beside the scheduled one of the same entry (two
+    restores into one database, the failure of 2026-09-14), the next due check did not see it, and a
+    run that died left no row for the reaper to close.
+
+    An entry already running raises :class:`AlreadyRunning` before anything is claimed; a claim lost
+    in a race releases the ones taken. **A store that cannot be reached is not a refusal**: a restore
+    by hand is what is run when things are broken, so it goes on unclaimed and says so in the log.
+    """
+    from dbabrain.backup_restore import schedule
+    from dbabrain.db.store import DbaBrainStore, RunAlreadyClaimed
+
+    keyed = [config for config in restore_configs if config.restore_id]
+    claims: list[tuple[object, int]] = []
+    store = None
+    try:
+        store = DbaBrainStore.from_config(app_config)
+        latest = store.fetch_latest_job_runs_by_job_code()
+        running = [config.restore_id for config in keyed
+                   if schedule.is_running(schedule.restore_job_code(config.restore_id), latest)]
+        if running:
+            raise AlreadyRunning(
+                f"restore_id={', '.join(running)} is already running - two restores into one database is "
+                "what the run claim stops. Nothing was started. Wait for it; a run abandoned at RUNNING is "
+                "closed by itself once it is past its time_window.timeout.")
+        noun = "Copy only" if action == "copy_only" else "Restore"
+        for config in keyed:
+            try:
+                log_id, _started = schedule.start_run(
+                    store=store, job_code=schedule.restore_job_code(config.restore_id),
+                    message=f"{noun} {config.restore_id} started by hand.",
+                    metadata={"restore_id": config.restore_id, "source_id": config.source_id,
+                              "target_id": config.target_id, "action": action, "started_by": "restore-workflow"})
+            except RunAlreadyClaimed as exc:
+                _close_hand_started(store, claims, started=time.monotonic(),
+                                    error=AlreadyRunning(f"not started: {config.restore_id} was claimed by another run"))
+                raise AlreadyRunning(f"restore_id={config.restore_id} is already running ({exc}). "
+                                     "Nothing was started.") from exc
+            claims.append((config, log_id))
+    except AlreadyRunning:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the claim is a guard, not a condition of a restore by hand
+        if logger:
+            log_event(logger, level="warning", message=sanitize_text(
+                f"backup_restore.restore-workflow: no run claim taken - the store could not be used "
+                f"({type(exc).__name__}: {exc}); the restore goes on unclaimed"))
+        return store, claims
+    return store, claims
+
+
+def _hand_run_outcome(output: dict[str, object], restore_id: str) -> tuple[str, str | None]:
+    """``(status, error)`` of one entry of a hand-started run, by the rule the scheduled run uses:
+    done only when the engine said so AND no database of it was left unrestored or unclean."""
+    per = next((row for row in output.get("per_restore_results") or []
+                if isinstance(row, dict) and row.get("restore_id") == restore_id), None)
+    verdict = str((per if per is not None else output).get("status") or "")
+    if per is not None:
+        failed = int(per.get("failed") or 0)
+    else:
+        failed = len([state for state in (output.get("per_database_restore_status") or {}).values()
+                      if str(state) not in {"SUCCESS", "SUCCESS_RESUMED", "DRY_RUN"}])
+    if verdict in {"SUCCESS", "DRY_RUN"} and not failed:
+        return "done", None
+    return "error", (f"restore reported {verdict or 'no status'}"
+                     + (f"; {failed} database(s) not restored or not clean" if failed else ""))
+
+
+def _close_hand_started(store: object, claims: list[tuple[object, int]], *, started: float,
+                        output: dict[str, object] | None = None, error: BaseException | None = None) -> None:
+    """Close each claimed row with what its restore came to. Never raises: the record is not the restore."""
+    if store is None or not claims:
+        return
+    from dbabrain.backup_restore import schedule
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    for config, log_id in claims:
+        try:
+            if error is not None:
+                status, error_text = "error", f"{type(error).__name__}: {error}"[-2000:]
+            else:
+                status, error_text = _hand_run_outcome(output or {}, config.restore_id)
+            schedule.finish_run(
+                store=store, log_id=log_id, status=status,
+                message=f"Restore {config.restore_id} finished: {status}.",
+                duration_ms=duration_ms, error_text=error_text,
+                metadata={"restore_id": config.restore_id, "status": status, "started_by": "restore-workflow",
+                          "output_status": str((output or {}).get("status", ""))})
+        except Exception:  # noqa: BLE001
+            continue
+
+
 def _decide_copy_only(restore_configs: list[BackupRestoreConfig], *, asked: bool) -> bool:
     """Whether this run copies only (0.34.0, 1.216): ``--copy-only``, or every selected entry stating
     ``action: copy_only``. An entry that states no action is refused (R50), and a run over entries that
@@ -1853,6 +2035,14 @@ def _decide_copy_only(restore_configs: list[BackupRestoreConfig], *, asked: bool
             raise OffloadConfigError(f"restore_id={c.restore_id}: restore_from {source!r} is built for the "
                                      "script-driven restores; this share-driven SQL Server entry reads its "
                                      "server's share (restore_from: server).")
+        # And the rest of what the scheduled run refuses an entry for (workflow._entry_action; 0.39.0,
+        # 1.342): whether it may replace a database that exists, and the fields that decide a run
+        # (1.366) - this door asked for the source and the action only.
+        from dbabrain.backup_restore.workflow import _entry_action
+
+        _action, refused = _entry_action(c, copy_only=asked)
+        if refused is not None:
+            raise refused
     actions = {require_restore_action(c.action, label=f"restore_id={c.restore_id}") for c in restore_configs}
     if asked:
         return True
@@ -2003,6 +2193,20 @@ def _verify_targets(config: Any, restored: Iterable[str] = ()) -> list[str]:
             if name and str(name) not in names:
                 names.append(str(name))
     return names
+
+
+def _held_to_the_plan(restore_output: object, outcome: dict) -> tuple[list[dict], list[str]]:
+    """``(landed, off_target)`` for one entry of a share-driven restore: each database its run
+    restored, held to the stop point its own restore planned (``expect``) by the target's record
+    (``verify-restore``'s ``restored_to``) - ``restore_by_id.where_it_stopped``, the one rule."""
+    from dbabrain.backup_restore.restore_by_id import where_it_stopped
+
+    results = restore_output.get("results") if isinstance(restore_output, dict) else None
+    expects = [result["expect"] for result in results or []
+               if isinstance(result, dict) and result.get("status") == "SUCCESS" and isinstance(result.get("expect"), dict)]
+    if not expects:
+        return [], []
+    return where_it_stopped(expects, list(outcome.get("databases") or []))
 
 
 def _restored_databases(output: object) -> list[str]:

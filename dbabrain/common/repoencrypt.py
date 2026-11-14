@@ -257,8 +257,16 @@ def fetch_decrypted_file(request: dict[str, Any], *, open_reader: Callable[[dict
     only when the ``.age`` is the bytes and sha256 measured when it was encrypted AND the plaintext is
     the plain file's bytes and sha256 - the very file the backup wrote. Anything else: the partial is
     removed, nothing takes the name. ``overwrite`` (required) says whether a file already at the name
-    may be replaced - false leaves it as it is and the file fails."""
+    may be replaced - false leaves it as it is and the file fails.
+
+    **Onto a Windows target** (the target login's ``platform: windows``, 0.39.0 - SQL Server running
+    natively there): ``target_path`` is a drive path (``C:/dbabrain_restore/X/APP/FULL/a.bak``), and
+    the plaintext is written over SFTP whatever ``transfer`` says - a Windows host has no ``cat`` to
+    write a channel into; ``transfer`` still says how the ``.age`` is read from the repository. The
+    answer's ``target_path`` is the one the request gave."""
     from dbabrain.common import filecopy
+    from dbabrain.lib.restore import windows as windows_target
+    from dbabrain.lib.verified_cleanup import last_part
 
     _known(request, FETCH_FIELDS, "fetch-decrypted-file")
     path = _path(request.get("path"))
@@ -267,9 +275,21 @@ def fetch_decrypted_file(request: dict[str, Any], *, open_reader: Callable[[dict
     size, sha = _size(request.get("size_bytes"), "size_bytes"), _sha(request.get("sha256"), "sha256")
     plain_size = _size(request.get("plain_size_bytes"), "plain_size_bytes")
     plain_sha = _sha(request.get("plain_sha256"), "plain_sha256")
-    target_path = _path(request.get("target_path"), field="target_path")
+    try:
+        windows = filecopy.login_platform(request.get("target"), role="target") == windows_target.PLATFORM
+    except filecopy.FileCopyError as exc:
+        raise RepoEncryptError(str(exc)) from exc
+    if windows:
+        target_path = request.get("target_path")
+        try:
+            # Where SFTP finds it: `/C:/...`, an absolute path to the folder walk and the rename alike.
+            where = windows_target.sftp_form(target_path, field="target_path")
+        except ValueError as exc:
+            raise RepoEncryptError(str(exc)) from exc
+    else:
+        target_path = where = _path(request.get("target_path"), field="target_path")
     name = request.get("file_name")
-    if not isinstance(name, str) or name != target_path.rsplit("/", 1)[-1] or path.rsplit("/", 1)[-1] != name + K.SUFFIX:
+    if not isinstance(name, str) or name != last_part(target_path) or path.rsplit("/", 1)[-1] != name + K.SUFFIX:
         raise RepoEncryptError(f"file_name must be the last part of target_path, and path must be it + {K.SUFFIX}; "
                                f"got {name!r} for {path!r} -> {target_path!r}.")
     identity = request.get("identity")
@@ -287,15 +307,15 @@ def fetch_decrypted_file(request: dict[str, Any], *, open_reader: Callable[[dict
 
     target_session = (open_target or (lambda login: filecopy._ssh(login, role="target")))(request.get("target"))
     reader = None
-    partial = target_path + filecopy.PARTIAL_SUFFIX
+    partial = where + filecopy.PARTIAL_SUFFIX
     try:
         sftp = target_session.sftp()
-        if not overwrite and filecopy._exists(sftp, target_path):
+        if not overwrite and filecopy._exists(sftp, where):
             raise RepoEncryptError(f"{target_path} is already there and overwrite is false - left as it is.")
-        filecopy._mkdirs(sftp, target_path.rsplit("/", 1)[0])
-        reader = (open_reader or (lambda host, where: _remote_reader(host, where, transfer)))(request.get("source"), path)
+        filecopy._mkdirs(sftp, where.rsplit("/", 1)[0])
+        reader = (open_reader or (lambda host, at: _remote_reader(host, at, transfer)))(request.get("source"), path)
         measured = _Measured(reader)
-        if transfer == "cat" and hasattr(target_session, "client"):
+        if transfer == "cat" and not windows and hasattr(target_session, "client"):
             out_cm: Any = filecopy._CatWriter(target_session.client, partial)
         else:
             out_cm = sftp.open(partial, "wb")
@@ -316,9 +336,9 @@ def fetch_decrypted_file(request: dict[str, Any], *, open_reader: Callable[[dict
         if problems:
             raise RepoEncryptError(f"{path}: not restored - {'; '.join(problems)}.")
         if overwrite:
-            filecopy._replace(sftp, partial, target_path)
+            filecopy._replace(sftp, partial, where)
         else:
-            filecopy._place_new(sftp, partial, target_path)
+            filecopy._place_new(sftp, partial, where)
     except BaseException:
         try:
             target_session.sftp().remove(partial)
@@ -334,7 +354,7 @@ def fetch_decrypted_file(request: dict[str, Any], *, open_reader: Callable[[dict
             reader.close()
     except RepoEncryptError:
         try:
-            target_session.sftp().remove(target_path)
+            target_session.sftp().remove(where)
         finally:
             target_session.close()
         raise

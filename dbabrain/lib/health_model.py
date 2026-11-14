@@ -189,6 +189,9 @@ def group_findings(findings: list[dict], *, now: int) -> list[dict]:
             "label": finding.get("label") or code,
             "severity": severity,
             "action": finding.get("action") or "Check the metric detail below.",
+            # The platform or engine the action was worded for ("" for a general one): what a page
+            # that merges one metric across servers tells its sentences apart by.
+            "actionFor": finding.get("actionFor") or "",
             "items": [],
         })
         if SEVERITY_RANK[severity] > SEVERITY_RANK[group["severity"]]:

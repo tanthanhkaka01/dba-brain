@@ -189,6 +189,28 @@ def _failed(name: str, output: str, exit_code: int) -> bool:
     return exit_code != 0 or "ORA-" in output or "RMAN-" in output
 
 
+def _target_holds(host: Any, request: dict[str, Any], *, mode: str, timeout: int) -> str:
+    """What the target database holds before RMAN replaces it, in one sentence - or the refusal.
+
+    A ``duplicate`` rebuilds the whole database of the target instance; a ``restore`` writes the
+    datafiles of the database it runs in. Either way what was there is gone, so without
+    ``overwrite_existing: true`` the step goes on only when the database is open and no schema of its
+    own owns a segment - and stops when it holds user data or cannot say (:mod:`.target_holds`).
+    """
+    from dbabrain.common.restorestep import target_holds
+
+    overwrite = request.get("overwrite_existing") is True
+    sid = str(request.get("oracle_sid") or "").strip()
+    prefix = f"export ORACLE_SID={shlex.quote(sid)} && " if sid else ""
+    result = run(host, prefix + _sqlplus(target_holds.oracle_script()), timeout=timeout)
+    holds = target_holds.read_oracle(result.get("stdout") or "", sid)
+    if not overwrite and not (holds.read and holds.empty):
+        raise RestoreStepError(target_holds.refusal("oracle", holds)
+                               + (" (mode restore recovers a database in place: its own files are replaced)"
+                                  if mode == RESTORE else ""))
+    return holds.what + (" - replaced (overwrite_existing is true)" if overwrite and not holds.empty else "")
+
+
 def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, Any]:
     steps = build_steps(level, request, paths)
     mode = str(request.get("mode") or DUPLICATE).strip().lower()
@@ -205,6 +227,14 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
     # (stage_into_target); these primitives did not - PostgreSQL learnt the same lesson first, and
     # its staging is the one rule both engines now follow: served by a mount -> nothing to do;
     # otherwise copied in, replacing a previous copy rather than reusing it.
+    # Whether this restore may replace the target's database - the entry's word, true or nothing
+    # (0.39.0, 1.362). Until then the step never read it: SHUTDOWN ABORT, then RMAN wrote over
+    # whatever the instance held. Asked of the full level only - the one that replaces the datafiles -
+    # and before anything is staged or the instance is touched, so a refused restore leaves the
+    # target as it was.
+    held = None
+    if level == FULL:
+        held = _target_holds(host, request, mode=mode, timeout=min(timeout, 600))
     staged: list[str] = []
     backup_location = str(request.get("backup_location") or "").strip()
     if host.runtime == DOCKER and mode == DUPLICATE and backup_location:
@@ -227,6 +257,7 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
             "cataloged": paths if mode == RESTORE else [],
             "backup_location": str(request.get("backup_location") or "") or None,
             "staged_into_container": staged,
+            "target_held": held,
             "stopat": str(request.get("stopat") or "") or None,
             "note": ("RMAN chose which pieces to read from the backup location"
                      if mode == DUPLICATE else "pieces were cataloged; RMAN selected what to read")}

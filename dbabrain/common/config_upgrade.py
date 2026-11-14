@@ -35,6 +35,8 @@ from dbabrain.lib import config_references, earlier_defaults, package_rename, sh
 from dbabrain.lib import integrity as restore_integrity
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib import backup_scope
+from dbabrain.lib.restore import landing as restore_landing
+from dbabrain.lib.restore import stated as restore_stated
 from dbabrain.lib import cleanup_retention
 from dbabrain.lib import ai_assist as ai_assist_rules
 from dbabrain.lib import mcp_tools as mcp_tools_rules
@@ -102,8 +104,22 @@ Steps, in order (each one idempotent - a file already moved plans nothing):
                       fields (offload off, as it ran) and every restore entry "restore_from":
                       "server"; and every backup job its databases as a list - env
                       MSSQL_DATABASES moved into databases, all_databases true where none was
-                      named. What is stated is left as it is (dbabrain/lib/integrity.py,
-                      dbabrain/lib/offload.py, dbabrain/lib/backup_scope.py)
+                      named; and every script-driven SQL Server restore entry the databases it
+                      restores - env MSSQL_DATABASES moved into database_mappings, each name
+                      mapped to itself, restore_all_databases true where none was named
+                      (0.39.0); and every restore entry, backup entry and backup job each field
+                      that decided its run from a default, at the value it had been running on
+                      (0.39.0) - a restore's allow_production_target false, checkdb true,
+                      copy_selection chain, space_check on at factor 2, active true, notify both
+                      rules on, checkdb_timeout_seconds 3600, checkdb_jobs 1, tier null, env {},
+                      copy_mode auto, a share-driven target's sql_instance localhost and its
+                      timeouts; a backup entry's active, env_secrets {}, scrub_files_per_run 20;
+                      a job's active, env {} and notify (its entry's rules); every one's
+                      time_window repeat_interval 300, retry_interval its repeat interval (else
+                      60) and timeout 0 - no limit, never reaped. What is stated is left as it is
+                      (dbabrain/lib/integrity.py, dbabrain/lib/offload.py,
+                      dbabrain/lib/backup_scope.py, dbabrain/lib/restore/landing.py,
+                      dbabrain/lib/restore/stated.py)
   stated-ai-assist    0.34.0: a node with no ai_assist.json is given the shipped one (off, no key,
                       nobody switched on); a node's own file gets every field it does not state at
                       its shipped value - a user row's missing "active" is false, so nobody is
@@ -122,6 +138,18 @@ Steps, in order (each one idempotent - a file already moved plans nothing):
   stated-mcp-tools    0.38.0: a node with no mcp_tools.json is given the shipped one (every tool on,
                       each call logged); a node's own file gets every field it does not state at
                       its shipped value. What is stated is left as it is (dbabrain/lib/mcp_tools.py)
+  report-texts        0.39.0: the texts a report page shows are data - they were tables in the
+                      code. metric_definitions.json: a metric that states no What to do sentence
+                      (report_policy.action, action_by_platform, action_by_db_type) or no label
+                      (report_policy.label) is given the shipped catalogue's. reports_config.json:
+                      each health area and each fleet card page_texts does not state is given
+                      the shipped text. What a node states is left exactly as it is
+                      (dbabrain/lib/report_texts.py)
+  menu-descriptions   0.39.0: the bot's menu is read from telegram_support_commands.json - each
+                      command's own line, menu_description - and no longer from the md document.
+                      A command that states none is given the shipped catalogue's line for the
+                      same command; a command the catalogue does not know is left for its owner
+                      (dbabrain/lib/bot_menu.py)
 
 A record whose two spellings DISAGREE is a conflict: its file is not written, and the answer names
 the record. After a write, check-objects and check-references are run and their counts reported -
@@ -136,7 +164,7 @@ Exit code 1 when a conflict left a file unwritten.
 STEPS = ("reference-files", "package-rename", "field-names", "restore-machine-ids", "earlier-defaults",
          "telegram-active", "inventory-into-reports", "moved-commands", "console-apps",
          "unread-report-keys", "stated-integrity", "stated-ai-assist", "retention-per-type",
-         "stated-mcp-tools")
+         "stated-mcp-tools", "report-texts", "menu-descriptions")
 
 
 #: The app command that was a report (0.22.0), and the report it becomes.
@@ -667,7 +695,8 @@ def _earlier_defaults(root: Path, *, dry_run: bool, before_write: Any) -> dict[s
 
 
 def _stated_integrity(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
-    """Write ``integrity`` into every restore entry that states none (0.34.0).
+    """Write ``integrity`` into every restore entry that states none (0.34.0), and every field a
+    backup or restore record left to a default at the value it ran on (0.39.0, 1.366).
 
     The example file too: it is the worked entry a person copies, and an example without the
     block would teach the one shape check-objects now refuses.
@@ -680,7 +709,16 @@ def _stated_integrity(root: Path, *, dry_run: bool, before_write: Any) -> dict[s
         document = json.loads(path.read_bytes().decode("utf-8-sig"))
         changes = (restore_integrity.state_restore_integrity(document)
                    + offload_rules.state_offload(document)
-                   + backup_scope.state_backup_databases(document))
+                   + backup_scope.state_backup_databases(document)
+                   # 0.39.0 (1.362): a script-driven SQL Server restore states which databases it
+                   # restores and the name each lands under - what its env.MSSQL_DATABASES said.
+                   + restore_landing.state_restore_landing(document)
+                   # 0.39.0 (1.366): the fields that decided a run from a default, at the value the
+                   # record had been running on - for a restore production as a target, the
+                   # consistency check, what the copy takes and the room it must find; for every
+                   # restore entry, backup entry and backup job its switch, schedule and notify rules
+                   # (lib.restore.stated has the four tables).
+                   + restore_stated.state_restore_fields(document))
         written = bool(changes) and not dry_run
         if written:
             before_write(path)
@@ -711,6 +749,56 @@ def _retention_per_type(root: Path, *, dry_run: bool, before_write: Any) -> dict
         files.append({"file": name, "records_changed": len(changes), "changes": changes,
                       "conflicts": conflicts, "written": written})
     return {"files": files}
+
+
+def _report_texts(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """The shipped texts of the report pages written into a node's own files where it states none
+    (0.39.0, lib.report_texts): each metric's What to do sentences and label in
+    ``metric_definitions.json``, each health area and fleet card in ``reports_config.json`` - the
+    examples beside them too, as the other steps treat a worked example."""
+    from dbabrain.common import scaffold
+    from dbabrain.lib import report_texts
+
+    plans = (("metric_definitions.json", scaffold.packaged_catalogue(), report_texts.state_metric_texts),
+             ("reports_config.json", scaffold.packaged_default("data/reports_config.json") or {},
+              report_texts.state_page_texts))
+    files: list[dict[str, Any]] = []
+    for stem, shipped, state in plans:
+        files.extend(_state_shipped_texts(root, stem, shipped, state, dry_run=dry_run, before_write=before_write))
+    return {"files": files}
+
+
+def _menu_descriptions(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
+    """Each bot command's menu line written into a node's commands where it states none (0.39.0,
+    lib.bot_menu): the menu is read from the commands file, so a command without its line would be
+    left out of it."""
+    from dbabrain.common import scaffold
+    from dbabrain.lib import bot_menu
+
+    shipped = scaffold.packaged_default("data/telegram_support_commands.json") or {}
+    return {"files": _state_shipped_texts(root, "telegram_support_commands.json", shipped,
+                                          bot_menu.state_menu_descriptions, dry_run=dry_run,
+                                          before_write=before_write)}
+
+
+def _state_shipped_texts(root: Path, stem: str, shipped: dict[str, Any], state: Any, *, dry_run: bool,
+                         before_write: Any) -> list[dict[str, Any]]:
+    """One file of :func:`_report_texts` and its example: read, stated, written when it changed."""
+    files: list[dict[str, Any]] = []
+    for name in (stem, stem.replace(".json", ".example.json")):
+        path = root / name
+        if not path.is_file():
+            continue
+        document = json.loads(path.read_bytes().decode("utf-8-sig"))
+        changes = state(document, shipped)
+        written = bool(changes) and not dry_run
+        if written:
+            before_write(path)
+            atomic_write_text(path, json.dumps(document, ensure_ascii=False,
+                                               indent=indent_of(path)) + "\n")
+        files.append({"file": name, "records_changed": len(changes), "changes": changes,
+                      "conflicts": [], "written": written})
+    return files
 
 
 def _stated_ai_assist(root: Path, *, dry_run: bool, before_write: Any) -> dict[str, Any]:
@@ -867,6 +955,10 @@ def upgrade(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             files = _stated_ai_assist(root, dry_run=dry_run, before_write=before_write)["files"]
         elif step == "stated-mcp-tools":
             files = _stated_mcp_tools(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "report-texts":
+            files = _report_texts(root, dry_run=dry_run, before_write=before_write)["files"]
+        elif step == "menu-descriptions":
+            files = _menu_descriptions(root, dry_run=dry_run, before_write=before_write)["files"]
         else:
             files = _inventory_into_reports(root, dry_run=dry_run, before_write=before_write)["files"]
         results.append({

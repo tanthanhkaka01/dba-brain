@@ -125,7 +125,7 @@ stored.
 # the database record (the source; repeat for the target with _B, .50 and REMOTE_192_0_2_50_*)
 echo '{"server_id": "LAB-192-0-2-49-PG-5432", "db_type": "postgresql", "ip": "192.0.2.49", "port": 5432,
   "database_name": "postgres", "username": "postgres", "password_ref": "PG_LAB_A_PASSWORD",
-  "container_name": "PG_LAB_A", "environment": "lab", "active": false,
+  "container_name": "PG_LAB_A", "site": "LAB", "environment": "lab", "active": false,
   "metrics": {"enabled": false}}' | dbabrain common instance-add -
 
 # the SSH login, and the cmd_access block that uses it
@@ -438,7 +438,7 @@ dbabrain sre create-db-docker --name XE_LAB_A --engine oracle-xe --version 11 --
 echo '{"server_id": "LAB-192-0-2-49-XE-1521", "db_type": "oracle", "ip": "192.0.2.49", "port": 1521,
   "username": "system", "password_ref": "XE_LAB_A_PASSWORD", "service_name": "XE", "sid": "XE",
   "instance_name": "XE", "database_name": "XE", "container_name": "XE_LAB_A",
-  "environment": "lab", "active": false}' | dbabrain common instance-add -
+  "site": "LAB", "environment": "lab", "active": false}' | dbabrain common instance-add -
 ```
 
 Then register the two backup entries, `XE_LAB_A_DB` (`oracle_rman_database.sh`, `BACKUP_LEVEL 0`)

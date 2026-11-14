@@ -41,6 +41,14 @@ from dbabrain.lib.json_io import atomic_write_text
 #: silently dropped — the inventory grows faster than any allow-list of keys would.
 REQUIRED_FIELDS: tuple[str, ...] = ("server_id", "db_type", "ip")
 
+#: What a REGISTRATION states besides those (0.39.0, D-39.6): the inventory reference marks both
+#: required of every record, and this command wrote records without them. Nothing can stand in for
+#: either - which site a machine belongs to and whether it is production are known to its owner,
+#: not derivable from an ip - and a restore onto a target whose record states no environment is
+#: refused, so a record written without one is a target no restore can use. A ``keep_default``
+#: request writes no inventory field, so it carries neither.
+REGISTRATION_FIELDS: tuple[str, ...] = ("site", "environment")
+
 #: What each engine listens on when the caller does not say. Stated rather than defaulted to 1433
 #: for everything, because a wrong port fails as a timeout, which reads as "the host is down".
 #: ``host`` is absent on purpose - it has nothing to connect to, and its port stays ``None``.
@@ -77,6 +85,10 @@ with one call, and the password never reaches the disk in the clear.
   server_id      required. Its name everywhere - reports, alerts, commands
   db_type        required. sqlserver | oracle | postgresql | mysql | host
   ip             required
+  site           required. The site or company the machine belongs to (a short code)
+  environment    required. prod | uat | test | dev, or the estate's own label. A restore
+                 onto a target whose record states none is refused, and nothing guesses it:
+                 only the machine's owner knows whether it is production
   port           optional. Defaults per engine (1433 / 1521 / 5432 / 3306); none for host
 
 db_type "host" is a machine with NO database - an application server, a hypervisor, a VM that
@@ -96,10 +108,11 @@ stopping is a target that collects nothing - the record exists and nothing can l
                  default: users.json and the secret are written, db_instances.json is not.
                  Needs the server already registered (db_type and ip as on its record), a
                  username, and a credential_name other than the default's; no inventory
-                 field. With replace, a login of that name is overwritten
+                 field - so no site and no environment. With replace, a login of that name
+                 is overwritten
 
 Anything else in the object is passed through to the inventory record, so major_version,
-service_name, environment, platform, cmd_access and note all reach it unchanged. An older spelling
+service_name, platform, cmd_access and note all reach it unchanged. An older spelling
 (enabled, env, ord, database, db_name) is accepted and written under the standard name.
 
 Three fields fail in ways that do not name themselves, and the same warnings apply here as in the
@@ -157,13 +170,14 @@ def add_instance(request: dict[str, Any] | None = None, *,
                  key: str | None = None) -> dict[str, Any]:
     """Register one target: inventory, credential and secret, in one operation.
 
-    Request fields: ``server_id``, ``db_type``, ``ip`` are required; ``port``, ``major_version``,
-    ``service_name``, ``environment``, ``active``, ``note`` and anything else are passed through to
-    the inventory record, under the standard names (``lib.field_names``) whatever spelling the
-    request used. ``username`` plus either ``password`` or ``password_ref`` supply the login;
-    ``credential_name`` is derived from the target when it is not given. ``replace`` allows
-    overwriting an existing ``server_id``. ``keep_default`` adds the login beside a registered
-    server's default instead (:func:`_add_beside_default`).
+    Request fields: ``server_id``, ``db_type``, ``ip`` are required, and a registration also states
+    ``site`` and ``environment`` (:data:`REGISTRATION_FIELDS`); ``port``, ``major_version``,
+    ``service_name``, ``active``, ``note`` and anything else are passed through to the inventory
+    record, under the standard names (``lib.field_names``) whatever spelling the request used.
+    ``username`` plus either ``password`` or ``password_ref`` supply the login; ``credential_name``
+    is derived from the target when it is not given. ``replace`` allows overwriting an existing
+    ``server_id``. ``keep_default`` adds the login beside a registered server's default instead
+    (:func:`_add_beside_default`).
     """
     payload, _renamed, conflicts = field_names.standardize(dict(request or {}), "db_instance")
     if conflicts:
@@ -172,11 +186,19 @@ def add_instance(request: dict[str, Any] | None = None, *,
                 f"{item['standard']} = {item['values']}" for item in conflicts))
     root = Path(data_dir) if data_dir else data_sources.DEFAULT_DATA_DIR
 
-    missing = [name for name in REQUIRED_FIELDS if not str(payload.get(name) or "").strip()]
+    # Judged from the request alone (rules R09), and every missing field named in one refusal: a
+    # registration refused for its ip and then again for its site is two round trips for one form.
+    registering = not payload.get("keep_default")
+    wanted = REQUIRED_FIELDS + (REGISTRATION_FIELDS if registering else ())
+    missing = [name for name in wanted if not str(payload.get(name) or "").strip()]
     if missing:
         raise InstanceAdminError(
             f"missing required field(s): {', '.join(missing)}. A target needs at least a "
-            "server_id (its name everywhere), a db_type and an ip.")
+            "server_id (its name everywhere), a db_type and an ip"
+            + (", and its record states the site it belongs to and its environment (prod, uat, "
+               "test, dev or the estate's own label) - a restore onto a target with no environment "
+               "is refused, and only the machine's owner knows whether it is production"
+               if registering else "") + ". Nothing was written.")
 
     server_id = str(payload["server_id"]).strip()
     db_type = str(payload["db_type"]).strip().lower()

@@ -459,9 +459,12 @@ def _run_file(catalog, run_id, path, *, verdict="match", sha=SHA):
     return catalog.add_run_file(
         restore_run_id=run_id, source_server_id="SRC-01", target_server_id="TGT-01", file_name=path.rsplit("/", 1)[-1],
         file_type="FULL", source_path="/bk/" + path.rsplit("/", 1)[-1], target_path=path, target_host_path=path,
-        copy_max_retry=3, size_source_bytes=5, size_target_bytes=5 if verdict == "match" else None,
-        checksum_source_before_copy=sha, checksum_target_after_copy=sha if verdict == "match" else None,
+        copy_max_retry=3, size_source_bytes=5, size_target_bytes=5 if verdict in PROVEN else None,
+        checksum_source_before_copy=sha, checksum_target_after_copy=sha if verdict in PROVEN else None,
         verdict=verdict)
+
+
+PROVEN = ("match", "copied", "recopied")
 
 
 def test_only_a_proven_copy_gives_a_staged_file_its_facts(tmp_path):
@@ -477,6 +480,21 @@ def test_only_a_proven_copy_gives_a_staged_file_its_facts(tmp_path):
     # Another server's staging is another matter.
     assert catalog.staged_file_facts(target_server_id="OTHER-01", paths=["/st/proven.bak"]) == {}
     assert catalog.staged_file_facts(target_server_id="TGT-01", paths=[]) == {}
+
+
+@pytest.mark.parametrize("verdict", ["copied", "recopied"])
+def test_a_file_a_run_copied_fresh_gives_its_facts_too(tmp_path, verdict):
+    """``copied`` is as proven as ``match`` (the store holds its sha256 to the source's). Read as
+    ``match`` alone, a file a run copied and nobody found again was kept past its retention as *not in
+    the catalog* (0.39.0, found with the Oracle overwrite test on the lab host)."""
+    catalog = BackupCatalogStore(tmp_path / "store.sqlite")
+    run_id = catalog.start_restore_run(action="restore", restore_id="R1", source_server_id="SRC-01",
+                                       target_server_id="TGT-01", target_folder="/st", copy_max_retry=3,
+                                       phase="copying")
+    _run_file(catalog, run_id, "/st/fresh.bkp", verdict=verdict)
+
+    assert catalog.staged_file_facts(target_server_id="TGT-01", paths=["/st/fresh.bkp"]) == {
+        "/st/fresh.bkp": {"size_bytes": 5, "sha256": SHA}}
 
 
 # ---------------------------------------------------------------------------- the target import folder

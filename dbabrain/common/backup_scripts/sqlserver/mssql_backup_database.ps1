@@ -111,6 +111,17 @@ if ($perType.Count -gt 0) {
         }
     }
 }
+# Only the files written before a moment are the age window's (0.39.0, 1.373) - the Linux script's
+# rule: an entry whose files are released by the repository copy hands RETENTION_ONLY_BEFORE (epoch
+# seconds, UTC), the moment from which its files go there; a file written since is deleted only
+# after its copy is proven, never here.
+$onlyBefore = $null
+$onlyBeforeSaid = ''
+if ($env:RETENTION_ONLY_BEFORE) {
+    if ($env:RETENTION_ONLY_BEFORE -notmatch '^\d+$') { Die "RETENTION_ONLY_BEFORE must be epoch seconds: '$($env:RETENTION_ONLY_BEFORE)'." }
+    $onlyBefore = [DateTimeOffset]::FromUnixTimeSeconds([long]$env:RETENTION_ONLY_BEFORE).UtcDateTime
+    $onlyBeforeSaid = " (only files written before $($onlyBefore.ToString('yyyy-MM-ddTHH:mm:ssZ')): the newer are the repository copy's to release)"
+}
 # A SQL login needs both halves. One without the other silently falls back to Windows auth and
 # backs up as whoever WinRM connected as - which may have rights the operator did not intend.
 if ($mssqlUser -and -not $mssqlPass) { Die 'MSSQL_USER is set without MSSQL_PASSWORD.' }
@@ -401,20 +412,22 @@ foreach ($db in $databases) {
             $kindCutoff = (Get-Date).AddSeconds(-1 * [int]$perType[$kind])
             $filter = if ($kind -eq 'LOG') { '*.trn' } else { '*.bak' }
             $aged = @(Get-ChildItem -LiteralPath "$dbDir\$kind" -Filter $filter -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.LastWriteTime -lt $kindCutoff -and $_.LastWriteTime -lt $newestFull.LastWriteTime })
+                Where-Object { $_.LastWriteTime -lt $kindCutoff -and $_.LastWriteTime -lt $newestFull.LastWriteTime -and
+                               (-not $onlyBefore -or $_.LastWriteTimeUtc -lt $onlyBefore) })
             $removed = 0
             foreach ($file in $aged) {
                 Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
                 if (-not (Test-Path -LiteralPath $file.FullName)) { $removed++ }
             }
-            "retention: $db $kind removed $removed file(s) past its window ($($perType[$kind])s), below its newest full $($newestFull.Name)"
+            "retention: $db $kind removed $removed file(s) past its window ($($perType[$kind])s), below its newest full $($newestFull.Name)$onlyBeforeSaid"
         }
         continue
     }
     # <<< retention per type
     $aged = @(Get-ChildItem -LiteralPath $dbDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -in @('.bak', '.trn') } |
-        Where-Object { $_.LastWriteTime -lt $cutoff -and $_.LastWriteTime -lt $newestFull.LastWriteTime })
+        Where-Object { $_.LastWriteTime -lt $cutoff -and $_.LastWriteTime -lt $newestFull.LastWriteTime -and
+                       (-not $onlyBefore -or $_.LastWriteTimeUtc -lt $onlyBefore) })
     # Counted as they go, so the run says what the window removed - the Linux script's line
     # (0.27.0 item 1.91). A file that could not be removed is not counted.
     $removed = 0
@@ -422,7 +435,7 @@ foreach ($db in $databases) {
         Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
         if (-not (Test-Path -LiteralPath $file.FullName)) { $removed++ }
     }
-    "retention: $db removed $removed file(s) past the window ($retentionWindow), below its newest full $($newestFull.Name)"
+    "retention: $db removed $removed file(s) past the window ($retentionWindow), below its newest full $($newestFull.Name)$onlyBeforeSaid"
 }
 
 if ($failed -ne 0) { Die "one or more $level backups failed." }

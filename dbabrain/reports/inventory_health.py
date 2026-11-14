@@ -1799,7 +1799,8 @@ def _freshness_block(rows: list[dict], *, now: int, days: int) -> dict:
     return build_freshness(rows, now=now, days=days)
 
 
-def build_metric_problems(rows: list[dict], *, now: int | None = None) -> list[dict]:
+def build_metric_problems(rows: list[dict], *, now: int | None = None, platform: object = "",
+                          db_type: object = "") -> list[dict]:
     """The grouped problem list for one server, from the store's current-snapshot rows.
 
     Same shape, same severities and same actions as the per-server page's ``problems`` — see
@@ -1807,7 +1808,7 @@ def build_metric_problems(rows: list[dict], *, now: int | None = None) -> list[d
     re-deriving findings from a hand-picked subset of signals, which is what left 42 current
     blocked sessions and a 95 ms latency finding with no Priority Attention card of their own.
     """
-    from dbabrain.reports.server_report import metric_action, metric_label  # noqa: PLC0415 - same app, avoids a cycle
+    from dbabrain.reports.server_report import metric_action_for, metric_label  # noqa: PLC0415 - same app, avoids a cycle
 
     now = now if now is not None else int(
         datetime.datetime.now(datetime.timezone.utc).timestamp())
@@ -1831,7 +1832,10 @@ def build_metric_problems(rows: list[dict], *, now: int | None = None) -> list[d
                 code=code, status=row.get("status"), value=value),
             "message": str(row.get("message") or ""),
             "lastText": text,
-            "action": metric_action(code),
+            # Worded for THIS server's operating system and engine, and saying whom it is for: the
+            # fleet page merges one metric across servers, and a Windows host and a Linux one read
+            # different sentences (it was the code's one sentence for every platform, 2026-11-13).
+            **dict(zip(("action", "actionFor"), metric_action_for(code, platform=platform, db_type=db_type))),
             "collectedAt": str(row.get("collected_at") or ""),
         })
     return health_model.group_findings(findings, now=now)
@@ -1844,6 +1848,26 @@ def _windowed(server_id: str, row: dict, history: dict) -> dict:
         return row
     return report_windows.rejudged_row(
         row, report_windows.history_for(history, server_id, code, item))
+
+
+def _os_family(code_map: dict) -> str:
+    """``Windows`` / ``Linux`` as the OS collector read it on the host (``OS_INFO``'s ``os_family``); ``""``
+    when no such row is there - the inventory's stated platform is then the caller's next word."""
+    for item, row in latest_items_for(code_map, "OS_INFO"):
+        if item == "os_name":
+            return str(parse_os_kv(row["message"]).get("os_family") or "")
+    return ""
+
+
+def _engines() -> dict[str, tuple[str, str]]:
+    """``server_id -> (db_type, platform)`` as the inventory states them; ``{}`` when there is none to read."""
+    try:
+        return {str(server.get("server_id") or ""): (str(database.get("db_type") or ""),
+                                                     str(server.get("platform") or database.get("platform") or ""))
+                for server in data_sources.load_inventory()
+                for database in (server.get("databases") or [])[:1] if isinstance(database, dict)}
+    except Exception:  # noqa: BLE001 - a page without it still says what was read, in the general words.
+        return {}
 
 
 def _environments() -> dict[str, str]:
@@ -1888,6 +1912,7 @@ def build_inventory_health(*, sqlite_path, config=None, output_dir=None, days=2,
     servers = index_by_server(rows)
     store = MetricStore(sqlite_path)
     environments = environments if environments is not None else _environments()
+    engines = _engines()
     edition_rule = _edition_rule()
     vault = _vault_thumbprints(sqlite_path)
     # Fetched apart from `rows` on purpose. `index_by_server` reduces every metric to its newest
@@ -1928,7 +1953,11 @@ def build_inventory_health(*, sqlite_path, config=None, output_dir=None, days=2,
     overlay_servers = [
         build_server_overlay(
             sid, ip, code_map, severity.get(sid),
-            problems=build_metric_problems(problem_rows.get(sid, []), now=now),
+            problems=build_metric_problems(
+                problem_rows.get(sid, []), now=now,
+                # The OS as the collector read it on the host, else the inventory's stated platform.
+                platform=_os_family(code_map) or engines.get(sid, ("", ""))[1],
+                db_type=engines.get(sid, ("", ""))[0]),
             freshness=_freshness_block(freshness_rows.get(sid, []), now=now, days=int(days)),
             workload_rows=workload_rows.get(sid, []),
             environment=environments.get(sid, ""),

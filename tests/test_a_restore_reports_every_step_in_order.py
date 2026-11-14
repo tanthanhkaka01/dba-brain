@@ -25,8 +25,11 @@ command of its own, which is what was asked for.
 
 The scenario, success first, then each way it stops:
 
-    START  COPY_START COPY_DONE  METADATA(pre)  RESTORE_START RESTORE_DONE
+    START  COPY_START COPY_DONE  METADATA(pre)  RESTORE_START RESTORE_STEP... RESTORE_DONE
            VERIFY_START VERIFY_DONE  METADATA(post)  DELETE_START DELETE_DONE  END
+
+``RESTORE_STEP`` since 0.39.0 (1.370): one per step of the chain as it finishes - the full, the
+differential, the logs - where there was one line for all of them.
 """
 
 from __future__ import annotations
@@ -35,12 +38,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import landing_of
 from dbabrain.backup_restore import events, restore_by_id, restore_script
 from dbabrain.common import backup_copy
 from dbabrain.lib import restore_space
 from dbabrain.lib.integrity import RestoreIntegrity
 
-SUCCESS = ["COPY_START", "COPY_DONE", "METADATA_SKIP", "RESTORE_START", "RESTORE_DONE",
+# Its restore targets are lab machines the tests do not list in an inventory; a target whose
+# environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
+pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")
+
+SUCCESS = ["COPY_START", "COPY_DONE", "METADATA_SKIP", "RESTORE_START", "RESTORE_STEP", "RESTORE_DONE",
            "VERIFY_START", "VERIFY_DONE", "DELETE_START", "DELETE_DONE"]
 
 
@@ -54,6 +62,8 @@ def _job(db_type="postgresql", *, remote=True, metadata=False):
         cleanup_retention=259200, copy_mode="auto", space_check=restore_space.SpaceCheck(),
         copy_selection="chain", copy_recent_hours=24, staging_marker="",
         integrity=RestoreIntegrity(copy_retry_interval_seconds=0),
+        # What a SQL Server entry states it restores (1.362): every database of the folder.
+        landing=landing_of(),
         server_metadata=SimpleNamespace(enabled=metadata))
 
 
@@ -145,7 +155,7 @@ def test_the_delete_runs_after_the_verify_and_not_inside_the_copy(drill):
 def test_an_in_place_restore_has_no_copy_and_no_delete(drill):
     drill(_job(remote=False))
 
-    assert _phases(drill) == ["METADATA_SKIP", "RESTORE_START", "RESTORE_DONE",
+    assert _phases(drill) == ["METADATA_SKIP", "RESTORE_START", "RESTORE_STEP", "RESTORE_DONE",
                               "VERIFY_START", "VERIFY_DONE"]
 
 
@@ -180,7 +190,7 @@ def test_instance_metadata_is_replayed_before_the_databases_and_after_them(drill
         {"op": "verify-restore", "request": {}}])
 
     assert _phases(drill) == ["COPY_START", "COPY_DONE", "METADATA_START", "METADATA_DONE",
-                              "RESTORE_START", "RESTORE_DONE", "VERIFY_START", "VERIFY_DONE",
+                              "RESTORE_START", "RESTORE_STEP", "RESTORE_DONE", "VERIFY_START", "VERIFY_DONE",
                               "METADATA_START", "METADATA_DONE", "DELETE_START", "DELETE_DONE"]
     assert [c for c in drill.state["calls"] if c[0] == "metadata"] == [
         ("metadata", "pre-database"), ("metadata", "post-database")]
@@ -320,8 +330,10 @@ def test_the_copy_is_a_plan_a_staging_a_copy_and_its_times_and_the_delete_starts
     assert (out["copied"], out["bytes_copied"], out["skipped"]) == (1, 5, 0)
 
 
-def test_a_point_in_time_copies_the_whole_directory_without_asking_the_source():
-    """The narrowings take the NEWEST chain; a moment before the newest full needs an older one."""
+def test_an_oracle_point_in_time_copies_the_whole_directory_without_asking_the_source():
+    """RMAN decides what a moment needs, so Oracle's copy takes the whole directory for one. PostgreSQL
+    and SQL Server read the chain that reaches the moment since 0.39.0 (1.360) -
+    test_every_engine_copies_its_chain_or_its_window.py."""
     class _NoTouch:
         def open_stream(self, *_a, **_k):
             raise AssertionError("the source was asked about a chain it cannot choose")
@@ -329,7 +341,7 @@ def test_a_point_in_time_copies_the_whole_directory_without_asking_the_source():
         def run(self, *_a, **_k):
             raise AssertionError("the source was asked about a chain it cannot choose")
 
-    for engine in ("postgresql", "oracle"):
+    for engine in ("oracle",):
         assert backup_copy.chain_include(engine, _NoTouch(), source_dir="/b", container="c",
                                          point_in_time="2026-09-25 08:23:46 +08:00") == ()
 

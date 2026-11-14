@@ -16,6 +16,10 @@ import pytest
 
 from dbabrain.backup_restore import restore_chain_check as cc
 
+# Its restore targets are lab machines the tests do not list in an inventory; a target whose
+# environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
+pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")
+
 FULL, DIFF = "/b/APP_FULL_1.bak", "/b/APP_DIFF_1.bak"
 LOG1, LOG2, LOG3 = "/b/APP_LOG_1.trn", "/b/APP_LOG_2.trn", "/b/APP_LOG_3.trn"
 

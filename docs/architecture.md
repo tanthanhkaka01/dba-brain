@@ -239,10 +239,13 @@ diverges is always the one nobody reads. It also means an agent cannot reach any
 cannot audit — "what did the agent do last night" is the same query as "what did the daemon do
 last night", against the same table.
 
-**What this does not make it.** Nothing here talks to a model, holds a prompt, or decides anything.
-A layer that does not reason is a layer you can audit, and every judgement that carries
-consequences — restore this, fail over that — stays with whoever is accountable for it. The value
-is that the operation underneath is typed, logged and identical no matter who asked for it.
+**What this does not make it.** The operations do not reason: no model schedules, grades, backs up
+or alerts, and none is needed for any of it. A model is a caller - the optional assistant
+(`telegram` app, on only with an API key, read-only tools, `docs/07_telegram_app.md`), an MCP client
+(`docs/16_mcp_app.md`), or an agent in a shell - and it reaches the estate through the same commands
+a person runs. A layer that does not reason is a layer you can audit, and every judgement that
+carries consequences — restore this, fail over that — stays with whoever is accountable for it. The
+value is that the operation underneath is typed, logged and identical no matter who asked for it.
 
 ---
 

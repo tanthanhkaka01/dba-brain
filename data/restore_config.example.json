@@ -55,7 +55,8 @@
                             }
                         },
                         "databases": [],
-                        "all_databases": true
+                        "all_databases": true,
+                        "env": {}
                     },
                     {
                         "job": "log",
@@ -83,7 +84,8 @@
                             }
                         },
                         "databases": [],
-                        "all_databases": true
+                        "all_databases": true,
+                        "env": {}
                     }
                 ],
                 "offload_enabled": false,
@@ -109,7 +111,11 @@
                 "offload_stall_seconds": 300,
                 "offload_retention": {},
                 "offload_source_keeps_newest_chain": true,
-                "offload_files_since": ""
+                "offload_files_since": "",
+                "scrub_files_per_run": 20,
+                "server_metadata": {
+                    "enabled": false
+                }
             },
             {
                 "backup_id": "ACME_SALESDB_BASEBACKUP",
@@ -124,7 +130,6 @@
                         "job": "database_full",
                         "active": false,
                         "script": "assets/backup/postgresql/pg_basebackup_database.sh",
-                        "cleanup_retention": 1814400,
                         "time_window": {
                             "from_hour": 1,
                             "to_hour": 5,
@@ -158,7 +163,6 @@
                         "job": "database",
                         "active": false,
                         "script": "assets/backup/postgresql/pg_basebackup_database.sh",
-                        "cleanup_retention": 1814400,
                         "time_window": {
                             "from_hour": 1,
                             "to_hour": 5,
@@ -217,7 +221,9 @@
                 "offload_stall_seconds": 300,
                 "offload_retention": {},
                 "offload_source_keeps_newest_chain": true,
-                "offload_files_since": ""
+                "offload_files_since": "",
+                "scrub_files_per_run": 20,
+                "cleanup_retention": 1814400
             }
         ],
         "restores": [
@@ -257,7 +263,11 @@
                     "sql_container": "MSSQL_DRILL_1433",
                     "sqlcmd_path": "/opt/mssql-tools18/bin/sqlcmd",
                     "vm_import_linux_path": "/opt/restore/import/ACME-192-0-2-10",
-                    "vm_import_linux_log_path": "/opt/restore/import/ACME-192-0-2-10"
+                    "vm_import_linux_log_path": "/opt/restore/import/ACME-192-0-2-10",
+                    "sql_login_timeout_seconds": 60,
+                    "sql_query_timeout_seconds": 0,
+                    "remote_command_timeout_seconds": 60,
+                    "restore_command_timeout_seconds": 0
                 },
                 "database_mappings": [
                     {
@@ -287,7 +297,34 @@
                     "engine_verify_before_restore": false
                 },
                 "action": "restore",
-                "restore_from": "server"
+                "restore_from": "server",
+                "allow_production_target": false,
+                "checkdb": true,
+                "copy_selection": "chain",
+                "time_window": {
+                    "from_hour": 2,
+                    "to_hour": 5,
+                    "repeat_interval": 72000,
+                    "retry_interval": 3600,
+                    "timeout": 7200
+                },
+                "notify": {
+                    "logging_on_run": {
+                        "enabled": true,
+                        "telegram_chat": "",
+                        "chat_id": ""
+                    },
+                    "alert_on_error": {
+                        "enabled": true,
+                        "telegram_chat": "",
+                        "chat_id": ""
+                    }
+                },
+                "checkdb_timeout_seconds": 3600,
+                "checkdb_jobs": 1,
+                "tier": null,
+                "full_backup_subdir": "FULL",
+                "execution_mode": "sync"
             }
         ]
     }

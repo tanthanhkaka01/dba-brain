@@ -74,6 +74,7 @@ SETTINGS_FIELDS: tuple[FieldSpec, ...] = (
     # 0.38.0 (1.326), the operator, 2026-11-11: *dbabrain's AI has no name yet; name it, set in the
     # config json.* The value below is what `upgrade-config` writes into a node's file that states
     # none - the one place the shipped name is written in code; nothing reads it as a fallback.
+    # Each install may name its own; a node whose file states a name keeps it.
     _f("assistant_name", "name", "Phanes",
        "The assistant's name: what it calls itself in its system prompt and in every Telegram reply, what "
        "the console titles its page, and the word a message may address it by - at the start of the "

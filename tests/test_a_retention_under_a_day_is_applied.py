@@ -51,7 +51,7 @@ def _job(seconds, db_type="sqlserver"):
     return BackupJob(backup_id="LAB_FULL", job="full", db_type=db_type, server_id="LAB-SQL",
                      script="assets/backup/sqlserver/mssql_backup_database.sh",
                      backup_dir="/opt/db_ops/backup/LAB", cleanup_retention=seconds,
-                     time_window=parse_time_window_config({}, context="test").time_window,
+                     time_window=parse_time_window_config({"time_window": {"timeout": 3600}}, context="test").time_window,
                      env_secrets={"MSSQL_PASSWORD": "LAB_SA"},
                      scope=BackupScope(databases=(), all_databases=True))
 
@@ -110,7 +110,8 @@ def test_sqlserver_counts_the_files_own_age_in_minutes_and_stops_at_the_newest_f
     assert 'retention_seconds="${RETENTION_SECONDS:-}"' in text
     assert 'age_test="-mmin +$(( retention_seconds / 60 ))"' in text
     # `! -path` too (0.35.0): `! -newer` alone matches the newest full itself.
-    assert "${age_test} ! -newer '${newest_full}' ! -path '${newest_full}' -delete" in text
+    # 0.39.0 (1.373): bounded to the files before RETENTION_ONLY_BEFORE when the entry hands one.
+    assert "${age_test} ${only_before_test} ! -newer '${newest_full}' ! -path '${newest_full}' -delete" in text
     # the day rule is the default it always was
     assert 'age_test="-mtime +${retention_days}"' in text
 
@@ -133,7 +134,7 @@ def test_sqlserver_says_what_its_window_removed_on_both_platforms():
     windows = _script("sqlserver/mssql_backup_database.ps1")
     assert "if (-not (Test-Path -LiteralPath $file.FullName)) { $removed++ }" in windows
     assert ('"retention: $db removed $removed file(s) past the window ($retentionWindow), below its '
-            'newest full $($newestFull.Name)"') in windows
+            'newest full $($newestFull.Name)$onlyBeforeSaid"') in windows
 
 
 def test_postgresql_drops_whole_chains_on_a_nearer_cutoff_not_single_backups():

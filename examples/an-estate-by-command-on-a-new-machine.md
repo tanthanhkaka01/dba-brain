@@ -189,7 +189,7 @@ into the inventory: `metrics` and its overrides, `cmd_access`, `sql_access`, `no
   "server_id": "ACME-192-0-2-10-SQL01",
   "db_type": "sqlserver", "ip": "192.0.2.10", "port": 1433,
   "major_version": 16, "service_name": "MSSQLSERVER",
-  "environment": "prod", "platform": "windows", "active": true,
+  "site": "ACME", "environment": "prod", "platform": "windows", "active": true,
   "metrics": {"enabled": true},
   "cmd_access": {"method": "winrm", "host": "192.0.2.10", "port": 5985,
                  "credential_name": "remote_192_0_2_10_admin", "auth_type": "password"},

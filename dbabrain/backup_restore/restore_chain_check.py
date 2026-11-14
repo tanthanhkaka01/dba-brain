@@ -36,7 +36,7 @@ MAX_COLUMNS = 90
 
 #: 1-based positions of the columns read, unchanged since 2008 R2.
 POSITIONS = {"backup_type": 3, "position": 6, "database": 10, "first_lsn": 14, "last_lsn": 15,
-             "checkpoint_lsn": 16, "differential_base_lsn": 48}
+             "checkpoint_lsn": 16, "differential_base_lsn": 48, "backup_finish_date": 19}
 
 MARKER = "DBABRAIN_HEAD|"
 ERROR_MARKER = "DBABRAIN_HEAD_ERR|"
@@ -48,12 +48,18 @@ def _sql_string(value: str) -> str:
 
 def build_header_sql(paths: list[str]) -> str:
     """One batch reading every file's header: ``DBABRAIN_HEAD|<index>|<type>|<position>|<database>|
-    <first>|<last>|<checkpoint>|<diff base>`` per backup set, ``DBABRAIN_HEAD_ERR|<index>|<number>|
-    <message>`` for a file that could not be read."""
+    <first>|<last>|<checkpoint>|<diff base>|<finished>`` per backup set, ``DBABRAIN_HEAD_ERR|<index>|
+    <number>|<message>`` for a file that could not be read.
+
+    ``<finished>`` (0.39.0, 1.363 / 1.367) is ``BackupFinishDate`` - the SOURCE server's clock - as
+    ``YYYY-MM-DD HH:MM:SS``: where a restore of this chain ends, and, against a file named by its UTC
+    start, the source's offset. Its column is made ``datetime`` before the first insert: into the
+    ``nvarchar`` the others are, SQL Server writes ``Nov 13 2026  1:00AM`` and the seconds are lost."""
     values = ",\n    ".join(f"({index}, N'{_sql_string(path)}')" for index, path in enumerate(paths))
-    picked = " + N'|' + ".join(f"COALESCE(c{POSITIONS[key]}, N'')" for key in (
+    finish = POSITIONS["backup_finish_date"]
+    picked = " + N'|' + ".join([*(f"COALESCE(c{POSITIONS[key]}, N'')" for key in (
         "backup_type", "position", "database", "first_lsn", "last_lsn", "checkpoint_lsn",
-        "differential_base_lsn"))
+        "differential_base_lsn")), f"COALESCE(CONVERT(nvarchar(19), c{finish}, 120), N'')"])
     # Two quotes inside the dynamic text: it is a string inside a string.
     return f"""
 SET NOCOUNT ON;
@@ -68,6 +74,7 @@ BEGIN
     SET @sql = N'ALTER TABLE #h ADD c' + CONVERT(nvarchar(10), @n) + N' nvarchar(4000) NULL';
     EXEC (@sql);
 END;
+ALTER TABLE #h ALTER COLUMN c{finish} datetime NULL;
 SELECT @first = path FROM @files WHERE i = 0;
 WHILE @fits = 0 AND @n <= {MAX_COLUMNS}
 BEGIN
@@ -143,7 +150,8 @@ def parse_headers(stdout: str, paths: list[str]) -> tuple[list[dict[str, Any] | 
         if MARKER not in line:
             continue
         parts = line[line.index(MARKER) + len(MARKER):].strip().split("|")
-        if len(parts) != 8 or not parts[0].isdigit():
+        # Nine since 0.39.0 (the finish date); eight from a batch written before it.
+        if len(parts) not in (8, 9) or not parts[0].isdigit():
             continue
         index = int(parts[0])
         position = parts[2].strip()
@@ -156,6 +164,7 @@ def parse_headers(stdout: str, paths: list[str]) -> tuple[list[dict[str, Any] | 
             "path": paths[index], "backup_type": parts[1].strip(), "database": parts[3].strip(),
             "first_lsn": _lsn(parts[4]), "last_lsn": _lsn(parts[5]),
             "checkpoint_lsn": _lsn(parts[6]), "differential_base_lsn": _lsn(parts[7]),
+            "finished_at": (parts[8].strip() or None) if len(parts) == 9 else None,
         }
     return heads, errors
 
@@ -163,23 +172,31 @@ def parse_headers(stdout: str, paths: list[str]) -> tuple[list[dict[str, Any] | 
 def chain_break(full: str, diff: str | None, logs: list[str], stdout: str) -> tuple[str, str]:
     """``(break, not_judged)``: the first break of the chain in words naming its file, or why it was
     not judged. Both empty when it holds."""
+    broken, unjudged, _heads = read_chain(full, diff, logs, stdout)
+    return broken, unjudged
+
+
+def read_chain(full: str, diff: str | None, logs: list[str],
+               stdout: str) -> tuple[str, str, list[dict[str, Any]] | None]:
+    """:func:`chain_break` with the headers it judged by - ``None`` when it did not judge - so the
+    restore can read each file's finish date off the same answer (0.39.0)."""
     from dbabrain.lib.integrity import sqlserver_chain_break
 
     paths = [full, *([diff] if diff else []), *logs]
     heads, errors = parse_headers(stdout, paths)
     if errors:
-        return "", "a header could not be read - " + "; ".join(errors[:3])
+        return "", "a header could not be read - " + "; ".join(errors[:3]), None
     if any(head is None for head in heads):
         missing = [path for path, head in zip(paths, heads) if head is None]
-        return "", f"no header was printed for {len(missing)} file(s), first {missing[0]}"
+        return "", f"no header was printed for {len(missing)} file(s), first {missing[0]}", None
     # RESTORE HEADERONLY's BackupType: 1 database, 5 differential, 2 log. A file of another kind than
     # its place in the chain means the columns were not where they are read - not judged, never a
     # refusal made on misread numbers.
     expected = ["1", *(["5"] if diff else []), *["2"] * len(logs)]
     wrong = [head["path"] for head, kind in zip(heads, expected) if head["backup_type"] != kind]
     if wrong:
-        return "", f"a header did not read as its kind ({wrong[0]}), so the LSNs were not trusted"
+        return "", f"a header did not read as its kind ({wrong[0]}), so the LSNs were not trusted", None
     full_head = heads[0]
     diff_head = heads[1] if diff else None
     log_heads = heads[2 if diff else 1:]
-    return sqlserver_chain_break(full_head, diff_head, log_heads), ""
+    return sqlserver_chain_break(full_head, diff_head, log_heads), "", [head for head in heads if head]

@@ -41,6 +41,8 @@ from dbabrain.lib import errors
 from dataclasses import dataclass
 from typing import Mapping
 
+from dbabrain.lib.powershell import quote_powershell
+
 #: Multiplied by the bytes about to be copied to get the room a restore must find. Not 1.0, because
 #: the copy is never the only thing that grows; 2.0 for every engine since 0.26.0 (it was 1.5) - see
 #: the module docstring.
@@ -185,6 +187,34 @@ def free_space_command(target: str) -> str:
     return (f"p={quoted}; "
             'while [ ! -e "$p" ] && [ "$p" != / ]; do p=$(dirname "$p"); done; '
             'df -Pk "$p"')
+
+
+def windows_free_space_script(target: str) -> str:
+    """PowerShell: the bytes free to this login on the drive ``target`` is on (0.39.0).
+
+    The Windows half of :func:`free_space_command`, for a staging on SQL Server running natively on
+    Windows: ``df`` sent there reached cmd.exe and answered nothing a check could read. The drive,
+    not the folder - a folder on Windows has no free space of its own, and the staging is made after
+    this check, so it need not exist. ``DriveInfo.AvailableFreeSpace`` is the room *this login* has
+    (a disk quota counts), which is the room the copy will find; and it is .NET, so PowerShell 2.0
+    answers too. ``target`` may be stated with either separator, or as SFTP names it (``/C:/x``).
+    """
+    text = str(target).strip().replace("/", "\\")
+    if len(text) > 2 and text[0] == "\\" and text[2] == ":":
+        text = text[1:]
+    return ("$ErrorActionPreference = 'Stop'\n"
+            f"$root = [System.IO.Path]::GetPathRoot({quote_powershell(text)})\n"
+            "$drive = New-Object System.IO.DriveInfo($root)\n"
+            "'FREE ' + $drive.AvailableFreeSpace\n")
+
+
+def parse_windows_free_bytes(stdout: str) -> int | None:
+    """The free bytes :func:`windows_free_space_script` answered, or ``None`` when it did not say."""
+    for line in str(stdout or "").splitlines():
+        word, _, number = line.strip().partition(" ")
+        if word == "FREE" and number.strip().isdigit():
+            return int(number.strip())
+    return None
 
 
 def parse_df_free_bytes(stdout: str) -> int | None:

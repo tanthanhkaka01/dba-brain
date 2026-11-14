@@ -24,6 +24,8 @@ spbot_add_sql - Add SQL task
 spbot_run_sql_task - Run one SQL task now by sql_id, ignoring its schedule (optional NAME=VALUE parameters)
 spbot_metric_toggle - Enable/disable metrics for one server (all, one collector class, or one metric)
 spbot_backup - Run one backup by backup_id, optionally forcing full/diff/log
+spbot_offload - Run one entry's repository pass now: copy, verify, encrypt, release at the source (dry-run to see)
+spbot_restore_plan - What a restore would do, read only: the chain, where from, the room on the target, the steps
 spbot_restore - Run point-in-time restore workflow by restore_id and point_in_time
 spbot_copy_backup - Copy a restore entry's backups from server_id to its target, proven, nothing restored
 spbot_create_db_docker - Create a lab database container (postgres/mysql/mssql/oracle) on the worker
@@ -62,6 +64,8 @@ spbot_restart_server - EMERGENCY: restart a server (asks yes, then the server id
 | `/spbot_run_sql_task` | Run one SQL task now by `sql_id` (the number `/spbot_list_sql_tasks` shows). Runs every target configured for that task, in the background, and each target reports its own result as a separate message — the runner already queues those. Always `--force`, which the CLI requires for a targeted run: it ignores the time window, the repeat interval **and the active flag**, so an id that `/spbot_list_sql_tasks` hides as inactive will still run if you name it. Requires clearance 10, the same as `/spbot_restore` and `/spbot_add_sql`, because a task may be an UPDATE against production. |
 | `/spbot_metric_toggle` | Enable/disable metric collection for one `server_id` in `db_instances.json` (atomic write; the bot runs the `common.cli metric-toggle` command itself, so there is one engine and one caller path). Scope: `all` (the target's `metrics.enabled`), `collector:<sql\|cmd\|docker\|k8s>` (one collector class via `disabled_collector_types`), or one metric_code (`metric_overrides.<CODE>.enabled`; enabling also removes the code from `report_policy.disabled_metric_codes`, the list that keeps a metric's alerts out of the reports - so *on* means collected and reported). Clearance 10, private chat only — switching collection off produces no alert of its own. Afterwards, pull the change back to the master with `control worker-pull-data-config --all-json --overwrite`. |
 | `/spbot_backup` | Run one backup now by `backup_id`, always with `--force` (ignores the schedule, but never a run already in flight). Optional second argument sets the level: `full` \| `diff` \| `log`, or `-` to let the script decide as it would on a scheduled run. One word for every engine — it is translated to that engine's own name (Oracle 0/1, PostgreSQL full/incr, SQL Server full/diff/log). Use `/spbot_list_backup_id` to find the id. |
+| `/spbot_offload` | The repository pass of one backup entry now (0.39.0): every step after the backup - copy to the repository, verify, encrypt, verify the encryption, release at the source, the repository check - as the entry states them, in one pass. `dry-run` as the second word says what it would copy, encrypt, release and expire, and does none of it. The scheduled workflow runs the same pass after every backup; this brings it forward. The same clearance (10) as `/spbot_backup`. |
+| `/spbot_restore_plan` | A restore's dry run (0.39.0): `restore-workflow --restore-id <id> --dry-run`, with the same arguments as `/spbot_restore`. Reads the chain where the copy would read it (the repository for `restore_from: repository`), each file with the bytes it will have on the target, whether the staging folder is usable and the files fit, the steps after the copy, and anything that would refuse the restore. Copies, makes and restores nothing. Clearance 2. |
 | `/spbot_restore` | Run point-in-time restore workflow by restore_id and point_in_time |
 | `/spbot_copy_backup` | Copy only (0.34.0): the restore entry's copy from its `server_id` to its target, every file proven by checksum, then stop - nothing restored, no metadata replayed, the staged files kept. `restore-workflow --copy-only`. The same arguments and clearance (10) as `/spbot_restore`. |
 | `/spbot_create_db_docker` | Create a lab database container, on the worker host **or directly on a remote Ubuntu VM over SSH** — one unified parameter set for every engine. Private chat only. Fourteen parameters, in order: **name · engine · version · mode · host_port · password_env (DB secret ref) · password_text (DB password value) · deploy_target · remote_user · remote_password_ref · remote_password_text · remote_key_name · recreate · install_docker**. See the Usage section below for what each means and inline examples. Both passwords come in two forms — a **ref** already in the encrypted secret store, or a **text value** (handed to the CLI through the environment, never rendered onto a command line). `deploy_target` = `worker` runs in-container on the worker host (as before); an **IP** provisions on that Ubuntu VM over SSH (`remote_user` + one of the SSH password forms). Engines: `postgres`/`mysql`/`mssql`/`oracle` (26ai = tag `23.26.2`/`latest`; oracle `ha-lab` = Data Guard 1+1). `recreate=yes` = `--force`: **destroys the existing containers and their data volumes**. Afterwards pull the new connection + secret back to the master with `control worker-pull-data-config --all-json --include-secrets --overwrite`. |
@@ -396,6 +400,40 @@ second backup against the same database.
 The optional level is one word for every engine and is translated per engine (Oracle `0`/`1`,
 PostgreSQL `full`/`incr`, SQL Server `full`/`diff`/`log`). Pass `-` to leave the decision to the
 script, exactly as a scheduled run would.
+
+### `/spbot_offload`
+
+Run one backup entry's repository pass now, by `backup_id` (0.39.0):
+
+```
+/spbot_offload CLOUD_MSSQL_FULL
+/spbot_offload CLOUD_MSSQL_FULL dry-run
+```
+
+The pass is every step of the flow after the backup, as the entry states them: copy each catalogued
+file to the repository and prove it by size and sha256, encrypt it (`offload_encrypt`) and prove the
+`.age` decrypts back, release the source (`offload_delete_source` - the newest chain too when
+`offload_source_keeps_newest_chain` is false), expire repository copies past `offload_retention`,
+and check the repository folder against the catalog. The scheduled workflow runs the same pass after
+every backup; this brings it forward, so `/spbot_backup` followed by `/spbot_offload` is the whole
+flow from a chat.
+
+`dry-run` answers what the pass would copy, encrypt, release and expire, and changes nothing. A run
+takes at most the entry's `offload_files_per_pass` files. One pass per entry at a time: a second is
+skipped. The release at the source waits while a lockdown is on; the copy goes on. Each step is
+reported in the entry's backup group, as a scheduled pass's is; the chat that typed the command gets
+one line - what was done, or that there was nothing to do.
+
+### `/spbot_restore_plan`
+
+What a restore would do, before it does it (0.39.0):
+
+```
+/spbot_restore_plan APP_TO_LAB LATEST
+/spbot_restore_plan APP_TO_LAB 2026-11-12 21:00:00 +07:00
+```
+
+The answer is one line: how many files and GB, read from where (the repository or the source server), decrypted through what, how many are on the target already, whether the rest fit, what the staging folder is, then the steps after the copy - or `WOULD BE REFUSED` with each reason (an entry the workflow refuses, a file no offload proved, a folder that is not a staging folder, not enough room). Nothing is copied, made, restored or deleted, and no run is claimed. Run it before `/spbot_restore`.
 
 ### `/spbot_restore`
 

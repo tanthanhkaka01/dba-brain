@@ -40,7 +40,7 @@ from typing import Any
 from dbabrain.lib import cleanup_retention
 from dbabrain.lib.backup_level import BACKUP_LEVEL_BY_ENGINE
 from dbabrain.lib.integrity import PRODUCTION_ENVIRONMENTS, production_target_refusal
-from dbabrain.lib.restore.kind import is_script_restore
+from dbabrain.lib.restore.kind import REPOSITORY_ENGINES, is_script_restore
 from dbabrain.lib.time_window import time_window_closed_reason, weekdays_text, window_of
 from dbabrain.lib.timezone import format_display
 from dbabrain.lib.webhost_endpoints import STABLE_PAGES
@@ -66,6 +66,14 @@ LATEST = "LATEST"
 #: The kinds of bot command a runbook step is held to, and the ``backup_restore.cli`` sub-command
 #: each one runs.
 GATE_BACKUP, GATE_RESTORE, GATE_COPY_ONLY = "backup", "restore", "copy_only"
+#: The repository pass (``offload``). A node with no bot command for it holds the pass to the
+#: backup command's level, as it did before ``/spbot_offload`` existed (0.39.0, 1.347).
+GATE_OFFLOAD = "offload"
+#: A restore's dry run (``/spbot_restore_plan``, 0.39.0): it runs ``restore-workflow`` too, with
+#: ``--dry-run`` fixed in its line - never the command a changing step is held to, whatever its place in
+#: the file (found the day it was added: placed first, it was taken for the restore and its level 2
+#: would have handed the restore to level 2).
+RESTORE_PLAN = "restore_plan"
 LIST_BACKUPS, LIST_RESTORES = "list_backups", "list_restores"
 
 #: A runbook answered in full for at most this many entries of one server; more are listed by id.
@@ -219,8 +227,10 @@ def bot_twins(commands_document: Any) -> dict[str, dict[str, Any]]:
         sub = next((item for item in rest if not item.startswith("-") and not item.startswith("{")), "")
         conditional = [str(item) for block in action.get("conditional_args") or [] if isinstance(block, dict)
                        for item in block.get("argv") or []]
-        kind = {"backup": GATE_BACKUP, "list-backups": LIST_BACKUPS, "list-restores": LIST_RESTORES,
-                "restore-workflow": GATE_COPY_ONLY if "--copy-only" in rest else GATE_RESTORE}.get(sub)
+        kind = {"backup": GATE_BACKUP, "offload": GATE_OFFLOAD, "list-backups": LIST_BACKUPS,
+                "list-restores": LIST_RESTORES,
+                "restore-workflow": RESTORE_PLAN if "--dry-run" in rest
+                else GATE_COPY_ONLY if "--copy-only" in rest else GATE_RESTORE}.get(sub)
         if kind is None or kind in twins:
             continue
         parameters = [dict(item) for item in action.get("parameters") or []
@@ -238,6 +248,7 @@ def bot_twins(commands_document: Any) -> dict[str, dict[str, Any]]:
             "runs": " ".join(rest), "names_a_job": "--job" in rest,
             "takes_a_level": "--backup-type" in conditional or "--backup-type" in rest,
             "takes_a_moment": "--point-in-time" in conditional or "--point-in-time" in rest,
+            "takes_a_dry_run": "--dry-run" in conditional,
         }
     return twins
 
@@ -581,6 +592,8 @@ def backup_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, dic
               f"{' | '.join(words)} forces that level for this run"
               if twin and twin["takes_a_level"] and words else ""))
 
+    offload_twin = twins.get(GATE_OFFLOAD)
+    offload_gate = GATE_OFFLOAD if offload_twin is not None else GATE_BACKUP
     if repository.get("enabled"):
         offload = ["offload", *CONFIG_ARGS, "--backup-id", backup_id]
         steps.append({"step": "Dry run of the repository pass", "kind": "dry_run", "changes": False,
@@ -589,7 +602,7 @@ def backup_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, dic
                               "of it; an entry with nothing to do is left out of the answer",
                       **_lines(node, [*offload, "--dry-run"])})
         steps.append({
-            "step": "Run the repository pass now", "kind": "run", "changes": True, "gate": GATE_BACKUP,
+            "step": "Run the repository pass now", "kind": "run", "changes": True, "gate": offload_gate,
             "touches": (f"copies the entry's catalogued files to {repository['server_id']}:{repository['folder']}/"
                         f"{server}/ and proves each copy"
                         + (", encrypted as .age" if repository["encrypt"] else "")
@@ -599,8 +612,9 @@ def backup_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, dic
                         + "; deletes repository copies past offload_retention, when one is stated"),
             "confirmation": NOTHING_ASKS,
             "note": "the scheduled workflow runs this pass by itself after every backup; by hand it only "
-                    "brings it forward. A hand run takes at most 100 files of the entry (--limit N for another "
-                    "number).",
+                    "brings it forward. A hand run takes at most the entry's offload_files_per_pass ("
+                    + (f"{repository['files_per_pass']}" if repository.get("files_per_pass") else "as stated")
+                    + " files) - --limit N for another number, this run only.",
             **_lines(node, offload)})
     steps.append({
         "step": "Check the files are still there and unchanged", "kind": "check", "changes": False,
@@ -634,10 +648,25 @@ def backup_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, dic
                          "`workflow` (the APP-BACKUP-RESTORE job) runs the due backups, then the due restores, "
                          "then the repository pass.",
         "steps": steps, "guards": guards, "telegram": telegram,
+        "telegram_offload": _offload_block(offload_twin, backup_id=backup_id, repository=repository),
         "list": _list_block(node, twins.get(LIST_BACKUPS), "list-backups"),
         "watch": _watch(kind="backup", entry_id=backup_id, report_base=report_base, jobs=names,
                         notify=jobs[0]["notify"] if jobs else _notify(entry)),
     }
+
+
+def _offload_block(twin: dict[str, Any] | None, *, backup_id: str, repository: dict[str, Any]) -> dict[str, Any]:
+    """The bot command for the repository pass (0.39.0, 1.347), or why there is none."""
+    if not repository.get("enabled"):
+        return {"available": False, "why": repository.get("why") or "the entry has no repository pass"}
+    if twin is None:
+        return {"available": False,
+                "why": "this node's telegram_support_commands.json has no command that runs offload: from a "
+                       "chat, the backup command runs the backup and the scheduled workflow runs this pass after it"}
+    return _bot_block(twin, _bot_line(twin, {"backup_id": backup_id}),
+                      runs=f"offload --backup-id {backup_id} - every later step of the flow in one pass",
+                      note=("add dry-run as the last word to see what the pass would copy, encrypt, release "
+                            "and expire, and do none of it" if twin["takes_a_dry_run"] else ""))
 
 
 def _list_block(node: Node, twin: dict[str, Any] | None, sub: str) -> dict[str, Any]:
@@ -687,12 +716,25 @@ def restore_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, di
     refusal = production_target_refusal(environments.get(target), allowed=entry.get("allow_production_target") is True,
                                         restore_id=restore_id, target=target)
     where = target or source
+    # What the workflow refuses before anything runs (workflow._entry_action), said before the line
+    # that would meet it (0.39.0, 1.359).
+    repository_refusal = ("" if restore_from != "repository" else
+                          "a share-driven SQL Server entry does not read the repository: make it script-driven, "
+                          "or state restore_from: server" if not script else
+                          f"restore_from repository reads {', '.join(REPOSITORY_ENGINES)} backups; {engine} is "
+                          "not built (RMAN catalogs its own pieces)" if engine not in REPOSITORY_ENGINES else
+                          "restore_from repository needs a target_server_id other than the source: in place, "
+                          "nothing would come from the repository" if in_place else "")
     if script:
         reads = ("the repository's proven copies of the server's backups (.age copies are decrypted on the way)"
                  if restore_from == "repository" else f"the backup folder of {source}")
         copies = "nothing is copied: the target reads the source's own folder" if in_place else \
             f"the backup chain is copied from {reads} to {staging or 'the staging folder'} on {where}, every " \
-            "file proven by checksum before it is used"
+            "file proven by checksum before it is used" + (
+                "; the staging folder is made, marked and held to the free space before the first file, and "
+                "opened to the engine after the last; an encrypted (.age) copy is decrypted through this node "
+                "with the key the runtime store keeps for it (DBABRAIN_SECRET_KEY opens the store), or on the "
+                "repository host when that host is the target" if restore_from == "repository" else "")
     else:
         share = _text((entry.get("source") or {}).get("backup_share") if isinstance(entry.get("source"), dict) else "")
         reads = f"the share {share}" if share else f"the backup share of {source}"
@@ -706,7 +748,12 @@ def restore_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, di
          else "nothing: server_metadata is off for this entry"},
         {"step": "Restore", "does": {
             "sqlserver": "per database: the newest FULL, its newest DIFF, then every LOG after it - to the newest "
-                         "backup, or to the moment asked for",
+                         "backup, or to the moment asked for" + (
+                             "; every file of the database is moved to the target's own data and log folders "
+                             "(its source's paths do not exist there); an encrypted backup's certificate is "
+                             "imported from dbabrain's vault first - it must be there (backup_restore "
+                             "take-certificate stores it; backup_restore certificates lists it)"
+                             if script and not in_place else ""),
             "postgresql": "the base backup and its incrementals are combined, then WAL is replayed - to the newest "
                           "backup, or to the moment asked for",
             "oracle": "one RMAN DUPLICATE: RMAN picks the level 0, the incrementals and the archived logs itself",
@@ -723,24 +770,36 @@ def restore_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, di
             f"removed from {staging or 'the staging folder'} on {where}"},
     ]
     whole = engine in ("postgresql", "oracle", "mysql")
+    # What the entry's overwrite_existing means on each kind of restore (0.39.0, 1.362): it was ONLINE
+    # only for SQL Server, and "REPLACED" whatever a PostgreSQL or Oracle entry stated.
     touches = (f"RESTORES {databases} onto {where}" + (f" (container {container})" if container else "")
-               + (" - what runs there now is REPLACED by the restored copy" if whole else
-                  " - a database ONLINE there under the same name is REPLACED (overwrite_existing is true)"
-                  if overwrite else " - a full restore over a database that is ONLINE there is refused "
-                                    "(overwrite_existing is not true)")
+               + ((" - what the target instance holds now is REPLACED by the restored copy (overwrite_existing "
+                   "is true)" if overwrite else
+                   " - refused when the target instance already holds user data (overwrite_existing is not "
+                   "true); onto a target that holds none it becomes that instance") if whole else
+                  " - a database there under the name it lands as, in any state, is REPLACED "
+                  "(overwrite_existing is true)" if overwrite else
+                  " - refused, before anything is copied, when the target already holds a database under the "
+                  "name it lands as, in any state (overwrite_existing is not true)")
                + ("" if in_place else f"; first writes the backup chain into {staging or 'the staging folder'}")
                + ("; replays the source's logins, roles and Agent jobs on the target" if metadata else "")
                + ("" if in_place else f"; afterwards deletes staged files older than {retention}")
                + ("; the target answers to the source's logins afterwards - a physical restore brings them"
                   if whole else ""))
     allowed = entry.get("allow_production_target") is True
-    guards = [f"a target the inventory calls production is refused unless the entry states "
-              f"allow_production_target (this entry: {str(allowed).lower()}; {where}: "
-              f"{_environment(where, environments)})"]
+    # The unknown cases are named with the production one (D-39.6): an unmarked target is refused as
+    # well, and a runbook that said only "production" would read as a run that goes ahead.
+    guards = [f"a target the inventory calls production - or does not list, or lists with no environment - "
+              f"is refused unless the entry states allow_production_target (this entry: "
+              f"{str(allowed).lower()}; {where}: {_environment(where, environments)})"]
+    guards.append(("a restore onto a target instance that holds user data is refused unless the entry states "
+                   "overwrite_existing" if whole else
+                   "a restore onto a name the target already holds - a database in any state - is refused unless "
+                   "the entry states overwrite_existing") + f" (this entry: {str(overwrite).lower()}) - and always "
+                  "while a lockdown is on. What cannot be read is refused, never assumed empty")
     if not whole:
-        guards.append("a full restore over a database that is ONLINE on the target is refused unless the entry "
-                      f"states overwrite_existing (this entry: {str(overwrite).lower()}) - and always while a "
-                      "lockdown is on")
+        guards.append("after the check, the target's own record of where each database stopped is held to what "
+                      "was asked - the moment, or the end of the chain - and a difference fails the restore")
     guards.append("restore-workflow takes the entry's run claim: while one run of it is in flight, a second "
                   "answers already-running and does nothing. restore-by-id takes no claim" if script else
                   "a run started by hand takes no run claim: look at job_runs and the entry's chat for a run "
@@ -748,20 +807,31 @@ def restore_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, di
     if restore_from == "repository":
         guards.append("restore_from is repository: only the copies an offload proved are used, and any other "
                       "file found there refuses the run")
+        guards.append("a point in time copies every file of the entry's folder on the repository, not only "
+                      "the chain: one newest log or WAL not yet encrypted there refuses the run - wait for the "
+                      "next repository pass")
+    if repository_refusal:
+        guards.append("REFUSED before anything runs: " + repository_refusal)
     workflow = ["restore-workflow", *CONFIG_ARGS, "--restore-id", restore_id]
     steps: list[dict[str, Any]] = []
     if script:
         request = json.dumps({"restore_id": restore_id, "dry_run": True})
-        steps.append({
-            "step": "Plan the restore (dry run)", "kind": "dry_run", "changes": False,
-            "does": "answers the steps the restore would run, in order, and runs none: nothing is copied, "
-                    "nothing restored. It still reports `started` and `finished: done` to the entry's chat, as "
-                    "a run does - say there that it is a dry run",
-            **_lines(node, ["restore-by-id", *CONFIG_ARGS, request], bash_only=True)})
+        plan_does = ("answers the plan and runs none of it: the chain read where the copy would read it "
+                     + ("(the repository)" if restore_from == "repository" else f"({source})")
+                     + ", each file with the bytes it will have on the target, whether the staging folder is "
+                     "usable and the files fit, the steps after the copy, and anything that would refuse the "
+                     "restore. Nothing is copied, made, restored or deleted"
+                     if not in_place else
+                     "answers the steps the restore would run over the folder the target reads, and runs none")
         steps.append({
             "step": "Dry run of the workflow", "kind": "dry_run", "changes": False,
-            "does": "answers only that the entry would run (status dry-run); it plans and copies nothing",
+            "does": plan_does + "; no run is claimed and nothing is said in the entry's chat (the one sentence "
+                                "of it is `said`)",
             **_lines(node, [*workflow, "--dry-run"])})
+        steps.append({
+            "step": "Plan the restore (dry run)", "kind": "dry_run", "changes": False,
+            "does": plan_does + "; it says it is a dry run at its start and its end in the entry's chat",
+            **_lines(node, ["restore-by-id", *CONFIG_ARGS, request], bash_only=True)})
     else:
         steps.append({
             "step": "Rehearse the workflow (dry run)", "kind": "dry_run", "changes": False,
@@ -774,9 +844,11 @@ def restore_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, di
             "does": "prints the RESTORE statements for the files staged on the target now and runs none",
             **_lines(node, ["restore-latest", *CONFIG_ARGS, "--restore-id", restore_id, "--dry-run"])})
     run = {"kind": "run", "changes": True, "gate": GATE_RESTORE, "touches": touches, "confirmation": NOTHING_ASKS}
+    # Before `same` is made from it (0.39.0): made first, the point in time and restore-by-id steps never
+    # carried a refusal - not even a production target's.
+    if refusal or repository_refusal:
+        run["will_be_refused"] = "; ".join(text for text in (refusal, repository_refusal) if text)
     same = {**run, "touches": "what `Restore to the newest backup` touches"}
-    if refusal:
-        run["will_be_refused"] = refusal
     if entry.get("active", True) is False:
         run["inactive"] = ("the entry is inactive: the schedule never runs it, but a run named by its "
                            "restore_id still does")
@@ -798,7 +870,7 @@ def restore_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, di
         steps.append({
             "step": "Restore only what is staged", **{**run, "touches": (
                 f"RESTORES {databases} onto {where} from the files already staged there; it copies nothing and "
-                "deletes nothing" + (" - a database ONLINE under the same name is REPLACED" if overwrite else ""))},
+                "deletes nothing" + (" - a database the target holds under the same name is REPLACED" if overwrite else ""))},
             **_lines(node, ["restore-latest", *CONFIG_ARGS, "--restore-id", restore_id])})
     copy_only_ok = not in_place
     if copy_only_ok:
@@ -821,6 +893,14 @@ def restore_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, di
             if copy_twin else "", runs=f"restore-workflow --restore-id {restore_id} --copy-only")}
            if copy_only_ok else {}),
     }
+    plan_twin = twins.get(RESTORE_PLAN)
+    telegram_plan = (_bot_block(plan_twin, _bot_line(plan_twin, {"restore_id": restore_id, "point_in_time": LATEST}),
+                                runs=f"restore-workflow --restore-id {restore_id} --dry-run",
+                                note="read only: the answer is the plan in one line - run it before the restore")
+                     if plan_twin and script else
+                     {"available": False, "why": "a share-driven entry's dry run is the CLI's (restore-workflow "
+                                                 "--dry-run)" if not script else
+                      "this node's telegram_support_commands.json has no command that runs the dry run"})
     return {
         "kind": "restore", "restore_id": restore_id,
         "entry_kind": ("script-driven: restore-workflow and restore-by-id run it; restore-latest refuses it"
@@ -836,7 +916,7 @@ def restore_runbook(entry: dict[str, Any], *, node: Node, twins: Mapping[str, di
         "staging_folder": staging, "cleanup_retention": retention,
         "note": _text(entry.get("note"))[:NOTE_CHARS],
         "schedule": _schedule(entry, now), "notify": _notify(entry),
-        "flow": flow, "steps": steps, "guards": guards, "telegram": telegram,
+        "flow": flow, "steps": steps, "guards": guards, "telegram": telegram, "telegram_plan": telegram_plan,
         "list": _list_block(node, twins.get(LIST_RESTORES), "list-restores"),
         "watch": _watch(kind="restore", entry_id=restore_id, notify=_notify(entry), report_base=report_base),
     }
@@ -947,6 +1027,9 @@ LINE_KEYS = ("cli", "from_master", "cli_not_written", "from_master_not_written",
 
 
 def _gate_twin(runbook: dict[str, Any], gate: str) -> dict[str, Any] | None:
+    if gate == GATE_OFFLOAD:
+        block = runbook.get("telegram_offload") or {}
+        return block if block.get("available") else None
     block = runbook.get("telegram") or {}
     if runbook.get("kind") == "restore":
         block = block.get("copy_only" if gate == GATE_COPY_ONLY else "restore") or block.get("restore") or {}
@@ -1002,8 +1085,9 @@ def for_asker(answer: dict[str, Any], *, asker_level: int | None,
                 step.pop(key, None)
             step["withheld"] = why
             withheld += 1
-        blocks = [runbook.get("telegram") or {}] if runbook.get("kind") == "backup" else \
-            list((runbook.get("telegram") or {}).values())
+        blocks = [runbook.get("telegram") or {}, runbook.get("telegram_offload") or {}] \
+            if runbook.get("kind") == "backup" else \
+            [*(runbook.get("telegram") or {}).values(), runbook.get("telegram_plan") or {}]
         for block in blocks:
             if not block.get("available") or operator:
                 continue

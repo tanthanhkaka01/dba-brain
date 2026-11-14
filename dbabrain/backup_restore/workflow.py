@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from dbabrain.backup_restore import schedule
+from dbabrain.backup_restore import restore_messages, schedule
 from dbabrain.backup_restore.backup import run_backup
 from dbabrain.backup_restore.config import BackupRestoreConfig, load_restore_configs
 from dbabrain.backup_restore.restore_script import (
@@ -33,8 +33,11 @@ from dbabrain.backup_restore.restore_script import (
 )
 from dbabrain.backup_restore.events import emit_backup_restore_event, stdout_excerpt
 from dbabrain.backup_restore.server_metadata import replay_phase
-from dbabrain.lib.integrity import ACTION_COPY_ONLY, IntegrityConfigError, require_restore_action
+from dbabrain.lib.integrity import (
+    ACTION_COPY_ONLY, IntegrityConfigError, require_overwrite_stated, require_restore_action)
 from dbabrain.lib.offload import OffloadConfigError, require_restore_from
+from dbabrain.lib.restore import landing as restore_landing
+from dbabrain.lib.restore import stated as restore_stated
 from dbabrain.lib import instance_bundle
 from dbabrain.db.store import DbaBrainStore, RunAlreadyClaimed, utc_now_text
 
@@ -128,6 +131,56 @@ def replay_engine_phase(
     return line, ({phase: report} if report else {})
 
 
+def _dry_run_plan(job: Any, *, copy_only: bool, point_in_time: str | None, key: Any, key_base64: Any,
+                  app_config: Any, logger: Any) -> dict[str, Any]:
+    """One script restore's dry run: its plan, or the sentence that refuses it (0.39.0, 1.356)."""
+    head = {"restore_id": job.restore_id, "db_type": job.db_type, "status": "dry-run"}
+    action, action_error = _entry_action(job, copy_only=copy_only)
+    if action_error is not None:
+        return {**head, "would_refuse": [str(action_error)], "said": f"refused - {action_error}"}
+    try:
+        from dbabrain.backup_restore.cli import _open_catalog
+        from dbabrain.backup_restore.restore_by_id import restore_by_id
+
+        plan = restore_by_id({"restore_id": job.restore_id, "dry_run": True,
+                              **({"point_in_time": point_in_time} if point_in_time else {}),
+                              **({"copy_only": True} if action == ACTION_COPY_ONLY else {})},
+                             key=key, key_base64=key_base64, catalog=_open_catalog(app_config, logger))
+    except Exception as exc:  # noqa: BLE001 - a dry run says what stops the restore; it does not stop.
+        return {**head, "would_refuse": [f"{type(exc).__name__}: {exc}"], "said": f"refused - {exc}"}
+    answer = {**head, "action": action, **{k: v for k, v in plan.items() if k not in head}}
+    answer["said"] = dry_run_said(answer)
+    return answer
+
+
+def dry_run_said(plan: dict[str, Any]) -> str:
+    """A restore's dry run in one sentence - what the chat that asked for it reads (0.39.0, 1.356)."""
+    refused = list(plan.get("would_refuse") or [])
+    copy = plan.get("transfer_plan") or {}
+    parts = []
+    if copy:
+        room = copy.get("space_check") or {}
+        parts.append(
+            f"{copy.get('file_count', 0)} file(s), {copy.get('bytes', 0) / 1024 ** 3:.2f} GB from {copy.get('reads_from')} "
+            f"({copy.get('source_server_id')}) to {copy.get('target_server_id')}:{copy.get('target_dir')}"
+            + (f", decrypted through {copy.get('decrypted_through')}" if copy.get("encrypted") else "")
+            + (f"; {copy.get('already_on_target')} already there" if copy.get("already_on_target") else "")
+            + (f"; room: {'fits' if room.get('ok') else 'DOES NOT FIT'}" if room.get("checked") else "")
+            + (f"; staging: {copy.get('staging')}" if copy.get("staging") else ""))
+    lands = [item for item in plan.get("lands") or [] if item.get("will")]
+    if lands:
+        # Where it lands (0.39.0, 1.362): each database, the name it is restored as, and what the
+        # target holds under that name now.
+        parts.append("lands: " + "; ".join(
+            (f"{item['source_database']}" + ("" if str(item["source_database"]).lower() == str(item["lands_as"]).lower()
+                                             else f" as {item['lands_as']}") + f" - {item['will']}")
+            if item.get("lands_as") else f"{item.get('lands')} - {item['will']}" for item in lands))
+    if plan.get("steps"):
+        parts.append("then " + ", ".join(str(step).split(" - ")[0] for step in plan["steps"]))
+    head = ("WOULD BE REFUSED - " + "; ".join(refused) + (" | " if parts else "")) if refused else "would run: "
+    return head + " | ".join(parts) + " - nothing changed"
+
+
 def _entry_action(entry: Any, *, copy_only: bool) -> tuple[str | None, Exception | None]:
     """What this run of ``entry`` does: copy only when the run says so, else the entry's stated
     ``action`` - or the refusal for an entry that states none, raised inside its own run (R50)."""
@@ -153,11 +206,48 @@ def _entry_action(entry: Any, *, copy_only: bool) -> tuple[str | None, Exception
                 raise OffloadConfigError(f"{label}: restore_from repository copies the repository's files to the "
                                          "target's staging; an in-place entry copies nothing - give it a target "
                                          "server, or state restore_from: server.")
+        # Stated on every entry (0.39.0, 1.362): whether a restore may replace a database that exists.
+        require_overwrite_stated(getattr(entry, "overwrite_existing", False), label=label)
+        # And, on a script-driven SQL Server entry, which databases it restores and the name each lands
+        # under (1.362): with none named it restored whatever FULL it found. A share-driven entry has
+        # stated the same since 0.27.0 (lib.stated_facts); a whole-instance engine has nothing to name.
+        from dbabrain.backup_restore.restore_script import ScriptRestore as _Script
+
+        if isinstance(entry, _Script) and str(entry.db_type or "").lower() in restore_landing.BY_DATABASE_ENGINES:
+            restore_landing.require_landing(entry.landing, label=label)
+        # And the four that decided a run from a default (1.366): whether production may be the
+        # target, whether the consistency check runs, what the copy takes, whether the room is checked.
+        restore_stated.require_stated(getattr(entry, "unstated", ()), label=label)
         if copy_only:
             return ACTION_COPY_ONLY, None
         return require_restore_action(entry.action, label=label), None
-    except (IntegrityConfigError, OffloadConfigError) as exc:
+    except (IntegrityConfigError, OffloadConfigError, restore_landing.LandingError,
+            restore_stated.StatedError) as exc:
         return None, exc
+
+
+def _share_restored(output: Any) -> dict[str, str]:
+    """What a share-driven restore's END message says it did (0.39.0, 1.370): the databases restored,
+    the check, and where each stopped - read off the workflow's own summary."""
+    said: dict[str, str] = {}
+    if not isinstance(output, dict):
+        return said
+    latest = output.get("restore-latest") if isinstance(output.get("restore-latest"), dict) else {}
+    restored = [str(name) for source in latest.get("sources") or [] if isinstance(source, dict)
+                for name, status in (source.get("per_database_restore_status") or {}).items()
+                if str(status) == "SUCCESS"]
+    if restored:
+        said["restored"] = ", ".join(restored)
+    verify = output.get("verify-restore") or {}
+    if isinstance(verify, dict) and verify.get("checked") is not None:
+        said["verified"] = f"{verify.get('checked')} database(s) checked, {verify.get('failed') or 0} unusable"
+        landed = [item for target in verify.get("targets") or [] if isinstance(target, dict)
+                  for item in target.get("landed") or []]
+        if landed:
+            from dbabrain.backup_restore.restore_by_id import landed_said
+
+            said["landed"] = landed_said(landed)
+    return said
 
 
 def run_scheduled_restores(
@@ -279,14 +369,22 @@ def run_scheduled_restores(
         emit_backup_restore_event(
             app_config=app_config, command="restore-workflow", phase="START", level="logging",
             message=f"{noun} {config.restore_id} started.", logger=logger,
-            started_at=started_at, metadata=metadata, notify=config.notify,
+            started_at=started_at,
+            # The flow format (1.306 / 1.370), as the script-driven restore's START.
+            metadata={**metadata, **restore_messages.started(
+                str(config.restore_id), source=str(config.source_id), target=str(config.target_id),
+                moment="", copy_only=is_copy)},
+            notify=config.notify,
         )
 
         def announce(event: str, message: str, extra: dict[str, Any] | None = None) -> None:
+            fields = dict(extra or {})
+            # A short step's start is not a message of its own (1.306): the run row and the log keep it.
+            on_telegram = fields.pop("telegram", True) is not False
             emit_backup_restore_event(
                 app_config=app_config, command="restore-workflow", phase=event, level="logging",
                 message=message, logger=logger, started_at=utc_now_text(),
-                metadata={**metadata, **(extra or {})}, notify=config.notify,
+                metadata={**metadata, **fields}, notify=config.notify, telegram=on_telegram,
             )
 
         # The same two phases the script path runs, from the same shared function - see
@@ -377,7 +475,10 @@ def run_scheduled_restores(
             level="logging" if status == "done" else "error",
             message=end_message, logger=logger, started_at=started_at,
             finished_at=utc_now_text(), duration_ms=duration_ms, error_text=error_text,
-            metadata=end_metadata, notify=config.notify,
+            metadata={**end_metadata, **restore_messages.finished(
+                str(config.restore_id), status=status, copy_only=is_copy, restored=_share_restored(output),
+                error=error_text or "", seconds=duration_ms // 1000)},
+            notify=config.notify,
         )
         summary["succeeded" if status == "done" else "failed"] += 1
         summary["restores"].append({
@@ -396,7 +497,13 @@ def run_scheduled_restores(
 
     for job in script_due:
         if dry_run:
-            summary["restores"].append({"restore_id": job.restore_id, "db_type": job.db_type, "status": "dry-run"})
+            # 0.39.0 (1.356): the dry run answered "dry-run" and nothing else. It is now the restore's
+            # own plan, read only: what the entry's action is or why it is refused, the chain where the
+            # copy would read it, whether it fits on the target, and the steps after it. No run is
+            # claimed, nothing is announced.
+            summary["restores"].append(_dry_run_plan(job, copy_only=copy_only, point_in_time=point_in_time,
+                                                     key=key, key_base64=key_base64, app_config=app_config,
+                                                     logger=logger))
             continue
         if not force and schedule.taken_since(store, job.job_code, listed_at):
             summary["skipped"] += 1
@@ -426,7 +533,13 @@ def run_scheduled_restores(
         emit_backup_restore_event(
             app_config=app_config, command="restore-workflow", phase="START", level="logging",
             message=f"{noun} {job.label} started.", logger=logger,
-            started_at=started_at, metadata=metadata, notify=job.notify,
+            started_at=started_at,
+            # In the flow format a backup's messages have (1.306), each step of a restore after it (1.370).
+            metadata={**metadata, **restore_messages.started(
+                job.restore_id, source=str(job.server_id), target=str(job.target_server_id or job.server_id),
+                moment=point_in_time, copy_only=is_copy,
+                from_repository=getattr(job, "restore_from", None) == "repository")},
+            notify=job.notify,
         )
         # The copy is the long half of a remote drill - 17 GB over two internet hops took hours
         # here - and between START and END the run said nothing at all, so "still copying" and
@@ -434,10 +547,13 @@ def run_scheduled_restores(
         # These two events bound that silence; they are the same event machinery, so an entry
         # that has silenced logging_on_run stays silent.
         def on_phase(phase: str, message: str, extra: dict[str, Any] | None = None) -> None:
+            fields = dict(extra or {})
+            # A short step's start is not a message of its own (1.306): the run row and the log keep it.
+            on_telegram = fields.pop("telegram", True) is not False
             emit_backup_restore_event(
                 app_config=app_config, command="restore-workflow", phase=phase, level="logging",
                 message=message, logger=logger, started_at=utc_now_text(),
-                metadata={**metadata, **(extra or {})}, notify=job.notify,
+                metadata={**metadata, **fields}, notify=job.notify, telegram=on_telegram,
             )
 
         try:
@@ -471,6 +587,21 @@ def run_scheduled_restores(
             if outcome.get("verify"):
                 restored["verified"] = (f"{outcome['verify'].get('checked')} database(s) checked, "
                                         f"{outcome['verify'].get('failed')} unusable")
+            if outcome.get("landed"):
+                from dbabrain.backup_restore.restore_by_id import landed_said
+
+                # Where each database stopped, as the target itself recorded it (0.39.0, 1.362).
+                restored["landed"] = landed_said(outcome["landed"])
+            if outcome.get("continued"):
+                from dbabrain.backup_restore.restore_by_id import continued_said
+
+                # Taken up from this entry's own unfinished restore (1.372).
+                restored["continued"] = continued_said(outcome["continued"])
+            if outcome.get("plain_deleted"):
+                # The copies this entry staged - decrypted or plain - deleted after it worked (1.371).
+                gone = outcome["plain_deleted"]
+                restored["plain_deleted"] = (f"{gone.get('deleted', 0)} of {gone.get('plain_files', 0)} staged "
+                                             f"copy(ies), {gone.get('bytes_deleted', 0)} bytes")
         except Exception as exc:  # noqa: BLE001 - one restore must not stop the others.
             status, exit_code, out, err = "error", None, "", str(exc)
             error_text = str(exc)[-2000:]
@@ -499,11 +630,19 @@ def run_scheduled_restores(
             level=("warning" if warnings else "logging") if status == "done" else "error",
             message=end_message, logger=logger, started_at=started_at,
             finished_at=utc_now_text(), duration_ms=duration_ms, error_text=error_text,
-            metadata=end_metadata, notify=job.notify,
+            metadata={**end_metadata, **restore_messages.finished(
+                job.restore_id, status=status, copy_only=is_copy, restored=restored, warnings=warnings,
+                error=error_text or "", seconds=duration_ms // 1000)},
+            notify=job.notify,
         )
         summary["succeeded" if status == "done" else "failed"] += 1
         summary["restores"].append({"restore_id": job.restore_id, "db_type": job.db_type,
-                                    "status": status, "exit_code": exit_code, "duration_ms": duration_ms})
+                                    "status": status, "exit_code": exit_code, "duration_ms": duration_ms,
+                                    # What a person at the CLI reads without opening the store: why it
+                                    # failed, what it warned of, and where each database stopped.
+                                    **({"error": error_text} if error_text else {}),
+                                    **({"warnings": warnings} if warnings else {}),
+                                    **({"landed": restored["landed"]} if restored.get("landed") else {})})
 
     return summary
 

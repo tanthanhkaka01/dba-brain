@@ -47,6 +47,7 @@ from dbabrain.db import lockdown_store
 from dbabrain.lib.backup_run import RUN_TAG_ENV, run_tag
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib import backup_scope
+from dbabrain.lib.restore import stated as record_stated
 from dbabrain.lib.timezone import format_display_text
 from dbabrain.lib.version import __version__
 from dbabrain.db.backup_catalog import BackupCatalogStore
@@ -115,6 +116,11 @@ class BackupJob:
     # The windows per file type (1.227); ``cleanup_retention`` above is their longest, for the
     # readers that apply one number. ``None`` for a job built without the loader.
     retention: Any = None
+    # The fields that decide what a run does and that the job - and, apart, its entry - left to a
+    # default (0.39.0, 1.366, lib.restore.stated: BACKUP_JOB_FIELDS, BACKUP_ENTRY_FIELDS). The job
+    # loads on what it had been running on; its run is refused, naming them (require_job_stated).
+    unstated: tuple[str, ...] = ()
+    entry_unstated: tuple[str, ...] = ()
 
     @property
     def retention_days(self) -> int | None:
@@ -211,6 +217,7 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
         raw_jobs = entry.get("jobs") or []
         if not isinstance(raw_jobs, list) or not raw_jobs:
             raise ValueError(f"backup_restore.backups[{index}] ({backup_id}) requires a non-empty jobs array.")
+        entry_unstated = record_stated.unstated(entry, kind=record_stated.BACKUP_ENTRY)
         for job_index, raw_job in enumerate(raw_jobs):
             if not isinstance(raw_job, dict):
                 raise ValueError(f"{backup_id}.jobs[{job_index}] must be an object.")
@@ -266,12 +273,22 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
                 offload=entry_offload,
                 scope=backup_scope.parse_backup_databases(raw_job, label=f"{backup_id}.{job_name}", db_type=db_type),
                 scrub_files_per_run=integrity.scrub_files_per_run(entry, label=backup_id),
+                unstated=record_stated.unstated(raw_job, kind=record_stated.BACKUP_JOB),
+                entry_unstated=entry_unstated,
             )
             if item.job_code in seen:
                 raise ValueError(f"Duplicate backup job: {item.label}. backup_id + job must be unique.")
             seen.add(item.job_code)
             jobs.append(item)
     return jobs
+
+
+def require_job_stated(job: BackupJob) -> None:
+    """Refuse a job - or the entry it belongs to - that left a field deciding its run to a default
+    (0.39.0, 1.366), naming each field and what it decides. Inside the job's own run, so the rest of
+    the pass runs; ``upgrade-config`` writes the value the job had been running on."""
+    record_stated.require_stated(job.entry_unstated, label=f"backup entry {job.backup_id}")
+    record_stated.require_stated(job.unstated, label=f"backup job {job.label}")
 
 
 def select_due_backup_jobs(
@@ -751,8 +768,7 @@ def verify_backup_files(
             # the catalog says so - pruned, with the window - instead of an attack's "gone".
             why = "" if item else next((reason for reason in (
                 cleanup_retention.removed_by_retention(
-                    retention, str(row.get("file_type") or ""),
-                    str(row.get("backup_ended_at") or row.get("created_at") or ""), now_utc=now_utc)
+                    retention, str(row.get("file_type") or ""), _written_from(row), now_utc=now_utc)
                 for retention in retentions.get((job.server_id, job.backup_dir.rstrip("/\\")), [])) if reason), "")
             if not item and not why:
                 why = _cut_by_archivecleanup(catalog, row, bases)
@@ -771,6 +787,20 @@ def verify_backup_files(
                 summary[result].append({"server_id": row["server_id"], "file": row["file_name"],
                                         "host_path": row["host_path"]})
     return summary
+
+
+def _written_from(row: dict[str, Any]) -> str:
+    """The earliest moment a stored file can have been written - its backup's start, else its run's.
+
+    A script's window cuts a file by its write time on the server (`find -mmin`, LastWriteTime), and
+    that time lies between the backup's start and its end. Held to the END, a file the script cut on
+    the window's last seconds was still inside it by the catalog's clock and read as gone: the lockdown
+    of 2026-11-13 12:08Z (five LOG files of 2026-10-30 12:07, cut at 14 days by the script at 12:07:39,
+    their run ended 12:07:46) - and its predecessor of 2026-11-03 had the same shape. Held to the
+    start, every file the script may cut is the window's, and one gone well inside it is still the
+    signal. The end and the row's own time only where the catalog holds neither start."""
+    return str(row.get("backup_started_at") or row.get("run_started_at") or row.get("backup_ended_at")
+               or row.get("created_at") or "")
 
 
 def _cut_by_archivecleanup(catalog: Any, row: dict[str, Any], bases: dict[str, str | None]) -> str:
@@ -870,11 +900,21 @@ def restore_candidates(*, app_config: Any, backup_id: str) -> dict[str, Any]:
     * ``candidate``: both - a chain to restore from.
 
     Read-only: it lists, it chooses nothing.
+
+    **The new flow** (0.39.0, 1.358). A server's FULL, DIFF and LOG are three entries there, so the
+    chains are read across every entry of the backup_id's server - one entry held only fulls, never a
+    chain. A file released at its source is sound when its repository copy is proven
+    (``offload_state`` verified): read as it was, every offloaded chain was "not verified". And a chain
+    is read by time - a full, then the files of its database until the next full - because
+    ``chain_parent_file_id`` named an older full, or none, for a file written after its full had left
+    the server (0.38.0's backup page reads it the same way).
     """
     from dbabrain.db.lockdown_store import LockdownStore
 
     catalog = BackupCatalogStore.from_config(app_config)
-    files = catalog.chain_files(backup_id=backup_id)
+    own = catalog.chain_files(backup_id=backup_id)
+    server_id = str(own[0].get("server_id") or "") if own else ""
+    files = catalog.chain_files(server_id=server_id) if server_id else own
     signal = catalog.first_signal(backup_id=backup_id)
     try:
         lockdown = LockdownStore.from_config(app_config).active()
@@ -882,20 +922,23 @@ def restore_candidates(*, app_config: Any, backup_id: str) -> dict[str, Any]:
         lockdown = None
     marks = [m for m in (signal, (lockdown or {}).get("started_at")) if m]
     first = min(marks) if marks else None
-    by_full: dict[int, list[dict[str, Any]]] = {}
-    for row in files:
-        root = row["chain_parent_file_id"] or (row["file_id"] if integrity.LEVEL_OF_FILE_TYPE.get(
-            str(row["file_type"] or "").upper()) == "full" else None)
-        if root is not None:
-            by_full.setdefault(int(root), []).append(row)
+    by_database: dict[str, list[list[dict[str, Any]]]] = {}
+    for row in sorted(files, key=lambda r: (str(r["ended_at"] or ""), int(r["file_id"]))):
+        groups = by_database.setdefault(str(row["database_name"] or ""), [])
+        if integrity.LEVEL_OF_FILE_TYPE.get(str(row["file_type"] or "").upper()) == "full":
+            groups.append([row])
+        elif groups:
+            groups[-1].append(row)
+        # A file before its database's first full belongs to no chain this catalog can restore.
+
+    def sound(m: dict[str, Any]) -> bool:
+        on_the_server = (m["state"] == "present" and m["verdict"] == "ok" and m["on_disk"] != 0
+                         and m["checksum_matches"] != 0)
+        return on_the_server or (m["verdict"] == "ok" and m["offload_state"] == "verified")
+
     chains = []
-    for root, members in by_full.items():
-        full = next((m for m in members if m["file_id"] == root), None)
-        if full is None:
-            continue
-        def sound(m: dict[str, Any]) -> bool:
-            return (m["state"] == "present" and m["verdict"] == "ok" and m["on_disk"] != 0
-                    and m["checksum_matches"] != 0)
+    for members in (group for groups in by_database.values() for group in groups):
+        full = members[0]
 
         verified = all(sound(m) for m in members)
         ended = max(str(m["ended_at"] or "") for m in members)
@@ -905,11 +948,14 @@ def restore_candidates(*, app_config: Any, backup_id: str) -> dict[str, Any]:
             "files": len(members), "ended_at": ended, "verified": verified,
             "unverified": [m["file_name"] for m in members if not sound(m)][:10],
             "offloaded": sum(1 for m in members if m["offload_state"] == "verified"),
+            "on_the_server": sum(1 for m in members if m["state"] == "present"),
             "last_restored": max((str(m["last_restore_at"]) for m in members if m["last_restore_at"]), default=None),
             "before_first_signal": before, "candidate": verified and before,
         })
     chains.sort(key=lambda c: (c["database_name"] or "", c["ended_at"]), reverse=True)
-    return {"backup_id": backup_id, "first_signal": first, "signal_from": (
+    return {"backup_id": backup_id, "server_id": server_id or None,
+            "backup_ids": sorted({str(f.get("backup_id") or "") for f in files}),
+            "first_signal": first, "signal_from": (
                 "lockdown" if first and lockdown and first == lockdown.get("started_at") else
                 "a stored file changed or gone" if first else None),
             "chains": chains, "candidates": sum(1 for c in chains if c["candidate"])}
@@ -1243,7 +1289,12 @@ def run_backup(
 
     for item in due:
         if dry_run:
-            summary["jobs"].append({"job": item.label, "status": "dry-run"})
+            try:
+                require_job_stated(item)
+                summary["jobs"].append({"job": item.label, "status": "dry-run"})
+            except record_stated.StatedError as exc:
+                # What the real run would do with it, said before it is due.
+                summary["jobs"].append({"job": item.label, "status": "refused", "error": str(exc)})
             continue
         # Due when this run listed it is not the same as still due: an overlapping async run may have
         # taken it since, and finished it (schedule.taken_since). An explicit --force still runs.
@@ -1289,6 +1340,9 @@ def run_backup(
             telegram=is_long_level(item),
         )
         try:
+            # Before anything reaches the host: a job whose run a default would decide is refused,
+            # recorded as this run's error like any other (0.39.0, 1.366).
+            require_job_stated(item)
             target = resolve_backup_target(item, data_dir=data_dir)
             job_env = dict(env_overrides or {})
             # What a stop finds this run by on its host: the script's pid file and its sessions'

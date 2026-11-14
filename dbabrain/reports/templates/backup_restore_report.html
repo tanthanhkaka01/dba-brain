@@ -8,13 +8,8 @@
 __REPORT_CSS__
 __BANNER_CSS__
   section.files{margin-top:6px}
-  section.recover{margin:10px 0 18px}
-  section.recover table{border-collapse:collapse;width:100%;font-size:13px;margin:6px 0 12px}
-  section.recover th,section.recover td{border-bottom:1px solid #e5e7eb;padding:4px 6px;text-align:left;vertical-align:top}
-  section.recover .st-OK,section.recover .st-complete{color:#166534;font-weight:600}
-  section.recover .st-OVERDUE,section.recover .st-NEVER{color:#b91c1c;font-weight:600}
-  section.recover .st-incomplete{color:#b45309;font-weight:600}
-  section.recover .st-REMOVED{color:var(--muted)}
+  /* Recoverability and Restores: their rules are in the server page's stylesheet, pasted above,
+     since a server page folds the same Restores table under its backup section. */
 </style>
 </head>
 <body>
@@ -30,6 +25,7 @@ __BANNER_CSS__
 
 <div class="wrap">
   __RECOVERABILITY__
+  __RESTORES__
   <div id="body"></div>
 </div>
 

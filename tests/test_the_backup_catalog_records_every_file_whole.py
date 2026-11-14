@@ -54,7 +54,7 @@ def _file(**over):
 # --------------------------------------------------------------------------- #
 # The tables
 # --------------------------------------------------------------------------- #
-def test_all_six_tables_are_created_with_their_keys(catalog):
+def test_all_seven_tables_are_created_with_their_keys(catalog):
     with _raw(catalog) as conn:
         names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert set(TABLES) <= names
@@ -64,6 +64,8 @@ def test_all_six_tables_are_created_with_their_keys(catalog):
     assert fks["backup_file_checks"] == {"backup_files"}
     assert fks["restore_run_files"] == {"restore_runs", "backup_files"}
     assert fks["copy_attempts"] == {"restore_run_files"}
+    # 0.39.0: the files a restore applied, in order - a run's, each tied to its backup file.
+    assert fks["restore_chain_files"] == {"restore_runs", "backup_files"}
     # job_runs ages out into its archive; a real key into it blocked that sweep once (run_requests.py).
     assert all("job_runs" not in parents for parents in fks.values())
 
@@ -252,7 +254,9 @@ def test_upgrade_config_states_the_block_where_it_is_missing_and_keeps_one_alrea
 
     restores = json.loads((data / "restore_config.json").read_text(encoding="utf-8"))["backup_restore"]["restores"]
     assert restores[0]["integrity"] == I.stated_restore_integrity()
-    assert restores[1]["integrity"] == {"copy_max_retry": 7}, "a stated block is never overridden"
+    # A stated block is never overridden: its own value stays, and since 0.39.0 (1.366) each field it left
+    # to the parser is written at the value it ran on.
+    assert restores[1]["integrity"] == {**I.stated_restore_integrity(), "copy_max_retry": 7}
     assert [r["action"] for r in restores] == ["restore", "restore"], "the action is stated on both (1.216)"
     assert data_out["records_changed"] == 2, "records, not fields: NO_BLOCK got two, OWN_BLOCK one"
     assert "stated-integrity" in config_upgrade.STEPS

@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import landing_of
 from dbabrain.backup_restore import restore_by_id
 from dbabrain.backup_restore.backup import BackupTarget
 
@@ -23,7 +24,7 @@ def _job(**over):
     values = dict(restore_id="R", label="R (sqlserver)", db_type="sqlserver", server_id="SRC",
                   target_server_id="SRC", target_container="lab_b", target_backup_dir="",
                   target_visible_dir="/in", backup_dir="/out", env={"MSSQL_PORT": "11433"},
-                  env_secrets={})
+                  env_secrets={}, landing=landing_of())
     values.update(over)
     return SimpleNamespace(**values)
 

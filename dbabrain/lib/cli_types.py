@@ -501,6 +501,7 @@ RestoreStepAnswer = TypedDict('RestoreStepAnswer', {
     'plan': list[Any] | None,
     'recovery_target_time': str | None,
     'staged_into_container': bool | None,
+    'target_held': str | None,
 }, total=False)
 
 
@@ -663,8 +664,8 @@ CopyBackupDirRequest = TypedDict('CopyBackupDirRequest', {
 
 #: A restore's staging folder to make ready for a backup directory's files, and the question of which still have to travel. (prepare-staging)
 PrepareStagingRequest = TypedDict('PrepareStagingRequest', {
-    'source': Required[dict[str, Any] | None],
-    'source_dir': Required[str | None],
+    'source': dict[str, Any] | None,
+    'source_dir': str | None,
     'target': dict[str, Any] | None,
     'target_dir': str | None,
     'chain': dict[str, Any] | None,
@@ -675,6 +676,8 @@ PrepareStagingRequest = TypedDict('PrepareStagingRequest', {
     'staging_marker': str | None,
     'replace': list[str] | None,
     'plan_only': bool | None,
+    'incoming': list[dict[str, Any]] | None,
+    'dry_run': bool | None,
 }, total=False)
 
 
@@ -782,6 +785,19 @@ SecretSetAnswer = TypedDict('SecretSetAnswer', {
     'store': str | None,
     'written': bool | None,
     'plaintext_source': str | None,
+}, total=False)
+
+
+#: The AI assistant's key stored, and the assistant switched on. (ai-key)
+AiKeyAnswer = TypedDict('AiKeyAnswer', {
+    'ref': str | None,
+    'written': bool | None,
+    'replaced': bool | None,
+    'enabled': bool | None,
+    'settings_file': str | None,
+    'store': str | None,
+    'next': str | None,
+    'warnings': list[str] | None,
 }, total=False)
 
 
@@ -1393,6 +1409,7 @@ RestoreStepRequest = TypedDict('RestoreStepRequest', {
     'database_name': str | None,
     'move': dict[str, Any] | None,
     'move_files': dict[str, Any] | None,
+    'relocate': dict[str, Any] | None,
     'replace': bool | None,
     'overwrite_existing': bool,
     'stats': int | None,
@@ -1606,6 +1623,8 @@ InstanceAddRequest = TypedDict('InstanceAddRequest', {
     'server_id': Required[str | None],
     'db_type': Required[str | None],
     'ip': Required[str | None],
+    'site': Required[str],
+    'environment': Required[str],
     'port': int | None,
     'service_name': str | None,
     'database_name': str | None,
@@ -1789,6 +1808,14 @@ SecretSetRequest = TypedDict('SecretSetRequest', {
     'value': Required[str | None],
     'overwrite': bool | None,
     'also_plaintext': bool | None,
+}, total=False)
+
+
+#: The AI assistant's API key. Stdin only (or the prompt): never on a command line. (ai-key)
+AiKeyRequest = TypedDict('AiKeyRequest', {
+    'value': Required[str],
+    'ref': str | None,
+    'overwrite': bool | None,
 }, total=False)
 
 
@@ -2153,6 +2180,7 @@ __all__ = [
     'RegistrationAnswer',
     'ConfigEditAnswer',
     'SecretSetAnswer',
+    'AiKeyAnswer',
     'RunSqlAnswer',
     'RunCmdAnswer',
     'TraceSessionAnswer',
@@ -2219,6 +2247,7 @@ __all__ = [
     'MetricEnvRequest',
     'AppCommandSetRequest',
     'SecretSetRequest',
+    'AiKeyRequest',
     'RunSqlRequest',
     'RunCmdRequest',
     'TraceSessionRequest',

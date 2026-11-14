@@ -409,14 +409,21 @@ def test_a_restore_says_where_it_reads_what_it_replaces_and_what_can_refuse_it()
     assert server["reads"] == f"the backup folder of {STORE}" and server["restore_from"] == "server"
     run = _step(server, "Restore to the newest backup")
     assert f"RESTORES the whole cluster onto {LAB} (container PG_LAB)" in run["touches"]
-    assert "REPLACED by the restored copy" in run["touches"] and "/opt/restore/acme_store" in run["touches"]
+    # A whole-instance restore whose entry does not state the word (0.39.0, 1.362): it replaces nothing
+    # that holds user data - it said REPLACED whatever the entry stated, and the step never asked.
+    assert "refused when the target instance already holds user data (overwrite_existing is not true)" in run["touches"]
+    assert "/opt/restore/acme_store" in run["touches"]
+    assert any("a target instance that holds user data is refused unless the entry states overwrite_existing"
+               in guard and "What cannot be read is refused" in guard for guard in server["guards"])
     assert any("takes the entry's run claim" in guard for guard in server["guards"])
     repository = _restore("ACME_STORE_FROM_REPO")
     assert repository["restore_from"] == "repository" and "repository's proven copies" in repository["reads"]
     assert any("only the copies an offload proved" in guard for guard in repository["guards"])
     share = _restore("ACME_APPDB_TO_DRILL")
     assert share["reads"] == "the share \\\\192.0.2.10\\SQLBK\\APPDB" and share["databases"] == "APPDB -> APPDB_DRILL"
-    assert "REPLACED (overwrite_existing is true)" in _step(share, "Restore to the newest backup")["touches"]
+    assert "in any state, is REPLACED (overwrite_existing is true)" in _step(share, "Restore to the newest backup")["touches"]
+    assert any("a database in any state - is refused unless the entry states overwrite_existing" in guard
+               for guard in share["guards"])
     assert any("takes no run claim" in guard for guard in share["guards"])
 
 

@@ -28,6 +28,9 @@ def spawn(command: str, request: dict[str, Any], *, module: str = ...,
 def run(command: Literal['add-sql'], request: t.AddSqlRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.RegistrationAnswer: ...
 
 @overload
+def run(command: Literal['ai-key'], request: t.AiKeyRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.AiKeyAnswer: ...
+
+@overload
 def run(command: Literal['app-command-set'], request: t.AppCommandSetRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.ConfigEditAnswer: ...
 
 @overload
@@ -332,6 +335,9 @@ def run(command: str, request: dict[str, Any], *, timeout_seconds: int | None = 
 
 @overload
 def run_allowing_failure(command: Literal['add-sql'], request: t.AddSqlRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.RegistrationAnswer, str]: ...
+
+@overload
+def run_allowing_failure(command: Literal['ai-key'], request: t.AiKeyRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.AiKeyAnswer, str]: ...
 
 @overload
 def run_allowing_failure(command: Literal['app-command-set'], request: t.AppCommandSetRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.ConfigEditAnswer, str]: ...

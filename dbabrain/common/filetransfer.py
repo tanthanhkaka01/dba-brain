@@ -25,6 +25,7 @@ from typing import Any
 
 from dbabrain.common import filechecksum
 from dbabrain.common.hostcmd import WINDOWS, Host, HostCommandError, open_session, parse_host, run
+from dbabrain.lib.powershell import quote_powershell
 
 TAR = "tar"
 ZIP = "zip"
@@ -177,8 +178,11 @@ def push(request: dict[str, Any]) -> dict[str, Any]:
     session = open_session(host)
     try:
         # The destination directory has to exist; SFTP will not make it, and the failure it
-        # gives ("No such file") names the file rather than the directory that is missing.
-        parent = remote.rsplit("\\", 1)[0] if host.runtime == WINDOWS else remote.rsplit("/", 1)[0]
+        # gives ("No such file") names the file rather than the directory that is missing. A Windows
+        # path takes either separator (`C:/dbabrain_restore/X/__dbabrain_cert/k.cer`, a restore's
+        # vault pair - 0.39.0): split on the backslash alone, it had no parent, and the put failed.
+        cut = max(remote.rfind("/"), remote.rfind("\\")) if host.runtime == WINDOWS else remote.rfind("/")
+        parent = remote[:cut] if cut > 0 else remote
         if parent and parent != remote:
             _ensure_dir(host, parent)
         session.sftp().put(local, remote)
@@ -193,6 +197,6 @@ def push(request: dict[str, Any]) -> dict[str, Any]:
 
 def _ensure_dir(host: Host, directory: str) -> None:
     if host.runtime == WINDOWS:
-        run(host, f"New-Item -ItemType Directory -Force -Path '{directory}' | Out-Null")
+        run(host, f"New-Item -ItemType Directory -Force -Path {quote_powershell(directory)} | Out-Null")
     else:
         run(host, f"mkdir -p {shlex.quote(directory)}")

@@ -53,6 +53,10 @@ def container_run(monkeypatch):
             return {"exit_code": 0, "stdout": "postgres:18\n", "stderr": ""}
         if "pg_is_in_recovery" in command:
             return {"exit_code": 0, "stdout": "f\n", "stderr": ""}
+        if "DBABRAIN_HOLDS_DONE" in command:
+            # What the data directory holds, asked before it is replaced (0.39.0, 1.362): nothing
+            # here - the guard itself is held by test_a_whole_instance_restore_asks_what_its_target_holds.py.
+            return {"exit_code": 0, "stdout": "STATE=empty\nDBABRAIN_HOLDS_DONE\n", "stderr": ""}
         return {"exit_code": 0, "stdout": json.dumps([{"Mounts": mounts}]), "stderr": ""}
 
     monkeypatch.setattr(pg, "run", fake_run)
@@ -276,6 +280,9 @@ def test_an_oracle_duplicate_stages_its_backup_location_into_the_container(monke
 
     result = ora.apply("full", {"db_type": "oracle", "mode": "duplicate", "oracle_sid": "FREE",
                                 "backup_location": "/in/ora",
+                                # A drill over its own last restore: what the target holds is replaced
+                                # (without it the step stops first - 0.39.0, 1.362).
+                                "overwrite_existing": True,
                                 "host": {"runtime": "docker", "host": "h", "container": "c"}}, [])
 
     assert result["staged_into_container"] == ["/in/ora"]

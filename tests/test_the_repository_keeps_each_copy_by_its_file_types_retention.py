@@ -87,6 +87,54 @@ def test_a_full_past_its_retention_stays_while_a_copy_that_needs_it_is_kept():
     assert _names(expire) == ["DIFF_2", "FULL_1"], "once its diff goes, the full may go too"
 
 
+def _incremental_chain(engine_full, link, *, days):
+    """An old chain - a full and one incremental a day - and a newer full after it."""
+    rows = [_copy(1, engine_full, "2026-08-01T00:00:00Z")]
+    rows += [_copy(1 + day, link, f"2026-08-{1 + day:02d}T00:00:00Z") for day in range(1, days + 1)]
+    return rows + [_copy(99, engine_full, "2026-10-25T00:00:00Z")]
+
+
+@pytest.mark.parametrize("full, link", [("FULL_BASE", "INCR_BASE"), ("RMAN_L0", "RMAN_L1")])
+def test_an_incremental_that_needs_its_whole_chain_never_goes_before_the_links_after_it(full, link):
+    """Found reading the estate's retention, 2026-11-13: by its own age the oldest incremental of a chain
+    expired first, and the ones after it - inside their window, still listed - restored nothing."""
+    rows = _incremental_chain(full, link, days=6)
+    # 2026-10-31 12:00: the incrementals of 08-02 and 08-03 are past 89 days, 08-04 .. 08-07 are not.
+    expire, kept = O.expiry_plan(rows, _offload(retention={full: 89 * DAY, link: 89 * DAY}), now=NOW)
+
+    assert expire == [], "no link leaves while a later link of its chain is inside its window"
+    assert any("2 incremental(s) past their retention, kept" in line and f"{link}_2" in line for line in kept)
+
+
+@pytest.mark.parametrize("full, link", [("FULL_BASE", "INCR_BASE"), ("RMAN_L0", "RMAN_L1")])
+def test_the_links_of_a_chain_go_together_once_its_newest_is_past_its_window(full, link):
+    rows = _incremental_chain(full, link, days=6)
+
+    expire, _kept = O.expiry_plan(rows, _offload(retention={full: 80 * DAY, link: 80 * DAY}), now=NOW)
+
+    assert _names(expire) == sorted([f"{full}_1"] + [f"{link}_{n}" for n in range(2, 8)]), \
+        "the six links together, and the full they stood on with them"
+
+
+def test_a_cumulative_differential_still_goes_by_its_own_age():
+    """SQL Server's DIFF needs only its FULL: an old one leaves while a newer one of the same chain stays."""
+    rows = [_copy(1, "FULL", "2026-08-01T00:00:00Z"), _copy(2, "DIFF", "2026-09-01T00:00:00Z"),
+            _copy(3, "DIFF", "2026-10-20T00:00:00Z"), _copy(99, "FULL", "2026-10-25T00:00:00Z")]
+
+    expire, _kept = O.expiry_plan(rows, _offload(retention={"DIFF": 30 * DAY}), now=NOW)
+
+    assert _names(expire) == ["DIFF_2"]
+
+
+def test_the_log_of_an_incremental_chain_is_not_held_by_the_links():
+    rows = _incremental_chain("FULL_BASE", "INCR_BASE", days=3) + [_copy(50, "WAL", "2026-08-02T06:00:00Z")]
+
+    expire, _kept = O.expiry_plan(rows, _offload(retention={"FULL_BASE": 300 * DAY, "INCR_BASE": 300 * DAY,
+                                                             "WAL": 14 * DAY}), now=NOW)
+
+    assert _names(expire) == ["WAL_50"], "the WAL goes by its own window; the links and their full stay"
+
+
 def test_a_certificate_is_never_expired_on_the_repository():
     rows = [_copy(1, "CERT", "2025-01-01T00:00:00Z", name="backup_cert.cer"),
             _copy(2, "FULL", "2025-01-01T00:00:00Z"), _copy(3, "FULL", "2026-10-30T00:00:00Z")]

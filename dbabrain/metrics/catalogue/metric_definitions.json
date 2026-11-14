@@ -72,7 +72,11 @@
           "file": "postgresql/001_postgresql_instance_status.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Instance up",
+        "action": "Check the service is running and the port is reachable from the collector."
+      }
     },
     {
       "metric_id": 2,
@@ -146,7 +150,16 @@
           "file": "postgresql/002_postgresql_database_status.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Database state",
+        "action": "A database is not available: check the engine's log, then bring it back or restore it.",
+        "action_by_db_type": {
+          "sqlserver": "A database is not ONLINE: check the error log, then bring it online or restore it.",
+          "oracle": "A database or pluggable database is not OPEN: check the alert log, then open or recover it.",
+          "postgresql": "A database is not accepting connections: check the PostgreSQL log, then bring it back or restore it."
+        }
+      }
     },
     {
       "metric_id": 3,
@@ -213,7 +226,11 @@
           "file": "postgresql/003_postgresql_connections.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Sessions",
+        "action": "Session count is unusually high: check for an application not closing connections, or a pool sized larger than the server can serve."
+      }
     },
     {
       "metric_id": 4,
@@ -281,7 +298,11 @@
           "file": "postgresql/004_postgresql_long_running_queries.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Long-running queries",
+        "action": "Identify the query and its plan; kill it if it is a runaway, index it if it is not."
+      }
     },
     {
       "metric_id": 5,
@@ -349,6 +370,7 @@
         }
       ],
       "report_policy": {
+        "label": "Backup age",
         "technical_error": {
           "collapse_enabled": true,
           "event_code_template": "MONITORING_{collector_type}_UNAVAILABLE",
@@ -365,6 +387,10 @@
         },
         "backup_health": {
           "role": "age"
+        },
+        "action": "Check the backup job; run a fresh backup, and make sure the log backups that follow it are running.",
+        "action_by_db_type": {
+          "sqlserver": "Check the backup job and the recovery model; run a fresh backup and re-establish the log chain."
         }
       },
       "max_rows": 500
@@ -434,7 +460,11 @@
           "file": "postgresql/006_postgresql_database_size.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Data file space",
+        "action": "The data file is near its allocated size: grow it deliberately rather than letting autogrowth stall a transaction."
+      }
     },
     {
       "metric_id": 7,
@@ -509,6 +539,7 @@
         }
       ],
       "report_policy": {
+        "label": "Log file space",
         "technical_error": {
           "collapse_enabled": true,
           "event_code_template": "MONITORING_{collector_type}_UNAVAILABLE",
@@ -522,6 +553,12 @@
           "replace_raw_rows": true,
           "max_sample_metrics": 3,
           "max_sample_items": 5
+        },
+        "action": "The transaction log's space is nearly full: back the log up or free its space before writes stop.",
+        "action_by_db_type": {
+          "sqlserver": "The log file is nearly full: back up the log (or check log_reuse_wait) before it grows or writes stop.",
+          "oracle": "Redo or recovery-area space is nearly full: back up and remove archived logs, and check the recovery area, before writes stop.",
+          "postgresql": "WAL space is nearly full: check WAL archiving and the replication slots before writes stop."
         }
       },
       "max_rows": 500
@@ -599,7 +636,16 @@
           "unsupported_reason": "pg_ls_tmpdir() - the temp files in use, by backend - exists from 12."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "TempDB space",
+        "action": "Find the query spilling to temporary space; consider giving it more.",
+        "action_by_db_type": {
+          "sqlserver": "Find the query spilling to TempDB; consider more/larger TempDB files.",
+          "oracle": "Find the query spilling to the temporary tablespace; consider adding or extending its tempfiles.",
+          "postgresql": "Find the query spilling to temp files; consider raising work_mem for it."
+        }
+      }
     },
     {
       "metric_id": 9,
@@ -668,6 +714,7 @@
         }
       ],
       "report_policy": {
+        "label": "Blocking",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CHECK_FAILED",
@@ -731,7 +778,8 @@
               "severity": "WARNING"
             }
           ]
-        }
+        },
+        "action": "Find the head blocker and decide whether to wait for it or kill it."
       },
       "max_rows": 500
     },
@@ -802,6 +850,7 @@
         }
       ],
       "report_policy": {
+        "label": "Failed jobs",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CHECK_FAILED",
@@ -822,7 +871,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "Read the job history: a failed job is work that silently did not happen."
       },
       "max_rows": 500
     },
@@ -892,7 +942,15 @@
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Availability (AG, mirroring, log shipping)",
+        "action": "A replica or standby is behind: failover would lose data. Check its transport and how far its apply lags.",
+        "action_by_db_type": {
+          "sqlserver": "A replica, mirror or log-shipped secondary is behind: failover would lose data. Check the endpoint and the send queue, or the log shipping backup, copy and restore jobs.",
+          "oracle": "A Data Guard standby is behind: failover would lose data. Check redo transport, the apply lag and the managed recovery process."
+        }
+      }
     },
     {
       "metric_id": 12,
@@ -952,6 +1010,7 @@
         }
       ],
       "report_policy": {
+        "label": "CPU & memory (engine)",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CHECK_FAILED",
@@ -998,6 +1057,10 @@
           "replace_raw_rows": true,
           "max_sample_metrics": 3,
           "max_sample_items": 5
+        },
+        "action": "CPU or memory is short as the engine sees it: find the heaviest queries, and check the engine's memory limit against host RAM and what else runs on this host.",
+        "action_by_db_type": {
+          "sqlserver": "CPU or memory is short as SQL Server sees it: find the heaviest queries, and check max server memory against host RAM and what else runs on this host."
         }
       },
       "max_rows": 500
@@ -1060,7 +1123,11 @@
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Disk free space",
+        "action": "Free space or extend the volume before writes stop."
+      }
     },
     {
       "metric_id": 14,
@@ -1128,7 +1195,15 @@
           "file": "postgresql/014_postgresql_wait_stats.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Wait statistics",
+        "action": "One kind of wait dominates what the sessions are doing: read which - storage, memory, CPU or contention inside the engine - and find the queries waiting on it.",
+        "action_by_db_type": {
+          "sqlserver": "Read the wait type: PAGEIOLATCH or WRITELOG is storage, RESOURCE_SEMAPHORE is memory grants, SOS_SCHEDULER_YIELD or a high signal wait is CPU, THREADPOOL is worker threads, tempdb_allocation is too few TempDB data files - then find the queries waiting on it.",
+          "postgresql": "Read the wait event: IO is storage, LWLock or BufferPin is contention inside the server, SyncRep is a commit waiting for a synchronous standby - then find the sessions waiting on it in pg_stat_activity."
+        }
+      }
     },
     {
       "metric_id": 15,
@@ -1197,7 +1272,15 @@
           "unsupported_reason": "PostgreSQL keeps the history of its deadlocks only in the server log: POSTGRES_SERVER_LOG grades 'deadlock detected' by this metric's rule (any WARNING, 5 in the window CRITICAL), and the Workload table differences pg_stat_database.deadlocks."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Deadlocks",
+        "action": "Review the deadlock's details; usually two statements taking locks in a different order.",
+        "action_by_db_type": {
+          "sqlserver": "Review the deadlock graph; usually two statements taking locks in a different order.",
+          "oracle": "Review the deadlock graph in the trace file the alert log names; usually two statements taking locks in a different order."
+        }
+      }
     },
     {
       "metric_id": 16,
@@ -1266,8 +1349,14 @@
         }
       ],
       "report_policy": {
+        "label": "Backup jobs",
         "backup_health": {
           "role": "job_status"
+        },
+        "action": "A backup job did not finish cleanly: read its history for the step that failed, fix that and run the backup again.",
+        "action_by_db_type": {
+          "sqlserver": "A backup job's last run failed: read the job history in SQL Server Agent for the step that failed, fix that and run the job again.",
+          "oracle": "An RMAN run or a backup scheduler job did not complete cleanly: read the RMAN output or the job's run details, fix what they name and run the backup again."
         }
       },
       "max_rows": 500
@@ -1340,6 +1429,7 @@
         }
       ],
       "report_policy": {
+        "label": "Recent error log entries",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_PERMISSION_DENIED",
@@ -1386,6 +1476,11 @@
           "replace_raw_rows": true,
           "max_sample_metrics": 3,
           "max_sample_items": 5
+        },
+        "action": "Read the engine's own log around that time - the entry names the cause.",
+        "action_by_db_type": {
+          "sqlserver": "Read the SQL Server error log around that time — the entry names the cause.",
+          "oracle": "Read the alert log around that time - the entry names the cause."
         }
       },
       "max_rows": 500
@@ -1455,7 +1550,14 @@
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Log reuse wait",
+        "action": "The log's space cannot be reused: find what holds it - a log backup that is not running is the usual one.",
+        "action_by_db_type": {
+          "sqlserver": "This is why the log cannot truncate. LOG_BACKUP means no log backup is running on a FULL-recovery database."
+        }
+      }
     },
     {
       "metric_id": 19,
@@ -1522,7 +1624,11 @@
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Disk latency",
+        "action": "Storage is slow: check the datastore, and whether one file is hotter than the rest."
+      }
     },
     {
       "metric_id": 21,
@@ -1599,7 +1705,11 @@
         }
       ],
       "max_rows": 500,
-      "note": "Corruption on every engine (1.159 / 1.160, 2026-10-15): SQL Server's msdb.dbo.suspect_pages, Oracle's v$database_block_corruption (what RMAN found), PostgreSQL's checksum failures (12+), each CRITICAL within 30 days."
+      "note": "Corruption on every engine (1.159 / 1.160, 2026-10-15): SQL Server's msdb.dbo.suspect_pages, Oracle's v$database_block_corruption (what RMAN found), PostgreSQL's checksum failures (12+), each CRITICAL within 30 days.",
+      "report_policy": {
+        "label": "Suspect pages",
+        "action": "Suspect pages mean corruption: restore the affected pages or blocks from backup, then check the whole database - DBCC CHECKDB on SQL Server, RMAN VALIDATE on Oracle, amcheck on PostgreSQL."
+      }
     },
     {
       "metric_id": 22,
@@ -1667,9 +1777,11 @@
         }
       ],
       "report_policy": {
+        "label": "Last backup result",
         "backup_health": {
           "role": "last_result"
-        }
+        },
+        "action": "The last backup did not succeed: read the job history before trusting any restore."
       },
       "max_rows": 500
     },
@@ -1740,6 +1852,7 @@
         }
       ],
       "report_policy": {
+        "label": "Query Store — heavy queries",
         "enabled": true,
         "condition_grouping": {
           "enabled": true,
@@ -1785,7 +1898,8 @@
           ],
           "max_items": 3,
           "include_raw_message": false
-        }
+        },
+        "action": "A query is heavy, mostly waiting, or on a worse plan than it had: open it in Query Store by its query_id, compare its plans, and force the good one or fix the statement and its indexes."
       },
       "max_rows": 500
     },
@@ -1827,6 +1941,7 @@
         }
       ],
       "report_policy": {
+        "label": "CPU",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -1849,7 +1964,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "Find the top process (below) and the heaviest queries; check for a runaway job."
       },
       "max_rows": 500
     },
@@ -1891,6 +2007,7 @@
         }
       ],
       "report_policy": {
+        "label": "Memory",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -1913,6 +2030,10 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
+        },
+        "action": "Check how much memory the database engine may take against host RAM, and what else runs on this host.",
+        "action_by_db_type": {
+          "sqlserver": "Check max server memory against host RAM and what else runs on this host."
         }
       },
       "max_rows": 500
@@ -1955,6 +2076,7 @@
         }
       ],
       "report_policy": {
+        "label": "Disk usage",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -1977,7 +2099,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "Free space or extend the volume before writes stop."
       },
       "max_rows": 500
     },
@@ -2084,6 +2207,7 @@
         }
       ],
       "report_policy": {
+        "label": "Services",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -2106,6 +2230,11 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
+        },
+        "action": "Start the service and find out why it stopped.",
+        "action_by_platform": {
+          "windows": "Start the service and find out why it stopped (event log, recovery settings).",
+          "linux": "Start the service and find out why it stopped (systemctl status <unit>, journalctl -u <unit>)."
         }
       },
       "max_rows": 500
@@ -2148,6 +2277,7 @@
         }
       ],
       "report_policy": {
+        "label": "Pending reboot",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -2170,7 +2300,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "A pending reboot leaves patches half-applied; schedule it with the application owner."
       },
       "max_rows": 500
     },
@@ -2212,6 +2343,7 @@
         }
       ],
       "report_policy": {
+        "label": "Uptime",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -2234,7 +2366,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "The uptime could not be read on this host: the message says why - fix what the monitoring login cannot read."
       },
       "max_rows": 500
     },
@@ -2276,6 +2409,7 @@
         }
       ],
       "report_policy": {
+        "label": "Time sync",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -2298,6 +2432,11 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
+        },
+        "action": "The clock is not being kept in sync with a time source: fix the time service before the drift breaks authentication, replication and the order of timestamps in logs.",
+        "action_by_platform": {
+          "windows": "The time service did not report its status: check the Windows Time service is running and has a source (w32tm /query /status, then w32tm /resync) before the clock drifts and breaks Kerberos logins.",
+          "linux": "The clock is not synchronized: check the time service and its sources (timedatectl, chronyc tracking or ntpq -p) before the drift breaks authentication and replication."
         }
       },
       "max_rows": 500
@@ -2341,6 +2480,7 @@
         }
       ],
       "report_policy": {
+        "label": "TCP ports",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -2363,7 +2503,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "A configured port is not answering where clients connect. CLOSED means nothing is listening — check the service that owns the port. LOOPBACK_ONLY means it listens on 127.0.0.1 but not on the host address, so it is up and still unreachable: fix the bind address. OPEN with a WARNING means the socket accepts but TLS or HTTP did not answer — read the probe detail in the message."
       },
       "max_rows": 500
     },
@@ -2434,6 +2575,7 @@
         }
       ],
       "report_policy": {
+        "label": "Sleeping sessions with open transaction",
         "enabled": true,
         "condition_grouping": {
           "enabled": true,
@@ -2527,7 +2669,8 @@
           ],
           "max_items": 5,
           "include_raw_message": false
-        }
+        },
+        "action": "An idle session holds an open transaction and its locks: have its owner commit or roll back, and end the session if it blocks others and nobody answers."
       },
       "max_rows": 500
     },
@@ -2605,7 +2748,11 @@
           "file": "postgresql/025_postgresql_transaction_lock_holders.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Open transactions",
+        "action": "A session holds locks in a transaction that is old, blocks others or was left idle: have its owner commit or roll back, and end the session if it has been abandoned."
+      }
     },
     {
       "metric_id": 35,
@@ -2665,7 +2812,11 @@
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Waiting / rolling back",
+        "action": "A request stuck waiting or rolling back holds its locks: find what it waits on before killing it — rollback cannot be hurried."
+      }
     },
     {
       "metric_id": 36,
@@ -2717,7 +2868,10 @@
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Instance configuration"
+      }
     },
     {
       "metric_id": 37,
@@ -2769,7 +2923,10 @@
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Database settings"
+      }
     },
     {
       "metric_id": 38,
@@ -2821,7 +2978,11 @@
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Page life expectancy",
+        "action": "Buffer pool is churning: review max server memory, missing indexes and plan-cache bloat."
+      }
     },
     {
       "metric_id": 39,
@@ -2883,7 +3044,10 @@
         }
       ],
       "max_rows": 500,
-      "note": "One code, both engines: 'what does this instance run on a schedule, and is it working' is the same question everywhere, and the catalog already maps codes per engine this way (LOG_FILE_SPACE reads the FRA on Oracle and the transaction log on SQL Server). Oracle 8i reads dba_jobs (DBMS_JOB), 10g+ reads dba_scheduler_jobs, SQL Server reads msdb. Every variant keeps metric_value = ENABLED/DISABLED and starts its message with enabled=/last_outcome=, because reports/inventory_health.py parses those by name. No job at all is an answer, not a failure (empty_result_is_ok): SQL Server on Linux runs no Agent unless mssql-conf enables it, Express has none, and many Oracle schemas schedule nothing - each read NO_DATA, a finding, before 2026-10-15."
+      "note": "One code, both engines: 'what does this instance run on a schedule, and is it working' is the same question everywhere, and the catalog already maps codes per engine this way (LOG_FILE_SPACE reads the FRA on Oracle and the transaction log on SQL Server). Oracle 8i reads dba_jobs (DBMS_JOB), 10g+ reads dba_scheduler_jobs, SQL Server reads msdb. Every variant keeps metric_value = ENABLED/DISABLED and starts its message with enabled=/last_outcome=, because reports/inventory_health.py parses those by name. No job at all is an answer, not a failure (empty_result_is_ok): SQL Server on Linux runs no Agent unless mssql-conf enables it, Express has none, and many Oracle schemas schedule nothing - each read NO_DATA, a finding, before 2026-10-15.",
+      "report_policy": {
+        "label": "SQL Agent jobs"
+      }
     },
     {
       "metric_id": 40,
@@ -2944,6 +3108,7 @@
       ],
       "note": "Status is policy-driven since 2026-08-03: 'unknown' used to be reported as OK, so a server that has never proven its integrity looked identical to one that proves it nightly. Grouped per instance because the finding is 'this instance never runs CHECKDB', not 112 separate database findings — the metric produces one row per database and the estate has 112 of them.",
       "report_policy": {
+        "label": "Last CHECKDB",
         "enabled": true,
         "condition_grouping": {
           "enabled": true,
@@ -2982,7 +3147,8 @@
           ],
           "max_items": 3,
           "include_raw_message": false
-        }
+        },
+        "action": "No last-known-good CHECKDB: run DBCC CHECKDB — corruption is only found by looking."
       },
       "max_rows": 500
     },
@@ -3036,7 +3202,11 @@
           "supported": false,
           "unsupported_reason": "PostgreSQL implementation has not been authored yet."
         }
-      ]
+      ],
+      "report_policy": {
+        "label": "File placement",
+        "action": "A database's backups sit on the drive or the host that holds its data: send them off the host - a share or object storage - so a failed disk or ransomware cannot take both."
+      }
     },
     {
       "metric_id": 42,
@@ -3096,7 +3266,14 @@
           "unsupported_reason": "PostgreSQL has no scheduler in core; jobs run from cron or pg_cron, whose long statements QUERY_LONG_RUNNING grades."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "SQL Agent job runtime",
+        "action": "A scheduled job is running longer than the limit set for it: find what it is doing or waiting on before stopping it.",
+        "action_by_db_type": {
+          "oracle": "A scheduler job is running past its max_run_duration: find what its session is doing or waiting on before stopping the job."
+        }
+      }
     },
     {
       "metric_id": 43,
@@ -3132,7 +3309,11 @@
           "file": "oracle/legacy_8i/101_oracle_tablespace_free.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Tablespace free space",
+        "action": "The tablespace has little space left to hand out, autoextend included: add a datafile or enlarge one before a segment fails to extend."
+      }
     },
     {
       "metric_id": 44,
@@ -3174,7 +3355,11 @@
           "file": "oracle/legacy_8i/102_oracle_process_limit.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Process limit",
+        "action": "Processes or sessions are near the configured limit, where new connections are refused (ORA-00020): find what holds them - an application not closing connections, or sessions left dead - before raising PROCESSES, which needs a restart."
+      }
     },
     {
       "metric_id": 91,
@@ -3210,7 +3395,10 @@
           "file": "oracle/legacy_8i/113_oracle_dead_sessions_and_threads.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "action": "Killed sessions and threads with no session hold slots of the process limit, and another kill only adds to them: fix the client that abandons its connections, turn on Dead Connection Detection (SQLNET.EXPIRE_TIME), and clear what is left with an instance restart in a maintenance window."
+      }
     },
     {
       "metric_id": 45,
@@ -3260,7 +3448,11 @@
           "file": "oracle/legacy_8i/103_oracle_shared_pool_free.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Shared pool",
+        "action": "The shared pool has little free memory, the step before ORA-04031: look for literal SQL that should use bind variables, then give the pool more (shared_pool_size, or sga_target where memory is automatic)."
+      }
     },
     {
       "metric_id": 46,
@@ -3310,7 +3502,11 @@
           "file": "oracle/legacy_8i/104_oracle_library_cache.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Library cache",
+        "action": "Statements are being parsed again instead of found in the library cache: look for literal SQL that should use bind variables and for objects being invalidated, then check the shared pool's size."
+      }
     },
     {
       "metric_id": 47,
@@ -3367,7 +3563,11 @@
           "file": "oracle/legacy_8i/105_oracle_buffer_cache_hit.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Buffer cache hit ratio",
+        "action": "More reads go to disk than the buffer cache serves: find the statements doing the physical reads (Top disk-read SQL) and index or rewrite them before giving the cache more memory."
+      }
     },
     {
       "metric_id": 48,
@@ -3409,7 +3609,10 @@
           "file": "oracle/065_oracle_top_disk_read_sql.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Top disk-read SQL"
+      }
     },
     {
       "metric_id": 49,
@@ -3443,7 +3646,11 @@
           "file": "postgresql/050_postgresql_replication.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Replication",
+        "action": "A standby is not streaming: check its connection, slot and WAL retention."
+      }
     },
     {
       "metric_id": 50,
@@ -3461,6 +3668,7 @@
         "timeout": 15
       },
       "report_policy": {
+        "label": "Replication role",
         "cost": "LIGHT",
         "minimum_version": 10,
         "role": "both"
@@ -3492,10 +3700,12 @@
         "timeout": 20
       },
       "report_policy": {
+        "label": "Replication slots",
         "cost": "LIGHT",
         "minimum_version": 10,
         "role": "primary",
-        "top_n": 20
+        "top_n": 20,
+        "action": "A replication slot is inactive or holding back WAL: reconnect its consumer, or drop the slot if the consumer is gone (pg_drop_replication_slot), before pg_wal fills the disk."
       },
       "variants": [
         {
@@ -3523,9 +3733,11 @@
         "timeout": 15
       },
       "report_policy": {
+        "label": "WAL archiving",
         "cost": "LIGHT",
         "minimum_version": 10,
-        "role": "both"
+        "role": "both",
+        "action": "WAL archiving is failing or has archived nothing: read the archive_command error in the server log and fix its destination, before pg_wal fills and point-in-time recovery falls behind."
       },
       "variants": [
         {
@@ -3554,10 +3766,12 @@
         "timeout": 15
       },
       "report_policy": {
+        "label": "Long transactions",
         "cost": "LIGHT",
         "minimum_version": 10,
         "role": "both",
-        "top_n": 20
+        "top_n": 20,
+        "action": "A transaction has been open for minutes: it keeps its locks and stops vacuum cleaning up behind it. Find its session in pg_stat_activity and have its owner end it; terminate it (pg_terminate_backend) if it is idle in transaction."
       },
       "variants": [
         {
@@ -3586,10 +3800,12 @@
         "timeout": 30
       },
       "report_policy": {
+        "label": "Vacuum",
         "cost": "NORMAL",
         "minimum_version": 10,
         "role": "both",
-        "top_n": 20
+        "top_n": 20,
+        "action": "Dead rows are piling up faster than autovacuum removes them: check what holds vacuum back - a long transaction, an inactive replication slot - then VACUUM the table and tune its autovacuum settings."
       },
       "variants": [
         {
@@ -3618,9 +3834,11 @@
         "timeout": 15
       },
       "report_policy": {
+        "label": "Transaction ID wraparound",
         "cost": "LIGHT",
         "minimum_version": 10,
-        "role": "both"
+        "role": "both",
+        "action": "A database is nearing transaction ID wraparound, where PostgreSQL stops accepting writes: VACUUM FREEZE its oldest tables now, and clear what holds the horizon back - long or prepared transactions, inactive replication slots."
       },
       "variants": [
         {
@@ -3648,9 +3866,11 @@
         "timeout": 20
       },
       "report_policy": {
+        "label": "Database health",
         "cost": "LIGHT",
         "minimum_version": 10,
-        "role": "both"
+        "role": "both",
+        "action": "A database does not allow connections: if that was not deliberate, turn it back on (ALTER DATABASE ... ALLOW_CONNECTIONS true) - a database nobody can connect to is not vacuumed either."
       },
       "variants": [
         {
@@ -3689,10 +3909,12 @@
         "timeout": 30
       },
       "report_policy": {
+        "label": "Invalid indexes",
         "cost": "HEAVY",
         "minimum_version": 10,
         "role": "both",
-        "top_n": 50
+        "top_n": 50,
+        "action": "An index is invalid, usually what a failed CREATE INDEX CONCURRENTLY leaves behind: no query uses it and every write still maintains it. REINDEX it, or drop it and build it again."
       },
       "variants": [
         {
@@ -3743,6 +3965,7 @@
         }
       ],
       "report_policy": {
+        "label": "OS",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -3765,7 +3988,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "The operating system's details could not be read on this host: the message says why - fix what the monitoring login cannot read."
       },
       "max_rows": 500
     },
@@ -3807,6 +4031,7 @@
         }
       ],
       "report_policy": {
+        "label": "Network",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -3829,6 +4054,11 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
+        },
+        "action": "A network interface has counted send or receive errors since boot: see whether the count is still rising, then check the cable, the switch port and the adapter's driver or virtual NIC.",
+        "action_by_platform": {
+          "windows": "A network adapter has counted send or receive errors since boot: see whether the count still rises (Get-NetAdapterStatistics), then check the cable, the switch port and the adapter's driver or virtual NIC.",
+          "linux": "A network interface has counted send or receive errors since boot: see whether the count still rises (ip -s link), then check the cable, the switch port and the driver or virtual NIC."
         }
       },
       "max_rows": 500
@@ -3871,6 +4101,7 @@
         }
       ],
       "report_policy": {
+        "label": "System log errors",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -3893,6 +4124,11 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
+        },
+        "action": "Read the errors in the system's own log - they usually name the cause.",
+        "action_by_platform": {
+          "windows": "Read the errors in the Windows event log (Event Viewer, or Get-WinEvent) - they usually name the cause.",
+          "linux": "Read the errors in the journal (journalctl -p err --since -24h) - they usually name the cause."
         }
       },
       "max_rows": 500
@@ -3935,6 +4171,7 @@
         }
       ],
       "report_policy": {
+        "label": "Top process by CPU",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -3957,7 +4194,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "One process is taking most of the CPU: if it is the database engine, find the heaviest queries; if it is anything else, find out why it runs on this host."
       },
       "max_rows": 500
     },
@@ -3999,6 +4237,7 @@
         }
       ],
       "report_policy": {
+        "label": "Top process by memory",
         "collapse": {
           "enabled": true,
           "event_code": "MONITORING_CMD_UNAVAILABLE",
@@ -4021,6 +4260,10 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
+        },
+        "action": "One program holds most of the host's memory: if it is the database engine, check its memory limit against host RAM; if it is anything else, find out why it runs on this host.",
+        "action_by_db_type": {
+          "sqlserver": "One program holds most of the host's memory: if it is SQL Server, check max server memory against host RAM; if it is anything else, find out why it runs on this host."
         }
       },
       "max_rows": 500
@@ -4068,9 +4311,11 @@
         }
       ],
       "report_policy": {
+        "label": "CPU totals (host and database process)",
         "_note": "Cumulative CPU totals since boot - the host's busy and idle time, and the database process's - deliberately ungraded, like PERFORMANCE_WORKLOAD_COUNTERS: the report subtracts two collections to get an interval. OS_CPU_USAGE is the graded reading of the moment; this is what the Workload section of the server report turns into the host's and the database's CPU over 15 minutes, an hour and a day.",
         "collect_only": true,
-        "chart_summary_only": true
+        "chart_summary_only": true,
+        "action": "The CPU totals could not be read, so the CPU the page shows over an hour or a day has a gap: the message says which total and why."
       },
       "max_rows": 10
     },
@@ -4131,7 +4376,13 @@
           "file": "mysql/050_mysql_user_permissions.sql"
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "action": "Review who holds administrative rights on this database; remove what is not needed.",
+        "action_by_db_type": {
+          "sqlserver": "Review who holds db_owner on this database; remove what is not needed."
+        }
+      }
     },
     {
       "metric_id": 64,
@@ -4184,7 +4435,15 @@
           "name": "mysql_8_0_16_plus",
           "file": "mysql/051_mysql_constraint_health.sql"
         }
-      ]
+      ],
+      "report_policy": {
+        "action": "A constraint that is disabled or not validated no longer guarantees the data: validate and enable it.",
+        "action_by_db_type": {
+          "sqlserver": "An untrusted or disabled constraint no longer guarantees the data and the optimizer stops using it: re-check it WITH CHECK.",
+          "oracle": "A constraint that is disabled or not validated no longer guarantees the data: ENABLE VALIDATE it.",
+          "postgresql": "A constraint that is NOT VALID no longer guarantees the rows already there: VALIDATE CONSTRAINT."
+        }
+      }
     },
     {
       "metric_id": 65,
@@ -4236,7 +4495,10 @@
           "unsupported_reason": "MySQL TLS cert expiry variant not authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "action": "Renew before it expires: an expired certificate breaks encrypted connections and backup encryption."
+      }
     },
     {
       "metric_id": 66,
@@ -4288,7 +4550,10 @@
           "unsupported_reason": "MySQL failed-login variant not authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "action": "Find the source host of the attempts, then fix or disable the principal. Sustained failures are an attack or a dead credential being retried."
+      }
     },
     {
       "metric_id": 67,
@@ -4343,7 +4608,8 @@
       ],
       "report_policy": {
         "collect_only": true,
-        "sparse_items": true
+        "sparse_items": true,
+        "action": "Rebuild or reorganize the index; if many are drifting, the index-maintenance job is not running."
       },
       "max_rows": 500
     },
@@ -4409,7 +4675,13 @@
       "report_policy": {
         "_note": "Inventory, not a signal - the same shape as MAINTENANCE_INDEX_FRAGMENTATION above. Measured 2026-08-11: 4441 WARNINGs over 2495 distinct statistics objects in 3 days, ~1480 rows per run, none of them ever resolving because a stale statistic stays stale until someone updates it. That is a list to work through, not an alert. collect_only keeps every row in the store and in the inventory report and stops feeding them to the scheduled reports.",
         "collect_only": true,
-        "sparse_items": true
+        "sparse_items": true,
+        "action": "Statistics this old give the optimizer a wrong row estimate: refresh them, and check whether the job that should is running.",
+        "action_by_db_type": {
+          "sqlserver": "Statistics this old give the optimizer a wrong row estimate: run UPDATE STATISTICS, and check whether the statistics job is disabled.",
+          "oracle": "Statistics this old give the optimizer a wrong row estimate: gather them with DBMS_STATS, and check the automatic statistics task.",
+          "mysql": "Statistics this old give the optimizer a wrong row estimate: run ANALYZE TABLE."
+        }
       }
     },
     {
@@ -4462,7 +4734,13 @@
           "unsupported_reason": "MySQL failed-login variant not authored yet."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "action": "Rotate the accounts whose password is past the threshold, starting with the administrative ones.",
+        "action_by_db_type": {
+          "sqlserver": "Rotate the logins whose password is past the threshold, starting with sa and anything holding db_owner."
+        }
+      }
     },
     {
       "metric_id": 70,
@@ -4489,7 +4767,10 @@
       },
       "collector_type": "docker",
       "file": "docker/009_docker_container_stats.sh",
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "action": "Check the container on its docker host (`docker ps -a`, `docker logs <name>`): one that stopped or keeps restarting takes its database with it; memory near its limit is the limit to raise or the query to find."
+      }
     },
     {
       "metric_id": 71,
@@ -4540,7 +4821,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "Read which item is not OK - ARCHIVELOG mode, force logging, the recovery area, a backup's age, the RMAN retention or autobackup setting, expired pieces - and fix that one: each is a gap in what can be restored."
       },
       "max_rows": 500
     },
@@ -4593,7 +4875,8 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
-        }
+        },
+        "action": "RMAN could not validate a restore from the current backups: read its errors in the message, take a fresh backup of what is missing or corrupt, and validate again."
       },
       "max_rows": 500
     },
@@ -4647,7 +4930,10 @@
           "unsupported_reason": "An Oracle 'database' is the whole instance, so per-database size has no equivalent; TABLESPACE_FREE_SPACE covers the allocation question there."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Database data size"
+      }
     },
     {
       "metric_id": 74,
@@ -4699,7 +4985,10 @@
           "unsupported_reason": "Redo logs are instance-level in Oracle, not per-database."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "label": "Database log size"
+      }
     },
     {
       "metric_id": 75,
@@ -4755,7 +5044,8 @@
       ],
       "report_policy": {
         "collect_only": true,
-        "sparse_items": true
+        "sparse_items": true,
+        "action": "A heap has many forwarded records or much empty space: rebuild it (ALTER TABLE ... REBUILD) in a maintenance window, and consider giving the table a clustered index."
       }
     },
     {
@@ -4808,7 +5098,10 @@
           "unsupported_reason": "The InnoDB redo log has no VLF structure."
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "action": "The transaction log has too many virtual log files, which slows recovery and startup: shrink the log after a log backup, grow it back in a few large steps, and set a fixed growth in MB."
+      }
     },
     {
       "metric_id": 77,
@@ -4864,7 +5157,12 @@
       "max_rows": 100000,
       "report_policy": {
         "collect_only": true,
-        "chart_summary_only": true
+        "chart_summary_only": true,
+        "action": "An index is disabled or invalid, so no query can use it: rebuild it, or drop it if it is not wanted.",
+        "action_by_db_type": {
+          "sqlserver": "An index is disabled, so no query can use it - and a disabled clustered index makes its table unreadable: rebuild it (ALTER INDEX ... REBUILD), or drop it if it is not wanted.",
+          "postgresql": "An index is invalid or not ready, usually what a failed CREATE INDEX CONCURRENTLY leaves behind: REINDEX it, or drop it and build it again."
+        }
       }
     },
     {
@@ -4900,7 +5198,10 @@
           "per_database": true
         }
       ],
-      "max_rows": 500
+      "max_rows": 500,
+      "report_policy": {
+        "action": "A large share of the table is dead rows, so autovacuum is not keeping up there: check for a long transaction holding it back, VACUUM the table, and lower its autovacuum thresholds."
+      }
     },
     {
       "metric_id": 79,
@@ -4944,6 +5245,7 @@
       ],
       "note": "A dead or unreferenced linked server is a configuration fact, not a live condition: it stays true until somebody changes it. Reported 4x a day and grouped per instance rather than hourly per linked server, which put 4 identical WARNINGs into every hourly report. Severity still distinguishes 'unreachable and code calls it' from 'unreachable and unreferenced' - see reports/server_report.build_linked_servers.",
       "report_policy": {
+        "label": "Linked servers",
         "enabled": true,
         "condition_grouping": {
           "enabled": true,
@@ -4982,7 +5284,8 @@
           ],
           "max_items": 3,
           "include_raw_message": false
-        }
+        },
+        "action": "See the Linked servers table below: it says, per server, whether to keep, fix or drop it, and which machine the fix belongs on."
       },
       "max_rows": 500
     },
@@ -5047,6 +5350,7 @@
         }
       ],
       "report_policy": {
+        "label": "Query Store — not capturing",
         "enabled": true,
         "condition_grouping": {
           "enabled": true,
@@ -5085,7 +5389,8 @@
           ],
           "max_items": 3,
           "include_raw_message": false
-        }
+        },
+        "action": "Query Store is off on these databases, so a slowdown cannot be diagnosed after the fact. Turn it on (READ_WRITE) where the workload matters; this is a configuration finding, reported once a morning."
       },
       "max_rows": 500
     },
@@ -5162,6 +5467,10 @@
           ],
           "max_items": 5,
           "include_raw_message": false
+        },
+        "action": "A cluster node, quorum witness, role or resource is not online, or a role moved in the last 24 hours: bring back what is offline and find out why it failed or moved.",
+        "action_by_platform": {
+          "windows": "A cluster node, quorum witness, role or resource is not online, or a role moved in the last 24 hours: see which in Failover Cluster Manager (Get-ClusterNode, Get-ClusterResource), bring it back and read the cluster log (Get-ClusterLog) for why."
         }
       },
       "max_rows": 500
@@ -5197,7 +5506,8 @@
           ],
           "max_sample_metrics": 3,
           "max_sample_items": 5
-        }
+        },
+        "action": "The newest backups could not be read from the container: the message says why - check the container is running and the server inside it answers."
       },
       "note": "The PostgreSQL half of BACKUP_LAST_RESULT. It cannot be a variant of that metric because collector_type is per metric, not per variant, and a base backup is a directory on disk rather than a row in a catalog - so this needs the docker collector while BACKUP_LAST_RESULT is sql. It emits the identical message contract, and dbabrain.common.backup_policy.BACKUP_LAST_RESULT_CODES lists both codes so the policy engine and the inventory report read them as one.",
       "max_rows": 500
@@ -5332,7 +5642,10 @@
         }
       ],
       "max_rows": 500,
-      "note": "An UNUSABLE index is not a slow index, it is an absent one: queries silently full-scan and DML on the table fails with ORA-01502. ALTER TABLE MOVE, partition maintenance and direct-path loads all produce it as a side effect without announcing what they broke. Checks dba_ind_partitions as well as dba_indexes, because a partitioned index carries its state per partition and reads N/A at the index level - looking only at dba_indexes misses exactly the indexes partition maintenance breaks."
+      "note": "An UNUSABLE index is not a slow index, it is an absent one: queries silently full-scan and DML on the table fails with ORA-01502. ALTER TABLE MOVE, partition maintenance and direct-path loads all produce it as a side effect without announcing what they broke. Checks dba_ind_partitions as well as dba_indexes, because a partitioned index carries its state per partition and reads N/A at the index level - looking only at dba_indexes misses exactly the indexes partition maintenance breaks.",
+      "report_policy": {
+        "action": "An index or index partition is UNUSABLE: queries full-scan without it and DML on its table can fail with ORA-01502. Rebuild it (ALTER INDEX ... REBUILD, or REBUILD PARTITION)."
+      }
     },
     {
       "metric_id": 86,
@@ -5370,7 +5683,8 @@
       "max_rows": 500,
       "report_policy": {
         "_note": "First run against a real instance (2.236, run 28781) found 76 objects already invalid in one application schema - 73 views, 2 functions, 1 procedure. That is a true finding and a real backlog, but it is a backlog: it stays exactly as it is until someone recompiles, so alerting on it would repeat every report cycle forever, which is the repeating-alert pattern this project deliberately stops. collect_only keeps every row in the store and in the inventory report while keeping it out of the warning/critical reports. Turn this off once a schema is clean, and a newly invalidated object after a release becomes the alert it should be.",
-        "collect_only": true
+        "collect_only": true,
+        "action": "Stored code or views are INVALID and fail when next called: recompile them (ALTER ... COMPILE, or DBMS_UTILITY.COMPILE_SCHEMA) and read the compile errors of what stays invalid."
       },
       "note": "INVALID stored code does not fail when it breaks, it fails when it is next called - ORA-04068 in the middle of a business transaction hours later. Grouped by owner and object type rather than one row per object: a failed release invalidates a whole schema at once, and 300 rows saying so is one finding, not 300."
     },
@@ -5451,7 +5765,10 @@
         }
       ],
       "max_rows": 500,
-      "note": "A dictionary-managed segment that reaches MAX_EXTENTS fails with ORA-01631 while the tablespace still shows gigabytes free - so TABLESPACE_FREE_SPACE reports healthy right up to the failed insert. 8i-only by design; see the unsupported reason on the 9i+ variant."
+      "note": "A dictionary-managed segment that reaches MAX_EXTENTS fails with ORA-01631 while the tablespace still shows gigabytes free - so TABLESPACE_FREE_SPACE reports healthy right up to the failed insert. 8i-only by design; see the unsupported reason on the 9i+ variant.",
+      "report_policy": {
+        "action": "A segment is near its MAXEXTENTS and its next extent will fail (ORA-01631 / ORA-01632) however much space the tablespace has: raise MAXEXTENTS in its STORAGE clause, then rebuild it with larger extents."
+      }
     },
     {
       "metric_id": 90,
@@ -5533,7 +5850,10 @@
         }
       ],
       "max_rows": 500,
-      "note": "Too few rollback segments for the transaction concurrency makes sessions queue on the segment headers: a general slowdown with no slow SQL to point at, which is the kind of incident that gets blamed on 'the database' for a week. The waits/gets ratio is the standard reading; shrinks and extends are in the message because a segment that repeatedly extends and shrinks back to OPTIMAL needs a bigger OPTIMAL, not more segments."
+      "note": "Too few rollback segments for the transaction concurrency makes sessions queue on the segment headers: a general slowdown with no slow SQL to point at, which is the kind of incident that gets blamed on 'the database' for a week. The waits/gets ratio is the standard reading; shrinks and extends are in the message because a segment that repeatedly extends and shrinks back to OPTIMAL needs a bigger OPTIMAL, not more segments.",
+      "report_policy": {
+        "action": "Transactions are waiting for a rollback segment header: create more rollback segments and bring them online; a segment that keeps extending and shrinking wants a larger OPTIMAL instead."
+      }
     },
     {
       "metric_id": 92,
@@ -5931,7 +6251,10 @@
         }
       ],
       "max_rows": 200,
-      "note": "ADR (Automatic Diagnostic Repository) tracks critical database errors (internal ORA-00600, ORA-07445, process crashes, block corruption) as incidents. Querying v$diag_incident, v$diag_problem, and v$diag_info provides direct SQL-level visibility into incidents from both CDB and PDB connections without needing host file access to alert logs."
+      "note": "ADR (Automatic Diagnostic Repository) tracks critical database errors (internal ORA-00600, ORA-07445, process crashes, block corruption) as incidents. Querying v$diag_incident, v$diag_problem, and v$diag_info provides direct SQL-level visibility into incidents from both CDB and PDB connections without needing host file access to alert logs.",
+      "report_policy": {
+        "action": "Oracle recorded an incident or has an open critical Health Monitor finding: read the alert log and the incident's trace file, and look up its problem key (adrci, show incident) before it repeats."
+      }
     },
     {
       "metric_id": 99,
@@ -6192,7 +6515,10 @@
         }
       ],
       "max_rows": 50,
-      "note": "Queries waiting for workspace memory (1.141): two samples 5 s apart inside one run. Pending > 5 in the second sample CRITICAL, > 0 in both WARNING; RESOURCE_SEMAPHORE waiters now in the message."
+      "note": "Queries waiting for workspace memory (1.141): two samples 5 s apart inside one run. Pending > 5 in the second sample CRITICAL, > 0 in both WARNING; RESOURCE_SEMAPHORE waiters now in the message.",
+      "report_policy": {
+        "action": "Queries are queueing for a memory grant: find the queries holding the largest grants (sys.dm_exec_query_memory_grants), fix their plans or statistics, and check max server memory."
+      }
     },
     {
       "metric_id": 103,
@@ -6317,7 +6643,10 @@
         }
       ],
       "max_rows": 100,
-      "note": "I/O latency now, not since start (1.147): two reads of the file stats 10 s apart inside one run, per database and file type. Log writes 20 / 50 ms, data reads 50 / 200 ms, at least 20 operations; data writes reported, not graded (checkpoint bursts). PERFORMANCE_IO_LATENCY keeps the cumulative per-file rows the reports difference."
+      "note": "I/O latency now, not since start (1.147): two reads of the file stats 10 s apart inside one run, per database and file type. Log writes 20 / 50 ms, data reads 50 / 200 ms, at least 20 operations; data writes reported, not graded (checkpoint bursts). PERFORMANCE_IO_LATENCY keeps the cumulative per-file rows the reports difference.",
+      "report_policy": {
+        "action": "Storage is slow right now for a database's log writes or data reads: check the volume and the storage under it, and what else is writing there - a backup, a checkpoint, another machine."
+      }
     },
     {
       "metric_id": 105,
@@ -6377,7 +6706,10 @@
         }
       ],
       "max_rows": 50,
-      "note": "SQL Server's own incidents (1.164): a memory dump within 120 minutes CRITICAL, within 7 days WARNING; sp_server_diagnostics components (2012+) - error CRITICAL, warning WARNING. The nearest thing SQL Server has to Oracle's ADR."
+      "note": "SQL Server's own incidents (1.164): a memory dump within 120 minutes CRITICAL, within 7 days WARNING; sp_server_diagnostics components (2012+) - error CRITICAL, warning WARNING. The nearest thing SQL Server has to Oracle's ADR.",
+      "report_policy": {
+        "action": "SQL Server wrote a memory dump or reports one of its components in warning or error: read the error log around that time and the dump's text file, and open a support case if it repeats."
+      }
     },
     {
       "metric_id": 106,
@@ -6397,7 +6729,10 @@
       },
       "max_rows": 20,
       "default_importance": 4,
-      "note": "The PostgreSQL server log (1.165): a container's through docker logs, a host install's log_directory files through the host login (host_fallback; PG_LOG_FILE / PG_LOG_DIRECTORY in collector_env, else the packagings' places, two clusters named and not guessed between). A day read; PANIC / corrupt pages / disk full / out of memory / a backend killed by a signal CRITICAL within 120 minutes and WARNING after; other FATALs, connection exhaustion and PostgreSQL's own 'checkpoints are occurring too frequently' (1.145) WARNING; failed logins counted. A server logging to syslog or journald is not read."
+      "note": "The PostgreSQL server log (1.165): a container's through docker logs, a host install's log_directory files through the host login (host_fallback; PG_LOG_FILE / PG_LOG_DIRECTORY in collector_env, else the packagings' places, two clusters named and not guessed between). A day read; PANIC / corrupt pages / disk full / out of memory / a backend killed by a signal CRITICAL within 120 minutes and WARNING after; other FATALs, connection exhaustion and PostgreSQL's own 'checkpoints are occurring too frequently' (1.145) WARNING; failed logins counted. A server logging to syslog or journald is not read.",
+      "report_policy": {
+        "action": "The PostgreSQL server log holds a PANIC, a corrupt page, a full disk, an out-of-memory, a crashed backend or repeated FATALs: read the lines the message quotes and fix that cause first."
+      }
     },
     {
       "metric_id": 108,
@@ -6488,6 +6823,11 @@
             "Express",
             "Evaluation"
           ]
+        },
+        "action": "A database's encryption at rest changed since the last read: confirm who changed it and why; if it was turned off, turn it back on and find where the unencrypted files and backups went.",
+        "action_by_db_type": {
+          "sqlserver": "A database's TDE state changed since the last read: confirm who changed it and why; if it was turned off, turn it back on, and check the certificate protecting its key is backed up.",
+          "oracle": "A tablespace's encryption or the keystore's status changed since the last read: confirm who changed it and why; a keystore that closed leaves its encrypted tablespaces unreadable until it is opened."
         }
       },
       "max_rows": 500,
@@ -6558,6 +6898,11 @@
         "thresholds": {},
         "suppress": {
           "enabled": false
+        },
+        "action": "Who can administer this host changed since the last read - an account, a key or a remote-login setting: confirm the change was intended with whoever made it, and undo it if nobody did.",
+        "action_by_platform": {
+          "windows": "The local Administrators or Remote Desktop Users group, or the Remote Desktop setting, changed since the last read: confirm the change was intended, and remove the account or turn the setting back if nobody asked for it.",
+          "linux": "A root-granting group (sudo, wheel, docker), a uid 0 account, a key in root's authorized_keys or an sshd login setting changed since the last read: confirm the change was intended, and remove it if nobody asked for it."
         }
       },
       "max_rows": 500,

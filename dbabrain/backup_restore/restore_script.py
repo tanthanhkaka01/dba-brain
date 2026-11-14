@@ -68,6 +68,9 @@ from dbabrain.lib import integrity as restore_integrity
 from dbabrain.lib import offload as offload_rules
 from dbabrain.lib.shell import docker_cli
 from dbabrain.lib.notify import NotifyConfig
+from dbabrain.lib.restore import landing as restore_landing
+from dbabrain.lib.restore import stated as restore_stated
+from dbabrain.lib.restore import windows as windows_target
 from dbabrain.lib.restore.copy_mode import parse_copy_mode, transfer_of
 from dbabrain.lib.time_window import TimeWindow, parse_time_window_config
 
@@ -149,6 +152,16 @@ class ScriptRestore:
     # already carries (`upgrade-config` wrote it in): the default took the tool's new name, and a
     # folder retention has emptied down to its marker would have been refused under it.
     staging_marker: str = ""
+    # Which databases a SQL Server restore takes and the name each lands under (0.39.0, 1.362):
+    # `database_mappings` or `restore_all_databases`, as a share-driven entry states them. None when
+    # the entry states neither - refused inside its own run - and on an engine that restores a whole
+    # instance, where there is nothing to name. See dbabrain.lib.restore.landing.
+    landing: restore_landing.Landing | None = None
+    # The fields that decide what a run does and that the entry left to a default (0.39.0, 1.366):
+    # lib.restore.stated.SCRIPT_RESTORE_FIELDS - from production as a target to the time window, the
+    # notify rules and the copy's transfer. The entry loads on what it had been running on; its run is
+    # refused, naming them.
+    unstated: tuple[str, ...] = ()
 
     @property
     def is_remote(self) -> bool:
@@ -304,6 +317,16 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
         )
     target_backup_dir = str(entry.get("target_backup_dir") or "").strip()
     target_visible_dir = str(entry.get("target_visible_dir") or "").strip()
+    try:
+        # A Windows staging (SQL Server running natively there, 0.39.0) is carried with forward slashes
+        # whichever the entry wrote: every path of the staging is joined to it with "/", and the check
+        # below counts its levels by "/" - `C:\dbabrain_restore\X` read as one level, too shallow.
+        if windows_target.is_drive_path(target_backup_dir):
+            target_backup_dir = windows_target.drive_path(target_backup_dir, field="target_backup_dir")
+        if windows_target.is_drive_path(target_visible_dir):
+            target_visible_dir = windows_target.drive_path(target_visible_dir, field="target_visible_dir")
+    except ValueError as exc:
+        raise ValueError(f"{restore_id}: {exc}") from None
     source_backup_host_dir = str(entry.get("source_backup_host_dir") or "").strip()
     env = entry.get("env") or {}
     if not isinstance(env, dict):
@@ -353,6 +376,10 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
         # 0 is a value - a window with no limit - not "absent": `or 24` read it as a day.
         hours = entry.get("copy_recent_hours")
         copy_recent_hours = 24 if hours is None or str(hours).strip() == "" else int(hours)
+        # Which databases, under which names (1.362). Mistyped is refused here, with the entry; stating
+        # neither field loads (None) and is refused inside the entry's own run, as an unstated action is.
+        landing = restore_landing.parse_landing(entry, label=f"backup_restore.restores[{restore_id}]",
+                                                db_type=db_type)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{restore_id}: {exc}") from None
     if space_check.measure_restore:
@@ -381,7 +408,7 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
             entry, context=f"backup_restore.restores[{index}] ({restore_id})"
         ),
         active=bool(entry.get("active", True)),
-        overwrite_existing=entry.get("overwrite_existing") is True,
+        overwrite_existing=restore_integrity.stated_overwrite(entry.get("overwrite_existing")),
         allow_production_target=entry.get("allow_production_target") is True,
         checkdb=entry.get("checkdb") is not False,
         checkdb_timeout_seconds=consistency_check.parse_timeout(
@@ -397,6 +424,8 @@ def _script_restore(index: int, entry: dict[str, Any], restore_id: str) -> Scrip
         copy_selection=copy_selection,
         copy_recent_hours=copy_recent_hours,
         staging_marker=str(entry.get("staging_marker") or "").strip(),
+        landing=landing,
+        unstated=restore_stated.unstated(entry, kind=restore_stated.SCRIPT_RESTORE),
         env={str(k): str(v) for k, v in env.items()},
         server_metadata=parse_server_metadata(
             entry.get("server_metadata"),
@@ -507,6 +536,10 @@ def _script_env(job: ScriptRestore, source: BackupTarget,
         "TARGET_MODE": job.target_mode,
     }
     env.update(job.env)
+    if job.landing is not None and not job.landing.all_databases:
+        # The script's own input, built from the entry's statement (0.39.0): the names, as it always
+        # read them. It restores each under its backup's name - it has no word for another.
+        env[restore_landing.SCRIPT_ENV] = ",".join(job.landing.sources)
     # Secrets last: the decryption passphrase reaches the script as an env var, exported ahead
     # of it on the remote side, so it never appears on a command line or in the config file.
     for name, ref in (job.env_secrets or {}).items():
@@ -523,11 +556,15 @@ def _script_env(job: ScriptRestore, source: BackupTarget,
 def _ssh_login(target: BackupTarget, *, data_dir, key, key_base64) -> dict[str, Any]:
     """The login a ``common.cli`` copy command opens its session with: resolved here, handed there.
 
-    ``common`` reads no configuration, so the secret ref and the key name stop at this line.
+    ``common`` reads no configuration, so the secret ref and the key name stop at this line. Nor does
+    it guess what it reached: a machine whose inventory record says ``platform: windows`` is said to
+    be one (0.39.0) - its staging is a drive path, its commands PowerShell, and no ``cat`` writes there.
     """
     from dbabrain.lib.data_sources import resolve_ssh_key, resolve_ssh_password
 
     login: dict[str, Any] = {"host": target.host, "port": target.port, "username": target.username}
+    if str(getattr(target, "platform", "") or "").strip().lower() == windows_target.PLATFORM:
+        login["platform"] = windows_target.PLATFORM
     key_filename = resolve_ssh_key(target.key_file, data_dir) if target.key_file else None
     if key_filename:
         login["key_file"] = str(key_filename)
@@ -537,6 +574,116 @@ def _ssh_login(target: BackupTarget, *, data_dir, key, key_base64) -> dict[str, 
             key=key, key_base64=key_base64, data_dir=data_dir,
         )
     return login
+
+
+def _chain_databases(job: Any) -> dict[str, list[str]]:
+    """``{"databases": [...]}`` for the copy's chain when the entry names the databases it restores.
+
+    0.39.0 (1.362): the folder holds every database its server backs up, and the copy took them all
+    whatever the entry restored - copied, and from an encrypted repository decrypted, for nothing; a
+    point in time refused the whole copy when a database nobody asked for had no full before the
+    moment. With ``restore_all_databases`` every database is the restore's, and nothing is narrowed.
+    """
+    landing = getattr(job, "landing", None)
+    if landing is None or landing.all_databases:
+        return {}
+    return {"databases": list(landing.sources)}
+
+
+def plan_transfer(
+    job: ScriptRestore,
+    *,
+    source: BackupTarget,
+    target: BackupTarget,
+    data_dir=None,
+    key=None,
+    key_base64=None,
+    point_in_time: str = "",
+    catalog: Any = None,
+) -> dict[str, Any]:
+    """What :func:`transfer_backup_to_target` would copy onto the target, and whether it fits - read only.
+
+    0.39.0 (1.356). A restore's dry run planned from what was already staged, so on a target nothing
+    had been restored to yet it failed listing an empty folder; and ``restore-workflow --dry-run``
+    answered ``dry-run`` and nothing else. This reads the chain where the copy would read it - the
+    repository for ``restore_from: repository`` - with ``prepare-staging``'s ``plan_only`` (no
+    ``chmod`` at the source: a dry run changes nothing there either), names each file with the bytes
+    it will have on the target (a ``.age`` by the plain size the store recorded, and a file no
+    offload proved as one the restore would refuse), and asks the target, read only, whether the
+    staging folder is usable and the files fit.
+    """
+    from dbabrain.lib.repository_keys import SUFFIX
+
+    proofs: dict[str, dict[str, Any]] | None = None
+    source_dir = job.source_backup_host_dir
+    if getattr(job, "restore_from", None) == "repository":
+        source, source_dir, proofs = _repository_source(job, catalog=catalog, data_dir=data_dir)
+    source_login = _ssh_login(source, data_dir=data_dir, key=key, key_base64=key_base64)
+    target_login = _ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64)
+    window = job.copy_selection == "window"
+    request = {"source": source_login, "source_dir": source_dir, "make_readable": False, "plan_only": True,
+               **({"window_hours": job.copy_recent_hours} if window and job.copy_recent_hours > 0 else {})}
+    if window and job.copy_recent_hours <= 0:
+        request["include"] = []
+    else:
+        request["chain"] = {"db_type": job.db_type, "backup_dir": job.backup_dir,
+                            "container": source.container_name, "point_in_time": point_in_time,
+                            **_chain_databases(job)}
+    plan = common_cli.run("prepare-staging", request, stream_stderr=True)
+    selected = [(str(item["path"]), int(item.get("size_bytes") or 0)) for item in plan.get("files") or []]
+    encrypted = any(rel.endswith(SUFFIX) for rel, _size in selected)
+    not_proven: list[str] = []
+    incoming: list[tuple[str, int]] = []
+    if encrypted:
+        from dbabrain.db.repository_encryption_store import RepositoryEncryptionStore
+        from dbabrain.lib.config import load_config
+
+        base = str(source_dir).rstrip("/")
+        proven = RepositoryEncryptionStore.from_config(load_config()).proven_under(
+            repository_server_id=source.server_id, folder=base)
+        for rel, size in selected:
+            row = proven.get(f"{base}/{rel}")
+            if row is None:
+                not_proven.append(rel)
+                incoming.append((rel[: -len(SUFFIX)] if rel.endswith(SUFFIX) else rel, size))
+            else:
+                incoming.append((rel[: -len(SUFFIX)], int(row["plain_size_bytes"])))
+    else:
+        incoming = list(selected)
+        if proofs is not None:
+            base = str(source_dir).rstrip("/")
+            not_proven = [rel for rel, _size in selected
+                          if f"{base}/{rel}" not in proofs and rel not in proofs]
+    measured: dict[str, Any] = {}
+    if incoming:
+        measured = common_cli.run("prepare-staging", {
+            "target": target_login, "target_dir": job.target_backup_dir, "dry_run": True,
+            "incoming": [{"path": rel, "size_bytes": size} for rel, size in incoming],
+            "space_check": restore_space.as_request(job.space_check), **_staging_marker(job)},
+            stream_stderr=True)
+    total = sum(size for _rel, size in incoming)
+    room = measured.get("space_check") or {}
+    refusals = ([f"{len(not_proven)} file(s) of the chain no offload proved on the repository - "
+                 f"{', '.join(not_proven[:5])}: the restore refuses them"] if not_proven else []) \
+        + ([measured["staging"]] if measured.get("refused") else []) \
+        + ([str(room.get("detail"))] if room and room.get("ok") is False else []) \
+        + (["the chain is empty: nothing to restore from"] if not incoming else [])
+    return {
+        "reads_from": "the repository" if proofs is not None else "the source server",
+        "source_server_id": source.server_id, "source_dir": source_dir,
+        "target_server_id": getattr(job, "target_server_id", ""), "target_dir": job.target_backup_dir,
+        "include": list(plan.get("include") or []),
+        "files": [{"path": rel, "size_bytes": size} for rel, size in incoming],
+        "file_count": len(incoming), "bytes": total,
+        # The same test the decryption makes (_stage_decrypted): the target's server_id, or its login's host.
+        "encrypted": encrypted, "decrypted_through": ("the repository host" if encrypted and (
+            str(getattr(job, "target_server_id", "")) == str(source.server_id)
+            or str(target_login.get("host") or "") == str(source_login.get("host") or "")) else
+            "this node, streamed to the target" if encrypted else "not encrypted - copied as it is"),
+        "already_on_target": measured.get("skipped", 0), "to_copy_bytes": measured.get("pending_bytes", total),
+        "staging": measured.get("staging", ""), **({"space_check": room} if room else {}),
+        "would_refuse": refusals,
+    }
 
 
 def transfer_backup_to_target(
@@ -587,7 +734,12 @@ def transfer_backup_to_target(
     request = {
         "source": source_login, "source_dir": source_dir,
         "target": target_login, "target_dir": job.target_backup_dir,
-        "make_readable": True,
+        # A server's own backup folder may hold a file its login cannot read yet (a live archivelog
+        # job writes 0640), so the copy may open it. The repository's files are the offload's, proven
+        # and readable by its login: a restore never changes their modes (0.39.0, 1.369 - it ran a
+        # sudo chmod over the repository folder on every restore, and where sudo wanted a password
+        # each one left two errors in that host's journal).
+        "make_readable": proofs is None,
         "space_check": restore_space.as_request(job.space_check),
         # The chain AND every file of the window: never fewer backups than `chain` copies.
         **({"window_hours": job.copy_recent_hours} if window and job.copy_recent_hours > 0 else {}),
@@ -600,7 +752,8 @@ def transfer_backup_to_target(
         # The chain is read once, with the plan (RMAN's preview is not cheap), and stated from then on.
         plan = common_cli.run("prepare-staging", {**request, "plan_only": True, "chain": {
             "db_type": job.db_type, "backup_dir": job.backup_dir,
-            "container": source.container_name, "point_in_time": point_in_time}}, stream_stderr=True)
+            "container": source.container_name, "point_in_time": point_in_time,
+            **_chain_databases(job)}}, stream_stderr=True)
     include = list(plan.get("include") or [])
     request["include"] = include
     if proofs is not None:
@@ -668,13 +821,25 @@ def _record_decrypted(job: Any, catalog: Any, *, source_server_id: str, source_d
         target_server_id=job.target_server_id, target_folder=target_dir,
         copy_max_retry=integrity.copy_max_retry, phase="copying", tier=getattr(job, "tier", None),
         node_host=socket.gethostname(), app_version=__version__)
+    # Each decrypted file tied to the backup file it IS (0.39.0): the plain name is the backup's own,
+    # so the catalog knows it by the SOURCE server and that name. Without the tie the backup's row
+    # never said a restore had used it - `_mark_used` follows file_id - and a page could not show
+    # which restore a file went into (the operator, 2026-11-13).
+    try:
+        known = catalog.backup_file_facts(
+            server_id=job.server_id, file_names=sorted({posixpath.basename(str(one["path"])) for one in files}))
+    except Exception:  # noqa: BLE001 - the tie is evidence, not a condition of the restore
+        known = {}
     for position, one in enumerate(files, start=1):
         target_path = str(one["path"])
         relative = target_path[len(target_dir) + 1:] if target_path.startswith(target_dir + "/") else posixpath.basename(target_path)
+        fact = known.get(posixpath.basename(target_path)) or {}
         catalog.add_run_file(
             restore_run_id=run_id, source_server_id=source_server_id, target_server_id=job.target_server_id,
+            **({"file_id": fact["file_id"], "database_name": str(fact.get("database_name") or ""),
+                "backup_taken_at": fact.get("backup_ended_at")} if fact else {}),
             engine=str(job.db_type or "").lower(), file_name=posixpath.basename(target_path),
-            file_type=_script_file_type(job.db_type, relative),
+            file_type=str(fact.get("file_type") or "") or _script_file_type(job.db_type, relative),
             # The source is the encrypted copy on the repository; what is held is the PLAIN file's hash,
             # which is what both ends were proven against.
             source_path=f"{source_dir}/{relative}", target_path=target_path,
@@ -727,14 +892,35 @@ def _stage_decrypted(job: Any, request: dict[str, Any], *, source: BackupTarget,
     # never leave the machine (0.37.0, the operator: *why copy to my PC - restore directly*).
     on_host = str(getattr(job, "target_server_id", "")) == str(source.server_id) or (
         str(target_login.get("host") or "") == str(source_login.get("host") or ""))
+    # The staging made ready before the first file is decrypted, as a plain copy's is (0.39.0, 1.355):
+    # this path skipped it, so no room was checked, no marker written (the cleanup then kept the
+    # folder) and the engine's access never opened. The plain names and bytes are the store's.
+    staging = common_cli.run("prepare-staging", {
+        "target": target_login, "target_dir": target_dir,
+        "incoming": [{"path": rel[: -len(SUFFIX)], "size_bytes": int(proven[f"{source_dir}/{rel}"]["plain_size_bytes"])}
+                     for rel in selected],
+        "space_check": request.get("space_check"),
+        **({"staging_marker": request["staging_marker"]} if request.get("staging_marker") else {})},
+        stream_stderr=True)
+    # A failed restore is continued (0.39.0, 1.372): a plain file a previous run of this restore
+    # already laid down is not decrypted again. "Already there" is proven, not assumed - the staging
+    # says which files it holds at their plain size, and each of those is hashed where it lies and
+    # held to the plaintext's sha256 the store recorded; anything else is decrypted over it.
+    staged = _already_decrypted(
+        staging, target_login=target_login, target_dir=target_dir,
+        expected={rel[: -len(SUFFIX)]: proven[f"{source_dir}/{rel}"] for rel in selected})
     identities: dict[int, str] = {}
     files, plain_bytes = [], 0
     for rel in selected:
         row = proven[f"{source_dir}/{rel}"]
         key_id = int(row["key_id"])
+        plain_rel = rel[: -len(SUFFIX)]
+        if plain_rel in staged:
+            files.append({"path": f"{target_dir}/{plain_rel}", "size_bytes": int(row["plain_size_bytes"]),
+                          "sha256": str(row["plain_sha256"]), "key_id": key_id, "already_staged": True})
+            continue
         if key_id not in identities:
             identities[key_id] = store.identity(key_id, passphrase=passphrase)
-        plain_rel = rel[: -len(SUFFIX)]
         if on_host:
             answer = common_cli.run("decrypt-on-host", {
                 "host": {"runtime": "linux", "access": "ssh", **source_login},
@@ -760,15 +946,76 @@ def _stage_decrypted(job: Any, request: dict[str, Any], *, source: BackupTarget,
         files.append({"path": answer["target_path"], "size_bytes": answer["plain_size_bytes"],
                       "sha256": answer["plain_sha256"], "key_id": key_id})
         plain_bytes += int(answer["plain_size_bytes"])
+    # The engine's own uid reads the staging (a SQL Server container runs as 10001): the access a plain
+    # copy's finish-staging opens, opened here too - and each file given its backup's time, as a plain
+    # copy keeps its source's (0.39.0). Dated by the decryption, a PostgreSQL base backup's manifest
+    # read as finished after any moment before the restore, and a point in time found "no base backup"
+    # (the PIT test on the lab host, 2026-11-14: decrypted 07:24Z, the moment asked 07:21:15Z, the full of
+    # 05:55Z). SQL Server dates by the file's name and did not see it.
+    times = _backup_times(catalog, [proven[f"{source_dir}/{rel}"].get("file_id") for rel in selected])
+    finished = common_cli.run("finish-staging", {
+        "target": target_login, "target_dir": target_dir,
+        "files": [{"path": rel[: -len(SUFFIX)],
+                   "mtime": times.get(proven[f"{source_dir}/{rel}"].get("file_id"))} for rel in selected],
+        "open_for_engine": True}, stream_stderr=True)
     # Recorded (0.38.0): the staging cleanup deletes a staged file only by facts the catalog holds.
     restore_run_id = _record_decrypted(job, catalog, source_server_id=source.server_id, source_dir=source_dir,
                                        target_dir=target_dir, files=files)
     # The keys every copy answers with (copied, bytes_copied, skipped) - the restore's own phases read
     # them; without them the drill of 2026-11-10 failed "'copied'" after a decryption that worked.
+    decrypted_now = len(files) - len(staged)
     return {"restore_from": "repository", "repository_server_id": source.server_id, "repository_dir": source_dir,
-            "copied": len(files), "bytes_copied": plain_bytes, "skipped": 0,
-            "encrypted": True, "files": files, "files_decrypted": len(files), "bytes": plain_bytes,
-            "transfer": "on the repository host" if on_host else transfer, "restore_run_id": restore_run_id}
+            "copied": decrypted_now, "bytes_copied": plain_bytes, "skipped": len(staged),
+            "encrypted": True, "files": files, "files_decrypted": decrypted_now, "bytes": plain_bytes,
+            "transfer": "on the repository host" if on_host else transfer, "restore_run_id": restore_run_id,
+            "space_check": staging.get("space_check"), "opened_for_engine": finished.get("opened_for_engine")}
+
+
+def _backup_times(catalog: Any, file_ids: list[Any]) -> dict[Any, int]:
+    """``file_id`` -> its backup's finish as epoch seconds, for ``finish-staging``; empty without a
+    catalog (a call made by hand) or when it cannot be read - the file is then dated by its decryption,
+    as before, and the restore still runs."""
+    from dbabrain.lib.coerce import as_epoch
+
+    if catalog is None:
+        return {}
+    try:
+        ended = catalog.backup_ended_at_of([one for one in file_ids if one is not None])
+    except Exception:  # noqa: BLE001 - a time is evidence for the plan, never a condition of the copy
+        return {}
+    return {file_id: int(epoch) for file_id, text in ended.items()
+            if (epoch := as_epoch(text)) is not None}
+
+
+def _already_decrypted(staging: dict[str, Any], *, target_login: dict[str, Any], target_dir: str,
+                       expected: dict[str, Any]) -> set[str]:
+    """The plain files of ``expected`` the staging already holds AS the plaintext the store recorded.
+
+    ``staging`` is ``prepare-staging``'s answer: ``pending`` names what is not there at its plain
+    size. The rest are hashed on the target (``file-checksum``) and kept only when the sha256 is the
+    recorded plaintext's - the same proof a fresh decryption ends with. An answer without ``pending``,
+    a hash that cannot be read, a file that differs: decrypted again, never trusted.
+    """
+    if not isinstance(staging.get("pending"), list):
+        return set()
+    pending = {str(item.get("path") or "") for item in staging["pending"]}
+    there = [rel for rel in expected if rel not in pending]
+    if not there:
+        return set()
+    try:
+        answer = common_cli.run("file-checksum", {"host": _ssh_host_block(target_login),
+                                                  "paths": [f"{target_dir}/{rel}" for rel in there]})
+        found = {str(one.get("path") or ""): (str(one.get("sha256") or "").lower(), one.get("size_bytes"))
+                 for one in answer.get("files") or []}
+    except Exception:  # noqa: BLE001 - what cannot be proven is decrypted again
+        return set()
+    kept = set()
+    for rel in there:
+        sha, size = found.get(f"{target_dir}/{rel}", ("", None))
+        row = expected[rel]
+        if sha and sha == str(row["plain_sha256"]).lower() and (size is None or int(size) == int(row["plain_size_bytes"])):
+            kept.add(rel)
+    return kept
 
 
 def _transfer_of(job: Any) -> str:
@@ -783,9 +1030,8 @@ def _transfer_of(job: Any) -> str:
                              "its offload_transfer says how a repository copy travels.")
 
 
-#: The engines a restore can read from the repository: their chain is read from the folder's own
-#: layout, which the repository keeps. Oracle's pieces are RMAN's to catalog (a later item).
-REPOSITORY_ENGINES = ("postgresql", "sqlserver")
+# The engines a restore reads from the repository: one definition, in lib (the runbook says the rule too).
+from dbabrain.lib.restore.kind import REPOSITORY_ENGINES  # noqa: E402 - re-exported where it always lived
 
 
 def _repository_source(job: Any, *, catalog: Any, data_dir: Any) -> tuple[BackupTarget, str, dict[str, Any]]:
@@ -811,8 +1057,17 @@ def _repository_source(job: Any, *, catalog: Any, data_dir: Any) -> tuple[Backup
 
 
 def _ssh_host_block(login: dict[str, Any]) -> dict[str, Any]:
-    """``file-checksum``'s ``host`` for a machine reached over SSH - the login the staging copy uses."""
-    return {"runtime": "linux", "access": "ssh", **login}
+    """``file-checksum``'s ``host`` for a machine reached over SSH - the login the staging copy uses.
+
+    Its runtime is the login's platform: ``windows`` for a Windows host (PowerShell over Windows OpenSSH
+    - hashing, listing and the verified deletes all speak it), ``linux`` otherwise.
+    """
+    block = {name: value for name, value in login.items() if name != "platform"}
+    return {"runtime": windows_target.PLATFORM if _is_windows_login(login) else "linux", "access": "ssh", **block}
+
+
+def _is_windows_login(login: dict[str, Any]) -> bool:
+    return str((login or {}).get("platform") or "").strip().lower() == windows_target.PLATFORM
 
 
 #: A staged file's ``file_type`` from its place in the layout - one reading, in ``lib.integrity``, shared
@@ -1136,6 +1391,110 @@ def _staging_marker(job: Any) -> dict[str, str]:
 DEFAULT_STAGING_MARKER = ".dbabrain-staging"
 
 
+def staged_copies_of_entry(job: Any, catalog: Any, *, exclude_paths: set[str] | frozenset[str] = frozenset()
+                           ) -> list[dict[str, Any]]:
+    """Every copy of a backup this entry's runs put in its staging and nobody has recorded as gone -
+    this run's and any earlier run's, decrypted or plain - for the clean-up after a restore that
+    worked (0.39.0, 1.371).
+
+    The operator, 2026-11-13: *a successful restore must delete the plain files*; 2026-11-14 (translated),
+    on a failed restore's files left behind: *each restore checks, and deletes them once it has
+    restored the DB successfully* - and on the copies from a source that was never encrypted (the
+    server's own folder, a plain repository), which waited for the entry's retention: *delete them too*.
+    A staged copy is a backup in the clear outside the place that keeps it; once the databases are
+    restored and checked it has done its work.
+
+    By proof, never by folder: the rows of THIS entry's runs onto this target
+    (``BackupCatalogStore.staged_by_entry``) a proven copy wrote, each with the bytes and sha256 the
+    copy measured on the target - what the verified delete holds the file to. Another entry's files in
+    a shared staging and a file nobody recorded stay for the retention sweep. ``exclude_paths``: the
+    files the caller already holds (this run's decrypted chain, with its own facts).
+    """
+    if catalog is None:
+        return []
+    target_dir = str(job.target_backup_dir or "").rstrip("/")
+    if not target_dir:
+        return []
+    rows = catalog.staged_by_entry(restore_id=job.restore_id, target_server_id=job.target_server_id,
+                                   folder=target_dir)
+    return [{"path": row["path"], "size_bytes": row["size_bytes"], "sha256": row["sha256"],
+             "run_file_id": row["run_file_id"], "restore_run_id": row["restore_run_id"]}
+            for row in rows if row["path"] not in exclude_paths]
+
+
+def delete_decrypted_staging(job: Any, *, target: BackupTarget, files: list[dict[str, Any]],
+                             restore_run_id: int | None = None, data_dir=None, key=None, key_base64=None,
+                             catalog: Any = None) -> dict[str, Any]:
+    """The copies a restore staged, deleted once it has succeeded (0.39.0, 1.371) - decrypted or plain.
+
+    The operator, 2026-11-13: *a successful restore must delete the plain files too (both at the
+    repository and on the target server_id)*. The repository keeps a backup encrypted; a restore lays
+    its chain down in the clear in the target's staging - which is on the repository host itself when
+    the drill runs there (``decrypt-on-host``) and on the target server otherwise
+    (``fetch-decrypted-file``). Until 0.39.0 those plain copies stayed for the entry's whole
+    ``cleanup_retention``: days of a backup anyone who can read the folder can read, beside the
+    encrypted one. Now each goes as soon as the restored databases are verified, by
+    ``delete-verified-files`` held to the bytes and sha256 its decryption proved - the file this
+    restore wrote, and no other.
+
+    Called only after a success: a failed restore keeps what it staged, which is what a continued run
+    reads. ``files`` may also carry the entry's staged copies the catalog knows
+    (:func:`staged_copies_of_entry`), each with its ``run_file_id``: deleted the same way, their rows
+    marked gone too; ``earlier_runs`` counts those an earlier run left. Never the restore's failure: a file that could not be deleted is named in ``error`` and
+    stays for the retention sweep. Nothing encrypted is touched - every path is under the staging.
+
+    ``{"plain_files", "deleted", "already_gone", "bytes_deleted", "not_deleted", "error"}``.
+    """
+    from dbabrain.backup_restore import verified_cleanup
+
+    target_dir = str(job.target_backup_dir or "").rstrip("/")
+    facts = {str(one["path"]): {"size_bytes": int(one["size_bytes"]), "sha256": str(one["sha256"])}
+             for one in files if one.get("path") and one.get("sha256") and one.get("size_bytes") is not None}
+    result: dict[str, Any] = {"plain_files": len(facts), "deleted": 0, "already_gone": 0, "bytes_deleted": 0}
+    earlier = {str(one["path"]): int(one["run_file_id"]) for one in files if one.get("run_file_id") is not None}
+    left_before = [one for one in files if one.get("run_file_id") is not None
+                   and one.get("restore_run_id") not in (None, restore_run_id)]
+    if left_before:
+        result["earlier_runs"] = len(left_before)
+    if not facts or not target_dir:
+        return result
+    host = _ssh_host_block(_ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64))
+    # A Windows host compares paths without case; a Linux call is the one it always was.
+    cleanup = verified_cleanup.delete_files(host=host, paths=list(facts), facts=facts, must_be_under=target_dir,
+                                            **({"windows": True} if host.get("runtime") == windows_target.PLATFORM
+                                               else {}))
+    deleted = [str(path) for path in cleanup["deleted"]]
+    result["deleted"] = len(deleted)
+    result["already_gone"] = len(cleanup["already_gone"])
+    result["bytes_deleted"] = sum(facts[path]["size_bytes"] for path in deleted if path in facts)
+    left = ([{"path": one["path"], "status": "kept", "reason": str(one.get("reason") or "not under the staging")}
+             for one in cleanup["kept"]] + list(cleanup["not_deleted"]))
+    if left:
+        first = left[0]
+        result["not_deleted"] = left
+        result["error"] = (f"{len(left)} decrypted file(s) could not be deleted and are still in the clear on "
+                           f"{job.target_server_id} - {first['path']}: {first.get('status')} - {first.get('reason')}")
+    gone = set(deleted) | {str(path) for path in cleanup["already_gone"]}
+    if catalog is not None and gone:
+        # The files no longer on the target: said on their rows - this run's, and an earlier run's by its
+        # own row - so a page does not show a staged copy that is gone, and the next restore does not
+        # look for it again. The record is not the cleanup - a store that fails changes nothing.
+        try:
+            from dbabrain.db.store import utc_now_text
+
+            if restore_run_id is not None:
+                for row in catalog.run_files(int(restore_run_id)):
+                    if str(row.get("target_host_path") or row.get("target_path") or "") in gone:
+                        catalog.set_run_file(int(row["run_file_id"]), target_on_disk=0,
+                                             target_checked_at=utc_now_text())
+            for path, run_file_id in earlier.items():
+                if path in gone:
+                    catalog.set_run_file(run_file_id, target_on_disk=0, target_checked_at=utc_now_text())
+        except Exception:  # noqa: BLE001
+            pass
+    return result
+
+
 def prune_staged_backups(
     job: ScriptRestore,
     *,
@@ -1178,6 +1537,7 @@ def prune_staged_backups(
         result["skipped"] = "retention disabled"
         return result
     host = _ssh_host_block(_ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64))
+    windows = host.get("runtime") == windows_target.PLATFORM
     listing = common_cli.run("list-files", {"host": host, "folder": target_dir, "with_folders": True})
     if not listing.get("folder_found"):
         return result
@@ -1188,20 +1548,30 @@ def prune_staged_backups(
         return result
     marker = str(job.staging_marker or "").strip() or DEFAULT_STAGING_MARKER
     entries = list(listing.get("files") or [])
+    folders = list(listing.get("folders") or [])
+    if windows:
+        # Windows names each entry by its own full path (`C:\dbabrain_restore\X\APP\FULL\a.bak`); the
+        # staging's files were recorded - and are deleted - by the stated folder joined with "/". Read
+        # in that form, the marker is found, the catalog knows each file, and the husks are POSIX-shaped.
+        entries = [{**entry, "path": _under_stated(str(entry.get("path") or ""), target_dir)} for entry in entries]
+        folders = [_under_stated(str(folder), target_dir) for folder in folders]
     if not any(str(entry.get("path")) == f"{target_dir}/{marker}" for entry in entries):
         if entries:
+            mark = (f"New-Item -ItemType File -Path '{windows_target.sql_server_path(target_dir)}\\{marker}'"
+                    if windows else f"touch {target_dir}/{marker}")
             result["error"] = (
                 f"{target_dir} holds files and has no {marker} marker, so it is not known to be a dbabrain "
-                f"staging directory - nothing was deleted there. If it is one, mark it: `touch {target_dir}/{marker}`.")
+                f"staging directory - nothing was deleted there. If it is one, mark it: `{mark}`.")
         return result
     old = rules.past_retention(entries, retention_seconds=retention,
                                now=_time.time() if now is None else float(now), keep_names=[marker])
     facts = (catalog.staged_file_facts(target_server_id=job.target_server_id, paths=old)
              if catalog is not None and old else {})
-    cleanup = verified_cleanup.delete_files(host=host, paths=old, facts=facts, must_be_under=target_dir)
+    cleanup = verified_cleanup.delete_files(host=host, paths=old, facts=facts, must_be_under=target_dir,
+                                            **({"windows": True} if windows else {}))
     gone = set(cleanup["deleted"]) | set(cleanup["already_gone"])
     husks = verified_cleanup.delete_husks(
-        host=host, root=target_dir, folders=list(listing.get("folders") or []),
+        host=host, root=target_dir, folders=folders,
         entries_left=[str(entry.get("path")) for entry in entries if str(entry.get("path")) not in gone])
     result["pruned"] = len(cleanup["deleted"])
     result["folders_removed"] = len(husks["removed"])
@@ -1215,6 +1585,17 @@ def prune_staged_backups(
         result["error"] = (f"{len(problems)} staged item(s) past retention could not be deleted - "
                            f"{first['path']}: {first['status']} - {first['reason']}")
     return result
+
+
+def _under_stated(path: str, folder: str) -> str:
+    """A path a Windows host listed under ``folder``, in the form the staging states: ``folder`` as
+    written, then the rest with forward slashes. The comparison ignores case and separators, as Windows
+    does; a path not under ``folder`` comes back with forward slashes and is no staging file of it."""
+    normal = path.replace("\\", "/")
+    base = folder.replace("\\", "/").rstrip("/")
+    if normal.casefold().startswith(base.casefold() + "/"):
+        return base + normal[len(base):]
+    return normal
 
 
 # `_announce` is `dbabrain.backup_restore.events.announce` since 2026-08-16 — it was four

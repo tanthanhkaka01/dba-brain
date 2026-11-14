@@ -475,7 +475,7 @@ python -m dbabrain.sre.cli run-powershell stop-vms -- -Group oracle_rac
 python -m dbabrain.sre.cli run-powershell add-oracle-shared-disks
 ```
 
-Creates and attaches 5 shared VMDKs in `D:\VMs\oracle_rac_shared\`:
+Creates and attaches 5 shared VMDKs in `C:\VMs\oracle_rac_shared\`:
 
 | Disk | Size | Use |
 |---|---|---|
@@ -1127,7 +1127,7 @@ python tests/sre_e2e_runner.py --config data/my_config.json --groups mysql
 
 Templates directory junction (create once):
 ```powershell
-cmd /c mklink /J D:\VMs_test\templates D:\VMs\templates
+cmd /c mklink /J C:\VMs_test\templates C:\VMs\templates
 ```
 
 ### IP ranges (test config)
@@ -1220,7 +1220,7 @@ Teardown: `stop-vms -VmName bastion-01` (runs after all DB groups).
 | 2 | stage-installer | `09-stage-oracle-installer -Group oracle_rac` |
 | 2 | playbook:oracle-rac-grid | `run-bastion-playbook oracle-rac-grid.yml` (20–40 min) |
 | 2 | playbook:oracle-rac-db | `run-bastion-playbook oracle-rac-db.yml` (20–40 min) |
-| cleanup | stop + delete | `stop-vms`, `delete-vms`, removes `D:\VMs_test\oracle_rac_shared\` |
+| cleanup | stop + delete | `stop-vms`, `delete-vms`, removes `C:\VMs_test\oracle_rac_shared\` |
 
 ---
 

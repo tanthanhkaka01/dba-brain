@@ -10,6 +10,7 @@ import datetime
 import re
 from dbabrain.lib import health_model, interval_rates
 from dbabrain.lib.coerce import as_epoch, as_float
+from dbabrain.reports import page_texts
 from dbabrain.reports.server_series import (
     OS_DISK_ACTIVITY_ITEMS,
     OS_DISK_NOT_A_VOLUME_ITEMS,
@@ -26,9 +27,17 @@ from dbabrain.reports.server_series import (
 # than 3 hours means collection itself has stopped — which is a finding, not a healthy server.
 STALE_AFTER_SECONDS = 3 * 3600
 
-# The health areas, in the order a DBA triages them. ``threshold`` states the rule that decided
-# the status; ``report_judged`` marks the two areas the collector deliberately does not alert on
-# (their SQL returns 'OK' on every branch), so the page must not pretend the collector agreed.
+# The health areas, in the order a DBA triages them. ``report_judged`` marks the areas the collector
+# deliberately does not alert on (their SQL returns 'OK' on every branch), so the page must not
+# pretend the collector agreed.
+#
+# **What an area is CALLED, the rule its tile prints and the note under it are not here** (0.39.0):
+# ``label``, ``threshold`` and ``note`` are the page's texts, in ``reports_config.json`` ->
+# ``page_texts.areas`` (``reports/page_texts.py``), each sayable per engine. They were literals in
+# this table, one wording for every engine - the Memory note explained page life expectancy to a
+# PostgreSQL host and the temporary-space tile was called TempDB on Oracle (the operator,
+# 2026-11-13: *fix what is hard-coded, the texts too*). What stays is the structure: which items
+# answer each area's question.
 #
 # ``selectors`` names **items**, not just metric codes, and their order is the area's priority.
 # Whole-code membership plus "take the largest number" produced four confident lies on one run:
@@ -51,35 +60,27 @@ STALE_AFTER_SECONDS = 3 * 3600
 # percent of ONE core (200% = two cores busy) and the collector judges none of it; its memory is
 # percent of the container's limit, WARNING at 90%.
 AREAS: list[dict] = [
-    {"key": "availability", "label": "Availability",
+    {"key": "availability",
      "selectors": [{"code": "INSTANCE_STATUS"}, {"code": "DATABASE_STATUS"},
-                   {"code": "DATABASE_SUSPECT_PAGES"}],
-     "threshold": "instance reachable; every database ONLINE",
-     "note": "If this is red the server is down or a database is not usable — nothing else matters first."},
-    {"key": "cpu", "label": "CPU",
+                   {"code": "DATABASE_SUSPECT_PAGES"}]},
+    {"key": "cpu",
      # Only the two items that are CPU. OS_CPU_USAGE also carries processor queue length and load
      # average; SYSTEM_CPU_MEMORY also carries two memory percentages.
      # A container's share of the CPUs it may use before its raw `docker stats` figure, which is
      # in CPUs (319% = 3.19 busy) and kept only for rows from before the share was collected.
+     # Its tile reads the hour, not the newest sample: one sample at 95% is a moment (2026-10-26).
      "selectors": [{"code": "OS_CPU_USAGE", "items": ("cpu_usage",)},
                    {"code": "SYSTEM_CPU_MEMORY", "items": ("cpu",)},
                    {"code": "DOCKER_CONTAINER_STATS", "item_suffix": (":cpu_share",), "units": "percent"},
-                   {"code": "DOCKER_CONTAINER_STATS", "item_suffix": (":cpu",), "units": "percent"}],
-     "threshold": "WARN ≥ 80% · CRITICAL ≥ 90% — the collector's severity, held for half of "
-                  "the last hour; the value is the hour's average",
-     "note": "Sustained high CPU makes every query slower; check the top process and the heaviest "
-             "queries. One sample at 95% is a moment, so the tile reads the hour (2026-10-26)."},
-    {"key": "memory", "label": "Memory",
+                   {"code": "DOCKER_CONTAINER_STATS", "item_suffix": (":cpu",), "units": "percent"}]},
+    {"key": "memory",
      "selectors": [{"code": "OS_MEMORY_USAGE", "items": ("memory_usage",)},
                    {"code": "SYSTEM_CPU_MEMORY", "items": ("system_memory", "sql_memory")},
                    {"code": "OS_MEMORY_USAGE", "items": ("swap_usage", "pagefile_usage")},
                    {"code": "PAGE_LIFE_EXPECTANCY"},
                    {"code": "DOCKER_CONTAINER_STATS", "item_suffix": (":memory",), "units": "percent"}],
-     "threshold": "WARN ≥ 85% · CRITICAL ≥ 95% used · PLE < 2000 s = pressure "
-                  "(report rule, on the last hour's average)",
-     "report_judged": True,
-     "note": "Low page life expectancy means the buffer pool is churning: pages are read from disk again and again."},
-    {"key": "disk_space", "label": "Disk space",
+     "report_judged": True},
+    {"key": "disk_space",
      # Mount points and file-fullness only. The throughput and queue-length rows of OS_DISK_USAGE
      # are storage *activity*; they have their own area below.
      "selectors": [{"code": "OS_DISK_USAGE",
@@ -93,74 +94,41 @@ AREAS: list[dict] = [
                    # are a file's size in MB and PostgreSQL's a database's size in bytes, and the
                    # tile printed "20000 MB" and "48803043007 bytes" as if they were fullness.
                    {"code": "STORAGE_DATA_FILE_SPACE", "units": "percent"},
-                   {"code": "LOG_FILE_SPACE", "units": "percent"}],
-     # Each collector's own rule, as the tile grades every one of them (audit 2026-11-05, B9): the
-     # host's OS collector, and SQL Server's by free space - which said only the first.
-     "threshold": "host: WARN ≥ 85% used · CRITICAL ≥ 95% used; SQL Server: WARN < 10% or 10 GB free · "
-                  "CRITICAL < 5% or 5 GB free",
-     "note": "A full data or log volume stops writes: the database goes read-only or the instance stalls."},
-    {"key": "disk_latency", "label": "Disk latency",
-     "selectors": [{"code": "PERFORMANCE_IO_LATENCY"}],
-     "threshold": "WARN ≥ 20 ms · CRITICAL ≥ 50 ms — report rule, the collector logs only. "
-                  "Over the last hour, from the stored counters",
-     "report_judged": True,
+                   {"code": "LOG_FILE_SPACE", "units": "percent"}]},
+    # Its threshold text states each collector's own rule, as the tile grades every one of them
+    # (audit 2026-11-05, B9): the host's OS collector, and SQL Server's by free space.
+    {"key": "disk_latency",
      # Until 2026-10-26 this was graded on the newest row: the average since the engine started,
      # which kept a stall eight days old CRITICAL. The window is dbabrain.lib.report_windows.
-     "note": "Latency above ~20 ms per I/O means storage, not SQL, is the bottleneck. Graded on "
-             "the last hour, from the file counters the store keeps; the latest interval and the "
-             "last 24 hours are printed beside it, and the average since the engine started is "
-             "printed and not graded."},
-    {"key": "storage_activity", "label": "Storage activity",
+     "selectors": [{"code": "PERFORMANCE_IO_LATENCY"}],
+     "report_judged": True},
+    {"key": "storage_activity",
      "selectors": [{"code": "OS_DISK_USAGE",
                     "items": OS_DISK_ACTIVITY_ITEMS}],
-     "threshold": "WARN queue length ≥ 2 per spindle, held for half of the last hour — "
-                  "throughput and IOPS are logged, not judged",
-     "note": "How hard the storage is being worked. A high queue with low throughput is a storage "
-             "limit; high throughput on its own is just a busy server.",
      "report_judged": True},
-    {"key": "blocking", "label": "Blocking", "empty_is_ok": True,
+    {"key": "blocking", "empty_is_ok": True,
      "selectors": [{"code": "LOCK_BLOCKING_SESSIONS"}, {"code": "LOCK_DEADLOCK_RECENT"},
-                   {"code": "LOCK_TRANSACTION_HOLDERS"}],
-     "threshold": "WARN any blocked session · CRITICAL ≥ 10 blocked or blocked ≥ 300 s",
-     "note": "One session holding a lock can stall an application entirely; find the head blocker."},
-    {"key": "long_queries", "label": "Long-running queries", "empty_is_ok": True,
+                   {"code": "LOCK_TRANSACTION_HOLDERS"}]},
+    {"key": "long_queries", "empty_is_ok": True,
      "selectors": [{"code": "QUERY_LONG_RUNNING"},
-                   {"code": "QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS"}],
-     "threshold": "WARN ≥ 900 s · CRITICAL ≥ 3600 s",
-     "note": "A query running for an hour is usually a missing index, a bad plan, or a runaway job."},
-    {"key": "backup", "label": "Backup",
+                   {"code": "QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS"}]},
+    {"key": "backup",
      # Deliberately has no selectors: this area is decided by the per-database backup policy in
      # dbabrain.lib.backup_policy, not by whichever backup row happens to carry the largest
      # number. "OK 3185 hours_since_last_backup" under a 48-hour threshold is what code-only
      # membership produced here.
      "selectors": [],
-     "policy": "backup",
-     "threshold": "per-database policy: required FULL/DIFF/LOG age from data/backup_policy.json",
-     "note": "Backup age is your worst-case data loss. A stale log backup means point-in-time "
-             "recovery is not possible for that database."},
-    {"key": "jobs", "label": "Failed jobs",
-     "selectors": [{"code": "JOB_FAILED"}, {"code": "SQL_AGENT_JOB_RUNTIME"}],
-     "threshold": "WARN any job failed since the last run",
-     "note": "A failed maintenance job is a backup, an index rebuild or a purge that silently did not happen."},
-    {"key": "tempdb", "label": "TempDB",
-     "selectors": [{"code": "STORAGE_TEMP_SPACE"}],
-     "threshold": "WARN ≥ 85% used and < 2 GB free · CRITICAL ≥ 95% used and < 1 GB free",
-     "note": "TempDB filling up fails sorts, hashes and version store — often a single bad query."},
-    {"key": "security", "label": "Security",
+     "policy": "backup"},
+    {"key": "jobs",
+     "selectors": [{"code": "JOB_FAILED"}, {"code": "SQL_AGENT_JOB_RUNTIME"}]},
+    {"key": "tempdb",
+     "selectors": [{"code": "STORAGE_TEMP_SPACE"}]},
+    {"key": "security",
      "selectors": [{"code": "SECURITY_FAILED_LOGINS"}, {"code": "SECURITY_LOGIN_HEALTH"},
-                   {"code": "SECURITY_CERTIFICATE_EXPIRY"}, {"code": "DATABASE_USER_PERMISSIONS"}],
-     "threshold": "no sustained failed logins · no password older than the collector's threshold "
-                  "· no certificate expiring",
-     "note": "Thousands of failed logins a day is a credential being guessed or an integration "
-             "retrying a dead one — and it fills the error log either way."},
-    {"key": "ha", "label": "HA / replication",
+                   {"code": "SECURITY_CERTIFICATE_EXPIRY"}, {"code": "DATABASE_USER_PERMISSIONS"}]},
+    {"key": "ha",
      "selectors": [{"code": "AVAILABILITY_DATABASE_HEALTH"}, {"code": "POSTGRES_REPLICATION"},
-                   {"code": "POSTGRES_REPLICATION_SLOTS"}, {"code": "POSTGRES_WAL_ARCHIVE"}],
-     "threshold": "every replica CONNECTED and SYNCHRONIZED / streaming",
-     "note": "A replica that stopped synchronising is not a replica: failover would lose data. "
-             "AVAILABILITY_DATABASE_HEALTH reads Availability Groups, database mirroring and log "
-             "shipping (2008 R2 too, since 0.30.0) — on a Failover Cluster Instance with none of "
-             "them it reports NOT_CONFIGURED, which is not an FCI health verdict."},
+                   {"code": "POSTGRES_REPLICATION_SLOTS"}, {"code": "POSTGRES_WAL_ARCHIVE"}]},
     # --- What an engine measures under its own name (0.28.0) --------------------------------
     #
     # The thirteen areas above are SQL Server's questions, and an Oracle or PostgreSQL page
@@ -183,67 +151,33 @@ AREAS: list[dict] = [
     # ``lowest_is_worst`` turns the last tie-break round: among rows of equal status these areas
     # show the *smallest* value, because the tablespace to look at is the one with the least free
     # space - "the fullest disk wins" is the same rule, read on a metric that counts what is left.
-    {"key": "oracle_processes", "label": "Sessions and processes", "only_when_collected": True,
-     "selectors": [{"code": "PROCESS_LIMIT"}, {"code": "PROCESS_DEAD_WEIGHT"}],
-     "threshold": "WARN ≥ 80% of the processes / sessions limit · CRITICAL ≥ 90% — dead weight: "
-                  "WARN ≥ 10% of the process limit held by killed sessions or orphaned threads · "
-                  "CRITICAL ≥ 20%",
-     "note": "At the limit Oracle refuses every new connection (ORA-00020). A killed session or a "
-             "thread with no session still holds its slot, so the ceiling can be reached by "
-             "sessions that do no work."},
-    {"key": "oracle_tablespaces", "label": "Tablespaces", "only_when_collected": True,
+    {"key": "oracle_processes", "only_when_collected": True,
+     "selectors": [{"code": "PROCESS_LIMIT"}, {"code": "PROCESS_DEAD_WEIGHT"}]},
+    {"key": "oracle_tablespaces", "only_when_collected": True,
      "lowest_is_worst": True,
-     "selectors": [{"code": "TABLESPACE_FREE_SPACE"}, {"code": "SEGMENT_EXTENT_LIMIT"}],
-     "threshold": "free space counting autoextend: WARN < 500 MB or < 5% · CRITICAL < 100 MB or "
-                  "< 2% — a segment at ≥ 90% of its extent limit is CRITICAL",
-     "note": "A tablespace with no room fails the next insert into anything stored in it "
-             "(ORA-01653); a segment at its extent limit fails the same way with space to spare."},
-    {"key": "oracle_sga", "label": "SGA memory", "only_when_collected": True,
+     "selectors": [{"code": "TABLESPACE_FREE_SPACE"}, {"code": "SEGMENT_EXTENT_LIMIT"}]},
+    {"key": "oracle_sga", "only_when_collected": True,
      "lowest_is_worst": True,
      # The shared pool's free memory only: the java and large pools are logged, not judged, and a
      # large pool at half a megabyte free is its normal state.
      "selectors": [{"code": "SHARED_POOL_FREE", "items": ("shared pool:free memory",)},
-                   {"code": "BUFFER_CACHE_HIT"}],
-     "threshold": "shared pool free: WARN < 25 MB · CRITICAL < 10 MB — buffer cache hit ratio: "
-                  "WARN < 90%",
-     "note": "A shared pool with nothing free ends in ORA-04031: statements can no longer be "
-             "parsed. A low buffer cache hit ratio means blocks are read from disk again and "
-             "again."},
-    {"key": "oracle_rollback", "label": "Rollback segments", "only_when_collected": True,
-     "selectors": [{"code": "ROLLBACK_SEGMENT_CONTENTION"}],
-     "threshold": "waits per get: WARN ≥ 1% · CRITICAL ≥ 5%",
-     "note": "Transactions queueing for a rollback segment header: there are too few segments "
-             "for the number of concurrent writers."},
-    {"key": "oracle_objects", "label": "Invalid objects", "only_when_collected": True,
+                   {"code": "BUFFER_CACHE_HIT"}]},
+    {"key": "oracle_rollback", "only_when_collected": True,
+     "selectors": [{"code": "ROLLBACK_SEGMENT_CONTENTION"}]},
+    {"key": "oracle_objects", "only_when_collected": True,
      "empty_is_ok": True,
-     "selectors": [{"code": "INVALID_OBJECTS"}, {"code": "INDEX_UNUSABLE"}],
-     "threshold": "WARN any invalid object · CRITICAL any unusable index",
-     "note": "Invalid code raises ORA-04068 when it is called, not when it broke; an unusable "
-             "index fails every DML on its table unless SKIP_UNUSABLE_INDEXES is on."},
-    {"key": "postgres_wraparound", "label": "Transaction ID wraparound",
+     "selectors": [{"code": "INVALID_OBJECTS"}, {"code": "INDEX_UNUSABLE"}]},
+    {"key": "postgres_wraparound",
      "only_when_collected": True,
-     "selectors": [{"code": "POSTGRES_XID_WRAPAROUND"}],
-     "threshold": "XID age: WARN ≥ 75% of autovacuum_freeze_max_age · CRITICAL ≥ 90%",
-     "note": "Past the freeze horizon PostgreSQL forces an aggressive vacuum, and at the hard "
-             "limit it stops accepting writes until one finishes. The oldest database decides."},
-    {"key": "postgres_vacuum", "label": "Vacuum and bloat", "only_when_collected": True,
-     "selectors": [{"code": "POSTGRES_VACUUM_HEALTH"}, {"code": "POSTGRES_TABLE_BLOAT"}],
-     "threshold": "dead tuples in one table: WARN ≥ 100,000 · CRITICAL ≥ 1,000,000 — bloat: WARN "
-                  "any table ≥ 20% dead with over 10,000 rows · CRITICAL ≥ 40%",
-     "note": "Dead tuples are space vacuum has not reclaimed: scans read them and indexes point "
-             "at them. A table that keeps growing here is one autovacuum cannot keep up with."},
-    {"key": "postgres_transactions", "label": "Long transactions", "only_when_collected": True,
+     "selectors": [{"code": "POSTGRES_XID_WRAPAROUND"}]},
+    {"key": "postgres_vacuum", "only_when_collected": True,
+     "selectors": [{"code": "POSTGRES_VACUUM_HEALTH"}, {"code": "POSTGRES_TABLE_BLOAT"}]},
+    {"key": "postgres_transactions", "only_when_collected": True,
      "empty_is_ok": True,
-     "selectors": [{"code": "POSTGRES_LONG_TRANSACTIONS"}],
-     "threshold": "a transaction open: WARN ≥ 5 minutes · CRITICAL ≥ 30 minutes",
-     "note": "An open transaction holds back vacuum for the whole cluster and keeps its locks; "
-             "idle in transaction is the usual culprit."},
-    {"key": "postgres_indexes", "label": "Invalid indexes", "only_when_collected": True,
+     "selectors": [{"code": "POSTGRES_LONG_TRANSACTIONS"}]},
+    {"key": "postgres_indexes", "only_when_collected": True,
      "empty_is_ok": True,
-     "selectors": [{"code": "POSTGRES_INVALID_INDEXES"}],
-     "threshold": "CRITICAL any index left invalid or not ready",
-     "note": "An invalid index is what a failed CREATE INDEX CONCURRENTLY leaves behind: it is "
-             "maintained on every write and used by no query. Drop it and build it again."},
+     "selectors": [{"code": "POSTGRES_INVALID_INDEXES"}]},
 ]
 
 #: Every metric code any area selects. ``build_problems`` uses it to find an entry's area.
@@ -252,77 +186,69 @@ AREA_CODES: dict[str, list[str]] = {
 }
 
 # What to do about it. Keyed by metric code; the area falls back to its own note.
-ACTIONS: dict[str, str] = {
-    "INSTANCE_STATUS": "Check the service is running and the port is reachable from the collector.",
-    # Its own action, because since it joined the CPU and Memory areas the fallback would be the
-    # CPU note - and a container that stopped or keeps restarting is not a CPU problem.
-    "DOCKER_CONTAINER_STATS": "Check the container on its docker host (`docker ps -a`, `docker logs "
-                              "<name>`): one that stopped or keeps restarting takes its database "
-                              "with it; memory near its limit is the limit to raise or the query "
-                              "to find.",
-    "QUERY_STORE_COVERAGE": "Query Store is off on these databases, so a slowdown cannot be "
-                            "diagnosed after the fact. Turn it on (READ_WRITE) where the workload "
-                            "matters; this is a configuration finding, reported once a morning.",
-    "OS_TCP_PORT_STATUS": "A configured port is not answering where clients connect. CLOSED means "
-                          "nothing is listening — check the service that owns the port. "
-                          "LOOPBACK_ONLY means it listens on 127.0.0.1 but not on the host address, "
-                          "so it is up and still unreachable: fix the bind address. OPEN with a "
-                          "WARNING means the socket accepts but TLS or HTTP did not answer — read "
-                          "the probe detail in the message.",
-    "LINKED_SERVER_STATUS": "See the Linked servers table below: it says, per server, whether to "
-                            "keep, fix or drop it, and which machine the fix belongs on.",
-    "DATABASE_STATUS": "A database is not ONLINE: check the error log, then bring it online or restore it.",
-    "DATABASE_SUSPECT_PAGES": "Suspect pages mean corruption: restore the affected pages or blocks from "
-                              "backup, then check the whole database - DBCC CHECKDB on SQL Server, RMAN "
-                              "VALIDATE on Oracle, amcheck on PostgreSQL.",
-    "OS_CPU_USAGE": "Find the top process (below) and the heaviest queries; check for a runaway job.",
-    "OS_MEMORY_USAGE": "Check max server memory against host RAM and what else runs on this host.",
-    "OS_DISK_USAGE": "Free space or extend the volume before writes stop.",
-    "STORAGE_DISK_FREE_SPACE": "Free space or extend the volume before writes stop.",
-    "STORAGE_TEMP_SPACE": "Find the query spilling to TempDB; consider more/larger TempDB files.",
-    "PERFORMANCE_IO_LATENCY": "Storage is slow: check the datastore, and whether one file is hotter than the rest.",
-    "PAGE_LIFE_EXPECTANCY": "Buffer pool is churning: review max server memory, missing indexes and plan-cache bloat.",
-    "LOCK_BLOCKING_SESSIONS": "Find the head blocker and decide whether to wait for it or kill it.",
-    "LOCK_DEADLOCK_RECENT": "Review the deadlock graph; usually two statements taking locks in a different order.",
-    "QUERY_LONG_RUNNING": "Identify the query and its plan; kill it if it is a runaway, index it if it is not.",
-    "BACKUP_AGE": "Check the backup job and the recovery model; run a fresh backup and re-establish the log chain.",
-    "BACKUP_LAST_RESULT": "The last backup did not succeed: read the job history before trusting any restore.",
-    "JOB_FAILED": "Read the job history: a failed job is work that silently did not happen.",
-    "AVAILABILITY_DATABASE_HEALTH": "A replica, mirror or log-shipped secondary is behind: failover would lose data. "
-                                    "Check the endpoint and the send queue, or the log shipping backup, copy and "
-                                    "restore jobs.",
-    "POSTGRES_REPLICATION": "A standby is not streaming: check its connection, slot and WAL retention.",
-    "OS_SERVICE_STATUS": "Start the service and find out why it stopped (event log, recovery settings).",
-    "OS_EVENTLOG_CRITICAL": "Read the errors in the Windows event log — they usually name the cause.",
-    "SECURITY_FAILED_LOGINS": "Find the source host of the attempts, then fix or disable the principal. "
-                              "Sustained failures are an attack or a dead credential being retried.",
-    "SECURITY_LOGIN_HEALTH": "Rotate the logins whose password is past the threshold, starting with sa "
-                             "and anything holding db_owner.",
-    "SECURITY_CERTIFICATE_EXPIRY": "Renew before it expires: an expired certificate breaks encrypted "
-                                   "connections and backup encryption.",
-    "DATABASE_USER_PERMISSIONS": "Review who holds db_owner on this database; remove what is not needed.",
-    # Without these the row fell back to "Check the metric detail below." — which is what the
-    # reader was already doing, and is not an action.
-    "MAINTENANCE_STATISTICS_AGE": "Statistics this old give the optimizer a wrong row estimate: "
-                                  "run UPDATE STATISTICS, and check whether the statistics job is disabled.",
-    "MAINTENANCE_INDEX_FRAGMENTATION": "Rebuild or reorganize the index; if many are drifting, the "
-                                       "index-maintenance job is not running.",
-    "DATABASE_CONSTRAINT_HEALTH": "An untrusted or disabled constraint no longer guarantees the data "
-                                  "and the optimizer stops using it: re-check it WITH CHECK.",
-    "LOG_RECENT_CRITICAL": "Read the SQL Server error log around that time — the entry names the cause.",
-    "LOG_FILE_SPACE": "The log file is nearly full: back up the log (or check log_reuse_wait) before "
-                      "it grows or writes stop.",
-    "LOG_REUSE_WAIT": "This is why the log cannot truncate. LOG_BACKUP means no log backup is running "
-                      "on a FULL-recovery database.",
-    "QUERY_LONG_WAITING_OR_ROLLBACK_REQUESTS": "A request stuck waiting or rolling back holds its locks: "
-                                               "find what it waits on before killing it — rollback cannot be hurried.",
-    "OS_REBOOT_PENDING": "A pending reboot leaves patches half-applied; schedule it with the application owner.",
-    "INSTANCE_CONNECTIONS": "Session count is unusually high: check for an application not closing "
-                            "connections, or a pool sized larger than the server can serve.",
-    "STORAGE_DATA_FILE_SPACE": "The data file is near its allocated size: grow it deliberately rather "
-                               "than letting autogrowth stall a transaction.",
-    "DATABASE_CHECKDB": "No last-known-good CHECKDB: run DBCC CHECKDB — corruption is only found by looking.",
-}
+#: What to do about a metric is the metric's own text, in ``metric_definitions.json`` -
+#: ``report_policy.action``, with ``action_by_platform`` / ``action_by_db_type`` where the right
+#: words differ by operating system or engine. It was a table in this module keyed by the code
+#: alone, so one sentence was shown on every platform: a Linux host with errors in its journal was
+#: told to read the Windows event log, on its own page and in the fleet page's card for a group
+#: holding both (the operator, 2026-11-13: *the VM is Ubuntu - why the Windows event log? fix
+#: what is hard-coded, the texts too*).
+GENERIC_ACTION = "Check the metric detail below."
+
+#: The words a group of servers on several platforms is told apart by.
+PLATFORM_NAMES = {"windows": "Windows", "linux": "Linux"}
+
+_METRIC_ACTIONS: dict[str, dict] | None = None
+
+
+def _texts(value: object) -> dict[str, str]:
+    """``{key: sentence}`` from an ``action_by_*`` object - lower-cased keys, empty sentences dropped."""
+    if not isinstance(value, dict):
+        return {}
+    return {str(key).strip().lower(): str(text).strip() for key, text in value.items() if str(text or "").strip()}
+
+
+def metric_actions(path=None) -> dict[str, dict]:
+    """``{code: {"action", "by_platform", "by_db_type"}}`` from each metric's ``report_policy``, cached.
+
+    Best-effort, as every reader of the catalog here is: without the file a problem row falls back
+    to its area's note rather than failing the page.
+    """
+    global _METRIC_ACTIONS
+    if _METRIC_ACTIONS is not None and path is None:
+        return _METRIC_ACTIONS
+    from dbabrain.lib import data_sources
+    from dbabrain.reports.server_series import METRIC_DEFINITIONS
+
+    found: dict[str, dict] = {}
+    try:
+        for definition in data_sources.load_metric_definition_records(path or METRIC_DEFINITIONS):
+            policy = definition.get("report_policy") if isinstance(definition.get("report_policy"), dict) else {}
+            entry = {"action": str(policy.get("action") or "").strip(),
+                     "by_platform": _texts(policy.get("action_by_platform")),
+                     "by_db_type": _texts(policy.get("action_by_db_type"))}
+            code = str(definition.get("metric_code") or "")
+            if code and (entry["action"] or entry["by_platform"] or entry["by_db_type"]):
+                found[code] = entry
+    except (OSError, ValueError, AttributeError):
+        found = {}
+    if path is None:
+        _METRIC_ACTIONS = found
+    return found
+
+
+def _platform_key(platform: object) -> str:
+    """``windows`` / ``linux`` from what a collector or the inventory said (``Linux``, ``windows``), else ``""``."""
+    text = str(platform or "").strip().lower()
+    return text if text in PLATFORM_NAMES else ""
+
+
+def _engine_key(db_type: object) -> str:
+    """The engine's key as the definitions spell it (``postgres`` -> ``postgresql``); ``""`` for a bare host."""
+    from dbabrain.lib import engine_sections
+
+    key = engine_sections.section_of(db_type) if str(db_type or "").strip() else ""
+    return key if key not in ("host", "other") else ""
 
 
 def series_severity(entry: dict) -> str:
@@ -397,7 +323,8 @@ def area_members(spec: dict, series: list[dict]) -> list[tuple[int, dict]]:
 
 
 def build_areas(series: list[dict], *, backup: dict | None = None,
-                freshness: dict | None = None, workload: dict | None = None) -> list[dict]:
+                freshness: dict | None = None, workload: dict | None = None,
+                db_type: object = "", platform: object = "") -> list[dict]:
     """Current state of each health area: the worst thing in it, its value, and the rule.
 
     Selection is ``(severity, downgraded severity, selector priority, value)`` in that order.
@@ -427,7 +354,10 @@ def build_areas(series: list[dict], *, backup: dict | None = None,
 
     areas = []
     for spec in AREAS:
-        base = {key: spec[key] for key in ("key", "label", "threshold", "note")}
+        # The area's own words, as they are said for this server's engine (page_texts.areas).
+        base = {"key": spec["key"], **{field: page_texts.area_text(spec["key"], field, db_type=db_type,
+                                                                   platform=platform)
+                                       for field in ("label", "threshold", "note")}}
         base["reportJudged"] = bool(spec.get("report_judged"))
         if spec.get("policy") == "backup":
             areas.append({**base, **_backup_area_state(backup)})
@@ -825,13 +755,44 @@ def _backup_area_state(backup: dict | None) -> dict:
 _age_hint = health_model.age_hint
 
 
-def metric_action(code: str) -> str:
-    """What to do about ``code``, falling back to its area's note. Shared with the fleet page."""
+def metric_action_for(code: str, *, platform: object = "", db_type: object = "") -> tuple[str, str]:
+    """``(what to do, whom it is for)`` for ``code`` on a server of that operating system and engine.
+
+    The engine's own sentence first, then the operating system's, then the metric's general one,
+    then its area's note. *Whom it is for* is the platform or engine a specific sentence was chosen
+    by (``Linux``, ``SQL Server``) and ``""`` for a general one - what the fleet page labels the
+    sentences with when one card holds servers of several.
+
+    A metric whose only sentences are per platform, on a server whose platform nobody read, gets
+    every one of them, each named: the page does not guess which applies.
+    """
+    from dbabrain.lib import engine_sections
+
+    stated = metric_actions().get(code) or {}
+    engine, system = _engine_key(db_type), _platform_key(platform)
+    if engine and stated.get("by_db_type", {}).get(engine):
+        return stated["by_db_type"][engine], engine_sections.section_label(engine)
+    if system and stated.get("by_platform", {}).get(system):
+        return stated["by_platform"][system], PLATFORM_NAMES[system]
+    if stated.get("action"):
+        return stated["action"], ""
+    every = [f"{PLATFORM_NAMES.get(key, key)}: {sentence}" for key, sentence in sorted(stated.get("by_platform", {}).items())]
+    every += [f"{engine_sections.section_label(key)}: {sentence}"
+              for key, sentence in sorted(stated.get("by_db_type", {}).items())]
+    if every:
+        return " ".join(every), ""
     area = next((spec for spec in AREAS if code in AREA_CODES[spec["key"]]), None)
-    return ACTIONS.get(code) or (area or {}).get("note") or "Check the metric detail below."
+    note = page_texts.area_text(area["key"], "note", db_type=db_type, platform=platform) if area else ""
+    return note or GENERIC_ACTION, ""
 
 
-def build_problems(series: list[dict], *, now: int | None = None) -> list[dict]:
+def metric_action(code: str, *, platform: object = "", db_type: object = "") -> str:
+    """What to do about ``code`` on that platform and engine. Shared with the fleet page."""
+    return metric_action_for(code, platform=platform, db_type=db_type)[0]
+
+
+def build_problems(series: list[dict], *, now: int | None = None, platform: object = "",
+                   db_type: object = "") -> list[dict]:
     """What is not OK right now, **grouped by metric**, worst first, each saying what to do.
 
     The grouping itself lives in :func:`dbabrain.lib.health_model.group_findings`, because the
@@ -851,11 +812,17 @@ def build_problems(series: list[dict], *, now: int | None = None) -> list[dict]:
             "message": (f"{entry['windowSummary']} | {entry.get('message', '')}"
                         if entry.get("windowSummary") else entry.get("message", "")),
             "lastText": entry.get("lastText", ""),
-            "action": metric_action(entry["code"]),
+            **_action_fields(entry["code"], platform=platform, db_type=db_type),
             "collectedAt": entry.get("lastAt"),
         }
         for entry in series
     ], now=now)
+
+
+def _action_fields(code: str, *, platform: object, db_type: object) -> dict:
+    """A finding's ``action`` and ``actionFor`` - the sentence for this server, and whom it was chosen for."""
+    sentence, whom = metric_action_for(code, platform=platform, db_type=db_type)
+    return {"action": sentence, "actionFor": whom}
 
 
 def build_timeline(series: list[dict], *, limit: int = 14) -> list[dict]:

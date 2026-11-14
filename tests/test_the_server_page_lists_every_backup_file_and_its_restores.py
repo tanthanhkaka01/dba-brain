@@ -221,7 +221,8 @@ def test_the_section_draws_sizes_in_bytes_and_both_filters(catalog):
     assert 'data-key="type"' in page and "<option>FULL</option>" in page and "<option>LOG</option>" in page
     assert 'data-key="use"' in page and 'value="ok"' in page and 'value="never"' in page
     assert re.search(r'data-type="FULL" data-use="ok"', page) and re.search(r'data-type="LOG" data-use="never"', page)
-    assert "RESTORE OK" in page and TARGET in page
+    # The file's own word since 0.39.0 (the operator: *restore done, fail with its reason*).
+    assert "restore done" in page and "RESTORE OK" not in page and TARGET in page
     assert "Backup &amp; restore files" in page and page.count("<table") == 1, "one report, not two"
 
 

@@ -117,8 +117,10 @@ def test_every_job_of_an_entry_carries_its_offload(tmp_path):
     path = tmp_path / "restore_config.json"
     path.write_text(json.dumps({"backup_restore": {"backups": [{
         "backup_id": "B", "server_id": "S", "db_type": "sqlserver", "backup_dir": "/b", **ON,
-        "jobs": [{"job": "full", "script": "x.sh", "cleanup_retention": 86400, "time_window": {"repeat_interval": 3600}},
-                 {"job": "log", "script": "x.sh", "cleanup_retention": 86400, "time_window": {"repeat_interval": 900}}]}]}}),
+        "jobs": [{"job": "full", "script": "x.sh", "cleanup_retention": 86400,
+                  "time_window": {"repeat_interval": 3600, "timeout": 3600}},
+                 {"job": "log", "script": "x.sh", "cleanup_retention": 86400,
+                  "time_window": {"repeat_interval": 900, "timeout": 3600}}]}]}}),
         encoding="utf-8")
     jobs = backup_module.load_backup_jobs(path)
     assert [(j.job, j.offload.server_id, j.offload.folder) for j in jobs] == [

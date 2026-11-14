@@ -203,7 +203,9 @@ _MEMORY_ROWS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("sql_physical_memory_in_use_kb", "Held by the SQL Server process", "kb", ""),
         ("available_physical_kb", "Available to the host", "kb", "min"),
         ("total_physical_kb", "Installed on the host", "kb", ""),
-        ("system_low_memory_signal", "Windows asked for memory back", "flag", "max"),
+        # The operating system's low-memory signal (sys.dm_os_sys_memory): it said "Windows" on a
+        # SQL Server running on Linux too (0.39.0, 1.368).
+        ("system_low_memory_signal", "The operating system asked for memory back", "flag", "max"),
         ("process_physical_memory_low", "Process reported low memory", "flag", "max"),
     ]),
 ]

@@ -29,6 +29,7 @@ from __future__ import annotations
 from dbabrain.lib import errors
 from dbabrain.lib import consistency_check
 import posixpath
+import re
 import sys
 import time
 
@@ -41,11 +42,15 @@ from pathlib import Path
 
 from typing import Any
 
+from dbabrain.backup_restore import restore_messages
 from dbabrain.backup_restore.events import announce
 from dbabrain.transport import common_cli
 from dbabrain.lib import integrity as restore_integrity
 from dbabrain.lib import instance_bundle
 from dbabrain.lib import response
+from dbabrain.lib.restore import landing as restore_landing
+from dbabrain.lib.restore import stated as restore_stated
+from dbabrain.lib.restore import windows as windows_target
 from dbabrain.lib import sqlserver_certificate
 
 
@@ -75,6 +80,14 @@ def _host_block(job: Any, *, data_dir: Any, load_secrets: Any = None) -> dict[st
     The block used to carry a key file or nothing, so every PostgreSQL and Oracle restore onto a
     password-login machine failed at planning, "open_ssh_client needs either a password or a
     key_filename" (the lab drill, 2026-09-24); the key-login cloud hosts never showed it.
+
+    **A Windows target** (0.39.0): the target's inventory record says ``platform: windows`` and the
+    entry names no container - SQL Server running natively there, reached over Windows OpenSSH. The
+    block's runtime is then ``windows`` (PowerShell, never ``sudo``), read from the record and never
+    guessed from a path. What that shape cannot do is refused here, before anything is copied:
+    another engine, a container, a WinRM-only host, a staging that is not a drive path
+    (:func:`dbabrain.lib.restore.windows.refusal`) - and the other way round, a drive path on a target
+    whose record does not say windows.
     """
     from dbabrain.backup_restore.backup import resolve_ssh_target
 
@@ -86,13 +99,25 @@ def _host_block(job: Any, *, data_dir: Any, load_secrets: Any = None) -> dict[st
         target_server_id, label=job.label,
         data_dir=data_dir, require_container=False,
     )
-    block: dict[str, Any] = {
-        "runtime": "docker" if job.target_container else "linux",
-        "host": target.host, "port": target.port, "username": target.username,
-        # Reaching docker on these hosts needs it, and guessing is how a restore fails with
-        # "permission denied while trying to connect to the Docker daemon socket".
-        "sudo": True,
-    }
+    windows = str(getattr(target, "platform", "") or "").strip().lower() == windows_target.PLATFORM
+    staging = {"target_dir": getattr(job, "target_backup_dir", ""), "visible_dir": getattr(job, "target_visible_dir", "")}
+    why = (windows_target.refusal(db_type=getattr(job, "db_type", ""), access=getattr(target, "access", "ssh"),
+                                  container=getattr(job, "target_container", ""), **staging)
+           if windows else windows_target.linux_refusal(**staging))
+    if why:
+        raise RestoreByIdError(f"{job.restore_id} cannot restore onto {target_server_id}: {why} Nothing was copied.")
+    if windows:
+        # No sudo: there is none on Windows, and the engine is the host's own service, not a container.
+        block: dict[str, Any] = {"runtime": windows_target.PLATFORM, "access": "ssh",
+                                 "host": target.host, "port": target.port, "username": target.username}
+    else:
+        block = {
+            "runtime": "docker" if job.target_container else "linux",
+            "host": target.host, "port": target.port, "username": target.username,
+            # Reaching docker on these hosts needs it, and guessing is how a restore fails with
+            # "permission denied while trying to connect to the Docker daemon socket".
+            "sudo": True,
+        }
     if target.key_file:
         from dbabrain.lib.data_sources import resolve_ssh_key
 
@@ -104,6 +129,18 @@ def _host_block(job: Any, *, data_dir: Any, load_secrets: Any = None) -> dict[st
     if job.target_container:
         block["container"] = job.target_container
     return block
+
+
+def _engine_dir(directory: str, host: dict[str, Any]) -> str:
+    """The staged directory in the form the ENGINE names files: on Windows, with backslashes.
+
+    SQL Server lists the folder (``sys.dm_os_enumerate_filesystem``) and reads every backup by this
+    path, and on Windows it names its own files ``C:\\...``; the entry states the staging with forward
+    slashes, the form every hop to the host takes. Elsewhere unchanged.
+    """
+    if host.get("runtime") == windows_target.PLATFORM:
+        return windows_target.sql_server_path(directory, field="target_visible_dir")
+    return directory
 
 
 def _visible_dir(job: Any) -> str:
@@ -249,27 +286,93 @@ def _logs_through(files: list[dict[str, Any]], moment: str) -> list[dict[str, An
     asked, and reported success (the point-in-time drill, 2026-09-25). Compared in the server's
     clock, as the listing's own window is.
     """
-    from dbabrain.lib.restore.moment import MomentError, server_clock_text
-
-    def clock(text: str) -> str:
-        head, dot, rest = str(text or "").strip().partition(".")
-        text = head + rest.lstrip("0123456789") if dot and len(head) >= 19 else str(text or "").strip()
-        try:
-            return server_clock_text(text[:-1] + "+00:00" if text.endswith("Z") else text)
-        except MomentError:
-            return text.replace("T", " ")[:19]
-
-    bound = clock(moment)
+    bound = _server_clock(moment)
     kept: list[dict[str, Any]] = []
     for item in files:  # oldest first, as the listing returns them
         kept.append(item)
-        if item.get("finished_at") and clock(item["finished_at"]) > bound:
+        if item.get("finished_at") and _server_clock(item["finished_at"]) > bound:
             break
     return kept
 
 
+def _server_clock(text: str) -> str:
+    """A moment or a listing's time in the server's clock, comparable as text."""
+    from dbabrain.lib.restore.moment import MomentError, server_clock_text
+
+    head, dot, rest = str(text or "").strip().partition(".")
+    text = head + rest.lstrip("0123456789") if dot and len(head) >= 19 else str(text or "").strip()
+    try:
+        return server_clock_text(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except MomentError:
+        return text.replace("T", " ")[:19]
+
+
+#: A backup file's own UTC stamp, as dbabrain's scripts name it: ``..._YYYYMMDD_HHMMSSZ.<ext>``.
+_UTC_STAMP_IN_NAME = re.compile(r"_(\d{8})_(\d{6})Z\.")
+
+
+def source_offset_minutes(files: list[dict[str, Any]]) -> int | None:
+    """The source server's UTC offset, in minutes, read off its own backup files (0.39.0, 1.363).
+
+    A SQL Server backup's header times (``BackupFinishDate``) and its log records are in the SOURCE
+    instance's clock, and STOPAT is read in that clock. The restore used to hand them the moment in
+    UTC - the target's clock - so from a Windows server on +07 every point in time landed seven hours
+    early: found 2026-11-13 by the random point-in-time test (the restore to *now* stopped at the log of
+    seven hours before and said done; a moment soon after the first full found no full before it).
+
+    dbabrain's scripts name each file by its start in UTC (``_YYYYMMDD_HHMMSSZ``), so a file's header
+    end minus its name is its duration plus the offset; a log backup lasts seconds, so the smallest
+    such difference, to the nearest quarter hour, is the offset. ``None`` when no file carries a UTC
+    stamp - a backup another tool wrote - and the moment is then read in the target's clock, as before.
+    """
+    from datetime import datetime
+
+    diffs = []
+    for item in files:
+        found = _UTC_STAMP_IN_NAME.search(str(item.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1])
+        finished = str(item.get("finished_at") or "")[:19].replace("T", " ")
+        if not found or len(finished) < 19:
+            continue
+        try:
+            stamp = datetime.strptime(found.group(1) + found.group(2), "%Y%m%d%H%M%S")
+            local = datetime.strptime(finished, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        diffs.append((local - stamp).total_seconds() / 60)
+    if not diffs:
+        return None
+    return int(round(min(diffs) / 15) * 15)
+
+
+def in_source_clock(moment: str, offset_minutes: int | None) -> str:
+    """``moment`` as ``YYYY-MM-DD HH:MM:SS`` in the source's clock; unchanged when its offset is unknown."""
+    if not moment or offset_minutes is None:
+        return moment
+    from dbabrain.lib.restore.moment import server_clock_text
+
+    return server_clock_text(moment, server_utc_offset_hours=offset_minutes / 60)
+
+
+def past_the_newest(files: list[dict[str, Any]], moment: str) -> str:
+    """The newest file's end when ``moment`` lies at or after it, else ``""`` (0.39.0, 1.363).
+
+    The operator, 2026-11-13: *restore must be able to restore to a point in time; the newest is a point
+    in time of now.* A moment after the newest log is that log's end - nothing after it is in a backup -
+    and asked for as a STOPAT it broke the restore: SQL Server leaves the database RESTORING when the
+    last log ends before its STOPAT (Msg 4326), PostgreSQL 13+ stops with "recovery ended before
+    configured recovery target was reached". So the chain is replayed to its end, and the answer says
+    where that is.
+    """
+    ends = [str(item.get("finished_at")) for item in files if item.get("finished_at")]
+    if not moment or not ends:
+        return ""
+    newest = max(ends, key=_server_clock)
+    return newest if _server_clock(newest) <= _server_clock(moment) else ""
+
+
 def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
-                    host: dict[str, Any], data_dir: Any, dry_run: bool = False) -> list[dict[str, Any]]:
+                    host: dict[str, Any], data_dir: Any, dry_run: bool = False,
+                    resume: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     _UNREADABLE.clear()  # this plan's listings only - never a previous restore's
     # The login is stated (rules R50, G2.11): it ran as `sa` when the entry said nothing until
     # 0.27.0, with a warning in the answer. The loader refuses such an entry; this is the same rule
@@ -279,7 +382,8 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
         raise RestoreByIdError(
             f"{job.restore_id}: env.MSSQL_USER is not stated - the restore would log in as sa; "
             "state it - a record without it is refused (rules R50, G2.11).")
-    directory = _visible_dir(job)
+    stated_dir = _visible_dir(job)
+    directory = _engine_dir(stated_dir, host)
     target = {
         "host": host["host"], "port": _sqlserver_port(job, data_dir=data_dir),
         "username": username,
@@ -300,22 +404,53 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
         # it no longer replaces a target's own certificate of the same name. A dry run changes
         # nothing, so there it stays a planned step - and its listing may fail for this reason.
         steps.append(_key_from_vault(job, name=name, password=cert_password, target=target, host=host,
-                                     directory=directory, dry_run=dry_run))
+                                     directory=stated_dir, dry_run=dry_run))
 
     base = {"db_type": "sqlserver", "path": directory, "target": target}
-    databases = [d for d in (job.env.get("MSSQL_DATABASES", "") or "").split(",") if d.strip()]
-    if not databases:
+    # Which databases, and the name each lands under - the entry's own statement (0.39.0, 1.362). It
+    # used to be env.MSSQL_DATABASES, and with none named, whatever FULL the folder held.
+    try:
+        landing = restore_landing.require_landing(getattr(job, "landing", None),
+                                                  label=f"restore_id={job.restore_id}")
+    except restore_landing.LandingError as exc:
+        raise RestoreByIdError(str(exc)) from exc
+    found_names: list[str] = []
+    if landing.all_databases:
         found = _list_backup_files({**base, "kinds": ["full"]})
-        databases = sorted({f["database_name"] for f in found["files"] if f["database_name"]})
-    if not databases:
+        found_names = sorted({f["database_name"] for f in found["files"] if f["database_name"]})
+    names = restore_landing.landing_names(landing, found_names)
+    if not names:
         raise RestoreByIdError(f"{job.restore_id}: no databases found under {directory}.")
 
-    for database in databases:
+    asked = point_in_time
+    for database, lands_as in names:
+        # Listed by the name the BACKUP carries; restored as the name the entry states.
         scoped = {**base, "database_name": database}
+        named = database if database.lower() == lands_as.lower() else f"{database} (as {lands_as})"
+        resumed = (resume or {}).get(lands_as.lower())
+        if resumed and resumed.get("complete"):
+            # This entry's unfinished run already restored it to its end and opened it (1.372): a
+            # recovered database takes no more of a chain, so it is kept as it is, said, and held to
+            # where THAT run was to stop - while the databases the run never finished go on.
+            steps.append({"op": "continued", "continued": {
+                "database_name": lands_as, "source_database": database, "complete": True,
+                "from_run": resumed.get("restore_run_id"), "after_file": resumed.get("file_name"),
+                "after": resumed.get("after")}})
+            steps.append({"op": "expect", "expect": {
+                "database_name": lands_as, "source_database": database,
+                "moment": str(resumed.get("stopat") or ""), "stopat": bool(resumed.get("stopat")),
+                "chain_ends": str(resumed.get("after") or ""), "files": 0}})
+            continue
+        if asked:
+            # The moment in the SOURCE's clock (1.363): the clock the headers, the log records and
+            # STOPAT are in. Read per database - one entry, one server, but each from its own files.
+            point_in_time = in_source_clock(asked, source_offset_minutes(
+                _list_backup_files({**scoped, "kinds": ["log"]})["files"]))
         full = _list_backup_files({**scoped, "kinds": ["full"], "latest": True,
                                   **({"before": point_in_time} if point_in_time else {})})
         if not full["files"]:
-            raise RestoreByIdError(f"{job.restore_id}: no full backup for {database}.")
+            raise RestoreByIdError(f"{job.restore_id}: no full backup for {database}"
+                                   + (f" at or before {point_in_time}" if point_in_time else "") + ".")
         anchor = full["newest_finished_at"]
         diff = _list_backup_files({**scoped, "kinds": ["diff"], "latest": True, "after": anchor,
                                   **({"before": point_in_time} if point_in_time else {})})
@@ -328,31 +463,88 @@ def _plan_sqlserver(job: Any, secrets: dict[str, str], *, point_in_time: str,
         broken = restore_integrity.sqlserver_chain_break(
             full["files"][0], diff["files"][0] if diff["files"] else None, logs["files"])
         if broken:
-            raise RestoreByIdError(f"{job.restore_id}: {database}: the backup chain is broken - {broken}. "
+            raise RestoreByIdError(f"{job.restore_id}: {named}: the backup chain is broken - {broken}. "
                                    "Nothing was restored.")
+
+        # A database this entry's own failed run left RESTORING goes on from the file after the last
+        # one the TARGET says it applied (1.372) - when that file is in the chain to restore now. A
+        # chain that has moved on (a newer full or differential) cannot take it up: said, not guessed.
+        chain = [full["files"][0]] + ([diff["files"][0]] if diff["files"] else []) + list(logs["files"])
+        skip = 0
+        if resumed:
+            at = next((index for index, item in enumerate(chain)
+                       if _clock(item.get("finished_at")) == str(resumed.get("after") or "")), None)
+            if at is None or at >= len(chain) - 1:
+                raise RestoreByIdError(
+                    f"{job.restore_id}: {named}: the target holds it RESTORING - run {resumed.get('restore_run_id')} "
+                    f"of this entry stopped after {resumed.get('file_name')} - and "
+                    + ("that file is not in the chain to restore now (a newer full or differential has been "
+                       "taken since)" if at is None else "nothing of its chain is left to apply")
+                    + ". It cannot be continued: drop the unfinished database on the target, or state "
+                      "overwrite_existing: true to restore over it. Nothing was restored.")
+            skip = at + 1
+            steps.append({"op": "continued", "continued": {
+                "database_name": lands_as, "source_database": database, "complete": False,
+                "from_run": resumed.get("restore_run_id"), "after_file": resumed.get("file_name"),
+                "after": resumed.get("after"), "skipped": skip, "left": len(chain) - skip}})
+        log_files = list(logs["files"])[max(0, skip - 1 - (1 if diff["files"] else 0)):]
 
         # NORECOVERY on everything but the last step: a database recovered early cannot take the
         # rest of its chain, and the only fix is to start the whole restore again.
         tail = "log" if logs["files"] else ("diff" if diff["files"] else "full")
-        steps.append({"op": "restore-full", "request": {
-            "db_type": "sqlserver", "database_name": database, "target": target,
+        steps.append({"op": "restore-full", "source_database": database, "chain": [full["files"][0]], "request": {
+            "db_type": "sqlserver", "database_name": lands_as, "target": target,
             "backup_path": full["files"][0]["path"], "with_recovery": tail == "full",
-            # The entry's word: a database ONLINE on the target is refused without it (G2.10).
-            # Never over an ONLINE database while a lockdown is on (1.220): the step then refuses it.
+            # Onto another server, always (0.39.0, 1.354): the backup names its source's paths -
+            # a Windows server's D:\ on a Linux target - so every file goes to the target's folders.
+            "relocate": {},
+            # The entry's word: a name the target already holds - in any state - is refused without it
+            # (G2.10; any state since 0.39.0, 1.362). Never while a lockdown is on (1.220): the step
+            # then refuses it.
             "overwrite_existing": bool(job.overwrite_existing) and not _locked()}})
-        if diff["files"]:
-            steps.append({"op": "restore-diff", "request": {
-                "db_type": "sqlserver", "database_name": database, "target": target,
-                "backup_path": diff["files"][0]["path"], "with_recovery": tail == "diff"}})
+        if skip:
+            # Applied by the unfinished run this one goes on from: the full is not restored again.
+            steps.pop()
+        if diff["files"] and skip <= 1:
+            steps.append({"op": "restore-diff", "source_database": database, "chain": [diff["files"][0]],
+                          "request": {
+                              "db_type": "sqlserver", "database_name": lands_as, "target": target,
+                              "backup_path": diff["files"][0]["path"], "with_recovery": tail == "diff"}})
+        reached = ""
         if logs["files"]:
-            steps.append({"op": "restore-log", "request": {
-                "db_type": "sqlserver", "database_name": database, "target": target,
-                "backup_paths": [f["path"] for f in logs["files"]], "with_recovery": True,
-                **({"stopat": point_in_time} if point_in_time else {})}})
+            reached = past_the_newest(logs["files"], point_in_time)
+            # One step per log file (0.39.0, 1.370; the operator, 2026-11-14: *one message for each
+            # log file*). One command for all of them said one message for 46 logs, and a failure on
+            # the seventeenth was recorded on all 46 - the step's error is each of its files'. One
+            # file a step: its own message as it goes in, its own chain row applied or failed. The
+            # statements are the ones one command sent: NORECOVERY on each, the recovery and the
+            # STOPAT on the last.
+            for number, item in enumerate(log_files, start=1):
+                last_log = number == len(log_files)
+                steps.append({"op": "restore-log", "source_database": database, "chain": [item],
+                              "log_number": number, "log_total": len(log_files),
+                              "request": {
+                                  "db_type": "sqlserver", "database_name": lands_as, "target": target,
+                                  "backup_path": item["path"], "with_recovery": last_log,
+                                  **({"stopat": point_in_time} if last_log and point_in_time and not reached
+                                     else {})}})
+            if reached:
+                steps.append({"op": "warning", "warning": (
+                    f"{named}: the moment {point_in_time} is at or after its newest log backup (finished "
+                    f"{reached}) - restored to that log's end; what came after it is in no backup yet")})
+        # What this database was asked to stop at, for the check after it (1.362): the moment as the
+        # engine was handed it - the SOURCE's clock - whether a STOPAT carries it, and the end of the
+        # last backup of its chain. Read back against what the target itself recorded.
+        last = (logs["files"] or diff["files"] or full["files"])[-1]
+        steps.append({"op": "expect", "expect": {
+            "database_name": lands_as, "source_database": database,
+            "moment": point_in_time or "", "stopat": bool(point_in_time and logs["files"] and not reached),
+            "chain_ends": str(last.get("finished_at") or ""),
+            "files": 1 + (1 if diff["files"] else 0) + len(logs["files"])}})
 
     # The consistency check too (1.251) unless the entry says `checkdb: false`.
     steps.append({"op": "verify-restore", "request": {
-        "db_type": "sqlserver", "database_names": databases, "target": target,
+        "db_type": "sqlserver", "database_names": [lands_as for _database, lands_as in names], "target": target,
         "consistency": getattr(job, "checkdb", True), **consistency_check.verify_fields(job)}})
     if _UNREADABLE:
         steps.append({"op": "warning", "warning": (
@@ -390,8 +582,10 @@ def _key_from_vault(job: Any, *, name: str, password: str, target: dict[str, Any
     sha256 - then the empty folder. A pair that cannot be removed fails the restore by name.
     """
     stage = f"{directory.rstrip('/')}/{KEY_STAGE}"
-    request = {"certificate_name": name, "cer_path": f"{stage}/{name}.cer", "pvk_path": f"{stage}/{name}.pvk",
-               "password": password, "target": target}
+    # The engine reads the pair by its own form of the path (a Windows SQL Server: backslashes); the
+    # file commands place and remove it by the stated one.
+    request = {"certificate_name": name, "cer_path": _engine_dir(f"{stage}/{name}.cer", host),
+               "pvk_path": _engine_dir(f"{stage}/{name}.pvk", host), "password": password, "target": target}
     step: dict[str, Any] = {"op": "restore-key", "request": request, "from": "dbabrain's certificate vault"}
     if dry_run:
         return step
@@ -466,9 +660,13 @@ def _plan_oracle(job: Any, secrets: dict[str, str], *, point_in_time: str,
             encryption, secrets, where=f"{job.restore_id}.env_secrets.BACKUP_ENCRYPTION_PASSWORD")
     if point_in_time:
         request["stopat"] = point_in_time
+    # The entry's word (0.39.0, 1.362): a DUPLICATE rebuilds the whole target database, so without
+    # it the step stops when that database holds user data. Never while a lockdown is on (1.220).
+    request["overwrite_existing"] = bool(getattr(job, "overwrite_existing", False)) and not _locked()
     # One DUPLICATE and nothing else: RMAN picks the level 0, the incrementals and the archived
-    # logs itself, so a diff or log step here would describe work it did not do.
-    return [{"op": "restore-full", "request": request},
+    # logs itself, so a diff or log step here would describe work it did not do. The chain record
+    # names the folder for the same reason: which pieces RMAN read is RMAN's to say.
+    return [{"op": "restore-full", "request": request, "chain": [{"path": directory.rstrip("/") + "/"}]},
             # The SID goes to the check as well as to the restore. Without it `sqlplus / as sysdba`
             # takes whatever ORACLE_SID the shell carries, which is right for a container holding
             # one instance and wrong for a host holding two - and a check that answers for the
@@ -522,8 +720,18 @@ def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
     # missing its middle produces a data directory that starts and is incomplete.
     step = ({"op": "restore-diff", "request": {**common, "backup_paths": chain}} if len(chain) > 1
             else {"op": "restore-full", "request": {**common, "backup_path": chain[0]}})
+    # The entry's word (0.39.0, 1.362): the base backup becomes the target's whole data directory, so
+    # without it the step stops when that directory holds a cluster with user data. Never while a
+    # lockdown is on (1.220).
+    step["request"]["overwrite_existing"] = bool(getattr(job, "overwrite_existing", False)) and not _locked()
+    # What this restore applies, for the record: each base backup of the chain, then the WAL folder.
+    step["chain"] = [*members, {"path": f"{directory.rstrip('/')}/wal/", "step": "restore-log",
+                                "finished_at": wal.get("newest_finished_at")}]
+    # A moment at or after the newest archived WAL is the end of the WAL (1.363): asked for as a target,
+    # PostgreSQL 13+ stops the recovery with "recovery ended before configured recovery target".
+    reached = past_the_newest(wal["files"], point_in_time)
     recovery = {"wal_dir": f"{directory.rstrip('/')}/wal",
-                **({"stopat": point_in_time} if point_in_time else {})}
+                **({"stopat": point_in_time} if point_in_time and not reached else {})}
     if host.get("runtime") == "docker":
         # Into a container the recovery configuration travels WITH the combine, written before the
         # first start. As a separate step after it, it reached a server that had already started
@@ -532,9 +740,13 @@ def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
         replay: list[dict[str, Any]] = []
     else:
         replay = [{"op": "restore-log", "request": {**common, **recovery}}]
+    said = ([{"op": "warning", "warning": (
+        f"the moment {point_in_time} is at or after the newest WAL archived (finished {reached}) - recovered to "
+        "the end of the WAL; what came after it is in no backup yet")}] if reached else [])
     return [
         step,
         *replay,
+        *said,
         # PGPORT when the job states one: psql with no -p takes the default cluster, which is right
         # inside a container and wrong on a host running two.
         {"op": "verify-restore", "request": {
@@ -542,6 +754,24 @@ def _plan_postgresql(job: Any, secrets: dict[str, str], *, point_in_time: str,
             **consistency_check.verify_fields(job),
             **({"port": job.env["PGPORT"]} if job.env.get("PGPORT") else {})}},
     ]
+
+
+#: What a restore onto another machine runs after its copy, said by a dry run that has nothing staged
+#: to plan the steps from yet (0.39.0, 1.356). The step names are the ``common`` commands.
+DRY_RUN_STEPS = {
+    "sqlserver": ["restore-key - the backup certificate from the vault, when the backup is encrypted",
+                  "restore-full per database - every file moved to the target's folders (relocate), NORECOVERY",
+                  "restore-diff - the newest differential after that full, when there is one",
+                  "restore-log - each log after it in order; STOPAT on the last for a point in time; RECOVERY",
+                  "verify-restore - DBCC CHECKDB on each restored database",
+                  "delete - staged files past cleanup_retention, each by its recorded facts"],
+    "postgresql": ["restore-full - the base backup laid down as the data directory (pg_combinebackup "
+                   "with its incrementals into one)",
+                   "restore-log - WAL replayed; recovery_target_time for a point in time",
+                   "verify-restore - the server started and pg_amcheck run",
+                   "delete - staged files past cleanup_retention, each by its recorded facts"],
+}
+DRY_RUN_STEPS["postgres"] = DRY_RUN_STEPS["postgresql"]
 
 
 _PLANNERS = {"sqlserver": _plan_sqlserver, "oracle": _plan_oracle,
@@ -595,7 +825,8 @@ def _metadata_phase(job: Any, phase: str, *, data_dir: Any, on_phase: Any) -> st
                       if engine in ("oracle", "postgresql")
                       else "not replayed - server_metadata is off for this entry")
             announce(on_phase, "METADATA_SKIP",
-                     f"Restore {job.restore_id}: instance metadata {reason}.")
+                     f"Restore {job.restore_id}: instance metadata {reason}.",
+                     restore_messages.note(job.restore_id, "Instance metadata", f"logins, roles and jobs: {reason}"))
         return None
     _line, report = replay_metadata_phase(job, phase=phase, data_dir=data_dir, on_phase=on_phase)
     if report is None or report.get("ok", True):
@@ -612,11 +843,12 @@ def _plan_summary(steps: list[dict[str, Any]]) -> str:
     """
     parts: list[str] = []
     by_database: dict[str, list[str]] = {}
+    logs_of: dict[str, int] = {}
     for step in steps:
         op, req = step.get("op"), step.get("request") or {}
         paths = [str(p) for p in (req.get("backup_paths") or
                                   ([req["backup_path"]] if req.get("backup_path") else []))]
-        names = [posixpath.basename(p.rstrip("/")) or p for p in paths]
+        names = [_file_name(p) for p in paths]
         if op == "restore-key":
             parts.append("the backup certificate")
         elif op == "restore-full" and req.get("mode") == "duplicate":
@@ -626,10 +858,23 @@ def _plan_summary(steps: list[dict[str, Any]]) -> str:
         elif req.get("database_name"):
             # SQL Server: one chain per database.
             words = {"restore-full": f"full {names[0] if names else ''}".strip(),
-                     "restore-diff": f"diff {names[0] if names else ''}".strip(),
-                     "restore-log": f"{len(paths)} log(s)"}
-            if op in words:
-                by_database.setdefault(str(req["database_name"]), []).append(words[op])
+                     "restore-diff": f"diff {names[0] if names else ''}".strip()}
+            if op in words or op == "restore-log":
+                source = str(step.get("source_database") or req["database_name"])
+                label = source if source.lower() == str(req["database_name"]).lower() \
+                    else f"{source} as {req['database_name']}"
+                said = by_database.setdefault(label, [])
+                if op != "restore-log":
+                    said.append(words[op])
+                else:
+                    # A log step holds one file since 1.370: a database's logs are counted together,
+                    # and a single one is named - the plan says "46 log(s)", a step says which log.
+                    count = logs_of.get(label, 0)
+                    logs_of[label] = count + len(paths)
+                    if count:
+                        said.pop()
+                    said.append(f"log {names[0]}" if logs_of[label] == 1 and names
+                                else f"{logs_of[label]} log(s)")
         elif op in ("restore-full", "restore-diff"):
             # A summary that raised would fail the restore it describes; a step without a named
             # path is described, not indexed.
@@ -644,6 +889,369 @@ def _plan_summary(steps: list[dict[str, Any]]) -> str:
 
 # `_announce` is `dbabrain.backup_restore.events.announce` since 2026-08-16 — it was four
 # near-copies in this app, one of which had already drifted its parameter names.
+
+
+#: The steps whose files are a restore's chain - the ``common.cli`` command names, as the catalog holds them.
+_CHAIN_STEPS = ("restore-full", "restore-diff", "restore-log")
+
+
+def step_said(step: dict[str, Any]) -> str:
+    """One restore step in the words of the chat (0.39.0, 1.370): the database, the backup(s) it
+    applies and when they were taken, a STOPAT it carries, and whether it leaves the database open.
+
+    The operator, 2026-11-13: *restore is like backup - it must message every step of its flow;
+    restore has restore full -> diff -> log as well, a message for each*. Read off the step itself
+    (:func:`_plan_summary`), so it cannot describe work the step does not do; and never the reason a
+    restore fails - a step that cannot be described is named by its command.
+    """
+    try:
+        request = step.get("request") or {}
+        said = _plan_summary([step]) or str(step.get("op") or "a step")
+        if step.get("log_total"):
+            # Where this log stands in its database's logs (1.370): a reader of the chat counts them down.
+            said += f" ({step['log_number']} of {step['log_total']} logs)"
+        ends =[_clock(item.get("finished_at")) for item in step.get("chain") or [] if item.get("finished_at")]
+        if len(ends) == 1:
+            said += f" (backup finished {ends[0]})"
+        elif ends:
+            said += f" (backups finished {ends[0]} .. {ends[-1]})"
+        if request.get("stopat"):
+            said += f", stopped at {request['stopat']}"
+        if request.get("database_name"):
+            said += (" - recovered, the database is open" if request.get("with_recovery")
+                     else " - left restoring for the next step")
+        return said
+    except Exception:  # noqa: BLE001 - a message is not the restore
+        return str(step.get("op") or "a step")
+
+
+def continued_said(continued: list[dict[str, Any]]) -> str:
+    """One line per database a run took up from an unfinished one (1.372), for the chat and the END message."""
+    parts = []
+    for item in continued:
+        name = item["database_name"] if str(item.get("source_database") or "").lower() == str(item["database_name"]).lower() \
+            else f"{item.get('source_database')} as {item['database_name']}"
+        if item.get("complete"):
+            parts.append(f"{name}: kept as run {item.get('from_run')} restored it (to {item.get('after')})")
+        else:
+            parts.append(f"{name}: continued after {item.get('after_file')} - run {item.get('from_run')} stopped "
+                         f"there; {item.get('skipped')} file(s) already applied, {item.get('left')} to go")
+    return "; ".join(parts)
+
+
+def continuation(recorded: list[dict[str, Any]], *, state: Any, restored_to: Any) -> dict[str, Any] | None:
+    """Whether a database the target already holds is this entry's own unfinished restore - and after
+    which file a run goes on (0.39.0, 1.372). ``None`` when it is not: the name is then held like any
+    other database that exists (refused, or replaced when the entry says so).
+
+    The operator, 2026-11-13: *like backup - can a failed restore go on?* Until now it could not: a
+    restore that failed after its full left the database RESTORING, and the next run - which since
+    1.362 replaces nothing that exists - was refused by that very database. Two records are held to
+    each other, and it goes on only where they agree:
+
+    - ``recorded``: the chain rows of this entry's runs onto this target since its last finished
+      restore, for this landing name (``BackupCatalogStore.unfinished_chain``) - what makes the
+      database *this entry's*; a RESTORING database nobody recorded is somebody's standby.
+    - ``restored_to``: what the TARGET says it applied last (``verify-restore``, from msdb) - the
+      truth about where it stopped: a SQL Server log is a step of its own since 1.370, so its row says
+      which log failed - but a row is what dbabrain asked and heard back, the target is what it holds.
+
+    RESTORING, the target's last backup among the recorded files: continued after that file. ONLINE
+    with its last recorded file applied and that file the target's last: this entry's unfinished run
+    restored it to its end - kept (``complete``), so the run's other databases can go on.
+    """
+    if not recorded or not isinstance(restored_to, dict):
+        return None
+    last = _clock(restored_to.get("last_backup_finished"))
+    if not last:
+        return None
+    at = next((row for row in reversed(recorded) if _clock(row.get("backup_ended_at")) == last), None)
+    if at is None:
+        return None
+    found = {"restore_run_id": at.get("restore_run_id"), "file_name": at.get("file_name"), "after": last}
+    status = str(state or "").upper()
+    if status == "RESTORING":
+        return {**found, "complete": False}
+    final = recorded[-1]
+    if (status == "ONLINE" and str(final.get("result") or "") == "applied"
+            and _clock(final.get("backup_ended_at")) == last):
+        return {**found, "complete": True, "stopat": str(final.get("stopat") or "")}
+    return None
+
+
+def _file_name(path: str) -> str:
+    """A step's file name, whichever separator its path uses - the last part, or the path itself.
+
+    A SQL Server on Windows reads its backup as ``C:\\...\\APP_LOG_....trn`` (0.39.0): split on ``/``
+    alone, the "name" was the whole path, so its chain rows were tied to no catalogued backup file and
+    its messages named the path (found by the first restore onto the lab host's native instance, 2026-11-14)."""
+    text = str(path or "").rstrip("/\\")
+    return re.split(r"[\\/]", text)[-1] or str(path or "")
+
+
+def _chain_rows(job: Any, steps: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[int, list[int]]]:
+    """The chain a plan applies, one row per file in the order they go in, and - per step index - the
+    positions of its files. Read off the plan's own steps, so it cannot name a file the plan does not use."""
+    rows: list[dict[str, Any]] = []
+    positions: dict[int, list[int]] = {}
+    for index, step in enumerate(steps):
+        files = step.get("chain") or []
+        if step.get("op") not in _CHAIN_STEPS or not files:
+            continue
+        request = step.get("request") or {}
+        for number, item in enumerate(files, start=1):
+            last = number == len(files)
+            path = str(item.get("path") or "")
+            rows.append({
+                "source_server_id": str(getattr(job, "server_id", "") or ""),
+                "target_server_id": str(getattr(job, "target_server_id", "") or getattr(job, "server_id", "") or ""),
+                "database_name": str(step.get("source_database") or ""),
+                "restored_as": str(request.get("database_name") or ""),
+                # A file may say its own step: PostgreSQL's WAL folder travels with the combine.
+                "step": str(item.get("step") or step["op"]),
+                "file_name": _file_name(path), "file_path": path,
+                "backup_ended_at": str(item.get("finished_at") or "") or None,
+                "with_recovery": 1 if last and request.get("with_recovery") else 0,
+                "stopat": str(request["stopat"]) if last and request.get("stopat") else None})
+            positions.setdefault(index, []).append(len(rows))
+    return rows, positions
+
+
+def _record_chain(catalog: Any, run_id: int | None, job: Any,
+                  steps: list[dict[str, Any]]) -> tuple[dict[int, list[int]], str]:
+    """Write the plan's chain into the catalog, each file tied to its backup file where the catalog
+    knows it. ``({step index: positions}, warning)`` - the warning is said when the chain could not be
+    written: the record is not the restore (:func:`copy_gate.close_restore_runs`), but a restore whose
+    files nobody can show afterwards says so instead of ending as if they were kept."""
+    rows, positions = _chain_rows(job, steps)
+    if not rows:
+        return {}, ""
+    if catalog is None or run_id is None:
+        return {}, ("the files this restore applied are not recorded - no catalog was open for it" if catalog is None
+                    else "the files this restore applied are not recorded - the run has no catalog row")
+    try:
+        known = catalog.backup_file_facts(server_id=str(getattr(job, "server_id", "") or ""),
+                                          file_names=sorted({row["file_name"] for row in rows}))
+        for row in rows:
+            fact = known.get(row["file_name"])
+            if fact:
+                row["file_id"] = fact["file_id"]
+                row["file_type"] = str(fact.get("file_type") or "")
+        catalog.plan_chain(int(run_id), rows)
+    except Exception as exc:  # noqa: BLE001 - the record is not the restore; it is said, never silent.
+        return {}, f"the files this restore applied could not be recorded - {type(exc).__name__}: {exc}"[:400]
+    return positions, ""
+
+
+def _mark_chain(catalog: Any, run_id: int | None, positions: list[int] | None, *, result: str,
+                error_text: str = "") -> None:
+    if catalog is None or run_id is None or not positions:
+        return
+    try:
+        catalog.set_chain_step(int(run_id), positions, result=result, error_text=error_text)
+    except Exception:  # noqa: BLE001 - the record is not the restore
+        return
+
+
+def _clock(text: Any) -> str:
+    """A moment as ``YYYY-MM-DD HH:MM:SS`` for comparing two of them; ``""`` for none."""
+    raw = str(text or "").strip()
+    return _server_clock(raw) if raw else ""
+
+
+def where_it_stopped(expects: list[dict[str, Any]], rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """What the target recorded of each restored database, held to what the plan asked (0.39.0, 1.362).
+
+    ``(landed, off_target)``. A restore that opens and checks clean can still be in the wrong place:
+    1.363's stopped seven hours early and said done. So after the check, the target's own record is
+    read (``verify-restore`` answers it per database as ``restored_to``) and compared:
+
+    - a moment carried by a STOPAT: the target's ``stop_at`` is that moment;
+    - anything else - the newest backup, a moment at or past the newest log, a chain with no log:
+      the last backup the target applied ended when the last file of the plan's chain ended.
+
+    Both sides are in the SOURCE's clock - the backup's headers and STOPAT are. ``off_target`` names
+    each database whose record differs; one the target gave no record for is ``not read`` and a
+    difference of nothing (an engine or a login that cannot answer is not a wrong restore).
+    """
+    by_name = {str(row.get("database_name") or "").lower(): row for row in rows}
+    landed: list[dict[str, Any]] = []
+    off_target: list[str] = []
+    for expect in expects:
+        name = str(expect.get("database_name") or "")
+        row = by_name.get(name.lower()) or {}
+        got = row.get("restored_to") if isinstance(row.get("restored_to"), dict) else {}
+        item = {"database_name": name, "source_database": expect.get("source_database") or name,
+                "state": row.get("state"), "asked": expect.get("moment") or "the newest backup",
+                "by_stopat": bool(expect.get("stopat")), "chain_ends": expect.get("chain_ends") or "",
+                "stop_at": got.get("stop_at"), "last_backup_finished": got.get("last_backup_finished"),
+                "last_backup_type": got.get("last_backup_type"), "restored_at": got.get("restored_at")}
+        if not got or (not got.get("stop_at") and not got.get("last_backup_finished")):
+            item["verdict"] = "not read"
+        elif expect.get("stopat"):
+            if _clock(got.get("stop_at")) == _clock(expect.get("moment")):
+                item["verdict"] = "stopped at the moment asked"
+            else:
+                item["verdict"] = "NOT at the moment asked"
+                off_target.append(f"{name}: asked to stop at {_clock(expect.get('moment'))}, the target recorded "
+                                  f"{_clock(got.get('stop_at')) or 'no stop point'}")
+        elif not expect.get("chain_ends"):
+            item["verdict"] = "not read"
+        elif _clock(got.get("last_backup_finished")) == _clock(expect.get("chain_ends")):
+            item["verdict"] = "restored to the end of its chain"
+        else:
+            item["verdict"] = "NOT at the end of its chain"
+            off_target.append(f"{name}: its chain ends {_clock(expect.get('chain_ends'))}, the last backup the "
+                              f"target applied ended {_clock(got.get('last_backup_finished')) or 'at no known time'}")
+        landed.append(item)
+    return landed, off_target
+
+
+def landed_said(landed: list[dict[str, Any]]) -> str:
+    """One line per database for the END message: where it stopped, in the source's clock."""
+    parts = []
+    for item in landed:
+        name = item["database_name"] if str(item["source_database"]).lower() == str(item["database_name"]).lower() \
+            else f"{item['source_database']} as {item['database_name']}"
+        where = (f"stopped at {_clock(item.get('stop_at'))}" if item.get("by_stopat") and item.get("stop_at")
+                 else f"last backup applied ended {_clock(item.get('last_backup_finished'))}"
+                 if item.get("last_backup_finished") else "stop point not read")
+        parts.append(f"{name}: {where} ({item.get('verdict')})")
+    return "; ".join(parts)
+
+
+def _where_it_lands(job: Any, secrets: dict[str, str], *, host: dict[str, Any], data_dir: Any,
+                    files: list[dict[str, Any]], catalog: Any = None) -> list[dict[str, Any]]:
+    """For a dry run: each database of the restore, the name it lands under, and what the target holds
+    under that name now - asked read only (``verify-restore`` with no consistency check).
+
+    SQL Server lands database by database. PostgreSQL and Oracle lay down a whole instance: one row
+    saying so, and that the step itself reads what the target holds when it runs.
+    """
+    engine = str(getattr(job, "db_type", "") or "").lower()
+    overwrite = bool(getattr(job, "overwrite_existing", False))
+    if engine not in restore_landing.BY_DATABASE_ENGINES:
+        return [{"lands": "the whole instance of the target",
+                 "will": ("REPLACES whatever the target instance holds (overwrite_existing is true)" if overwrite else
+                          "refused by its restore step when the target instance holds user data "
+                          "(overwrite_existing is false) - read when it runs, not by this dry run")}]
+    landing = getattr(job, "landing", None)
+    if landing is None:
+        return []
+    found = sorted({str(item.get("path") or "").replace("\\", "/").split("/")[0] for item in files
+                    if "/" in str(item.get("path") or "").replace("\\", "/")})
+    names = restore_landing.landing_names(landing, found)
+    if not names:
+        return []
+    try:
+        target = {"host": host["host"], "port": _sqlserver_port(job, data_dir=data_dir),
+                  "username": str(job.env.get("MSSQL_USER") or "").strip(),
+                  "password": _secret(job.env_secrets.get("MSSQL_PASSWORD", ""), secrets,
+                                      where=f"{job.restore_id}.env_secrets.MSSQL_PASSWORD")}
+        # A failed verdict is the usual answer here, not an error: verify-restore says "not usable" for
+        # a database that is not there - exactly the name a restore under a new name asks about (found
+        # on the first dry run of one, 2026-11-13: the plan read "the target could not be asked").
+        _usable, answer, error = common_cli.run_allowing_failure(
+            "verify-restore", {"db_type": "sqlserver", "consistency": False, "target": target,
+                               "database_names": [lands_as for _source, lands_as in names]})
+        rows = answer.get("databases") if isinstance(answer, dict) else None
+        if not rows:
+            raise errors.OperationFailed(error or "the target gave no answer")
+        states = {str(row.get("database_name") or "").lower(): str(row.get("state") or "") for row in rows}
+        records = {str(row.get("database_name") or "").lower(): row.get("restored_to") for row in rows}
+    except Exception as exc:  # noqa: BLE001 - a dry run says what it could not read; it does not stop.
+        return [{"source_database": source, "lands_as": lands_as, "on_target": "not read",
+                 "will": f"not known - the target could not be asked: {type(exc).__name__}: {exc}"[:300]}
+                for source, lands_as in names]
+    # This entry's own unfinished restore (1.372): read only where the entry may not replace - with
+    # overwrite_existing true a run restores over what is there, as it always has.
+    unfinished: list[dict[str, Any]] = []
+    if catalog is not None and not overwrite and any(state and state != "ABSENT" for state in states.values()):
+        try:
+            unfinished = catalog.unfinished_chain(restore_id=str(job.restore_id),
+                                                  target_server_id=str(getattr(job, "target_server_id", "") or
+                                                                       getattr(job, "server_id", "") or ""))
+        except Exception:  # noqa: BLE001 - without the record nothing is continued; the name is held as before
+            unfinished = []
+    lands = []
+    for source, lands_as in names:
+        state = states.get(lands_as.lower()) or "ABSENT"
+        item: dict[str, Any] = {"source_database": source, "lands_as": lands_as, "on_target": state}
+        goes_on = None if state == "ABSENT" or overwrite else continuation(
+            [row for row in unfinished if str(row.get("restored_as") or "").lower() == lands_as.lower()],
+            state=state, restored_to=records.get(lands_as.lower()))
+        if state == "ABSENT":
+            item["will"] = "created - the target holds no database of that name"
+        elif overwrite:
+            item["will"] = f"REPLACES the database there now ({state}) - overwrite_existing is true"
+        elif goes_on:
+            item["continues"] = goes_on
+            item["will"] = (f"KEPT - run {goes_on['restore_run_id']} of this entry restored it to its end "
+                            f"({goes_on['after']}) before it failed elsewhere" if goes_on.get("complete") else
+                            f"CONTINUED after {goes_on['file_name']} - run {goes_on['restore_run_id']} of this "
+                            f"entry stopped there and left it {state}")
+        else:
+            item["will"] = "REFUSED"
+            item["refused"] = (f"{lands_as} exists on the target ({state}) and overwrite_existing is false - "
+                               "the restore stops before it restores anything"
+                               + (" (it is not an unfinished restore of this entry that can be continued: no "
+                                  "failed run of it recorded the backup the target applied last)"
+                                  if state.upper() == "RESTORING" else ""))
+        lands.append(item)
+    return lands
+
+
+def _refuse_a_whole_instance_replace_under_a_lockdown(job: Any, *, restore_id: str) -> None:
+    """A PostgreSQL or Oracle entry that may replace its target, under a lockdown: refused before the
+    copy, by the lockdown's name (0.39.0).
+
+    Its restore lays down the whole instance, and whether the target holds data of its own is read by
+    the restore step itself, after the copy - which a lockdown runs without the entry's true. The
+    overwrite test on the lab host (2026-11-14, under the lockdown of 2026-11-13) copied its chain, and the
+    step then answered *overwrite_existing is not true* for an entry that states true. A lockdown is
+    the exception; this entry's intent is to replace, so it waits for the lockdown, said as such."""
+    if (str(getattr(job, "db_type", "") or "").lower() in restore_landing.BY_DATABASE_ENGINES
+            or not bool(getattr(job, "overwrite_existing", False)) or not _locked()):
+        return
+    raise RestoreByIdError(
+        f"{restore_id}: overwrite_existing is true, so this restore replaces whatever its target instance holds "
+        "- and a lockdown is on: nothing is replaced until it is turned off (/spbot_lockdown, or backup_restore "
+        "lockdown). Nothing was copied or restored.")
+
+
+def _refuse_a_name_already_held(job: Any, secrets: dict[str, str], *, host: dict[str, Any], data_dir: Any,
+                                catalog: Any = None) -> dict[str, dict[str, Any]]:
+    """Stop a SQL Server restore whose landing name the target holds, before its copy starts - and
+    answer the names this run goes on from instead (1.372): ``{landing name, lower: continuation}``,
+    a database this entry's own unfinished restore left RESTORING, or restored to its end.
+
+    Nothing when the entry may replace (``overwrite_existing: true``), names no database
+    (``restore_all_databases``), or is another engine - a whole-instance restore is asked by its own
+    step. A target that could not be asked is not a refusal here: the step's guard still decides.
+    """
+    landing = getattr(job, "landing", None)
+    overwrite = bool(getattr(job, "overwrite_existing", False))
+    # A lockdown holds every replace (1.220): the RESTORE is then sent without REPLACE and refused by
+    # the server - after the whole copy, and in words that told the entry to state the true it states
+    # (the overwrite test on the lab host, 2026-11-14, under the lockdown of 2026-11-13). Asked here, first.
+    locked = overwrite and _locked()
+    if (str(getattr(job, "db_type", "") or "").lower() not in restore_landing.BY_DATABASE_ENGINES
+            or landing is None or landing.all_databases or (overwrite and not locked)):
+        return {}
+    lands = _where_it_lands(job, secrets, host=host, data_dir=data_dir, files=[], catalog=catalog)
+    held = [item["refused"] for item in lands if item.get("refused")]
+    if held and locked:
+        names = ", ".join(str(item["lands_as"]) for item in lands if item.get("refused"))
+        raise RestoreByIdError(
+            f"{job.restore_id}: {names} exist(s) on the target and the entry states overwrite_existing true, "
+            "but a lockdown is on - nothing is replaced until it is turned off (/spbot_lockdown, or "
+            "backup_restore lockdown). Nothing was copied or restored.")
+    if held:
+        raise RestoreByIdError(
+            f"{job.restore_id}: " + "; ".join(held) + ". Nothing was copied or restored. State "
+            "overwrite_existing: true on the entry when replacing it is the intent, or map the database to "
+            "another name (database_mappings).")
+    return {str(item["lands_as"]).lower(): item["continues"] for item in lands if item.get("continues")}
 
 
 def restore_by_id(request: dict[str, Any], *, data_dir: Any = None,
@@ -737,6 +1345,36 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
         raise RestoreByIdError(f"No backup_restore entry found with restore_id={restore_id}.")
     job = jobs[0]
     copy_only = bool(request.get("copy_only"))
+    # The refusals restore-workflow makes before it runs an entry, made here too (0.39.0, 1.361): this
+    # second door ran a repository entry the workflow refuses - in place, an engine the repository does
+    # not hold - and an entry stating no action.
+    from dbabrain.backup_restore.workflow import _entry_action
+
+    if getattr(job, "overwrite_existing", False) is None:
+        # Loaded, and stating none (0.39.0, 1.362): the workflow's refusal, at this door too.
+        from dbabrain.lib.integrity import require_overwrite_stated
+
+        try:
+            require_overwrite_stated(None, label=f"restore_id={restore_id}")
+        except Exception as exc:  # noqa: BLE001 - said as this door's own error
+            raise RestoreByIdError(str(exc)) from exc
+    if str(getattr(job, "db_type", "") or "").lower() in restore_landing.BY_DATABASE_ENGINES:
+        # Which databases, under which names (1.362) - refused here, before a file is copied for it.
+        try:
+            restore_landing.require_landing(getattr(job, "landing", None), label=f"restore_id={restore_id}")
+        except restore_landing.LandingError as exc:
+            raise RestoreByIdError(str(exc)) from exc
+    try:
+        # The fields that decide the run, stated (1.366) - refused here, before a file is copied.
+        restore_stated.require_stated(getattr(job, "unstated", ()), label=f"restore_id={restore_id}")
+    except restore_stated.StatedError as exc:
+        raise RestoreByIdError(str(exc)) from exc
+    if getattr(job, "restore_from", None) == "repository":
+        # The loader already refuses an entry that states no restore_from or action (R50); what this door
+        # skipped were the repository's own rules.
+        _action, refused = _entry_action(job, copy_only=copy_only)
+        if refused is not None:
+            raise RestoreByIdError(str(refused))
     if copy_only:
         import dataclasses
 
@@ -768,6 +1406,43 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
     # know less than the script it was meant to generalise.
     transferred = None
     target_host = None
+    # The databases this run goes on from, where this entry's own unfinished restore left them (1.372).
+    resume: dict[str, dict[str, Any]] = {}
+    if getattr(job, "is_remote", False) and not bool(request.get("skip_transfer")) and dry_run:
+        # 0.39.0 (1.356): onto another machine a dry run planned from what was already staged - on a
+        # target nothing was restored to yet, an empty folder - and failed there. It now reads the
+        # chain where the copy would read it and asks the target, read only, whether it fits.
+        from dbabrain.backup_restore.backup import resolve_ssh_target
+        from dbabrain.backup_restore.restore_script import plan_transfer
+
+        source = resolve_ssh_target(job.server_id, label=job.label, data_dir=data_dir)
+        target_host = resolve_ssh_target(job.target_server_id, label=job.label,
+                                         data_dir=data_dir, require_container=False)
+        transfer_plan = plan_transfer(job, source=source, target=target_host, data_dir=data_dir, key=key,
+                                      key_base64=key_base64, point_in_time=point_in_time, catalog=catalog)
+        # Where it lands (0.39.0, 1.362): asked of the target, read only - a name already held there is
+        # said now, as the restore's own refusal or as what it will replace.
+        lands = [] if copy_only else _where_it_lands(job, secrets, host=host, data_dir=data_dir,
+                                                     files=transfer_plan.get("files") or [], catalog=catalog)
+        transfer_plan["would_refuse"] = list(transfer_plan.get("would_refuse") or []) + [
+            item["refused"] for item in lands if item.get("refused")]
+        return {"restore_id": restore_id, "db_type": engine, "dry_run": True, "copy_only": copy_only,
+                "point_in_time": point_in_time or "LATEST", "transfer_plan": transfer_plan, "lands": lands,
+                "steps": (["copy only - each file proven on the target; nothing restored"] if copy_only
+                          else [step for step in DRY_RUN_STEPS.get(engine, [])
+                                # The vault's key only for a backup encrypted with a certificate.
+                                if not step.startswith("restore-key")
+                                or "BACKUP_ENCRYPTION_PASSWORD" in (job.env_secrets or {})]),
+                "would_refuse": transfer_plan.get("would_refuse") or [],
+                "changed": "nothing - no file copied, no folder made, nothing restored or deleted"}
+    if not dry_run and not copy_only:
+        # A name the target already holds, asked BEFORE anything is copied (0.39.0, 1.362). The restore
+        # step's own guard is what holds the rule at the moment of the restore; this spares the copy -
+        # from an encrypted repository, the decryption of a whole chain - of a restore that guard is
+        # going to refuse. Only where the entry names its databases: with restore_all_databases the
+        # names are the folder's, known once it is listed.
+        resume = _refuse_a_name_already_held(job, secrets, host=host, data_dir=data_dir, catalog=catalog)
+        _refuse_a_whole_instance_replace_under_a_lockdown(job, restore_id=restore_id)
     if getattr(job, "is_remote", False) and not bool(request.get("skip_transfer")) and not dry_run:
         from dbabrain.backup_restore.backup import resolve_ssh_target
         from dbabrain.backup_restore.restore_script import transfer_backup_to_target
@@ -781,7 +1456,13 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
         # months; when the scheduled restore moved onto this function in 2.69.52 those events were
         # left behind with it, and the silence came back without anyone changing the reporting.
         announce(on_phase, "COPY_START",
-                  f"Restore {restore_id}: copy started {job.server_id} -> {job.target_server_id}.")
+                  f"Restore {restore_id}: copy started "
+                  # From the repository it is not the server's copy (0.39.0, 1.361): it said server_id.
+                  + (f"from the repository ({job.server_id}'s copies)" if getattr(job, "restore_from", None)
+                     == "repository" else job.server_id) + f" -> {job.target_server_id}.",
+                  restore_messages.copy_started(
+                      restore_id, source=str(job.server_id), target=str(job.target_server_id),
+                      from_repository=getattr(job, "restore_from", None) == "repository"))
         transferred = transfer_backup_to_target(
             job, source=source, target=target_host,
             data_dir=data_dir, key=key, key_base64=key_base64, prune=False,
@@ -793,13 +1474,16 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
         announce(on_phase, "COPY_DONE",
                   f"Restore {restore_id}: copy finished - {transferred['copied']} piece(s), "
                   f"{transferred['bytes_copied']} bytes, {transferred['skipped']} already present"
+                  # From an encrypted repository each file is decrypted on its way (1.370: said).
+                  + (" - decrypted from the repository's encrypted copies" if transferred.get("encrypted") else "")
                   + (f", {transferred['removed_absent_at_source']} removed (gone at the source)"
                      if transferred.get("removed_absent_at_source") else "")
                   + ("" if transferred.get("include") else " (the whole directory)")
                   # Left at the source, never staged unproven - said where a person reads it.
                   + (f" - {len(transferred['written_after_the_plan'])} file(s) written at the source after "
                      "the plan were left there" if transferred.get("written_after_the_plan") else "") + ".",
-                  {"copied": transferred["copied"], "skipped": transferred["skipped"],
+                  {**restore_messages.copy_done(restore_id, transferred, target=str(job.target_server_id)),
+                   "copied": transferred["copied"], "skipped": transferred["skipped"],
                    "bytes_copied": transferred["bytes_copied"],
                    "removed_absent_at_source": transferred.get("removed_absent_at_source", 0),
                    **({"written_after_the_plan": list(transferred["written_after_the_plan"])}
@@ -822,11 +1506,11 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
                 "transfer": transferred, "steps": [], "warnings": []}
 
     steps = planner(job, secrets, point_in_time=point_in_time, host=host, data_dir=data_dir,
-                    dry_run=dry_run)
+                    dry_run=dry_run, **({"resume": resume} if resume else {}))
 
     if dry_run:
         return {"restore_id": restore_id, "db_type": engine, "dry_run": True,
-                "steps": [s["op"] for s in steps]}
+                "steps": [s["op"] for s in steps if s["op"] not in ("expect", "continued")]}
 
     # The restore and its check are announced as well as the copy. After COPY_DONE a drill said
     # nothing until END - an Oracle DUPLICATE is minutes, a large one hours - and END said only
@@ -846,9 +1530,22 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
     restoring = [s for s in steps
                  if s.get("request") and s["op"] != "verify-restore" and not s.get("done")]
     record_run(catalog, run_id, phase="restoring")
-    if restoring:
-        announce(on_phase, "RESTORE_START", f"Restore {restore_id}: restoring {plan}, {moment}.",
-                 {"plan": plan})
+    # Every file this restore is about to apply, in order, written before the first one goes in
+    # (0.39.0; the operator, 2026-11-13: *keep the full chain of files, so it can be shown which file
+    # a restore used*). A restore that dies half way leaves the chain it meant to apply.
+    chain_of_step, chain_warning = _record_chain(catalog, run_id, job, steps)
+    # Taken up from this entry's unfinished run (1.372): said with the plan, and in the answer.
+    continued = [s["continued"] for s in steps if s.get("op") == "continued"]
+    # Each step of the chain is announced as it finishes (1.370) - full, differential, logs - numbered.
+    chain_number = {id(s): number for number, s in
+                    enumerate([s for s in restoring if s["op"] in _CHAIN_STEPS], start=1)}
+    if restoring or continued:
+        announce(on_phase, "RESTORE_START",
+                 f"Restore {restore_id}: restoring {plan or 'nothing more'}, {moment}"
+                 + (f" - {continued_said(continued)}" if continued else "") + ".",
+                 {"plan": plan, **({"continued": continued} if continued else {}),
+                  **restore_messages.restore_started(restore_id, plan=plan, moment=moment,
+                                                     continued=continued_said(continued) if continued else "")})
     restore_started = time.monotonic()
     restore_done_said = not restoring
 
@@ -859,14 +1556,23 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
             seconds = int(time.monotonic() - restore_started)
             announce(on_phase, "RESTORE_DONE",
                      f"Restore {restore_id}: {len(restoring)} restore step(s) finished in {seconds} s.",
-                     {"steps": len(restoring), "restore_seconds": seconds})
+                     {"steps": len(restoring), "restore_seconds": seconds,
+                      **restore_messages.restore_done(restore_id, steps=len(restoring), seconds=seconds)})
 
     results: list[dict[str, Any]] = []
-    warnings: list[str] = list(metadata_warnings)
+    warnings: list[str] = list(metadata_warnings) + ([chain_warning] if chain_warning else [])
     verify: dict[str, Any] | None = None
-    for step in steps:
+    expects: list[dict[str, Any]] = []
+    landed: list[dict[str, Any]] = []
+    for index, step in enumerate(steps):
         if step.get("warning"):
             warnings.append(step["warning"])
+            continue
+        if step["op"] == "expect":
+            # Not a step: what the plan says this database stops at, held to the target after the check.
+            expects.append(step["expect"])
+            continue
+        if step["op"] == "continued":
             continue
         if step.get("done"):
             # Run while planning (the certificate, which the listing needed); recorded, not repeated.
@@ -876,23 +1582,58 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
             _restore_done()
             record_run(catalog, run_id, phase="verifying_db")
             announce(on_phase, "VERIFY_START",
-                     f"Restore {restore_id}: checking the restored database(s) can be opened.")
-        outcome = _execute(step["op"], step["request"])
+                     f"Restore {restore_id}: checking the restored database(s) can be opened.",
+                     restore_messages.check_started(restore_id))
+        number = chain_number.get(id(step))
+        step_started = time.monotonic()
+        try:
+            outcome = _execute(step["op"], step["request"])
+        except Exception as exc:
+            # One command carries a step's files, so the step's error is each of theirs.
+            _mark_chain(catalog, run_id, chain_of_step.get(index), result="failed",
+                        error_text=f"{type(exc).__name__}: {exc}")
+            if number and isinstance(exc, RestoreByIdError):
+                # Which step of the chain, and which backup(s): what the ERROR message in the chat says.
+                raise RestoreByIdError(f"{restore_id}: step {number} of {len(chain_number)} failed - "
+                                       f"{step_said(step)}: {exc}") from exc
+            raise
+        _mark_chain(catalog, run_id, chain_of_step.get(index), result="applied")
+        if number:
+            seconds = int(time.monotonic() - step_started)
+            announce(on_phase, "RESTORE_STEP",
+                     f"Restore {restore_id}: step {number} of {len(chain_number)} done in {seconds} s - "
+                     f"{step_said(step)}.",
+                     {"step": step["op"], "step_number": number, "steps": len(chain_number),
+                      "step_seconds": seconds, "files": len(step.get("chain") or []),
+                      **restore_messages.step_done(restore_id, op=step["op"], number=number,
+                                                   total=len(chain_number), said=step_said(step), seconds=seconds)})
         results.append({"step": step["op"], "ok": bool(outcome.get("ok", True))})
         if step["op"] == "verify-restore":
             verify = {"checked": outcome.get("checked"), "failed": outcome.get("failed")}
+            # Where each database stopped, as the TARGET recorded it, against what the plan asked
+            # (1.362): written on the run's row whatever it says.
+            landed, off_target = where_it_stopped(expects, outcome.get("databases") or [])
+            if landed:
+                record_run(catalog, run_id, landed_json=json.dumps(landed, default=str))
             # Before a failed check raises: the row says how many opened either way.
             record_run(catalog, run_id, databases_failed=int(outcome.get("failed") or 0),
                        databases_ok=max(int(outcome.get("checked") or 0) - int(outcome.get("failed") or 0), 0))
             announce(on_phase, "VERIFY_DONE",
                      f"Restore {restore_id}: {outcome.get('checked')} database(s) checked, "
-                     f"{outcome.get('failed')} unusable.", verify)
+                     f"{outcome.get('failed')} unusable.",
+                     {**verify, **restore_messages.check_done(restore_id, checked=outcome.get("checked"),
+                                                              failed=outcome.get("failed"))})
             if not outcome.get("ok"):
                 # A restore that finished and left a database nobody can query is the failure the
                 # whole verify step exists to catch; it must not be reported as success.
                 raise RestoreByIdError(
                     f"{restore_id}: restored, but verification failed - "
                     f"{outcome.get('failed')} of {outcome.get('checked')} database(s) unusable.")
+            if off_target:
+                # Open and consistent, and not where it was asked to be: the same kind of success
+                # that is not one (1.363 said done seven hours early).
+                raise RestoreByIdError(
+                    f"{restore_id}: restored and checked, but not to what was asked - " + "; ".join(off_target))
     _restore_done()
     # Only after a restore that worked: Agent job steps name databases that have to exist.
     post_warning = _metadata_phase(job, instance_bundle.POST_DATABASE, data_dir=data_dir,
@@ -901,12 +1642,47 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
         warnings.append(post_warning)
 
     pruned = None
+    plain = None
     if transferred is not None and target_host is not None:
-        from dbabrain.backup_restore.restore_script import prune_staged_backups
+        from dbabrain.backup_restore.restore_script import (
+            delete_decrypted_staging,
+            prune_staged_backups,
+            staged_copies_of_entry,
+        )
 
+        # Every copy this entry staged, deleted now the databases are restored and checked (1.371): what
+        # this restore decrypted from the encrypted repository, what it copied plain from a source that
+        # was never encrypted, and what an earlier run of the entry left - a failed run nobody ran again
+        # (the operator, 2026-11-14: *each restore checks, and deletes them once the DB is restored*;
+        # the plain copies: *delete them too*).
+        decrypted = list(transferred.get("files") or []) if transferred.get("encrypted") else []
+        staged: list[dict[str, Any]] = []
+        try:
+            staged = staged_copies_of_entry(job, catalog, exclude_paths={str(one.get("path")) for one in decrypted})
+        except Exception as exc:  # noqa: BLE001 - the cleanup never turns a verified restore into a failed one
+            warnings.append(f"staging: the copies this entry staged could not be read from the catalog - "
+                            f"{type(exc).__name__}: {exc}"[:400])
+        earlier = [one for one in staged if one.get("restore_run_id") not in (None, run_id)]
+        to_delete = decrypted + staged
         announce(on_phase, "DELETE_START",
-                 f"Restore {restore_id}: removing staged backups older than the entry's "
-                 f"retention ({int(job.cleanup_retention or 0)} s) from {job.target_backup_dir}.")
+                 f"Restore {restore_id}: removing "
+                 + (f"the {len(to_delete) - len(earlier)} file(s) this restore staged"
+                    + (f" and {len(earlier)} an earlier run of this entry left" if earlier else "")
+                    + " - the databases are restored and checked - and " if to_delete else "")
+                 + f"staged backups older than the entry's "
+                 f"retention ({int(job.cleanup_retention or 0)} s) from {job.target_backup_dir}.",
+                 restore_messages.cleanup_started(restore_id))
+        if to_delete:
+            try:
+                plain = delete_decrypted_staging(job, target=target_host, files=to_delete,
+                                                 restore_run_id=run_id,
+                                                 data_dir=data_dir, key=key, key_base64=key_base64, catalog=catalog)
+            except Exception as exc:  # noqa: BLE001 - the cleanup never turns a verified restore into a failed one
+                plain = {"plain_files": len(to_delete), "deleted": 0, "already_gone": 0, "bytes_deleted": 0,
+                         "error": f"the staged copies could not be deleted and are still in the clear on "
+                                  f"{job.target_server_id} - {type(exc).__name__}: {exc}"[:400]}
+            if plain.get("error"):
+                warnings.append(f"staging: {plain['error']}")
         pruned = prune_staged_backups(job, target=target_host, data_dir=data_dir,
                                       key=key, key_base64=key_base64, catalog=catalog)
         # Said in the run's own words (0.38.0): a staged file the catalog does not know is kept and
@@ -922,13 +1698,21 @@ def _restore_by_id(request: dict[str, Any], *, data_dir: Any, key: str | None, k
         if pruned.get("error"):
             warnings.append(f"staging cleanup: {pruned['error']}")
         announce(on_phase, "DELETE_DONE",
-                 f"Restore {restore_id}: {pruned.get('pruned', 0)} staged file(s) removed"
+                 f"Restore {restore_id}: "
+                 + (f"{plain['deleted']} of {plain['plain_files']} staged copy(ies) deleted "
+                    f"({plain['bytes_deleted']} bytes); " if plain else "")
+                 + f"{pruned.get('pruned', 0)} staged file(s) removed"
                  + (f" ({pruned['skipped']})" if pruned.get("skipped") else "")
                  + (f", {len(kept)} kept - not in the catalog" if kept else "")
                  + (f"; {pruned['error']}" if pruned.get("error") else "") + ".",
                  {"pruned": pruned.get("pruned", 0),
                   "retention_seconds": pruned.get("retention_seconds", 0),
-                  "kept_unknown": len(kept), "error": pruned.get("error") or ""})
+                  "kept_unknown": len(kept), "error": pruned.get("error") or "",
+                  **({"plain_deleted": plain["deleted"], "plain_files": plain["plain_files"]} if plain else {}),
+                  **restore_messages.cleanup_done(restore_id, target=str(job.target_server_id), plain=plain,
+                                                  pruned=pruned, kept=len(kept))})
     return {"restore_id": restore_id, "db_type": engine, "steps": results,
             "transferred": transferred, "point_in_time": point_in_time or None,
-            "warnings": warnings, "plan": plan, "verify": verify, "pruned": pruned}
+            "warnings": warnings, "plan": plan, "verify": verify, "pruned": pruned,
+            "landed": landed, "restore_run_id": run_id,
+            "continued": continued, "plain_deleted": plain}

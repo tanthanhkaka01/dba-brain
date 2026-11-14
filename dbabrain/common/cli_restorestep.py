@@ -39,6 +39,9 @@ that - so a recovery can watch each step land before deciding the next.
    "move": {{"SALESDB_STG": "/var/opt/mssql/data/SALESDB_STG.mdf"}},   // restore-full only
    "move_files": {{"data": "D:\\DATA\\X.mdf", "log": "D:\\DATA\\X_log.ldf"}},  // or: the two paths;
                                      // the logical names are read on the server (FILELISTONLY)
+   "relocate": {{}},                   // or: EVERY file of the backup to the target's default data /
+                                     // log folder ({{"data_dir": ..., "log_dir": ...}} to name them),
+                                     // as <database>_<file name> - onto another server
    "dry_run": true,                  // show what would run, touch nothing
 {_TARGET},                            // sqlserver, over a driver from this machine
    "sqlcmd": {{...}},                 // sqlserver, OR run by sqlcmd where the server is: the

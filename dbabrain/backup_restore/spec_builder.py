@@ -65,6 +65,18 @@ def _retention_per_type_env(job: Any) -> dict[str, str]:
     return env
 
 
+def _source_age_cut_before(job: Any) -> int | None:
+    """``lib.offload.source_age_cut_before`` for one job: whether its retention keeps every file type
+    of its engine is read off the job's own windows."""
+    from dbabrain.lib import offload as offload_rules
+
+    retention = getattr(job, "retention", None)
+    kinds = RETENTION_TYPES_BY_ENGINE.get(str(getattr(job, "db_type", "")).lower()) or ()
+    keeps = bool(kinds) and retention is not None and all(retention.window_for(kind) is None for kind in kinds)
+    return offload_rules.source_age_cut_before(getattr(job, "offload", None), db_type=str(getattr(job, "db_type", "")),
+                                               keeps_every_type=keeps, label=job.label)
+
+
 def _secret(ref: str, secrets: dict[str, str], *, where: str) -> str:
     """Resolve one secret ref, or say which field wanted it. An empty password reaches the target
     as a failed login, which is a much worse place to discover a missing ref."""
@@ -110,6 +122,11 @@ def backup_request_from_job(
     if getattr(job, "retention_seconds", None) is not None:
         env["RETENTION_SECONDS"] = str(job.retention_seconds)
     env.update(_retention_per_type_env(job))
+    # The age window cuts only what never goes to the repository (0.39.0, 1.373): an entry whose files
+    # the repository copy releases states the moment they start going there, or keep.
+    cut_before = _source_age_cut_before(job)
+    if cut_before is not None:
+        env["RETENTION_ONLY_BEFORE"] = str(cut_before)
     # The databases, from the job's own list (0.34.0) - stated on every job, never left to a code
     # default (R50): a job with none stated is refused here, before anything is shipped.
     env.update(backup_scope.script_env(backup_scope.require_backup_databases(
@@ -128,9 +145,19 @@ def backup_request_from_job(
         "script_path": str(_script_path(job.script, label=job.label, data_dir=data_dir)),
         "env": env,
         "host": host_block(target, secrets=secrets, data_dir=data_dir),
-        "timeout": job.time_window.timeout or 3600,
+        # The job's own window, as stated: 0 is no limit (0.39.0). It was `or 3600`, so a stated 0 ran
+        # under an hour nobody wrote; an unstated one is refused with the job before it gets here.
+        "timeout": _stated_timeout(job),
         "dry_run": dry_run,
     }
+
+
+def _stated_timeout(job: Any) -> int:
+    timeout = getattr(getattr(job, "time_window", None), "timeout", None)
+    if timeout is None:
+        raise SpecBuildError(f"{job.label}: time_window.timeout is not stated - the seconds its backup may run, "
+                             "or 0 for no limit. State it, or run upgrade-config.")
+    return int(timeout)
 
 
 def host_block(target: Any, *, secrets: dict[str, str], data_dir: str | Path | None = None) -> dict:

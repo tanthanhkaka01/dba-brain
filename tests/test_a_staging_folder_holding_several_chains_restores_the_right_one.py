@@ -296,18 +296,15 @@ def test_latest_moves_the_newest_chain_and_the_new_wal_only():
     ]
 
 
-def test_a_point_in_time_moves_every_chain_the_staging_does_not_already_hold():
-    """A moment before the newest full needs an older chain, so a point in time copies the whole
-    directory - and still skips what is already staged (the 03:00Z chain, segment 41)."""
+def test_a_point_in_time_moves_the_chain_that_reaches_the_moment():
+    """A moment before the newest full needs an older chain: the newest full at or before the moment
+    (04:00Z) and its incremental, with wal/ - not the 05:00Z chain after it (0.39.0, 1.360; it used to
+    copy the whole directory) - and still skips what is already staged (segment 41)."""
     assert _transferred(point_in_time="2026-10-03 04:30:00 +00:00") == [
         "base/20261003T040018Z_FULL/backup_manifest",
         "base/20261003T040018Z_FULL/global/pg_control",
         "base/20261003T041026Z_INCR/backup_manifest",
         "base/20261003T041026Z_INCR/global/pg_control",
-        "base/20261003T050007Z_FULL/backup_manifest",
-        "base/20261003T050007Z_FULL/global/pg_control",
-        "base/20261003T051015Z_INCR/backup_manifest",
-        "base/20261003T051015Z_INCR/global/pg_control",
         "wal/000000010000000000000042",
         "wal/000000010000000000000043",
     ]

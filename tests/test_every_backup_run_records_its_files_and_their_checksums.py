@@ -83,7 +83,8 @@ def test_backup_database_answers_the_files_its_script_printed(monkeypatch):
     out = _line("APPDB", "FULL", "/b/a.bak") + "\nRESULT=ok level=full\n"
     monkeypatch.setattr(common_backup, "run_script",
                         lambda host, script, **k: {"stdout": out, "stderr": "", "exit_code": 0})
-    spec = common_backup.parse_backup_spec({"db_type": "sqlserver", "script": "echo", "level": "full"})
+    spec = common_backup.parse_backup_spec({"db_type": "sqlserver", "script": "echo", "level": "full",
+                                            "timeout": 3600})
 
     result = common_backup.run_backup(spec)
 
@@ -104,7 +105,7 @@ def catalog(tmp_path):
 def _job(backup_id="ACME_250_APPDB", db_type="sqlserver", job="full"):
     return backup_module.BackupJob(
         backup_id=backup_id, job=job, db_type=db_type, server_id="ACME-192-0-2-250",
-        script="x.sh", backup_dir="/b", cleanup_retention=691200, time_window=TimeWindow(),
+        script="x.sh", backup_dir="/b", cleanup_retention=691200, time_window=TimeWindow(timeout=3600),
         server_metadata=ServerMetadataPlan())
 
 

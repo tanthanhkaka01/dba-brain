@@ -8,6 +8,7 @@ import threading
 import time
 import re
 from dataclasses import dataclass
+from typing import Callable
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from dbabrain.backup_restore.config import (
     BackupRestoreConfig,
@@ -94,6 +95,124 @@ from dbabrain.backup_restore.restore_sqlcmd import (  # noqa: F401 - re-exported
 )
 
 
+@dataclass
+class ChainRecord:
+    """Where a share-driven SQL Server restore writes the files it applies (0.39.0, 1.367).
+
+    The operator, 2026-11-13: *dbabrain must keep the full chain of files a restore used, so it can be
+    shown which file went into which restore*. The restore from the repository has written
+    ``restore_chain_files`` since 1.367; this path - full, diff and each log applied by ``sqlcmd`` from
+    a share - wrote nothing. One record per source: the run row is the copy's
+    (``run_copy_backup(...).restore_run_id``), and each database adds its own chain to it as it is
+    reached (``append_chain``). Every file gets a row ``planned`` before its database's first RESTORE,
+    then ``applied``, ``skipped`` with SQL Server's reason, or ``failed`` with the error.
+
+    **The record is not the restore**: a store that cannot be written is said in the log, once per
+    database, and the restore goes on - as the other path's ``_record_chain`` does.
+    """
+
+    catalog: object
+    restore_run_id: int
+    source_server_id: str
+    target_server_id: str
+
+    def plan(self, rows: list[dict[str, object]], *, logger: object | None = None) -> list[int]:
+        """``rows`` added to the run's chain, each tied to its catalogued backup file when the catalog
+        knows it by the source server and the file's name; their positions, or ``[]`` when not written."""
+        try:
+            known = self.catalog.backup_file_facts(  # type: ignore[attr-defined]
+                server_id=self.source_server_id, file_names=sorted({str(row["file_name"]) for row in rows}))
+            for row in rows:
+                fact = known.get(str(row["file_name"])) or {}
+                if fact:
+                    row["file_id"] = fact["file_id"]
+                    row["file_type"] = str(fact.get("file_type") or "")
+                    row["backup_ended_at"] = row.get("backup_ended_at") or fact.get("backup_ended_at")
+            return list(self.catalog.append_chain(int(self.restore_run_id), rows))  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001 - the record is not the restore; it is said, never silent
+            _emit_restore_log(logger, "restore-db chain not-recorded "
+                              + _format_metadata(restore_run_id=self.restore_run_id,
+                                                 reason=f"{type(exc).__name__}: {exc}"[:300]), level="warning")
+            return []
+
+    def mark(self, positions: list[int], result: str, error_text: str = "") -> None:
+        if not positions:
+            return
+        try:
+            self.catalog.set_chain_step(int(self.restore_run_id), list(positions),  # type: ignore[attr-defined]
+                                        result=result, error_text=error_text)
+        except Exception:  # noqa: BLE001 - the record is not the restore
+            return
+
+
+def _chain_rows(chain: ChainRecord, candidate: "RestoreCandidate", config: BackupRestoreConfig,
+                diff: Path | None, logs: list, stopat_utc: datetime.datetime | None) -> list[dict[str, object]]:
+    """The files one database's restore is about to apply, in order, as chain rows - each by the path
+    the target's SQL Server reads it at, as the RESTORE statement names it."""
+    files: list[tuple[str, str]] = [("restore-full", str(candidate.backup_file_on_vm))]
+    if diff:
+        files.append(("restore-diff", str(vm_unc_to_local_path(diff, config))))
+    files.extend(("restore-log", str(vm_unc_to_local_path(log, config))) for log in logs)
+    rows = []
+    for number, (step, path) in enumerate(files, start=1):
+        last_log = step == "restore-log" and number == len(files)
+        rows.append({"source_server_id": chain.source_server_id, "target_server_id": chain.target_server_id,
+                     "database_name": candidate.source_database_name, "restored_as": candidate.restore_database_name,
+                     "step": step, "file_name": PureWindowsPath(path).name if "\\" in path else PurePosixPath(path).name,
+                     "file_path": path,
+                     # The last log of a point-in-time restore stops inside itself and recovers; a latest
+                     # restore recovers in a step of its own, after the chain.
+                     "with_recovery": 1 if last_log and stopat_utc is not None else 0,
+                     "stopat": stopat_utc.strftime("%Y-%m-%dT%H:%M:%SZ") if last_log and stopat_utc is not None else None})
+    return rows
+
+
+def _where_to_stop(candidate: "RestoreCandidate", logs: list, heads: list[dict[str, object]] | None,
+                   point_in_time_utc: datetime.datetime | None, *, logger: object | None = None,
+                   restore_id: str | None = None) -> tuple[str | None, dict[str, object]]:
+    """``(stopat_source, expect)`` for one database of a share-driven restore (0.39.0, 1.363 / 1.367).
+
+    **The clock.** A SQL Server backup's header times and its log records are in the SOURCE
+    instance's clock, and STOPAT is read in that clock. This path handed STOPAT in UTC - the defect
+    1.363 found and fixed on the restore from the repository (a +07 source stopped seven hours early
+    and said done). The offset is read the way that path reads it
+    (``restore_by_id.source_offset_minutes``): a file named by its UTC start (dbabrain's own
+    ``_YYYYMMDD_HHMMSSZ``) against its header's ``BackupFinishDate``. A name without the ``Z`` - a
+    backup another tool wrote - or headers that could not be read leave the moment as it was handed.
+
+    **What it is held to** (``expect``, the shape ``restore_by_id.where_it_stopped`` reads): with a
+    STOPAT, the target's ``stop_at`` is that moment; a moment at or past the newest log, or a latest
+    restore, the last backup the target applied ended when the chain's last file did. Unknown - no
+    headers - is ``not read`` there, never a difference.
+    """
+    from dbabrain.backup_restore.restore_by_id import in_source_clock, past_the_newest, source_offset_minutes
+
+    files = []
+    for head in heads or []:
+        files.append({"path": str(head.get("path") or ""), "finished_at": head.get("finished_at")})
+    chain_ends = str(files[-1]["finished_at"] or "") if files and files[-1].get("finished_at") else ""
+    expect: dict[str, object] = {"database_name": candidate.restore_database_name,
+                                 "source_database": candidate.source_database_name,
+                                 "moment": "", "stopat": False, "chain_ends": chain_ends}
+    if point_in_time_utc is None or not logs:
+        return None, expect
+    moment = point_in_time_utc.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    offset = source_offset_minutes(files) if files else None
+    in_source = in_source_clock(moment, offset) if offset is not None else ""
+    log_files = [item for item, head in zip(files, heads or []) if str(head.get("backup_type")) == "2"]
+    reached = past_the_newest(log_files, in_source) if in_source and log_files else ""
+    if reached:
+        # The STOPAT would lie past the last log: SQL Server leaves the database RESTORING (Msg 4326)
+        # and the recovery step after the chain opens it at the log's end - held to that end.
+        return None, expect
+    _emit_restore_log(logger, "restore-db point-in-time clock "
+                      + _format_metadata(restore_id=restore_id or None, database=candidate.source_database_name,
+                                         asked_utc=moment, source_offset_minutes=offset if offset is not None else "unknown",
+                                         stopat=in_source or moment))
+    expect.update(moment=in_source or point_in_time_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00"), stopat=True)
+    return (in_source or None), expect
+
+
 def parse_point_in_time(value: str) -> datetime.datetime:
     """Parse a timezone-aware datetime string into a UTC datetime.
 
@@ -158,7 +277,8 @@ def build_restore_candidate(
 
 def _restore_step(level: str, candidate: RestoreCandidate, config: BackupRestoreConfig, *,
                   path: str | Path, recovery: bool = False,
-                  stopat_utc: datetime.datetime | None = None) -> dict[str, object]:
+                  stopat_utc: datetime.datetime | None = None,
+                  stopat_source: str | None = None) -> dict[str, object]:
     """What ``common.cli restore-<level>`` is asked for one step of this restore.
 
     The RESTORE statement itself is written in one place, ``common/restorestep/sqlserver.py``
@@ -185,7 +305,11 @@ def _restore_step(level: str, candidate: RestoreCandidate, config: BackupRestore
             "data": _target_path_str(candidate.restore_data_file_on_vm, config),
             "log": _target_path_str(candidate.restore_log_file_on_vm, config),
         }
-    if stopat_utc is not None:
+    if stopat_source:
+        # The moment in the source's clock, with no offset: STOPAT is read against the log's own
+        # times, which are the source server's (1.363) - handed in UTC, a +07 source stopped 7 h early.
+        fields["stopat"] = stopat_source
+    elif stopat_utc is not None:
         fields["stopat"] = stopat_utc.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
     return fields
 
@@ -201,6 +325,8 @@ def run_restore_database(
     ensure_credential: bool = True,
     logger: object | None = None,
     point_in_time_utc: datetime.datetime | None = None,
+    chain: ChainRecord | None = None,
+    on_phase: "Callable[..., None] | None" = None,
 ) -> dict[str, object]:
     restore_config = config or load_restore_config()
     app_config = dbabrain_config or load_config()
@@ -333,8 +459,13 @@ def run_restore_database(
     # The chain is held to its LSNs before anything is restored (1.250, gap G10), as restore-by-id's
     # is: a missing log found at RESTORE LOG leaves the target half-restored, and found here it is
     # named instead.
-    _check_backup_chain(restore_config, candidate, selected_diff_backup, selected_log_backups,
-                        logger=logger, restore_mode=restore_mode)
+    heads = _check_backup_chain(restore_config, candidate, selected_diff_backup, selected_log_backups,
+                                logger=logger, restore_mode=restore_mode)
+    # Where this database is to stop, in the SOURCE's clock (0.39.0, 1.363 / 1.367), from the headers
+    # the check just read: the moment for STOPAT, and what the target's own record is held to after
+    # the check (``expect``, read by the workflow with ``restore_by_id.where_it_stopped``).
+    stopat_source, expect = _where_to_stop(candidate, selected_log_backups, heads, point_in_time_utc,
+                                           logger=logger, restore_id=restore_config.restore_id)
 
     # Print the restore plan before executing so the exact FULL -> DIFF -> LOG chain and the
     # STOPAT point are auditable up front (and visible in a dry run). Only the final LOG uses
@@ -423,13 +554,84 @@ def run_restore_database(
         backup_file=str(candidate.backup_file_on_vm),
         restore_start=started_at,
     )
+    # The chain this database is about to apply, written before its first RESTORE (1.367): full,
+    # diff, logs - in that order, so the positions of the logs follow the full's and the diff's.
+    positions = (chain.plan(_chain_rows(chain, candidate, restore_config, selected_diff_backup,
+                                        selected_log_backups, point_in_time_utc), logger=logger)
+                 if chain is not None else [])
+    at_full = positions[:1]
+    at_diff = positions[1:2] if selected_diff_backup else []
+    at_logs = positions[(2 if selected_diff_backup else 1):]
+    # Each file is said as it goes in (0.39.0, 1.370; the operator: *restore is like backup - a
+    # message for each of full, diff, log*; 2026-11-14: *one message for each log file*), numbered
+    # within this database: the full, the diff, each log.
+    total_files = 1 + (1 if selected_diff_backup else 0) + len(selected_log_backups)
+    label = (candidate.source_database_name if candidate.source_database_name.lower()
+             == candidate.restore_database_name.lower()
+             else f"{candidate.source_database_name} as {candidate.restore_database_name}")
+    last_mark = [time.monotonic()]
+
+    def _say_file(op: str, number: int, path: object, result: str, reason: str = "", *,
+                  log_number: int = 0, last_log: bool = False) -> None:
+        seconds = int(time.monotonic() - last_mark[0])
+        last_mark[0] = time.monotonic()
+        if on_phase is None:
+            return
+        from dbabrain.backup_restore import restore_messages
+        from dbabrain.backup_restore.events import announce
+        from dbabrain.lib.timezone import format_display
+
+        name = PureWindowsPath(str(path)).name
+        said = f"{label}: {restore_messages.STEP_NAMES.get(op, op)} {name}"
+        if log_number:
+            said += f" ({log_number} of {len(selected_log_backups)} logs)"
+        if result == "applied":
+            said += (f", stopped at {stopat_source or format_display(point_in_time_utc)}"
+                     " - recovered, the database is open"
+                     if last_log and point_in_time_utc is not None else " - left restoring for the next step")
+        announce(on_phase, "RESTORE_STEP",
+                 f"Restore {restore_config.restore_id or restore_config.source_id}: {said} - {result}"
+                 + (f" ({reason})" if reason else "") + ".",
+                 {"step": op, "step_number": number, "steps": total_files, "result": result,
+                  **restore_messages.share_step(restore_config.restore_id or restore_config.source_id, op=op,
+                                                result=result, number=number, total=total_files, said=said,
+                                                seconds=seconds, reason=reason)})
+
+    def _kept(step, at: list[int], op: str, number: int, path: object):
+        try:
+            outcome = step()
+        except Exception as exc:
+            if chain is not None:
+                chain.mark(at, "failed", f"{type(exc).__name__}: {exc}"[:2000])
+            _say_file(op, number, path, "failed", f"{type(exc).__name__}: {exc}"[:300])
+            raise
+        if chain is not None:
+            chain.mark(at, "applied")
+        if outcome.get("status") != "SKIPPED":
+            _say_file(op, number, path, "applied")
+        return outcome
+
+    first_log = 2 if selected_diff_backup else 1
+
+    def _log_kept(index: int, result: str, error_text: str = "") -> None:
+        if chain is not None and 0 < index <= len(at_logs):
+            chain.mark([at_logs[index - 1]], result, error_text)
+        if 0 < index <= len(selected_log_backups):
+            _say_file("restore-log", first_log + index, selected_log_backups[index - 1], result, error_text,
+                      log_number=index, last_log=index == len(selected_log_backups))
+
     try:
         # Before the first RESTORE: do the files this backup holds fit where they go (§1.76).
         restore_room = _check_restore_room(restore_config, candidate, selected_diff_backup, logger=logger)
         steps = [
-            run_restore_full(config=restore_config, candidate=candidate, logger=logger),
-            run_restore_diff(config=restore_config, candidate=candidate, selected_backup=selected_diff_backup, logger=logger),
-            run_restore_log(config=restore_config, candidate=candidate, selected_backups=selected_log_backups, logger=logger, stopat_utc=point_in_time_utc),
+            _kept(lambda: run_restore_full(config=restore_config, candidate=candidate, logger=logger), at_full,
+                  "restore-full", 1, candidate.backup_file_on_vm),
+            _kept(lambda: run_restore_diff(config=restore_config, candidate=candidate,
+                                           selected_backup=selected_diff_backup, logger=logger), at_diff,
+                  "restore-diff", 2, selected_diff_backup or ""),
+            run_restore_log(config=restore_config, candidate=candidate, selected_backups=selected_log_backups,
+                            logger=logger, stopat_utc=point_in_time_utc, on_file=_log_kept,
+                            stopat_source=stopat_source),
         ]
         if point_in_time_utc is not None:
             # The final LOG restore normally recovers the DB (WITH RECOVERY + STOPAT). If that log
@@ -509,6 +711,7 @@ def run_restore_database(
         "selected_log_backups": [str(path) for path in selected_log_backups],
         "skipped_backups": skipped_backups,
         "per_database_restore_status": {candidate.restore_database_name: "SUCCESS"},
+        "expect": expect,
         "final_recovery_status": recovery_result["status"],
         "final_recovery_model_status": recovery_model_result["status"],
         "checkdb_status": checkdb_result["status"],
@@ -541,9 +744,10 @@ def _read_chain_headers(config: BackupRestoreConfig, candidate: RestoreCandidate
 
 
 def _check_backup_chain(config: BackupRestoreConfig, candidate: RestoreCandidate, diff: Path | str | None,
-                        logs: list, *, logger: object | None, restore_mode: str) -> None:
+                        logs: list, *, logger: object | None, restore_mode: str) -> list[dict[str, object]] | None:
     """Refuse a chain whose LSNs do not join, naming the piece; a chain that cannot be read is
-    logged as not judged and restored as before (``restore_chain_check``)."""
+    logged as not judged and restored as before (``restore_chain_check``). Answers the headers it
+    judged by, full first (each with ``finished_at``, the source's clock), or ``None``."""
     from dbabrain.backup_restore import restore_chain_check
 
     def on_target(path) -> str:
@@ -557,21 +761,22 @@ def _check_backup_chain(config: BackupRestoreConfig, candidate: RestoreCandidate
             "database": candidate.source_database_name, "restore_mode": restore_mode, "files": len(paths)}
     try:
         stdout = _read_chain_headers(config, candidate, paths, logger=logger)
-        broken, unjudged = restore_chain_check.chain_break(full, diff_path, log_paths, stdout)
+        broken, unjudged, heads = restore_chain_check.read_chain(full, diff_path, log_paths, stdout)
     except errors.NotConfigured:
         raise
     except Exception as exc:  # noqa: BLE001 - a check that cannot run is not judged, never a refusal
-        broken, unjudged = "", f"the headers could not be read: {exc}"
+        broken, unjudged, heads = "", f"the headers could not be read: {exc}", None
     if unjudged:
         _emit_restore_log(logger, "restore-db backup-chain not-judged "
                           + _format_metadata(**meta, reason=unjudged), level="warning")
-        return
+        return None
     if broken:
         _emit_restore_log(logger, "restore-db backup-chain refused "
                           + _format_metadata(**meta, reason=broken), level="critical")
         raise errors.Refused(f"{candidate.source_database_name}: the backup chain is broken - {broken}. "
                              "Nothing was restored.")
     _emit_restore_log(logger, "restore-db backup-chain checked " + _format_metadata(**meta))
+    return heads
 
 
 def _check_restore_room(config: BackupRestoreConfig, candidate: RestoreCandidate,
@@ -654,11 +859,37 @@ def run_restore_log(
     selected_backups: list[Path] | None = None,
     logger: object | None = None,
     stopat_utc: datetime.datetime | None = None,
+    on_file: "Callable[[int, str, str], None] | None" = None,
+    stopat_source: str | None = None,
 ) -> dict[str, object]:
+    """Each selected log, in order; ``on_file(index, result, reason)`` is told what became of each -
+    ``applied``, ``skipped`` or ``failed`` (the chain record of 1.367).
+
+    Two refusals are passed over. **Msg 4326** - the log ends before the database's restore point, a
+    log taken the same minute as, just before, the full: it holds nothing the database needs, and is
+    ``skipped`` at once. **Msg 4305** - the log begins AFTER the restore point: either a file out of
+    the chain (a later log then goes in, and the file is ``skipped``) or a log is MISSING before it.
+    Until 0.39.0 every 4305 was passed over and the database still came out SUCCESS when one log had
+    gone in, so behind a real gap every later log was refused, passed over, and the database was
+    recovered at the gap - hours short of what was asked, and said done (read 2026-11-14 for 1.367;
+    the chain check before the restore catches a gap only when it can read the headers). Now a 4305
+    after which no later log of the database goes in **fails the database**, naming the log: it did
+    not reach what it was asked to.
+    """
     selected_backups = selected_backups or []
+
+    def _said(index: int, result: str, reason: str = "") -> None:
+        if on_file is not None:
+            try:
+                on_file(index, result, reason)
+            except Exception:  # noqa: BLE001 - the record is not the restore
+                pass
+
     if selected_backups:
         results = []
         skipped_4305: list[str] = []
+        # 4305 refusals no later log has gone in after yet: a file out of the chain, or the gap.
+        pending_4305: list[tuple[int, str]] = []
         total = len(selected_backups)
         for index, backup in enumerate(selected_backups, start=1):
             backup_on_vm = vm_unc_to_local_path(backup, config)
@@ -667,7 +898,8 @@ def run_restore_log(
             # stays NORECOVERY, and a latest restore recovers in its own step after the chain.
             step = ("log", _restore_step("log", candidate, config, path=backup_on_vm,
                                          recovery=is_last_with_stopat,
-                                         stopat_utc=stopat_utc if is_last_with_stopat else None))
+                                         stopat_utc=stopat_utc if is_last_with_stopat else None,
+                                         stopat_source=stopat_source if is_last_with_stopat else None))
             metadata: dict[str, object] = {"sequence": index, "total": total, "file": str(backup_on_vm)}
             if is_last_with_stopat:
                 metadata["stopat_utc"] = stopat_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -701,6 +933,7 @@ def run_restore_log(
                         "stderr": "",
                     }
                 else:
+                    _said(index, "failed", f"restore timed out and the target could not confirm the log went in: {exc}"[:2000])
                     raise errors.Refused(
                         f"reason=restore_timeout_resume_unsafe database={candidate.restore_database_name} "
                         f"backup={backup_on_vm} last_confirmed_log={resume_result['last_confirmed_log']}: {exc}"
@@ -708,6 +941,7 @@ def run_restore_log(
             except Exception as exc:  # noqa: BLE001 - inspect the SQL error to decide skip vs. fail.
                 if _is_sqlserver_msg_4305(str(exc)):
                     skipped_4305.append(str(backup_on_vm))
+                    pending_4305.append((index, str(backup_on_vm)))
                     _emit_restore_log(
                         logger,
                         "restore-db restore-log skipped "
@@ -728,6 +962,8 @@ def run_restore_log(
                 # redundant for the chain, so skip it and continue rather than failing the DB.
                 # (A real gap raises Msg 4305 "too recent to apply", which is NOT skipped.)
                 if "too early to apply" in str(exc).lower():
+                    _said(index, "skipped", "Msg 4326: the log ends before the database's restore point - "
+                                            "it holds nothing the database needs")
                     _emit_restore_log(
                         logger,
                         "restore-db restore-log skipped "
@@ -742,13 +978,29 @@ def run_restore_log(
                         ),
                     )
                     continue
+                _said(index, "failed", f"{type(exc).__name__}: {exc}"[:2000])
                 raise
             results.append(result)
-        if not results:
-            skipped_text = ", ".join(skipped_4305) if skipped_4305 else "none"
+            _said(index, "applied")
+            # A later log went in: the 4305 refusals before it were files out of the chain, not a gap.
+            for refused_index, _refused in pending_4305:
+                _said(refused_index, "skipped", "Msg 4305: the log begins after the database's restore point, "
+                                                "and a later log of the chain went in - a file out of the chain")
+            pending_4305.clear()
+        if pending_4305:
+            # Refused as too recent, and nothing went in after: a log is missing before the first of them.
+            first_index, first = pending_4305[0]
+            for refused_index, _refused in pending_4305:
+                _said(refused_index, "failed",
+                      "Msg 4305: the log begins after the database's restore point and no later log went in - "
+                      f"a log is missing before {PureWindowsPath(first).name if chr(92) in first else PurePosixPath(first).name}")
+            applied_text = f"{len(results)} log(s) applied before it" if results else "no log applied"
             raise errors.OperationFailed(
-                "missing required earlier LOG backup / LSN gap: no selected LOG backup could be applied "
-                f"database={candidate.restore_database_name} skipped_msg_4305={skipped_text}"
+                "missing required earlier LOG backup / LSN gap: "
+                f"database={candidate.restore_database_name} - {first} and the {len(pending_4305) - 1} log(s) after it "
+                f"were refused as too recent to apply (Msg 4305) and no later log went in; {applied_text}. "
+                "The database would stop at the gap, short of what was asked - it is not recovered as restored. "
+                f"skipped_msg_4305={', '.join(skipped_4305)}"
             )
         return {
             "step": "restore-log",
@@ -984,6 +1236,8 @@ def run_restore_server(
     dry_run: bool = False,
     logger: object | None = None,
     point_in_time_utc: datetime.datetime | None = None,
+    chain: ChainRecord | None = None,
+    on_phase: "Callable[..., None] | None" = None,
 ) -> dict[str, object]:
     restore_config = config or load_restore_config()
     app_config = dbabrain_config or load_config()
@@ -1019,6 +1273,8 @@ def run_restore_server(
                         ensure_credential=False,
                         logger=logger,
                         point_in_time_utc=point_in_time_utc,
+                        chain=chain,
+                        on_phase=on_phase,
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - one DB's failure must not abort the remaining databases.
@@ -1052,6 +1308,8 @@ def run_restore_server(
                         ensure_credential=False,
                         logger=logger,
                         point_in_time_utc=point_in_time_utc,
+                        chain=chain,
+                        on_phase=on_phase,
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - restore-all must continue past one DB's failure (e.g. broken log chain).
@@ -1155,8 +1413,11 @@ def run_restore_all_latest(
     dry_run: bool = False,
     logger: object | None = None,
     point_in_time_utc: datetime.datetime | None = None,
+    chain: ChainRecord | None = None,
+    on_phase: "Callable[..., None] | None" = None,
 ) -> dict[str, object]:
-    return run_restore_server(config=config, dbabrain_config=dbabrain_config, dry_run=dry_run, logger=logger, point_in_time_utc=point_in_time_utc)
+    return run_restore_server(config=config, dbabrain_config=dbabrain_config, dry_run=dry_run, logger=logger,
+                              point_in_time_utc=point_in_time_utc, chain=chain, on_phase=on_phase)
 
 
 def ensure_source_certificate_with_events(

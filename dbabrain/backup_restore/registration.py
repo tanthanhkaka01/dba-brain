@@ -39,6 +39,8 @@ from typing import Any
 from dbabrain.lib import field_names
 from dbabrain.lib import integrity as restore_integrity
 from dbabrain.lib import offload as offload_rules
+from dbabrain.lib.restore import landing as restore_landing
+from dbabrain.lib.restore import stated as restore_stated
 from dbabrain.lib import backup_scope
 from dbabrain.lib import cleanup_retention
 from dbabrain.lib import data_sources
@@ -393,6 +395,13 @@ def add_backup(request: dict[str, Any] | None = None, *,
     env_secrets.update(stored)
     if env_secrets:
         entry["env_secrets"] = env_secrets
+    # Every field that decides its runs (0.39.0, 1.366), at the value a record that says nothing had
+    # run on: each job's switch, window, notify rules and env - its notify read through the entry's,
+    # as the loader reads it - and the entry's switch, secrets, scrub and server metadata.
+    for job in entry.get("jobs") or []:
+        if isinstance(job, dict):
+            restore_stated.state_record(job, kind=restore_stated.BACKUP_JOB, parent=entry)
+    restore_stated.state_record(entry, kind=restore_stated.BACKUP_ENTRY)
 
     section["backups"] = _put_entry(section["backups"], "backup_id", backup_id, entry)
     _validate(path, document, load_backup_jobs)
@@ -560,11 +569,25 @@ def add_restore(request: dict[str, Any] | None = None, *,
     # restores nothing - else stated as `restore`, what an entry without the field always did.
     payload["action"] = payload.get("action") if payload.get("action") is not None else restore_integrity.STATED_ACTION
     payload.setdefault("restore_from", offload_rules.STATED_RESTORE_FROM)
+    # Whether it may replace what its target holds (0.39.0, 1.362): false unless the registration
+    # says true - an entry registered here used to carry no word at all, and its first run refused it.
+    payload.setdefault("overwrite_existing", False)
+    if not isinstance(payload["overwrite_existing"], bool):
+        raise RegistrationError(f"{restore_id}: overwrite_existing must be true or false, got "
+                                f"{payload['overwrite_existing']!r}.")
     try:
         restore_integrity.parse_restore_integrity(payload, label=restore_id)
         restore_integrity.parse_restore_action(payload, label=restore_id)
         offload_rules.parse_restore_from(payload, label=restore_id)
-    except (restore_integrity.IntegrityConfigError, offload_rules.OffloadConfigError) as exc:
+        if str(payload.get("script") or "").strip():
+            # A script-driven SQL Server entry names its databases and the name each lands under
+            # (1.362); nothing can be written for it - which databases is the registration's to say.
+            engine = str(payload.get("db_type") or "").strip().lower()
+            landing = restore_landing.parse_landing(payload, label=restore_id, db_type=engine)
+            if engine in restore_landing.BY_DATABASE_ENGINES:
+                restore_landing.require_landing(landing, label=restore_id)
+    except (restore_integrity.IntegrityConfigError, offload_rules.OffloadConfigError,
+            restore_landing.LandingError) as exc:
         raise RegistrationError(str(exc)) from None
 
     document = _read_document(path)
@@ -609,6 +632,16 @@ def add_restore(request: dict[str, Any] | None = None, *,
         block[ref_field] = ref
         entry[block_name] = block
 
+    # Every field that decides its run (0.39.0, 1.366), written into the entry at the value an entry
+    # that says nothing had run on - so the file shows the decision, and the registration may state
+    # another. A share-driven entry reads the block above it first, as its loader does.
+    if is_script_restore(entry) and str(entry.get("target_backup_dir") or "").strip():
+        from dbabrain.backup_restore.restore_script import DEFAULT_STAGING_MARKER
+
+        # A new staging folder is marked with this version's own name. What an older entry ran on
+        # is the name its folder carried before 0.29.0 (upgrade-config's earlier-defaults).
+        entry.setdefault("staging_marker", DEFAULT_STAGING_MARKER)
+    restore_stated.state_record(entry, above=restore_stated.section_above(section))
     section["restores"] = _put_entry(section["restores"], "restore_id", restore_id, entry)
     # Both loaders, because each reads only its own shape: `load_restore_configs` steps over a
     # script-driven entry, so an entry of that shape was checked by nothing. A PostgreSQL restore
@@ -625,8 +658,18 @@ def add_restore(request: dict[str, Any] | None = None, *,
     _write_document(path, document)
     written.append(path.name)
 
-    loaded = [item for item in load_restore_configs(path)
-              if str(getattr(item, "restore_id", "")) == restore_id]
+    # Read back by the loader of ITS shape (0.39.0): `load_restore_configs` steps over a script-driven
+    # entry, so one registered a moment ago answered "loaded": false, and was told to rehearse with
+    # restore-latest - the one command that refuses it.
+    scripted = bool(str(entry.get("script") or "").strip())
+    if scripted:
+        from dbabrain.backup_restore.restore_script import load_script_restores
+
+        loaded = [item for item in load_script_restores(path)
+                  if str(getattr(item, "restore_id", "")) == restore_id]
+    else:
+        loaded = [item for item in load_restore_configs(path)
+                  if str(getattr(item, "restore_id", "")) == restore_id]
     return {
         "restore_id": restore_id,
         "database_mappings": len(payload.get("database_mappings") or []),
@@ -636,7 +679,10 @@ def add_restore(request: dict[str, Any] | None = None, *,
         "files_written": written,
         "next": [
             "dbabrain backup_restore list-restores",
-            f"dbabrain backup_restore restore-latest --restore-id {restore_id} --dry-run",
+            # A script-driven entry's rehearsal is restore-workflow's dry run: the chain it would copy,
+            # the room on the target, where each database lands. restore-latest runs the share-driven kind.
+            (f"dbabrain backup_restore restore-workflow --restore-id {restore_id} --dry-run" if scripted else
+             f"dbabrain backup_restore restore-latest --restore-id {restore_id} --dry-run"),
         ],
     }
 

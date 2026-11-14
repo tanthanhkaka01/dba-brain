@@ -54,7 +54,13 @@ An app (R03): it never imports `common` - each command runs as `python -m dbabra
 3. **No secret crosses.** Every answer passes `lib.redaction` - each value of the encrypted secret
    store, as itself and as spelt inside JSON, and the shapes a secret is printed in - before Claude
    reads it; the request a command ran (holding the password it was completed with) is never handed
-   back.
+   back. **And none enters** (0.39.0, R52): a request carrying a secret - a key of
+   `lib.mcp_tools.SECRET_KEYS` (`password`, `connection.password`, `encryption_password`, `identity`,
+   ...) anywhere in it, or `secret-set` / `ai-key`'s `value` - is refused before it runs, without echoing
+   it, and says where to type it instead: on the node (`dbabrain common secret-set -`, `dbabrain
+   ai-key`), then named here by its reference (`password_ref`). A command that could only be refused
+   (`secret-set`, `ai-key`, the three that need an age `identity`) is not offered. A login the node
+   completes from its own store is not one - name the `server_id`.
 4. **Every answer is capped** at `max_chars` and says how much was cut.
 5. **Every call is recorded** (`log_calls`): a `job_runs` row `mcp.<tool>` - the tool, the
    `server_id`, the node's user, duration, done or failed - shown on the console's runs page.

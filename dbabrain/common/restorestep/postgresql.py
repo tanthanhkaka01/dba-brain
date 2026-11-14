@@ -287,6 +287,23 @@ def _combine_command(paths: list[str], staging: str, bin_dir: str) -> str:
             f'"$BIN" -o {shlex.quote(staging)} {" ".join(members)} && rm -rf {work_q}')
 
 
+def _target_holds(ask: Any, data_dir: str, *, overwrite: bool) -> str:
+    """What the data directory holds before it is replaced, in one sentence - or the refusal.
+
+    ``ask(command)`` runs the shell where the directory is and answers as ``run`` does. With
+    ``overwrite`` the reading is only said (the entry stated that this target is replaced); without
+    it a directory holding user data, or one that cannot be read, stops the restore here - before
+    the target is stopped, before a file is moved (0.39.0, 1.362; :mod:`.target_holds`).
+    """
+    from dbabrain.common.restorestep import target_holds
+
+    result = ask(target_holds.postgresql_command(data_dir))
+    holds = target_holds.read_postgresql(result.get("stdout") or "", data_dir)
+    if not overwrite and not (holds.read and holds.empty):
+        raise RestoreStepError(target_holds.refusal("postgresql", holds))
+    return holds.what + (" - replaced (overwrite_existing is true)" if overwrite and not holds.empty else "")
+
+
 def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, Any]:
     host = parse_host(request.get("host"))
     data_dir = str(request.get("data_dir") or "").strip()
@@ -359,18 +376,24 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
             f"mv {shlex.quote(staging)}/* {shlex.quote(data_dir.rstrip('/'))}/ && "
             f"rmdir {shlex.quote(staging)} && chmod 700 {shlex.quote(data_dir.rstrip('/'))}")
 
+    # Whether this restore may replace what the target's data directory holds - the entry's word,
+    # true or nothing (0.39.0, 1.362). Until then the step never read it: the contents were removed
+    # and the base backup moved in, whatever was there.
+    overwrite = request.get("overwrite_existing") is True
+
     if host.runtime != DOCKER:
         command = f"{build} && {swap}"
         if dry_run:
             return {"db_type": "postgresql", "level": level, "command": command,
                     "action": action, "dry_run": True}
+        held = _target_holds(lambda check: run(host, check, timeout=300), data_dir, overwrite=overwrite)
         result = run(host, command, timeout=int(request.get("timeout_seconds") or 7200))
         if result["exit_code"] != 0:
             raise RestoreStepError(
                 f"{action} failed (exit {result['exit_code']}): "
                 f"{(result['stderr'] or result['stdout']).strip()[-400:]}")
         return {"db_type": "postgresql", "level": level, "applied": paths,
-                "data_dir": data_dir, "action": action}
+                "data_dir": data_dir, "action": action, "target_held": held}
 
     # --- container: stop it, rebuild it from a helper, start it, wait for recovery ------------
     #
@@ -435,6 +458,11 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
         return {"db_type": "postgresql", "level": level, "plan": plan,
                 "action": action, "dry_run": True}
 
+    # Read through the same helper the rebuild uses - the target's own volumes, as the database user -
+    # so it answers for a target that is stopped or crash-looping, and BEFORE the target is stopped:
+    # a restore that is refused leaves it running as it was.
+    held = _target_holds(lambda check: run(on_host, helper + shlex.quote(check), timeout=300), data_dir,
+                         overwrite=overwrite)
     stopped = run(on_host, plan["stop"], timeout=300)
     if stopped["exit_code"] != 0:
         raise RestoreStepError(f"could not stop {host.container}: {stopped['stderr'][-200:]}")
@@ -461,5 +489,6 @@ def apply(level: str, request: dict[str, Any], paths: list[str]) -> dict[str, An
             "data_dir": data_dir, "action": action, "container": host.container,
             "read_from_host": readable, "wal_copy": wal_copy if wal_dir else None,
             "recovery": recovery, "recovery_target_time": target_time or None,
+            "target_held": held,
             "note": "rebuilt in a helper container while the target was stopped, recovery "
                     "configured before the first start, waited for until recovery ended"}

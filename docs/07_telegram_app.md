@@ -30,7 +30,7 @@ The Telegram App sends pending queue rows through the Telegram Bot API, saves up
 
 `data/telegram_config.json` controls Telegram enablement, API URL, timeout, bot token resolution, the group file path, and `level_chat_map` — routes that cannot be declared as a group (a private DM has a positive chat_id) plus any override of the group file; `config.json` only references it via the `telegram_config_file` key. A level routes iff it has a chat there or in the group file: no separate allow-list (the old `alert_levels` key is ignored). `data/bot_telegram.json` can provide bot identity and token secret references. `data/telegram_groups.json` maps notify levels to active chat IDs. `data/telegram_users.json` and `data/telegram_support_commands.json` control command permissions.
 
-`data/telegram_support_commands.md` is the human/BotFather command menu source (paste its command block into BotFather `/setcommands`). The bot executes from `data/telegram_support_commands.json`, not from the menu file.
+`data/telegram_support_commands.md` describes the commands for a reader; its first block is held to the json by a test. The bot executes from `data/telegram_support_commands.json`, and since 0.39.0 its "/" menu is set from it too (each command's `menu_description`, `telegram set-menu` - below), never pasted from the md file.
 
 ## Data Flow
 
@@ -918,6 +918,33 @@ directly, like petweb; keep what was asked, what the AI answered and which dbabr
 with a quota in $.* A message addressed to the bot in the assistant's chat is a question to
 Claude, answered with dbabrain's own read-only tools.
 
+**What it is for: the DBA's and the DevOps engineer's daily work on databases and servers** (the
+operator, 2026-11-14). *Why is this alert firing, did last night's backups run, which jobs failed,
+what is slow on this server, which query regressed* - it reads the answer itself (the store's
+metrics, runs, backups and restores with `store_query`; the configuration and logs with the file
+tools; a read-only query on the server with `run_sql`). It analyses queries - the heaviest by CPU,
+reads and duration, ad-hoc and single-use plans, plan regressions and plan changes (the metrics
+`PERFORMANCE_TOP_QUERIES`, `QUERY_STORE_QUERY_ISSUES`, and the server's own Query Store and DMVs) -
+and indexes (`MAINTENANCE_INDEX_USAGE`, fragmentation, PostgreSQL's invalid indexes). It explains
+what it found and what to do, and gives the exact command for
+the next step - a CLI line or a `/spbot_` command (`bot_commands`), a backup or a restore by hand
+(`backup_runbook`). It also walks a new install through its setup. It only reads and proposes; a
+person runs anything that changes something.
+
+**How it reaches the model, and how the model reaches the estate - no public IP, no inbound port**
+(0.39.0; the operator, 2026-11-14: *which path, does it need a public IP or a server - say it clearly*).
+The node opens every connection, outward. A question goes to `api.anthropic.com:443` over HTTPS (the
+SDK; `http_proxy` in `ai_assist.json` when the network needs one) with the tool definitions; the model
+answers with the tools it wants run; the node runs them itself - read-only, through the same commands
+a person runs, with this node's credentials - and sends the results in the next request, until the
+model answers in words. Nothing on the internet connects to the node, and no server is needed beside
+it. Telegram is the same shape: the job polls `api.telegram.org` (`getUpdates`) and sends replies; no
+webhook. MCP (`docs/16_mcp_app.md`) is a stdio child process on the same machine, or one WebSocket the
+node opens to `mcp.dbabrain.dev`.
+
+**Each install names its own assistant.** The package ships `Phanes`; set `assistant_name` to any
+name. A node whose file already states a name keeps it through every upgrade.
+
 **It has a name, and the name is configuration** (0.38.0, 1.326 - the operator, 2026-11-11: *name
 dbabrain's AI, set in the config json*). `data/ai_assist.json` `assistant_name` (mandatory, shipped
 `Phanes`; one line of 1 to 40 characters, not starting with `/` or `@`) is read wherever the
@@ -1061,6 +1088,36 @@ step by step in `agents_guide.md`'s order - passphrase, clock, store, the first 
 schedule, Telegram, backups, the assistant itself - and `dbabrain init`'s next steps say once that
 the assistant exists and what it needs.
 
+**Switched on by one command: `dbabrain ai-key`** (0.39.0; the operator, 2026-11-14: *a node just
+installed, the AI key added by a CLI command - written in the full guide, first*). Bare on a terminal
+it asks for the Anthropic key (not echoed); a script pipes `{"value": "<key>"}` to `dbabrain common
+ai-key -` (stdin only, as `secret-set`). The key is stored in the encrypted store first - under the
+`api_key_ref` the settings already name, else `AI_ASSIST_API_KEY`, which is then written there - and
+then `ai_assist.json` says `enabled: true` (a root with no file gets one at the shipped values). The
+ref the settings name is the assistant's own: a new key replaces it; a ref the request names that
+holds another secret is refused unless `overwrite`. A settings file that cannot be read is said, and
+nothing is stored. `init`'s next steps and `AGENTS.md` (section 2) give it first.
+
+**Asked for real, on demand: the live scenario** (0.39.0; the operator, 2026-11-14: *a fresh 0.39
+install, the AI key added by the CLI; the assistant asked at the command line how to set up Telegram -
+the token, the groups, the users' permissions; a Telegram user asking how to build the install, add
+an instance ...; and about backup and restore - add a backup, add a restore, run by hand, on a
+schedule, the repository; all in English - as test cases to run each time, switched on or off since
+they spend tokens*). `tests/test_the_ai_assistant_guides_a_new_install_live.py` is skipped unless
+`DBABRAIN_LIVE_AI=1`, and then needs the Anthropic key in `DBABRAIN_LIVE_AI_KEY` (switched on without
+one it fails, never skips):
+
+```bash
+DBABRAIN_LIVE_AI=1 DBABRAIN_LIVE_AI_KEY=<key> python -m pytest tests/test_the_ai_assistant_guides_a_new_install_live.py -v
+```
+
+On a tool root `init` writes, `ai-key` stores the key (scenario 1); two questions go through
+`dbabrain telegram ai-ask` (scenario 2) and nine through the bot's own job as messages from a user in
+the assistant's chat - the replies queued, nothing sent to Telegram (scenarios 3 and 4). Each answer
+must be in English, name what its question needs, and name only `dbabrain <app> <command>` and
+`/spbot_` commands this version has. Eleven questions with the shipped model; every answer with its
+tokens and cost lands in `runtime/live_ai/<stamp>.md` for a person to read.
+
 **Asked at the command line: `dbabrain telegram ai-ask "<question>"`** (0.36.0, 1.267). On a new
 install the assistant could be reached only through Telegram, which is step 6 of the setup it
 guides. The operator's test on 2026-11-06 was: a clean install, the AI key added, then ask the CLI
@@ -1136,8 +1193,9 @@ over SSH and over a share, and a restore from the server and from the repository
 **The answer is the asker's level** (0.38.0, 1.328). A step that changes something - a forced
 backup, a repository pass (it deletes at the source), a restore, a copy, a stop - is held to the
 level of the bot command that does the same thing **on this node**: its `command_type` in
-`telegram_support_commands.json` (shipped: 10 for `/spbot_backup`, `/spbot_restore` and
-`/spbot_copy_backup`). `lib.backup_runbook.for_asker` is given the asker's level from
+`telegram_support_commands.json` (shipped: 10 for `/spbot_backup`, `/spbot_offload`, `/spbot_restore`
+and `/spbot_copy_backup`). The repository pass is held to `/spbot_offload`'s level; a node whose
+configuration has no command running `offload` holds it to the backup command's, as before 0.39.0. `lib.backup_runbook.for_asker` is given the asker's level from
 `telegram_users.json` and the bot's own rule (`commands.can_run_command`, with the asker's level as
 the chat's - what `bot_commands` answers `asker_may_run_in_private_chat` by):
 
@@ -1157,6 +1215,64 @@ keeps - not in the prompt (`tests/test_a_changing_command_is_handed_only_to_a_le
 **Reading what it did**: `telegram.cli ai-usage --days 30 --by day|user|model` and
 `telegram.cli ai-show --id <ai_request_id>`, or the console's *AI assistant* page (0.35.0, admins;
 `docs/12_webhost_app.md`), which reads the same `AiAssistStore.usage_since` and `transcript`.
+
+## The repository pass from a chat: `/spbot_offload` (0.39.0)
+
+Until 0.39.0 a chat could run a backup (`/spbot_backup`) and nothing after it: the copy to the
+repository, its encryption and the release at the source ran only on the scheduled workflow's next
+pass, or by hand at a node's command line - the assistant said so whenever it was asked to walk a
+backup end to end. `/spbot_offload <backup_id> [run|dry-run]` runs `backup_restore offload
+--backup-id <id>` (with `--dry-run` for `dry-run`) as a background command, level 10 like
+`/spbot_backup`, in a group or a private chat.
+
+- **No `completion_probe`.** A scheduled pass of the same entry writes the same
+  `backup_restore.offload.end` row, and the poller stops a task whose probe answered - a hand pass
+  copying a FULL would have been killed by the scheduler's pass of the next quarter hour. The outcome
+  is the exit code (`offload` exits 1 when a pass failed).
+- **One sentence back**: the chat gets `offload`'s `said` - what was done, the dry run's counts, or
+  that there was nothing to do (an id with no repository, a pass with nothing pending). Each step's
+  message goes to the entry's backup group, as a scheduled pass's does.
+- The timeout is 6 hours, past which the task is stopped; the next pass starts at the first step not
+  done (`docs/08`, *resume*).
+
+The runbook (`backup_runbook`) gives the command beside the CLI line (`telegram_offload`), held to its
+own level.
+
+## A restore's plan from a chat: `/spbot_restore_plan` (0.39.0)
+
+`/spbot_restore_plan <restore_id> <LATEST|YYYY-MM-DD HH:MM:SS +HH:MM>` runs `restore-workflow --restore-id
+<id> --dry-run` and answers its `said`: the files and GB, read from the repository or the source, decrypted
+through what, already on the target, whether they fit, the staging folder, the steps after the copy - or
+`WOULD BE REFUSED` with each reason. Level 2: nothing is copied, made, restored or deleted. No
+`completion_probe` (a dry run writes no run row). The assistant's runbook never takes it for the restore it
+plans: `bot_twins` reads `--dry-run` fixed in a `restore-workflow` line as `RESTORE_PLAN` - placed first in
+the file the day it was added, it had been taken for `/spbot_restore`, its level 2 for the restore's.
+
+## The bot's menu: `telegram set-menu` (0.39.0)
+
+What Telegram offers under "/" is the bot's own menu (`setMyCommands`), not anything the node
+answers. It used to be pasted into BotFather's `/setcommands` from the block at the top of
+`data/telegram_support_commands.md`, and nothing compared the two: on 2026-11-13 the menu had 29
+commands while the node ran 31 (`/spbot_copy_backup` and `/spbot_lockdown` were never pasted).
+
+```bash
+python -m dbabrain.telegram.cli set-menu --dry-run    # what would change
+python -m dbabrain.telegram.cli set-menu              # set it, only when it differs
+```
+
+**The menu is the node's own `telegram_support_commands.json`** (the operator, 2026-11-14: *set-menu
+should take it straight from the json, not from the md file*). Each command states its line,
+`menu_description` (1-256 characters); `set-menu` reads the live menu (`getMyCommands`) and sets
+those lines, in `sort_order`, for the commands this node may run (a level below 0 is switched off
+here, and not offered) - `dbabrain.lib.bot_menu`. It answers what it added and removed, a command
+switched off here, and a command that states no line (`not_described` - named, never given an
+invented line). A line Telegram would refuse stops it by name; a file in which no command states a
+line is refused rather than set to an empty menu. **To do on upgrade:** `upgrade-config`
+(`menu-descriptions`) gives each command that states no line the shipped catalogue's. The md
+document's block still describes the shipped commands, and
+`tests/test_the_bot_menu_is_the_nodes_own_commands.py` holds it to the json; nothing reads it to set
+the menu. Run it after a deploy that adds or removes a command - one bot has one menu, so it is set
+from the node that runs the commands.
 
 ## A group that becomes a supergroup (0.34.0)
 

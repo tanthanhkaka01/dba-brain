@@ -10,8 +10,32 @@ real measurement history, and tells you about it — on a schedule, without an a
 monitored machine.
 
 **It sends nothing anywhere by itself.** No telemetry, no usage reporting, no update check. It
-connects to the databases and hosts you list, and — only if you turn it on and give it a token —
-to a chat service. Nothing else.
+connects to the databases and hosts you list, and — only if you turn each on and give it a key — to
+a chat service and to an AI model's API. Nothing else.
+
+**Better with an AI, complete without one.** dbabrain is the harness an AI model works through: give
+it an API key (`dbabrain ai-key`) and its assistant supports the DBA's and the DevOps engineer's
+daily work on databases and servers - it reads what is happening (alerts, backups, jobs, metrics, a
+read-only query on the server), explains it, and says the exact command for the next step, in
+Telegram or in a terminal; it also guides a new install. It only reads, through the same commands a
+person runs. An AI client can also drive it directly over MCP
+(`dbabrain mcp serve`). Leave the AI off, which is the default, and every collection, backup, report
+and alert runs exactly the same.
+
+**How a model reaches your estate - no public IP, no inbound port, no server of yours on the
+internet.** In every way below the connection is opened FROM your machine, outward; nothing on the
+internet connects in, and the commands run on your machine with your credentials:
+
+| Way | What runs where | What the network needs |
+| --- | --- | --- |
+| **The assistant** (`ai-key`, then `dbabrain telegram ai-ask` or Telegram) | Your node sends the question to the model's API; the model answers with the dbabrain tools it wants run; your node runs them (read-only) and sends the results in the next request, until the model answers | Outbound HTTPS to `api.anthropic.com:443` (through `http_proxy` in `data/ai_assist.json` when you need one). Telegram is polled outbound (`getUpdates` to `api.telegram.org:443`) - no webhook |
+| **An AI app on the same machine** (Claude Desktop, Claude Code, any MCP client) | The app starts `dbabrain mcp serve` as a child process and talks to it over stdin/stdout | Nothing from dbabrain; the app talks to its own model |
+| **claude.ai on the web or a phone** | `dbabrain mcp connect` links your node to the remote connector at `mcp.dbabrain.dev` and keeps one WebSocket open from your node; claude.ai's requests come down it | Outbound HTTPS/WebSocket to `mcp.dbabrain.dev:443`. The public endpoint is dbabrain.dev's, not yours |
+
+Only `dbabrain mcp serve --http` - serving MCP yourself - needs an address others can reach, and it
+is behind a bearer token. What leaves in each case, and what is redacted first:
+[`docs/security.md`](./docs/security.md), [`docs/07_telegram_app.md`](./docs/07_telegram_app.md),
+[`docs/16_mcp_app.md`](./docs/16_mcp_app.md).
 
 | What it does | |
 | --- | --- |
@@ -24,13 +48,14 @@ to a chat service. Nothing else.
 | **Alerts and chat commands** | Telegram delivery, one message at a time. Commands people send back are gated by the person's clearance *and* the chat's. |
 | **Configuration as code** | Every decision is a JSON file you keep in version control. A threshold change is a diff and a review, not an edit to somebody's script. |
 | **Secrets kept encrypted** | PBKDF2-HMAC-SHA256 and Fernet. The passphrase is supplied at run time and never written to disk, a log or the store. A password travels on stdin, never as a command-line word. |
+| **AI assistant (optional)** | Day-to-day support for the DBA and the DevOps engineer, on the databases and servers dbabrain watches. Ask in Telegram or at the terminal - *why is this alert firing*, *did last night's backups run*, *which jobs failed*, *what is slow on this server*, *which query regressed* - and it finds the answer itself: the metrics, runs, backups and restores in dbabrain's store, the configuration and the logs, a read-only query on the server. It analyses queries - the heaviest by CPU, reads and duration, ad-hoc and single-use plans, plan regressions and plan changes (Query Store) - and indexes (usage, unused, fragmented, invalid). It explains what it found and what to do, and gives the exact command for the next step (a CLI line or a `/spbot_` command) - running a backup or a restore by hand included. It also walks a new install through its setup. It only reads and proposes; a person runs anything that changes something. Off until you give it a key (`dbabrain ai-key`); every question, tool call, token and cost is kept, under limits you set. |
 
 **Two ways to read what it is, and both are accurate:**
 
 | | |
 | --- | --- |
 | **A database tool for SRE / DevOps** | Nothing is installed on a monitored machine — it reaches instances and hosts the way an operator does, over a connection and a credential you already have. Every decision is a JSON file you keep in version control, so a threshold change is a diff and a review rather than an edit to somebody's script. It schedules itself, or your scheduler drives it. |
-| **A database operations layer for an AI agent** | Every capability is one command that takes **one JSON object and answers with one**, with the same seven keys always present. There is no natural-language layer to translate through and no separate agent API: the command a person runs is byte-for-byte the command an agent runs. |
+| **A harness for an AI model** | Every capability is one command that takes **one JSON object and answers with one**, with the same seven keys always present. There is no separate agent API: the command a person runs is byte-for-byte the command an agent runs - its own assistant, an MCP client, or a coding agent in a shell. The model reads graded verdicts instead of raw rows, and every action it proposes is one a person can audit. |
 
 The second is not a later ambition. It is why the shape is what it is — and it is the **supported
 path today**, because the console that would let a person add an instance in a browser is not
@@ -54,7 +79,7 @@ Three commitments, and they are meant to be held to:
 | --- | --- |
 | **Reliable** | Every operation is typed, logged and repeatable. A scheduled run that failed can be replayed by hand from the same JSON request. Backups are not reported as successful — they are **restored, and the restore is the proof**. |
 | **Cheap for an agent to use** | An agent working a database from a shell pays, in context, for every raw result set it reads — on every check, most of them healthy. Here it sends a small request and reads a **graded verdict**, then pulls the evidence only for what came back bad. |
-| **Not dependent on one** | No model is required, configured, or contacted. Remove the agent and the daemon, the schedules, the reports and the alerts all still run. The agent is a caller, never a component. |
+| **Not dependent on one** | No model is required. With a key, the assistant makes setup and day-to-day questions easier; without one, nothing is contacted and the daemon, the schedules, the reports and the alerts all still run. The model is a caller, never a component the estate depends on. |
 
 The shape of that, because it is the whole argument in one picture:
 
@@ -92,12 +117,14 @@ current priority; see [`docs/first_run.md`](./docs/first_run.md) for where it st
 
 ## What it is not
 
-- **It is not an AI agent — it is what an agent operates.** Nothing here talks to a model, holds a
-  prompt, or decides anything on its own. It is a toolkit with a CLI, where every capability takes
-  one JSON object and answers with one, and that shape is what lets a human, a shell script, a chat
-  command and an agent drive the same operation without a translation layer. The distinction is
-  worth keeping: a layer that does not reason is a layer you can audit, and the judgement about
-  whether to restore production stays with whoever is accountable for it.
+- **It is not an AI that runs your estate on its own — it is the harness a model works through.**
+  The scheduler, the grading, the backups and the alerts are code and reviewed SQL; no model decides
+  any of them, and none is needed for them. The optional assistant calls a model's API only when you
+  give it a key, reads through read-only tools, and proposes commands for a person to run. Every
+  capability takes one JSON object and answers with one, and that shape is what lets a human, a
+  shell script, a chat command and a model drive the same operation without a translation layer. The
+  distinction is worth keeping: an operation that does not reason is one you can audit, and the
+  judgement about whether to restore production stays with whoever is accountable for it.
 - **It does not replace incident analysis, change approval, or runbooks.** It supports them. A
   restore drill proves a backup is restorable; deciding to restore production is still yours.
 - **It is not a dashboard product.** It has a web console for reading reports and editing
@@ -375,7 +402,7 @@ long-running service. If something errors here, stop: it will not get better onc
 python -m dbabrain.common.cli instance-add - <<'JSON'
 {"server_id": "ACME-192-0-2-9", "db_type": "sqlserver", "ip": "192.0.2.9",
  "port": 1433, "service_name": "MSSQLSERVER", "major_version": 16,
- "environment": "prod", "username": "dba_monitor", "password": "<the password>"}
+ "site": "ACME", "environment": "prod", "username": "dba_monitor", "password": "<the password>"}
 JSON
 ```
 

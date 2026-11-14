@@ -108,6 +108,21 @@ if [ -n "$per_type" ]; then
         esac
     done
 fi
+# Only the files written before a moment are the age window's (0.39.0, 1.373). The operator,
+# 2026-11-14: *a backup that goes to the repository is not cleaned the old way any more - unless it
+# does not go there, and then by a cleanup retention stated at the source.* An entry whose files are
+# released by the repository copy hands RETENTION_ONLY_BEFORE (epoch seconds, UTC) = the moment from
+# which its files go there: a file written since is deleted only after its copy is proven, never here.
+only_before="${RETENTION_ONLY_BEFORE:-}"
+only_before_test=""
+only_before_said=""
+if [ -n "$only_before" ]; then
+    case "$only_before" in
+        *[!0-9]*) die "RETENTION_ONLY_BEFORE must be epoch seconds: '${only_before}'." ;;
+    esac
+    only_before_test="! -newermt @${only_before}"
+    only_before_said=" (only files written before @${only_before}: the newer are the repository copy's to release)"
+fi
 
 # $DOCKER_CONTAINER is optional since 0.21.0: set it for an instance inside a container, leave it
 # unset for one installed on this Linux host. A NARROWER gap than the PostgreSQL and Oracle scripts
@@ -399,11 +414,12 @@ for db in $databases; do
             # The newest full itself is never the cut's, whatever its age. `! -newer` does not hold it - a
             # file is not newer than itself - so `! -path` does.
             removed="$(exec_here sh -c "
-                find '${db_dir}/${kind}' -type f -name '${pattern}' -mmin +$(( window / 60 )) \
+                find '${db_dir}/${kind}' -type f -name '${pattern}' -mmin +$(( window / 60 )) ${only_before_test} \
                      ! -newer '${newest_full}' ! -path '${newest_full}' -delete -print 2>/dev/null | wc -l
             " || true)"
-            printf 'retention: %s %s removed %s file(s) past its window (%ss), below its newest full %s\n' \
-                "$db" "$kind" "$(printf '%s' "${removed:-0}" | tr -d '[:space:]')" "$window" "${newest_full##*/}"
+            printf 'retention: %s %s removed %s file(s) past its window (%ss), below its newest full %s%s\n' \
+                "$db" "$kind" "$(printf '%s' "${removed:-0}" | tr -d '[:space:]')" "$window" "${newest_full##*/}" \
+                "$only_before_said"
         done
         continue
     fi
@@ -414,11 +430,11 @@ for db in $databases; do
     # window removed - PostgreSQL and Oracle always did, and this said nothing (0.27.0 item 1.91).
     removed="$(exec_here sh -c "
         find '${db_dir}' -type f \\( -name '*.bak' -o -name '*.trn' \\) \
-             ${age_test} ! -newer '${newest_full}' ! -path '${newest_full}' -delete -print 2>/dev/null | wc -l
+             ${age_test} ${only_before_test} ! -newer '${newest_full}' ! -path '${newest_full}' -delete -print 2>/dev/null | wc -l
     " || true)"
-    printf 'retention: %s removed %s file(s) past the window (%s), below its newest full %s\n' \
+    printf 'retention: %s removed %s file(s) past the window (%s), below its newest full %s%s\n' \
         "$db" "$(printf '%s' "${removed:-0}" | tr -d '[:space:]')" "$retention_window" \
-        "${newest_full##*/}"
+        "${newest_full##*/}" "$only_before_said"
 done
 
 # Readable by the SSH user that copies them to another machine, as the Oracle and PostgreSQL jobs

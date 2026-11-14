@@ -49,7 +49,7 @@ def _secrets(root):
 def test_one_call_writes_the_inventory_the_credential_and_the_secret(tmp_path):
     root = _root(tmp_path)
     answer = instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10",
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
          "username": "sa", "password": "s3cret"},
         data_dir=root, key=KEY)
 
@@ -61,7 +61,7 @@ def test_one_call_writes_the_inventory_the_credential_and_the_secret(tmp_path):
 def test_the_password_is_never_written_in_the_clear(tmp_path):
     root = _root(tmp_path)
     instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10",
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
          "username": "sa", "password": "s3cret"},
         data_dir=root, key=KEY)
 
@@ -75,7 +75,7 @@ def test_the_password_is_never_written_in_the_clear(tmp_path):
 def test_the_credential_name_is_derived_so_the_three_files_cannot_disagree(tmp_path):
     root = _root(tmp_path)
     answer = instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10",
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
          "username": "sa", "password": "x"},
         data_dir=root, key=KEY)
 
@@ -97,7 +97,7 @@ def test_the_port_defaults_per_engine_rather_than_to_one_number(tmp_path):
             # db_name only matters to postgresql/mysql, which refuse without one; the other two
             # ignore it, so passing it everywhere keeps this test about the port. Oracle states its
             # service, as it must (rules R50).
-            {"server_id": f"T-{db_type}", "db_type": db_type, "ip": "192.0.2.10",
+            {"server_id": f"T-{db_type}", "db_type": db_type, "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
              "db_name": "postgres", **({"service_name": "FREEPDB1"} if db_type == "oracle" else {})},
             data_dir=root, key=KEY)
         assert _instances(root)[0]["port"] == port
@@ -106,7 +106,7 @@ def test_the_port_defaults_per_engine_rather_than_to_one_number(tmp_path):
 def test_an_explicit_port_wins(tmp_path):
     root = _root(tmp_path)
     instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "port": 1453},
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab", "port": 1453},
         data_dir=root, key=KEY)
     assert _instances(root)[0]["port"] == 1453
 
@@ -116,7 +116,7 @@ def test_unknown_fields_are_passed_through_rather_than_dropped(tmp_path):
     # is a target whose OS metrics never run.
     root = _root(tmp_path)
     instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10",
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
          "major_version": 16, "service_name": "MSSQL", "platform": "linux",
          "cmd_access": {"method": "ssh", "auth_type": "password"}},
         data_dir=root, key=KEY)
@@ -127,7 +127,7 @@ def test_unknown_fields_are_passed_through_rather_than_dropped(tmp_path):
 
 def test_a_duplicate_server_id_is_refused_rather_than_overwritten(tmp_path):
     root = _root(tmp_path)
-    payload = {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10"}
+    payload = {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab"}
     instance_admin.add_instance(dict(payload), data_dir=root, key=KEY)
     with pytest.raises(instance_admin.InstanceAdminError) as excinfo:
         instance_admin.add_instance(dict(payload), data_dir=root, key=KEY)
@@ -138,10 +138,10 @@ def test_a_duplicate_server_id_is_refused_rather_than_overwritten(tmp_path):
 def test_replace_overwrites_exactly_one_record(tmp_path):
     root = _root(tmp_path)
     instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10"},
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab"},
         data_dir=root, key=KEY)
     instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.99", "replace": True},
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.99", "site": "LAB", "environment": "lab", "replace": True},
         data_dir=root, key=KEY)
     assert len(_instances(root)) == 1
     assert _instances(root)[0]["ip"] == "192.0.2.99"
@@ -159,7 +159,7 @@ def test_a_username_with_no_secret_at_all_is_refused(tmp_path):
     root = _root(tmp_path)
     with pytest.raises(instance_admin.InstanceAdminError) as excinfo:
         instance_admin.add_instance(
-            {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "username": "sa"},
+            {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab", "username": "sa"},
             data_dir=root, key=KEY)
     assert "no credential" in str(excinfo.value)
 
@@ -168,7 +168,7 @@ def test_giving_both_a_password_and_a_ref_is_refused(tmp_path):
     root = _root(tmp_path)
     with pytest.raises(instance_admin.InstanceAdminError) as excinfo:
         instance_admin.add_instance(
-            {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10",
+            {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
              "username": "sa", "password": "x", "password_ref": "EXISTING"},
             data_dir=root, key=KEY)
     assert "not both" in str(excinfo.value)
@@ -177,7 +177,7 @@ def test_giving_both_a_password_and_a_ref_is_refused(tmp_path):
 def test_an_existing_ref_is_pointed_at_rather_than_re_stored(tmp_path):
     root = _root(tmp_path)
     answer = instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10",
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
          "username": "sa", "password_ref": "SHARED_MONITOR_PW"},
         data_dir=root, key=KEY)
     assert answer["password_stored_encrypted"] is False
@@ -191,7 +191,7 @@ def test_a_password_with_no_passphrase_writes_nothing(tmp_path):
     root = _root(tmp_path)
     with pytest.raises(instance_admin.InstanceAdminError) as excinfo:
         instance_admin.add_instance(
-            {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10",
+            {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
              "username": "sa", "password": "x"},
             data_dir=root, key=None)
     assert "passphrase" in str(excinfo.value)
@@ -205,11 +205,11 @@ def test_a_wrong_passphrase_refuses_rather_than_replacing_the_store(tmp_path):
     # the next connection attempt.
     root = _root(tmp_path)
     instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10",
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
          "username": "sa", "password": "first"}, data_dir=root, key=KEY)
     with pytest.raises(instance_admin.InstanceAdminError) as excinfo:
         instance_admin.add_instance(
-            {"server_id": "LAB-2", "db_type": "sqlserver", "ip": "192.0.2.11",
+            {"server_id": "LAB-2", "db_type": "sqlserver", "ip": "192.0.2.11", "site": "LAB", "environment": "lab",
              "username": "sa", "password": "second"}, data_dir=root, key="wrong-passphrase")
     assert "could not be opened" in str(excinfo.value)
     assert _secrets(root)["MSSQL_LAB_1_MONITOR"] == "first"
@@ -220,10 +220,10 @@ def test_a_wrong_passphrase_refuses_rather_than_replacing_the_store(tmp_path):
 def test_a_second_target_keeps_the_first_one_s_secret(tmp_path):
     root = _root(tmp_path)
     instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10",
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab",
          "username": "sa", "password": "one"}, data_dir=root, key=KEY)
     instance_admin.add_instance(
-        {"server_id": "LAB-2", "db_type": "postgresql", "ip": "192.0.2.11",
+        {"server_id": "LAB-2", "db_type": "postgresql", "ip": "192.0.2.11", "site": "LAB", "environment": "lab",
          "db_name": "postgres", "username": "postgres", "password": "two"},
         data_dir=root, key=KEY)
     secrets = _secrets(root)
@@ -237,7 +237,7 @@ def test_a_target_with_no_login_is_allowed_and_writes_no_credential(tmp_path):
     # still worth doing on its own.
     root = _root(tmp_path)
     answer = instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10"},
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab"},
         data_dir=root, key=KEY)
     assert answer["credential_name"] == ""
     assert _credentials(root) == []
@@ -261,7 +261,7 @@ def test_the_command_is_registered_and_listed():
 def _registered(tmp_path):
     root = _root(tmp_path)
     instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "port": 1433,
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab", "port": 1433,
          "username": "monitor", "password": "first"}, data_dir=root, key=KEY)
     return root
 
@@ -360,7 +360,7 @@ def test_an_existing_second_login_is_overwritten_only_with_replace(tmp_path):
 def test_keep_default_false_is_an_ordinary_registration_and_not_written_on_the_record(tmp_path):
     root = _root(tmp_path)
     instance_admin.add_instance(
-        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "keep_default": False},
+        {"server_id": "LAB-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab", "keep_default": False},
         data_dir=root, key=KEY)
     assert "keep_default" not in _instances(root)[0]
 

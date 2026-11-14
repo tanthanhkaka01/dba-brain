@@ -13,7 +13,7 @@
   "sre": {
     "vmware": {
       "vmrun_path": "C:/Program Files (x86)/VMware/VMware Workstation/vmrun.exe",
-      "vm_root": "D:/VMs",
+      "vm_root": "C:/VMs",
       "template_name": "tpl-ubuntu-2404",
       "template_snapshot_name": "base-os",
       "net_interface": "ens33",

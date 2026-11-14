@@ -78,6 +78,8 @@ CONFIGURATION_IS_ITS_JOB = frozenset({
     # 0.24.0, the same review: it reports this node - what app_commands.json schedules here - so
     # its configuration is part of what it answers.
     "self-status",
+    # 0.39.0: the AI assistant's key into the encrypted store and ai_assist.json switched on.
+    "ai-key",
 })
 
 #: `init` writes a whole tool root into the directory it is given. Its runs here each get a directory
@@ -257,7 +259,7 @@ def _finished_offline(work: Path) -> dict[str, tuple[str, dict, str]]:
                                                             "plain_size_bytes": 1, "plain_sha256": "0" * 64,
                                                             "identity": "x"}, "fail"),
         "backup-database": ("backup-database", {"db_type": "postgresql", "host": _HERE, "label": "guard",
-                                                "script": "echo backed-up", "dry_run": True}, "ok"),
+                                                "script": "echo backed-up", "timeout": 600, "dry_run": True}, "ok"),
         "restore-key": ("restore-key", {"cer_path": "/c.cer", "pvk_path": "/c.pvk", "password": "pw",
                                         "dry_run": True}, "ok"),
         "restore-full": ("restore-full", {"db_type": "sqlserver", "target": {"host": "127.0.0.1"},
@@ -366,10 +368,11 @@ _ON_AN_EMPTY_ROOT = {
     # The field the Telegram command sends (0.25.0, 1.66), and the chats a new install has (1.67).
     "add-sql": {"db_type": "sqlserver", "server_id": "LAB-192-0-2-10", "display_name": "count the drill",
                 "sql_text": "select 1"},
-    "instance-add": {"server_id": "LAB-192-0-2-10", "db_type": "sqlserver", "ip": "192.0.2.10", "port": 1433},
+    "instance-add": {"server_id": "LAB-192-0-2-10", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab", "port": 1433},
     "remote-credential-add": {"server_id": "LAB-192-0-2-10", "username": "tuser",
                               "password_ref": "LAB_OS_PASSWORD", "host": "192.0.2.10"},
     "secret-set": {"ref": "LAB_PASSWORD", "value": "not-a-real-password"},
+    "ai-key": {"value": "sk-ant-not-a-real-key"},
     "list-targets": {}, "check-objects": {}, "check-references": {}, "describe-object": {},
     "standardize-field-names": {}, "upgrade-config": {}, "check-secret": {},
     # init creates the root it is given; guide prints this build's guide.
@@ -381,7 +384,7 @@ _ON_AN_EMPTY_ROOT = {
 }
 _TEST_KEY = "a-throwaway-passphrase-for-this-test-only"
 
-_INSTANCE = {"server_id": "LAB-192-0-2-10", "db_type": "sqlserver", "ip": "192.0.2.10", "port": 1433}
+_INSTANCE = {"server_id": "LAB-192-0-2-10", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "LAB", "environment": "lab", "port": 1433}
 
 
 def _on_a_root_init_wrote(work: Path, root: Path) -> dict[str, list[tuple[str, dict]]]:

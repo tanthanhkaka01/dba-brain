@@ -36,6 +36,20 @@ dbabrain init
 It writes nine files and then prints the next six commands. It **never overwrites** — the files it
 writes are the ones you edit immediately afterwards, so a second `init` cannot destroy your work.
 
+**The first thing to do, if you have an Anthropic API key: switch the AI assistant on** (0.39.0). It
+walks you through everything below - the passphrase, the clock, the first database, Telegram,
+backups - and answers questions about this install; it only reads, and proposes each command for you
+to run. With the passphrase set (`DBABRAIN_SECRET_KEY`):
+
+```bash
+pip install "dbabrain[ai]"
+dbabrain ai-key                                    # paste the key; it is not shown
+dbabrain telegram ai-ask "What do I set up next?"
+```
+
+`ai-key` stores the key in `data/encrypted_secret_text.json` and sets `enabled` and `api_key_ref` in
+`data/ai_assist.json`; run it again to replace the key. `init` prints the same lines first.
+
 One of the nine is **`AGENTS.md`, written into the tool root rather than into any repository**: an
 agent that has just run `init` is standing in that directory, and a guide in a repository it never
 cloned is a guide it will not read.

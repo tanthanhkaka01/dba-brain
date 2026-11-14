@@ -265,6 +265,50 @@ def test_a_plain_word_the_page_code_prints_is_left_as_the_product_s_prose(tmp_pa
     assert by_hand.apply("Machine") != "Machine"
 
 
+def test_a_plain_word_the_hosts_operating_system_uses_is_left_where_it_names_a_table(tmp_path, monkeypatch):
+    """The 0.38.0 showcase read `VMware Network SettlementQueue VMnet8` (1.352): a table called
+    `Adapter`, read off `...Connector.Adapter.PK_Adapters` on the index page, replaced the word in a
+    network interface's name - a value the operating system wrote, not the customer. A plain word an
+    OS metric's item uses is the operating system's before it is anyone's table; a name the host
+    carries as its own (`OS_INFO`), a name built from several words, and one named by hand are still
+    replaced.
+    """
+    from dbabrain.common import identifier_scan, showcase
+
+    monkeypatch.setattr(identifier_scan, "collect_identifiers",
+                        lambda _=None: {"10.1.2.3": "address"})
+    pages = (r"<td>FINDB\Connector.Adapter.PK_Adapters</td><td>FINDB\ops.Turbine.PK_Turbine</td>"
+             r"<td>FINDB\ops.ShiftRoster.IX_Shift</td>"
+             '<script>const S = [{"code":"OS_NETWORK","label":"Network","item":"VMware Network Adapter VMnet8"},'
+             '{"code":"OS_INFO","label":"OS","item":"Turbine"}];</script>')
+    mapping = showcase.build_mapping(data_dir=tmp_path, pages_text=pages)
+
+    assert mapping.apply("VMware Network Adapter VMnet8") == "VMware Network Adapter VMnet8"
+    assert "Adapter" in mapping.skipped_as_ordinary
+    assert mapping.apply("Turbine") != "Turbine", "the host's own name is not the operating system's word"
+    assert mapping.apply("ShiftRoster") != "ShiftRoster"
+
+    by_hand = showcase.build_mapping(data_dir=tmp_path, pages_text=pages, extra_terms={"Adapter": "table"})
+    assert by_hand.apply("Adapter") != "Adapter"
+
+
+def test_a_word_a_service_shares_with_an_instance_is_still_replaced(tmp_path, monkeypatch):
+    """A Windows service is named after its instance - `SQL Server (PAYROLL)` - so the words of an
+    OS item include the estate's identity. Only a database object's name is left for the operating
+    system's sake; an instance the pages state as `host=` is replaced inside the service's name too.
+    """
+    from dbabrain.common import identifier_scan, showcase
+
+    monkeypatch.setattr(identifier_scan, "collect_identifiers",
+                        lambda _=None: {"10.1.2.3": "address"})
+    pages = ('Session holding locks. spid=112, login=svc_app, host=PAYROLL, program=App\n'
+             '<script>const S = [{"code":"OS_SERVICE_STATUS","label":"Services","item":"SQL Server (PAYROLL)"}];</script>')
+    mapping = showcase.build_mapping(data_dir=tmp_path, pages_text=pages)
+
+    assert "PAYROLL" in mapping.as_dict()
+    assert "PAYROLL" not in mapping.apply("SQL Server (PAYROLL)")
+
+
 def test_an_estate_that_names_no_identifiers_is_refused_rather_than_certified_clean(tmp_path, monkeypatch):
     from dbabrain.common import identifier_scan, showcase
 

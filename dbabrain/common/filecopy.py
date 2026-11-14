@@ -75,6 +75,7 @@ from typing import Any, Callable
 from dbabrain.lib import errors
 from dbabrain.lib import repository_keys as K
 from dbabrain.lib.integrity import SHA256_HEX as _SHA256
+from dbabrain.lib.restore import windows as windows_target
 from dbabrain.lib.restore.copy_mode import TRANSFERS
 from dbabrain.lib.verified_cleanup import last_part as _last_part
 
@@ -119,9 +120,10 @@ class FileCopyError(errors.RequestError):
 FILE_FIELDS = ("source", "target", "file_name", "size_bytes", "sha256")
 
 
-def _files(request: dict[str, Any]) -> list[dict[str, Any]]:
+def _files(request: dict[str, Any], *, windows: bool = False) -> list[dict[str, Any]]:
     """Every line checked before the first byte moves - a bad line refuses the whole request while
-    nothing has been copied yet."""
+    nothing has been copied yet. ``windows``: the target login says ``platform: windows``, and each
+    ``target`` is a drive path there (``C:/dbabrain_restore/X/a.bak``)."""
     files = request.get("files")
     if not isinstance(files, list) or not files:
         raise FileCopyError('"files" must be a non-empty list of '
@@ -141,9 +143,16 @@ def _files(request: dict[str, Any]) -> list[dict[str, Any]]:
         source, target, name = (str(item[k]).strip() for k in ("source", "target", "file_name"))
         if any(ord(char) < 32 for char in source + target + name):
             raise FileCopyError(f"{where}: a path or name must not hold a control character.")
-        if not target.startswith("/"):
-            raise FileCopyError(f"{where}.target must be an absolute path on the target host; got {target!r}.")
-        if target.endswith("/") or posixpath.basename(target) in ("", ".", ".."):
+        if windows:
+            try:
+                windows_target.drive_path(target, field=f"{where}.target")
+            except ValueError as exc:
+                raise FileCopyError(str(exc)) from None
+        elif not target.startswith("/"):
+            raise FileCopyError(f"{where}.target must be an absolute path on the target host; got {target!r}"
+                                + (' - a Windows drive path: state "platform": "windows" in the target login.'
+                                   if windows_target.is_drive_path(target) else "."))
+        if target.endswith(("/", "\\")) or _last_part(target) in ("", ".", ".."):
             raise FileCopyError(f"{where}.target must name a file; got {target!r}.")
         if any(part in (".", "..") for part in re.split(r"[\\/]+", source + "/" + target)):
             raise FileCopyError(f"{where}: source and target must not contain '.' or '..' segments.")
@@ -160,6 +169,23 @@ def _files(request: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+#: What a login may say it reaches (``platform``): a Linux host - what every login meant until 0.39.0,
+#: and what one that says nothing still means - or a Windows host running Windows OpenSSH.
+LOGIN_PLATFORMS = ("linux", windows_target.PLATFORM)
+
+
+def login_platform(login: Any, *, role: str) -> str:
+    """The ``platform`` a login states: ``linux`` (also when it states none) or ``windows`` (0.39.0).
+
+    Stated, never guessed from a path: a Windows host takes PowerShell where a Linux one takes a shell
+    command, and writes no ``cat`` channel - the login is where the caller says which it reached.
+    """
+    value = str((login or {}).get("platform") or "linux").strip().lower() if isinstance(login, dict) else "linux"
+    if value not in LOGIN_PLATFORMS:
+        raise FileCopyError(f"{role}.platform must be one of {', '.join(LOGIN_PLATFORMS)}; got {value!r}.")
+    return value
+
+
 def _ssh(login: Any, *, role: str):
     """A connected SSH session - :mod:`remote_exec`, the one executor."""
     from dbabrain.common import remote_exec
@@ -170,7 +196,7 @@ def _ssh(login: Any, *, role: str):
     access: dict[str, Any] = {
         "method": "ssh", "host": str(login["host"]).strip(), "port": int(login.get("port") or 22),
         "username": str(login.get("username") or "").strip(), "password": str(login.get("password") or ""),
-        "auth_type": "key" if key_file else "password", "platform": "linux",
+        "auth_type": "key" if key_file else "password", "platform": login_platform(login, role=role),
         "timeout_seconds": int(login.get("open_timeout_seconds") or 30)}
     if key_file:
         access["key_file"] = key_file
@@ -803,8 +829,14 @@ def copy_one_encrypted(reader: Any, target_sftp, target: str, *, size_bytes: int
 
 
 def copy_files(request: dict[str, Any], *, clock: Callable[[], float] = time.monotonic) -> dict[str, Any]:
-    """Copy each named file; answer one line per file (``ok``, ``bytes_copied``, ``error``)."""
-    files = _files(request)
+    """Copy each named file; answer one line per file (``ok``, ``bytes_copied``, ``error``).
+
+    Onto a Windows target (the target login's ``platform: windows``, 0.39.0) each file is written over
+    SFTP whatever ``transfer`` says: a Windows host has no ``cat`` to write a channel into. ``transfer``
+    still says how the source is read.
+    """
+    windows = login_platform(request.get("target"), role="target") == windows_target.PLATFORM
+    files = _files(request, windows=windows)
     transfer = transfer_of(request, "copy-files")
     overwrite = request.get("overwrite")
     if not isinstance(overwrite, bool):
@@ -834,7 +866,10 @@ def copy_files(request: dict[str, Any], *, clock: Callable[[], float] = time.mon
                 line["error"] = f"not started: the command's {timeout}s were spent"
                 continue
             reader = None
-            if not overwrite and _exists(target_sftp, item["target"] + landed):
+            # Where SFTP finds it: a Windows drive path as `/C:/...`, so the folder walk and the partial's
+            # rename read it as the absolute path it is.
+            where = sftp_path(item["target"]) if windows else item["target"]
+            if not overwrite and _exists(target_sftp, where + landed):
                 # Left exactly as it is; the source is not read. The caller's hash of the target says
                 # whether what is there is the file.
                 line["error"] = "the target already holds a file and overwrite is false - left as it is"
@@ -842,20 +877,22 @@ def copy_files(request: dict[str, Any], *, clock: Callable[[], float] = time.mon
                 continue
             try:
                 reader = open_source(item["source"])
-                client = target_session.client if transfer == "cat" else None
+                client = target_session.client if transfer == "cat" and not windows else None
                 if encrypt:
                     line.update(copy_one_encrypted(
-                        reader, target_sftp, item["target"], size_bytes=item["size_bytes"], sha256=item["sha256"],
+                        reader, target_sftp, where, size_bytes=item["size_bytes"], sha256=item["sha256"],
                         overwrite=overwrite, encrypt=encrypt, stall=stall, target_client=client))
+                    if windows:
+                        line["encrypted_path"] = item["target"] + K.SUFFIX
                 else:
                     line["bytes_copied"], line["sha256_streamed"] = copy_one(
-                        reader, target_sftp, item["target"], size_bytes=item["size_bytes"], sha256=item["sha256"],
+                        reader, target_sftp, where, size_bytes=item["size_bytes"], sha256=item["sha256"],
                         overwrite=overwrite, stall=stall, target_client=client)
                 line["ok"] = True
             except Exception as exc:  # noqa: BLE001 - one file's failure is that file's answer
                 line["error"] = f"{type(exc).__name__}: {exc}"[:1000]
                 try:
-                    target_sftp.remove(item["target"] + landed + PARTIAL_SUFFIX)
+                    target_sftp.remove(where + landed + PARTIAL_SUFFIX)
                 except Exception:  # noqa: BLE001 - nothing was written, or the link is gone
                     pass
             finally:

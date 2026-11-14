@@ -125,6 +125,7 @@ R38-R45 keep their numbers and stand with the other layer rules; R43 is R11's si
 | R30 | [An `async` run never repeats claimed work](#r30) | absolute | - |
 | R47 | [A restore names its target; nothing about it is taken from the source](#r47) | absolute | - |
 | R50 | [A record states which thing is acted on; one left to a default is refused where it is used](#r50) | absolute | - |
+| R52 | [No secret enters through MCP, and none leaves](#r52) | absolute | - |
 
 ### 5. Code, tests and documentation
 
@@ -675,7 +676,7 @@ A restore names its target - `target_server_id`, and for an in-place restore `ta
 
 ### R50
 
-**A record states every fact that says which thing is acted on; one that leaves a fact to a default is refused where it is used**, naming the field - and alone: the rest of a scan runs (R26). The facts (`lib.stated_facts`): an instance reaching its host states `platform`, and over SSH `cmd_access.auth_type`; an instance with an engine states `port`, a PostgreSQL / MySQL one `database_name`, an Oracle one `service_name`; a script SQL Server restore states `env.MSSQL_USER`; an SMB (SQL Server) restore states its databases - `database_mappings`, or `restore_all_databases: true` for every one on the share under its backup's name - and into a container `target.sqlcmd_path`, and with a certificate API its `certificate_api_token_ref`. PostgreSQL and Oracle restores are script-driven and restore the instance. Where each is held: a connection (`request_fill.connection_from` / `sql_connection` - SQL tasks, the apps' `run-sql`), reaching a host (`request_fill.host_access`, `sre.remote`), a metric target (its SQL or host metrics fail, the scan runs), the two restore loaders (an active entry refuses the file, an inactive one is kept out with its reason), the restore plan; `instance-add` and `remote-credential-add` write no such active record, and `check-objects` counts each as a violation.
+**A record states every fact that says which thing is acted on; one that leaves a fact to a default is refused where it is used**, naming the field - and alone: the rest of a scan runs (R26). The facts (`lib.stated_facts`): an instance reaching its host states `platform`, and over SSH `cmd_access.auth_type`; an instance with an engine states `port`, a PostgreSQL / MySQL one `database_name`, an Oracle one `service_name`; a script SQL Server restore states `env.MSSQL_USER`; an SMB (SQL Server) restore states its databases - `database_mappings`, or `restore_all_databases: true` for every one on the share under its backup's name - and into a container `target.sqlcmd_path`, and with a certificate API its `certificate_api_token_ref`. PostgreSQL and Oracle restores are script-driven and restore the instance. Where each is held: a connection (`request_fill.connection_from` / `sql_connection` - SQL tasks, the apps' `run-sql`), reaching a host (`request_fill.host_access`, `sre.remote`), a metric target (its SQL or host metrics fail, the scan runs), the two restore loaders (an active entry refuses the file, an inactive one is kept out with its reason), the restore plan; `instance-add` and `remote-credential-add` write no such active record, and `check-objects` counts each as a violation. Since 0.39.0 (1.366) a backup or restore record also states every field that decides what its run does (`lib.restore.stated`: the switch, the window's three intervals, the notify rules, a restore's checks and copy, a share-driven target's instance and timeouts, a backup's scrub): one that leaves a field out still loads, is refused inside its own run naming the field and what it decides, and `upgrade-config` writes the value it had been running on.
 
 **Guard:**
 
@@ -686,8 +687,31 @@ A restore names its target - `target_server_id`, and for an in-place restore `ta
 - `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_the_parser_s_own_sqlcmd_default_does_not_answer_for_the_entry`
 - `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_instance_add_refuses_an_oracle_target_with_no_service`
 - `tests/test_a_record_that_leaves_a_fact_to_a_default_is_refused.py::test_the_shipped_examples_state_every_fact`
+- `tests/test_every_backup_and_restore_field_is_stated.py::test_the_workflow_refuses_it_inside_that_entrys_run_naming_what_each_decides`
+- `tests/test_every_backup_and_restore_field_is_stated.py::test_the_backup_run_refuses_that_job_before_anything_reaches_the_host_and_runs_the_rest`
+- `tests/test_every_backup_and_restore_field_is_stated.py::test_after_the_upgrade_every_record_states_every_field_and_a_second_run_writes_nothing`
 
 **Mark:** absolute since 0.27.0 - the owner's decision of 2026-10-01 (review 0.25.0, G3 phase 2) and the operator's word of 2026-10-06 (*add the full configuration - code that guesses for itself gets it wrong easily*). 0.26.0 reported these records as `fallback` notices so a node could be completed first; the worker's and the master's `check-objects` read 0 of them before this was switched on. What this rule does not cover yet: a `common.cli` request built by hand, whose own defaults (an SSH block's `auth_type`, `sqlcmd`'s path in a container, a default port) are the request contract's (R49) - the apps no longer reach them with a record that states nothing.
+
+### R52
+
+**No secret enters through MCP, and none leaves.** A request over MCP is written by the model, so a
+secret in it came through the chat - and on way 2 through the relay (the operator, 2026-11-14: *no
+secret goes in through MCP*). A request carrying one - a key in `lib.mcp_tools.SECRET_KEYS` anywhere in
+it, or `secret-set` / `ai-key`'s `value` - is refused before anything runs, without echoing it, and
+says where it is typed instead: on the node (`secret-set`, `ai-key`), then named by its reference
+(`password_ref`). A command that over MCP could only be refused is not offered. A login the node
+completes from its own store is not such a secret. Going out, every answer is redacted
+(`lib.redaction`) and the completed request is never handed back.
+
+**Guard:**
+
+- `tests/test_no_secret_enters_through_mcp.py::test_a_request_carrying_a_password_is_refused_before_it_runs_and_says_where_to_type_it`
+- `tests/test_no_secret_enters_through_mcp.py::test_a_command_that_could_only_be_refused_is_not_a_tool`
+- `tests/test_no_secret_enters_through_mcp.py::test_every_request_field_that_looks_like_a_secret_is_judged`
+- `tests/test_claude_reaches_dbabrain_through_mcp.py::test_no_secret_value_and_never_the_filled_request_reaches_the_model`
+
+**Mark:** absolute since 0.39.0.
 
 ### R31
 

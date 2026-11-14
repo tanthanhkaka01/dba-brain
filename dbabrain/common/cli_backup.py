@@ -38,7 +38,7 @@ the values.
                                       // SQL Server here is reached by winrm.
             "host": "203.0.113.188", "port": 22,
             "username": "ubuntu", "key_file": "/keys/oracle-cloud.key"},
-   "timeout": 7200,                   // seconds; default 3600
+   "timeout": 7200,                   // REQUIRED - seconds the script may run; 0 = no limit
    "dry_run": true}                   // optional; report the plan, ship nothing
 
 A SQL Server backup covers user databases only (`database_id > 4`), so master/msdb/model are

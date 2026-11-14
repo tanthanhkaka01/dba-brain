@@ -60,7 +60,10 @@ def logged(monkeypatch):
 def test_every_command_the_reference_describes_is_a_tool_and_the_store_has_two(tmp_path):
     node = _node(tmp_path)
     names = {tool["name"] for tool in S.tool_list(node)}
-    commands = set(M.command_entries(_reference()))
+    entries = M.command_entries(_reference())
+    # 0.39.0: a command that over MCP could only be refused - its purpose is a secret, or one it cannot
+    # run without - is not offered (no secret enters through MCP); every other one is a tool.
+    commands = {name for name, entry in entries.items() if not M.takes_a_secret_only(name, entry)}
     assert commands and commands <= names, "a command without its tool"
     assert {"run-sql", "db-status", "list-targets", "host-facts", "store_schema", "store_query"} <= names
     assert names - commands == set(M.STORE_TOOLS) | {M.SQL_WRITE_TOOL}

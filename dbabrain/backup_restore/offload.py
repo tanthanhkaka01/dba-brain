@@ -71,8 +71,10 @@ from dbabrain.backup_restore.events import emit_backup_restore_event
 from dbabrain.db.backup_catalog import MANIFEST_KEPT, BackupCatalogStore
 from dbabrain.db.store import DbaBrainStore, RunAlreadyClaimed, utc_now_text
 from dbabrain.lib import errors
+from dbabrain.lib import cleanup_retention as R
 from dbabrain.lib import integrity as I
 from dbabrain.lib import repository_keys as K
+from dbabrain.lib.restore import stated as record_stated
 from dbabrain.lib.verified_cleanup import last_part as _last_part
 from dbabrain.lib.version import __version__
 from dbabrain.transport import common_cli
@@ -127,6 +129,13 @@ def entries_to_offload(config_path: str | Path) -> list[_Entry]:
 
 def refusal(entry: _Entry) -> str:
     """Why this entry's offload cannot run as stated - '' when it can."""
+    # The entry's own fields that decide its runs (0.39.0, 1.366) - its switch decides this pass too.
+    # Every job of an entry carries them; an entry with no job has none to read.
+    unstated = getattr(entry.jobs[0], "entry_unstated", ()) if entry.jobs else ()
+    try:
+        record_stated.require_stated(unstated, label=f"backup entry {entry.backup_id}")
+    except record_stated.StatedError as exc:
+        return str(exc)
     offload = entry.offload
     if offload.scan != "none":
         return (f"offload_scan {offload.scan!r} is not built yet (1.242, decision V-3): no copy can be "
@@ -746,6 +755,10 @@ def _at(row: dict[str, Any]) -> str:
     return str(row.get("backup_ended_at") or row.get("created_at") or "")
 
 
+#: The file types whose every copy needs the ones before it in its chain (rule 6 of the expiry plan).
+_CHAIN_LINKS = frozenset(R.CHAIN_MEMBERS.values())
+
+
 def expiry_plan(rows: list[dict[str, Any]], offload: Any, *, now: datetime) -> tuple[list[dict[str, Any]], list[str]]:
     """Which repository copies have outlived their retention: ``(expire, kept_reasons)``.
 
@@ -765,6 +778,12 @@ def expiry_plan(rows: list[dict[str, Any]], offload: Any, *, now: datetime) -> t
     5. **A certificate never expires here.** Every encrypted backup made with it needs it, and a lost
        certificate makes all of them unreadable; it is removed by hand or not at all. A control file or
        spfile that belongs to no full on the repository is kept for the same reason.
+    6. **An incremental that needs every link back to its base goes with its chain** (0.39.0, 1.373):
+       PostgreSQL's ``INCR_BASE`` and Oracle's ``RMAN_L1`` (``cleanup_retention.CHAIN_MEMBERS``) expire
+       together, when the NEWEST of them in that chain is past its window. By its own age (rule 1)
+       the oldest link went first, and for as many days as the chain was long the incrementals after
+       it - still inside their window, still listed - restored nothing. A SQL Server DIFF is
+       cumulative and needs only its full: it still goes by its own age.
     """
     expire: list[dict[str, Any]] = []
     kept: list[str] = []
@@ -820,7 +839,16 @@ def expiry_plan(rows: list[dict[str, Any]], offload: Any, *, now: datetime) -> t
         for start in starts:
             if start >= newest:
                 continue                      # the newest chain: kept, and not news
-            gone = [row for row in dependents[start] if old(row)]
+            # Rule 6: the links of one chain go together, or not at all.
+            links = [row for row in dependents[start] if str(row["file_type"]).upper() in _CHAIN_LINKS]
+            links_go = bool(links) and all(old(row) for row in links)
+            if links and not links_go and any(old(row) for row in links):
+                waiting = [row["file_name"] for row in links if old(row)]
+                kept.append(f"{', '.join(waiting[:3])}{' ...' if len(waiting) > 3 else ''}: "
+                            f"{len(waiting)} incremental(s) past their retention, kept - a later incremental "
+                            "of the same chain is not, and needs every one of them")
+            gone = [row for row in dependents[start]
+                    if (links_go if str(row["file_type"]).upper() in _CHAIN_LINKS else old(row))]
             expire.extend(gone)
             members = groups[start]
             if not all(old(row) for row in members):
@@ -943,6 +971,7 @@ def run_offloads(
     entries = [e for e in entries_to_offload(config_path) if not backup_id or e.backup_id == backup_id]
     summary: dict[str, Any] = {"entries": len(entries), "ran": 0, "succeeded": 0, "failed": 0, "jobs": []}
     if not entries:
+        summary["said"] = said(summary, backup_id=backup_id, dry_run=dry_run)
         return summary
     store = DbaBrainStore.from_config(app_config)
     catalog = BackupCatalogStore.from_config(app_config)
@@ -978,7 +1007,32 @@ def run_offloads(
                                         store=store, catalog=catalog, refresh_release=refresh,
                                         app_config=app_config, logger=logger, data_dir=data_dir, key=key,
                                         key_base64=key_base64, sleep=sleep, summary=summary))
+    summary["said"] = said(summary, backup_id=backup_id, dry_run=dry_run)
     return summary
+
+
+def said(summary: dict[str, Any], *, backup_id: str | None, dry_run: bool) -> str:
+    """The pass in one sentence, for whoever started it from a chat (0.39.0, 1.347).
+
+    `/spbot_offload` answers in the chat it was typed in, from this summary: its per-step message goes
+    to the entry's backup group, as a scheduled pass's does. Without a sentence of its own the chat
+    read "done" for an id with no repository, and for a pass with nothing to do.
+    """
+    if not summary.get("entries"):
+        return (f"no backup entry {backup_id} with offload_enabled - nothing to offload (see list-backups)"
+                if backup_id else "no backup entry has offload_enabled - nothing to offload")
+    jobs = list(summary.get("jobs") or [])
+    if dry_run:
+        if not jobs:
+            return "dry run: nothing to copy, encrypt, release or expire"
+        return "dry run: " + "; ".join(
+            f"{job.get('backup_id')}: {job.get('to_copy', 0)} to copy, {job.get('to_encrypt', 0)} to encrypt, "
+            f"{job.get('to_release', 0)} to release at the source, {job.get('to_expire', 0)} to expire"
+            for job in jobs) + " - nothing done"
+    if not jobs:
+        return "nothing to do: every file is already copied, encrypted and released as its entry asks"
+    return (f"{summary.get('succeeded', 0)} done, {summary.get('failed', 0)} failed - each step is in the "
+            "entry's backup group")
 
 
 def _merge_encrypt(on_the_way: dict[str, Any] | None, after: dict[str, Any]) -> dict[str, Any]:

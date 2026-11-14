@@ -28,7 +28,7 @@ def test_a_registration_writes_one_flag_and_not_four(tmp_path):
     """The record carries `active: true` and says nothing about metrics, reports or alerts. Four
     blocks written at registration time would be four places to keep in step, and the cascade
     exists so there is one."""
-    instance_admin.add_instance({"server_id": "ACME-1", "db_type": "sqlserver", "ip": "192.0.2.10"},
+    instance_admin.add_instance({"server_id": "ACME-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "ACME", "environment": "prod"},
                                 data_dir=tmp_path)
 
     record = _record(tmp_path)
@@ -37,7 +37,7 @@ def test_a_registration_writes_one_flag_and_not_four(tmp_path):
 
 
 def test_all_four_read_true_from_that_one_flag(tmp_path):
-    instance_admin.add_instance({"server_id": "ACME-1", "db_type": "sqlserver", "ip": "192.0.2.10"},
+    instance_admin.add_instance({"server_id": "ACME-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "ACME", "environment": "prod"},
                                 data_dir=tmp_path)
 
     record = _record(tmp_path)
@@ -48,7 +48,7 @@ def test_all_four_read_true_from_that_one_flag(tmp_path):
 
 def test_a_new_registration_is_collected_from(tmp_path):
     """The metrics side of the same property, asked the way the collectors ask it."""
-    instance_admin.add_instance({"server_id": "ACME-1", "db_type": "sqlserver", "ip": "192.0.2.10"},
+    instance_admin.add_instance({"server_id": "ACME-1", "db_type": "sqlserver", "ip": "192.0.2.10", "site": "ACME", "environment": "prod"},
                                 data_dir=tmp_path)
 
     targets = load_config_metric_targets(data_dir=tmp_path, require_metrics_enabled=True)

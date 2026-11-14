@@ -310,6 +310,7 @@ and its package, the app's own builders, its hidden `restore-full/-diff/-log` co
 | --- | --- |
 | a full with `move` (logical name -> path) | `RESTORE DATABASE ... WITH ... REPLACE, MOVE ...` - the drills |
 | a full with `move_files` (`data`, `log`) | the nightly's batch: `SINGLE_USER` first, the logical names read with `RESTORE FILELISTONLY`, the RESTORE through `sp_executesql`, `MULTI_USER` after a recovering one |
+| a full with `relocate` (`true`, or `data_dir` / `log_dir`) (0.39.0, 1.354) | onto another server: the same batch, but **every** row of `RESTORE FILELISTONLY` gets a `MOVE` - a data file to `data_dir`, a log file to `log_dir`, each as `<database>_<its own file name>`; an empty folder is the target's `SERVERPROPERTY('InstanceDefaultDataPath')` / `'InstanceDefaultLogPath'`, and a target that names none stops the batch with a sentence (`THROW 51001`). The script restore (`restore-by-id`) always asks for it: its sources are Windows servers and its targets Linux SQL Servers, where the source's `D:\` paths do not exist. Checked on a SQL Server 2025 instance with a three-file list (an `.ndf` among them): the statement it built moved all three |
 | a diff or a log | `USE master; RESTORE DATABASE|LOG [db] FROM DISK = N'...' WITH NORECOVERY, CHECKSUM, STATS = 10;` |
 | the last log of a point in time | the same `WITH RECOVERY ... STOPAT = N'YYYY-MM-DDTHH:MM:SS'` |
 
@@ -1102,14 +1103,15 @@ calls, in order:
 
 | Step | Command |
 | --- | --- |
-| which files, and the staging made ready | **`prepare-staging`** - with `chain` it reads the chain from the source itself: PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), SQL Server's from `<database>/FULL|DIFF|LOG/` and the time in each name (a database with no FULL, or another layout, whole); for `copy_selection: window`, `window_hours` adds every other file the source wrote in that many hours, so a window is never less than the chain. **A certificate or key (`_cert/`, `.cer`, `.pvk`) is never selected** (0.37.0) - a restore imports it from dbabrain's vault. It makes the target folder, proves it writable, marks it (below), recreates every folder including the empty ones, and answers `files` (everything selected), `pending` (what still has to travel: a file the target holds at the same size and no older is skipped, unless `replace` names it), the room it measured for them, and `absent_at_source` / `folders_absent_at_source`. `plan_only` answers the selection and opens no target |
+| which files, and the staging made ready | **`prepare-staging`** - with `chain` it reads the chain from the source itself: PostgreSQL's newest chain from the directory names, RMAN's own answer for Oracle (`RESTORE DATABASE PREVIEW` plus the catalog), SQL Server's from `<database>/FULL|DIFF|LOG/` and the time in each name (a database with no FULL, or another layout, whole); for `copy_selection: window`, `window_hours` adds every other file the source wrote in that many hours, so a window is never less than the chain. **A certificate or key (`_cert/`, `.cer`, `.pvk`) is never selected** (0.37.0) - a restore imports it from dbabrain's vault. It makes the target folder, proves it writable, marks it (below), recreates every folder including the empty ones, and answers `files` (everything selected), `pending` (what still has to travel: a file the target holds at the same size and no older is skipped, unless `replace` names it), the room it measured for them, and `absent_at_source` / `folders_absent_at_source`. `plan_only` answers the selection and opens no target. **`incoming`** (0.39.0) instead of a source: the files the caller already knows (`{path, size_bytes}`, relative to `target_dir`) - the target half alone, for a restore that decrypts each `.age` on its way: the folder made, proven writable and marked by the same rule, every parent folder made, and the files not there yet at that size held to the room; a source, chain, include, window or replace beside it is refused |
 | the bytes | **`copy-files`** (above) - each pending file with the size and sha256 its source was just hashed to, written under a partial name and put in place only when they hold; `overwrite: true`, since `prepare-staging` decided each must travel |
-| the files' times, the engine's access | **`finish-staging`** - each landed file given its source's time (the skip rule of the next run reads it, and PostgreSQL dates a backup by its manifest's), and `chmod -R a+rX` on the staging for the engine's own uid |
+| the files' times, the engine's access | **`finish-staging`** - each landed file given its source's time (the skip rule of the next run reads it, and PostgreSQL dates a backup by its manifest's), and `chmod -R a+rX` on the staging for the engine's own uid (on a Windows target nothing: the folder's ACL - below) |
 | what the source no longer has | `delete-verified-files` / `delete-empty-folders`, by the restore, with the staged copy's recorded facts - one left behind stops the restore (`docs/08`) |
 | the listing | `list-backup-files` (unchanged) |
 | instance metadata | `sqlserver-replay-instance` (unchanged), before the databases and after them |
-| the restore | `restore-full` / `restore-diff` / `restore-log`. Since 0.26.0 a SQL Server full with `replace` starts its batch with a guard: a database ONLINE on the target raises before anything runs unless the request says `overwrite_existing: true` (G2.10) |
-| the check | `verify-restore` (unchanged) |
+| the restore | `restore-full` / `restore-diff` / `restore-log`. Without `overwrite_existing: true` a restore replaces nothing (0.26.0, G2.10; every engine and any state since 0.39.0): a SQL Server full starts its batch with a guard that raises when the target holds the database **in any state**, naming the state, and carries no `REPLACE`; a PostgreSQL full / diff reads the target's data directory first (`common/restorestep/target_holds.py`: a cluster with a database or relation of its own, OID 16384 and up) and an Oracle full asks the open database for segments owned by its own schemas - each stops before the target is touched, and what cannot be read is refused. The answer says what the target held (`target_held`) |
+| the check | `verify-restore`. Since 0.39.0 each SQL Server row also carries `restored_to` - what the target's own `msdb.dbo.restorehistory` recorded of that database's last restore (`stop_at`, `last_backup_finished`, `last_backup_type`, `restored_at`; the source's clock), absent for a database never restored there |
+| the chain | `prepare-staging`'s `chain` takes `databases` (0.39.0): only those SQL Server databases' chains are chosen; one the folder does not hold is refused by name, and naming any for PostgreSQL or Oracle is refused |
 | the cleanup | `backup_restore` itself: `list-files` on the staging, then one verified delete per file a proven copy recorded (`delete-verified-files`) and `delete-empty-folders` for an emptied set - **after** the verify |
 
 **The three old names are refused.** `backup-chain`, `copy-backup-dir` and `prune-staged-backups`
@@ -1127,6 +1129,39 @@ and a resolved `password` or an absolute `key_file` - never a ref. The work is
 `dbabrain/common/backup_copy.py`, which was `backup_restore/transfer.py` until 0.23.0. The fields
 are `input_`/`output_prepare_staging` and `_finish_staging`; the refused ones keep their input
 entries and answer `output_refused_command`.
+
+### A Windows target over SSH: `"platform": "windows"` in the login (0.39.0)
+
+A restore onto SQL Server running natively on Windows (`docs/08`, the operator 2026-11-14) stages its
+backups on a Windows host reached over Windows OpenSSH. The logins `prepare-staging`, `finish-staging`,
+`copy-files` and `fetch-decrypted-file` take say which kind of host they reach - `"platform": "linux"`
+(what a login that says nothing still means) or `"windows"` - stated by the caller, never guessed from a
+path (`filecopy.login_platform`; any other value is refused). On a Windows login:
+
+- **The folder is a drive path** - `target_dir`, a file's `target`, `target_path` - with either
+  separator (`C:/dbabrain_restore/X`, `C:\dbabrain_restore\X`); SFTP is handed it as Windows OpenSSH
+  names it, `/C:/dbabrain_restore/X`, an absolute POSIX path, so the walk relates every file to it as on
+  Linux, and the drive itself is never made. A POSIX path on a Windows login, and a drive path on any
+  other, is refused before a host is reached (`lib.restore.windows`).
+- **The free space** `space_check` is held to is asked of the drive in PowerShell
+  (`restore_space.windows_free_space_script`: `DriveInfo.AvailableFreeSpace`, the room this login has,
+  PowerShell 2.0 and up), sent as `-EncodedCommand` because a command over Windows OpenSSH reaches
+  cmd.exe, where `df` answered nothing.
+- **Nothing is made readable**: no `sudo -n chmod` at a Windows source, and `finish-staging`'s
+  `open_for_engine` changes nothing - SQL Server's service account reads the staging through the
+  folder's ACL, granted once by the operator; the answer is `opened_for_engine: false`, and the reason
+  is said on stderr. The files' times are still set over SFTP.
+- **Every file is written over SFTP**, whatever `transfer` says: a Windows host has no `cat` to write a
+  channel into. `transfer` still says how the source is read (the repository's `cat` stream, for one).
+  The partial is put in place by `posix-rename` (replacing) or a plain `rename` (which refuses an
+  existing name) exactly as on Linux - both measured on the lab host's Windows OpenSSH.
+
+The host blocks the other steps take are `runtime: windows` with `access: ssh` - `file-checksum`,
+`list-files` (which answers Windows' own paths, `C:\...`), `delete-verified-file(s)`,
+`delete-empty-folder(s)`, `push-file` - and already spoke PowerShell. `push-file` now finds the parent
+folder of a Windows path written with forward slashes too (it split on the backslash alone, so a
+restore's vault pair at `C:/.../__dbabrain_cert/k.cer` had no folder made for it), and quotes the
+folder it makes.
 
 ### A fallback in *how* is reported, and can be pinned (0.26.0, owner decision G4)
 
@@ -2015,6 +2050,20 @@ Three refusals, and they are the reason this is a command rather than a document
 A request with no `method` is answered honestly rather than as a success: `cmd_access_written`
 is false and `next` says nothing reaches the host yet.
 
+### `instance-add` - a registration states its `site` and its `environment` (0.39.0, D-39.6)
+
+`instance-add` asked for `server_id`, `db_type` and `ip` and passed the rest through, so it wrote
+inventory records with no `site` and no `environment` although the inventory reference
+(`db_instance`) marks both required. The second one mattered: a restore onto a target whose record
+stated no environment was not refused as production - unknown passed as "not production". The
+restore check now refuses such a target (`lib.integrity.production_target_refusal`, docs/08), and
+this command refuses the registration that would make one: a request without `site` or
+`environment` (the legacy spelling `env` counts) is refused with every missing field named, before
+anything is written. It is judged from the request alone (rules R09). Nothing defaults either -
+which site a machine belongs to and whether it is production are its owner's to say - and
+`upgrade-config` writes nothing into an existing record for it. A `keep_default` request (below)
+writes no inventory field, so it carries neither.
+
 ### A second database login on a server - `instance-add` with `keep_default`
 
 A server often carries more than one database login - a monitor account beside the DBA's, an
@@ -2033,7 +2082,8 @@ python -m dbabrain.common.cli instance-add @dba_login.json --key-base64 ...
 It writes `users.json` and the secret, and leaves `db_instances.json` as it is. It refuses, before
 writing anything: a `server_id` that is not registered; a `db_type` or `ip` other than the
 record's (the login would be filed under another machine); no `credential_name` (the derived one
-*is* the default's name) or the default's own; any inventory field (it would be ignored); and a
+*is* the default's name) or the default's own; any inventory field, `site` and `environment`
+included (it would be ignored); and a
 login of that name already there, unless `replace`. A run then names it:
 `run-sql` with `"target"` and `"credential_name"`.
 
@@ -2557,6 +2607,27 @@ script it belongs in `common` with a CLI — and the reason is visible in the ou
 lift moved 90 records and checked 183 file references in one command, and refused twice before it
 was allowed to write.
 
+## The AI assistant's key (`ai-key`, 0.39.0)
+
+`dbabrain ai-key` - the first step of a new install, right after `init` and the passphrase (the
+operator, 2026-11-14: *the AI key added by one CLI command, written in the full guide, first*). It
+stores the Anthropic API key in the encrypted store and switches the assistant on in
+`data/ai_assist.json` (`enabled: true`, `api_key_ref` naming the key), so `dbabrain telegram ai-ask`
+answers at once. Bare on a terminal it asks for the key (`getpass`, not echoed); a script pipes
+`{"value": "<key>"}` to `dbabrain common ai-key -` - stdin only, as `secret-set`, listed in
+`STDIN_ONLY_COMMANDS`.
+
+- The ref is the request's `ref`, else the `api_key_ref` the file already names, else
+  `AI_ASSIST_API_KEY` - and it is written into `api_key_ref`. The file's own ref is the assistant's:
+  a new key replaces it (a rotated key). A ref the request names that holds another secret is
+  refused unless `overwrite`.
+- The key is stored first, then the file points at it: a switched-on assistant never names a key the
+  store does not hold. A settings file that cannot be read is said and nothing is stored; a root with
+  no file gets one at the shipped values; the file keeps its indent and every other field.
+- A key that does not begin with `sk-ant-` is stored with a warning. `init`'s next steps and
+  `AGENTS.md` (section 2) give the command first. Held by
+  `tests/test_the_ai_key_is_stored_and_the_assistant_switched_on_in_one_command.py`.
+
 ## Storing one secret (`secret-set`, 2026-09-11)
 
 `encrypt-secret` is the bulk path: it encrypts a whole plaintext `secrets/secret_text.json`, so one
@@ -2891,6 +2962,15 @@ table called `Machine` is shown as `Machine`, while `ShiftRoster` - a name built
 - is still replaced, and a term in `extra_terms` is always replaced. Read off the package at run
 time, so it follows the pages as they change rather than one estate's collisions.
 
+**Nor a plain word the host's operating system names its own things with** (0.39.0, 1.352): the
+words in the `item` of the pages' `OS_*` metrics - an interface, a service, a process, a volume -
+`OS_INFO` left out, since it states the host's own name. A table called `Adapter`, read off
+`...Connector.Adapter.PK_Adapters` on an index page, had turned the network interface *VMware Network
+Adapter VMnet8* into *VMware Network SettlementQueue VMnet8* on the 0.38.0 showcase. Only a database
+object's name (table, schema, index) is left for this reason: a Windows service is named after its
+instance - *SQL Server (PAYROLL)* - and an instance, a host or a login is still replaced wherever it
+stands. On the 0.38.0 capture (74 pages) `Adapter` was the only page-learnt term this left.
+
 Finding the literals needs a scanner rather than a regex, and it is in `_js_string_spans`. Four
 things break a naive one, and every one was met on a real page: escapes; comments (an apostrophe in
 `/* don't */`); regular-expression literals (`.replace(/[&<>"']/g, …)` holds one of each quote, and
@@ -3004,7 +3084,7 @@ Three questions that had no answer a program could ask for:
 | `due-check` | would this `time_window` run now, and if not why not | nothing — it evaluates the request |
 | `check-objects` | does this node's own `data/*.json` obey the reference | that file, and every file it names |
 | `check-references` | which pointer between two config files lands nowhere | `data/config_references.json`, and every file it names |
-| `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the package's 0.29.0 name in every module path, path into the package, `tools/` alias and environment-variable name the node's files carry (`lib.package_rename`; the store's schema, host folders, ids and secret refs are left as they are), the field renames, a restore's machine ids, the name of the backup certificate written into every SQL Server backup job and restore that had been leaving it to the default 0.29.0 renamed the name of the file that marks a staging folder written into every restore entry that already stages on a target, and the two folders lab databases live in written into `sre_config.json` where it states none (`lib.earlier_defaults`; a default is configuration nobody wrote down, so the record is told what it has been running on before the code's default changes), a Telegram record's switch, the inventory into the reports, a command line that moved to another CLI, and the console apps this version lists and the node's `webhost_config.json` does not (added, never changed - 2026-10-03, after a node filled by bundle was found without the `transport` app), and an instance's `report_policy` keys nothing reads - `enabled`, `severity_overrides`, `disabled_event_codes`, `disabled_report_events` - removed where they hold their empty default, a value named as a conflict (0.34.0, `unread-report-keys`; the hand-formatted example keeps its layout), and a restore entry's `integrity` block - `copy_max_retry` 3 and the other defaults - written where the entry states none, mandatory since 0.34.0 (`stated-integrity`, `lib.integrity`) - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
+| `upgrade-config` | after `pip install --upgrade`: every config migration this version carries, in order - the shipped reference files (replaced when they say something else, compared as documents, so a copy `init` wrote with another layout is current), the package's 0.29.0 name in every module path, path into the package, `tools/` alias and environment-variable name the node's files carry (`lib.package_rename`; the store's schema, host folders, ids and secret refs are left as they are), the field renames, a restore's machine ids, the name of the backup certificate written into every SQL Server backup job and restore that had been leaving it to the default 0.29.0 renamed the name of the file that marks a staging folder written into every restore entry that already stages on a target, and the two folders lab databases live in written into `sre_config.json` where it states none (`lib.earlier_defaults`; a default is configuration nobody wrote down, so the record is told what it has been running on before the code's default changes), a Telegram record's switch, the inventory into the reports, a command line that moved to another CLI, and the console apps this version lists and the node's `webhost_config.json` does not (added, never changed - 2026-10-03, after a node filled by bundle was found without the `transport` app), and an instance's `report_policy` keys nothing reads - `enabled`, `severity_overrides`, `disabled_event_codes`, `disabled_report_events` - removed where they hold their empty default, a value named as a conflict (0.34.0, `unread-report-keys`; the hand-formatted example keeps its layout), and a restore entry's `integrity` block - `copy_max_retry` 3 and the other defaults - written where the entry states none, mandatory since 0.34.0 (`stated-integrity`, `lib.integrity`), and with it every field a backup entry, backup job or restore entry left to a default, at the value it ran on (0.39.0, 1.366, `lib.restore.stated`) - then `check-objects` and `check-references`; a plan unless `dry_run: false`, each written file copied to `runtime/config_upgrade/<stamp>/` first | the reference this version ships, and every file it names |
 | `standardize-field-names` | moves `data/*.json` to the standard field names (stage C of one name per concept), and `config_catalog.json`'s `label_field` / `key_fields` with them - a catalogue still naming `sql_name` labelled every SQL task empty on the worker and made each sync rewrite 30 unchanged records (0.27.0); a plan unless `dry_run: false` | the reference's `used_in`, and every file it names with its `.example.json` |
 
 `due-check` calls `dbabrain.lib.time_window.explain_due` — **the same function the schedulers call** —

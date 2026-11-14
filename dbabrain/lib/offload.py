@@ -281,6 +281,50 @@ def parse_backup_offload(entry: dict[str, Any] | None, *, label: str = "backup",
     return parsed
 
 
+#: The engines whose backup script can hold its age cut to the files written before a moment
+#: (``RETENTION_ONLY_BEFORE``): SQL Server's, which cuts file by file. PostgreSQL's cuts whole chains
+#: and Oracle's is RMAN's recovery window - neither can leave a file to another deleter.
+AGE_CUT_BOUNDED_ENGINES = ("sqlserver", "mssql")
+
+
+def source_age_cut_before(parsed: Any, *, db_type: str, keeps_every_type: bool, label: str) -> int | None:
+    """Up to which moment (epoch seconds, UTC) the backup script's own age window may delete at the
+    source; ``None`` when it is not bounded (0.39.0, 1.373).
+
+    The operator, 2026-11-14 (translated): *a backup that follows the repository is not cleaned the old
+    way any more - unless it does not go to the repository, and then by a cleanup retention stated at
+    the source backup.* Until then an entry that releases its files once their repository copy is
+    proven (``offload_delete_source``) kept its script's age window as well, and that window asked
+    nothing of the repository: an offload stuck for longer than the window, and the script deleted a
+    file no copy had reached.
+
+    - An entry that does not release at the source: its age window is the only deleter - ``None``.
+    - One that releases, on SQL Server with ``offload_files_since``: the window cuts only the files
+      written before that moment - the ones that never go to the repository; every later file is the
+      release's, after its copy is proven.
+    - One that releases otherwise (no ``offload_files_since``, or an engine whose script cannot bound
+      its cut): every file is the release's, so the entry states ``keep`` for every type - refused
+      by name otherwise, never quietly kept or quietly cut.
+    """
+    if parsed is None or not getattr(parsed, "enabled", False) or not getattr(parsed, "delete_source", False):
+        return None
+    engine = str(db_type or "").strip().lower()
+    since = str(getattr(parsed, "files_since", "") or "")
+    if engine in AGE_CUT_BOUNDED_ENGINES and since:
+        from datetime import datetime, timezone
+
+        return int(datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
+    if keeps_every_type:
+        return None
+    how = ("state offload_files_since - the moment from which its files go to the repository; the age window "
+           "then cuts only the files written before it" if engine in AGE_CUT_BOUNDED_ENGINES
+           else "state cleanup_retention as keep for every file type - this engine's script cannot leave "
+                "a file to the release")
+    raise OffloadConfigError(
+        f"{label}: its files are released at the source once their repository copy is proven "
+        f"(offload_delete_source), so the backup script must not delete them by age as well - {how}.")
+
+
 def _moment(value: str, *, label: str) -> str:
     """A UTC moment as the catalog writes them (``YYYY-MM-DDTHH:MM:SSZ``), or ``""``. The catalog's
     times compare as text, so another spelling of the same moment would compare wrong - refused."""
