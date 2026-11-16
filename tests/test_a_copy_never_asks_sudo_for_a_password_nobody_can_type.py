@@ -74,7 +74,9 @@ def test_a_file_the_login_cannot_read_is_what_brings_sudo_in(tmp_path):
     marker = tmp_path / "sudo_was_called"
     fake = tmp_path / "bin"
     fake.mkdir()
-    (fake / "sudo").write_text(f"#!/bin/sh\necho \"$@\" > {marker}\n")
+    # printf, not echo: dash's echo (sh on Ubuntu) takes the leading -n as its own option and drops
+    # it, so the record lost the very flag this test is about (CI on 0.39.0, 2026-11-16).
+    (fake / "sudo").write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {marker}\n")
     (fake / "sudo").chmod(0o755)
     env = {**os.environ, "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"}
 
