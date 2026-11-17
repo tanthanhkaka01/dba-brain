@@ -91,7 +91,8 @@ def test_a_base_backup_directory_is_deleted_file_by_file_then_its_empty_folder(n
 
     answer, catalog = _release(net, row, members)
 
-    assert answer == {"deleted": 1, "kept": 0, "refused": []}
+    assert {k: v for k, v in answer.items() if k != "deleted_ids"} == {"deleted": 1, "kept": 0, "refused": []}
+    assert len(answer["deleted_ids"]) == 1, "which file went - a backup's step 8 tells its own from earlier ones"
     assert not [p for p in net.source if p.startswith(FOLDER + "/")], "every file of it is gone"
     assert net.deleted[-1] == FOLDER + "/", "the folder goes last, once empty"
     assert sorted((r["file_name"], r["size_bytes"], r["sha256"]) for r in net.delete_requests) == sorted(
@@ -247,7 +248,8 @@ def test_the_newest_base_keeps_only_its_manifest_and_its_folder(net):
 
     answer, catalog = _release_all(net, row, members, newest_dir=9)
 
-    assert answer == {"deleted": 1, "kept": 0, "refused": []}
+    assert {k: v for k, v in answer.items() if k != "deleted_ids"} == {"deleted": 1, "kept": 0, "refused": []}
+    assert len(answer["deleted_ids"]) == 1, "which file went - a backup's step 8 tells its own from earlier ones"
     left = sorted(p for p in net.source if p.startswith(FOLDER + "/"))
     assert left == [f"{FOLDER}/backup_manifest"], "the next incremental chains onto it"
     assert FOLDER + "/" not in net.deleted, "a folder with a file in it is never deleted"

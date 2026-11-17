@@ -797,6 +797,7 @@ stdin. Global options (`--key`, `--key-base64`, `--data-dir`, `--dry-run`) go be
 | `sql_text` / `sql_file` | exactly one. `sql_file` is read **here** (a leading `@` is allowed), so the request `run-sql` receives is the whole of what runs |
 | `commit` / `autocommit` | `true` keeps what the SQL changed. **Omitted, everything is rolled back** - `run-sql`'s contract, and what it does not undo is in `dbabrain/common/sql_run.py` |
 | `confirm`, `assume_yes`, `reason` | the answer to the write's question, when nobody is at a terminal |
+| `confirm_target` | the second answer - the target's `server_id` typed back - where the node's ladder prices the write at two (0.41.0, 1.403; refused as unknown before, so such a write could never be answered off a terminal) |
 | `format`, `output_path`, `max_rows`, `capture`, `timeout_seconds`, `connect_timeout_seconds`, `max_result_sets` | passed to `run-sql` as they are |
 
 Any other field is refused: a misspelt `comit` read as "not asked" would roll back what the operator
@@ -806,7 +807,7 @@ meant to keep, and still say success.
 operation `run-sql-adhoc` - level 50 in `emergency_operations.json`, the ladder `run-sql-task` is
 priced on - at the terminal, or answered by `"confirm": "yes"` / waived by `"assume_yes": true`
 (`"confirm": true` is intent only: the terminal still asks). A node whose own ladder does not list
-`run-sql-adhoc` prices it strictest (two answers). A refused write answers `success: false`,
+`run-sql-adhoc` prices it strictest (two answers: `"confirm": "yes"` and `"confirm_target": "<server_id>"`). A refused write answers `success: false`,
 `error_kind: refused`, exit 1, and nothing ran. A read asks nothing.
 
 The answer is `run-sql`'s own, passed through: its JSON envelope on stdout (exit 0 on success), or

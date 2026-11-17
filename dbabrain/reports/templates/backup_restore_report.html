@@ -27,6 +27,7 @@ __BANNER_CSS__
   __RECOVERABILITY__
   __RESTORES__
   <div id="body"></div>
+  <div id="logs"></div>
 </div>
 
 <script>
@@ -36,6 +37,13 @@ __BANNER_CSS__
    it is still on disk and still the same bytes, the virus scan - and every restore or copy that used
    it. The table is the server page's own (backup_files.js), with a Server column and filter. */
 const FILES = __FILES__;
+const VERSION = "__STAMP__";   /* cache-buster: a rebuilt page must not read yesterday's log file */
+const LOG_ROW_LIMIT = __LOG_ROW_LIMIT__;
+/* ?date= is answered by the web host with that day's archived copy of whatever file is asked for, so
+   the log file this page fetches carries the page's own date (the server page does the same). */
+const DATE_PARAM = new URLSearchParams(location.search).get("date") || "";
+const withDate = (url) => !DATE_PARAM ? url
+  : url + (url.includes("?") ? "&" : "?") + "date=" + encodeURIComponent(DATE_PARAM);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 /* The configured clock, as on the server page: store timestamps are UTC, and every stamp says
    which clock it is on, the same wherever the page is opened. */
@@ -56,6 +64,41 @@ document.getElementById("body").innerHTML = backupFilesBlock(FILES, {fleet: true
   || `<div class="empty">The backup catalog holds no file yet. Backups record their files from 0.34.0
       on; the ones taken before are added by <span class="mono">backup_restore.cli catalog-backfill</span>.</div>`;
 bindFileFilters(FILES.files);
+
+/* LOG BACKUPS (0.41.0, 1.393) - the operator, 2026-11-17: the logs in a block of their own, hidden until
+   it is opened. A server with a log every 15 minutes writes ~100 a day per database: embedded, they
+   were most of an 11.8 MB page and pushed every full off it. Each server's newest logs are a file of
+   their own beside the page, read when that server is chosen here. */
+function logsBlock(list){
+  if (!list || !list.length) return "";
+  const opts = list.map(s => `<option value="${esc(s.file)}">${esc(s.server)} - ${esc(s.count)} file(s)</option>`).join("");
+  return `<details class="fold" id="logBackups"><summary>Log backups - LOG, WAL and ARCHIVELOG, each server's
+      newest ${LOG_ROW_LIMIT}, read when a server is chosen</summary><div class="in">
+    <div class="ffilters"><label class="ffilter">Server <select id="lg-server">
+      <option value="">Choose a server</option>${opts}</select></label></div>
+    <div id="lg-body"><p class="sec-note">Choose a server to read its log backups.</p></div></div></details>`;
+}
+document.getElementById("logs").innerHTML = logsBlock(FILES.logs);
+const lgServer = document.getElementById("lg-server");
+if (lgServer) lgServer.addEventListener("change", async () => {
+  const body = document.getElementById("lg-body");
+  const file = lgServer.value;
+  if (!file) { body.innerHTML = `<p class="sec-note">Choose a server to read its log backups.</p>`; return; }
+  body.innerHTML = `<p class="sec-note">Reading ${esc(file)} ...</p>`;
+  try {
+    const r = await fetch(withDate(file + "?v=" + VERSION));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    if (lgServer.value !== file) return;          // another server was chosen meanwhile
+    body.innerHTML = backupFilesBlock(data, {fleet: true, inner: true, idp: "lg"})
+      || `<p class="sec-note">No log backup of this server in the catalog.</p>`;
+    bindFileFilters(data.files, "lg");
+  } catch (e) {
+    // A page opened from disk (file://) cannot read the file beside it; the web console can.
+    body.innerHTML = `<p class="sec-note"><span class="sev crit">could not read ${esc(file)}</span> ${esc(e.message)}
+      - open this page from the web console.</p>`;
+  }
+});
 </script>
 </body>
 </html>

@@ -20,6 +20,8 @@ from types import SimpleNamespace
 import pytest
 
 from dbabrain.backup_restore import backup as backup_module
+
+from dbabrain.backup_restore import workflow as workflow_module
 from dbabrain.backup_restore import schedule, workflow
 from dbabrain.backup_restore.server_metadata import ServerMetadataPlan
 from dbabrain.db.store import RunAlreadyClaimed, utc_now_text
@@ -84,7 +86,9 @@ def _run_backups(monkeypatch, *, force):
     long_a, short_b = _backup_job("LONG_A"), _backup_job("SHORT_B")
     executed: list[str] = []
     monkeypatch.setattr(backup_module, "DbaBrainStore", _Store)
-    monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: None)
+    _emit = lambda **k: None
+    monkeypatch.setattr(backup_module, "emit_backup_restore_event", _emit)
+    monkeypatch.setattr(workflow_module, "emit_backup_restore_event", _emit)
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [long_a, short_b])
@@ -98,7 +102,7 @@ def _run_backups(monkeypatch, *, force):
                                              stdout="RESULT=ok", stderr="", error_text=None)
 
     monkeypatch.setattr(backup_module, "execute_backup_job", execute)
-    summary = backup_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"),
+    summary = workflow_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"),
                                        config_path="x", force=force)
     return executed, summary
 
@@ -136,7 +140,8 @@ def test_a_scheduled_restore_does_not_repeat_a_restore_another_run_finished(monk
             _other_run_does(jobs[1].job_code)
         return {"restore_id": request["restore_id"], "db_type": "postgresql", "steps": []}
 
-    monkeypatch.setattr("dbabrain.backup_restore.restore_by_id.restore_by_id", restore)
+    # The workflow runs a restore's steps itself (0.40.0, 1.375).
+    monkeypatch.setattr(workflow, "run_restore_by_id", restore)
 
     summary = workflow.run_scheduled_restores(app_config=SimpleNamespace(sqlite_path=":memory:"),
                                               config_path="x.json")

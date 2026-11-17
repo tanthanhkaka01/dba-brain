@@ -124,7 +124,7 @@ def test_the_fleet_table_has_a_server_column_and_filter_and_the_server_page_does
         script = ('const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",\'"\':"&quot;"}[c]));\n'
                   'const when = v => v ? String(v) : "";\n' + shared
                   + f"\nprocess.stdout.write(backupFilesBlock({json.dumps(table)}, {{fleet: {str(fleet_mode).lower()}}}));")
-        done = subprocess.run([NODE, "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        done = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert done.returncode == 0, done.stderr
         return done.stdout
 
@@ -152,7 +152,7 @@ def test_each_backup_file_says_whether_it_is_encrypted_and_unknown_is_not_no(cat
     shared = Path(page.BACKUP_FILES_JS).read_text(encoding="utf-8")
     script = ('const esc = s => String(s ?? "");\nconst when = v => v ? String(v) : "";\n' + shared
               + f"\nprocess.stdout.write(backupFilesBlock({json.dumps(table)}, {{}}));")
-    done = subprocess.run([NODE, "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    done = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert done.returncode == 0, done.stderr
     html = done.stdout
     assert "Engine's own encryption" in html, "in the opened row since 0.37.0, beside the repository's"

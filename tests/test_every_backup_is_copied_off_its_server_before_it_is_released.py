@@ -502,7 +502,7 @@ def test_a_row_without_its_recorded_facts_is_never_sent_to_delete(catalog, net, 
 def test_a_catalog_name_that_is_not_the_paths_last_part_is_never_sent_to_delete(catalog, net):
     entry = _two_chains(catalog, net)
     row = {**catalog.files_to_release(backup_id=entry.backup_id)[0], "file_name": "SOMETHING_ELSE.bak"}
-    with pytest.raises(O.OffloadRefused, match="not the last part"):
+    with pytest.raises(O.OffloadRefused, match="is not the name"):
         O.release_request(entry, row, _hosts(entry))
 
 
@@ -662,18 +662,19 @@ def test_a_pass_writes_nothing_for_an_entry_with_nothing_to_copy_and_retries_a_f
     monkeypatch.setattr(O.DbaBrainStore, "from_config", classmethod(lambda cls, _c: object()))
     monkeypatch.setattr(O.BackupCatalogStore, "from_config", classmethod(lambda cls, _c: catalog))
     monkeypatch.setattr(O.schedule, "reap_stale_runs", lambda **_k: [])
-    monkeypatch.setattr(O, "_run_one", lambda e, **k: started.append(len(k["rows"])) or {"status": "done"})
+    # The workflow runs each offload and says its steps (0.40.0, 1.374).
+    monkeypatch.setattr(workflow, "_offload", lambda e, **k: started.append(len(k["rows"])) or {"status": "done"})
 
-    assert O.run_offloads(app_config=None, config_path="x")["jobs"] == [], "nothing catalogued, nothing run"
+    assert workflow.run_offloads(app_config=None, config_path="x")["jobs"] == [], "nothing catalogued, nothing run"
 
     _backup(catalog, net, [("APPDB", "LOG", "APPDB_LOG_7.trn", b"log")])
     file_id = _rows(catalog)["APPDB_LOG_7.trn"]["file_id"]
     catalog.set_backup_file(file_id, offload_state="failed", offload_attempted_at="2999-01-01T00:00:00Z")
-    O.run_offloads(app_config=None, config_path="x")
+    workflow.run_offloads(app_config=None, config_path="x")
     assert started == [], "a failure is not retried before the entry's retry_interval"
 
     catalog.set_backup_file(file_id, offload_attempted_at="2000-01-01T00:00:00Z")
-    O.run_offloads(app_config=None, config_path="x")
+    workflow.run_offloads(app_config=None, config_path="x")
     assert started == [1]
 
 
@@ -681,7 +682,7 @@ def test_the_scheduled_workflow_runs_the_offload_after_the_restores_and_not_with
     order = []
     monkeypatch.setattr(workflow, "run_backup", lambda **_k: order.append("backup") or {"failed": 0})
     monkeypatch.setattr(workflow, "run_scheduled_restores", lambda **_k: order.append("restore") or {"failed": 0})
-    monkeypatch.setattr(O, "run_offloads", lambda **_k: order.append("offload") or {"failed": 1})
+    monkeypatch.setattr(workflow, "run_offloads", lambda **_k: order.append("offload") or {"failed": 1})
 
     result = workflow.run_workflow(app_config=None, config_path="x")
     assert order == ["backup", "restore", "offload"] and result["failed"] == 1

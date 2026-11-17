@@ -68,6 +68,11 @@ USAGE = (
     "  sql-target-add   Register WHERE a SQL task runs: one server, one schedule (see --help)\n"
     "  remote-credential-add  Register one host's OS login + the cmd_access naming it (see --help)\n"
     "  secret-set       Store one secret encrypted, never in clear; request on stdin (see --help)\n"
+    "  secret-remove    Remove one secret, proven by its value; request on stdin (see --help)\n"
+    "  entry-remove     Retire: remove ONE record of a data/*.json list, refused while named (see --help)\n"
+    "  credential-remove  Retire: remove ONE login of users.json, refused while named (see --help)\n"
+    "  instance-remove  Retire: remove ONE server from db_instances.json, refused while named (see --help)\n"
+    "  report-server-remove  Retire: take a server off the report's canonical inventory (see --help)\n"
     "  ai-key           Store the AI assistant's API key and switch the assistant on (see --help)\n"
     "  probe-host       What a host listens on, and what dbabrain can do with it (see --help)\n"
     "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING; or a list (see --help)\n"
@@ -366,6 +371,112 @@ SECRET_SET_USAGE = (
     "drops the secret stored here - and on a fresh node, whose scaffold holds no secrets at all, it\n"
     "drops every secret instance-add and this command ever stored.\n"
 )
+
+SECRET_REMOVE_USAGE = (
+    "usage: <request> | python -m dbabrain.common.cli secret-remove -\n"
+    "\n"
+    "Removes ONE secret from data/encrypted_secret_text.json - the twin of secret-set. The request\n"
+    "names the ref AND its value: a store holding a different value under that ref is refused and\n"
+    "nothing is written, so a ref named by mistake, or one rotated since, is never removed by its\n"
+    "name alone. One ref per call; there is no list form.\n"
+    "\n"
+    "The request is a JSON object ON STDIN ONLY (-): it carries the secret's value.\n"
+    "\n"
+    '  {"ref": "DBABRAIN_MCP_NODE_TOKEN", "value": "<the value it holds>"}\n'
+    "\n"
+    "  ref    required. The ref to remove\n"
+    "  value  required. The value it holds now. Never echoed back\n"
+    "\n"
+    "secrets/secret_text.json, where it exists (a master), is held to the same value and the ref\n"
+    "removed there too: deploy regenerates the encrypted store from that file, so a ref removed only\n"
+    "from the store comes back at the next deploy. Both are checked before either is written.\n"
+    "A ref in neither is refused. Each node's store is its own: removing a ref here leaves the\n"
+    "worker's, and a deploy --merge unions the secrets, so the worker's copy comes back with it.\n"
+    "\n"
+    "Needs the store's passphrase in DBABRAIN_SECRET_KEY.\n"
+    "\n"
+    "Prints JSON: {success, data: {ref, removed, plaintext_removed, store}}.\n"
+)
+
+
+_RETIRE_COMMON = (
+    "Retiring a server is step by step, the deepest record first (0.41.0, 1.391): an entry that\n"
+    "names it (entry-remove), then its logins (credential-remove), their secrets (secret-remove),\n"
+    "the server itself (instance-remove), and last its row on the report (report-server-remove).\n"
+    "There is no command that removes all of it. Each removes ONE record and is REFUSED while\n"
+    "anything else in data/*.json still names it - every such place listed, file and path, which\n"
+    "is the step to run before it. Nothing is written without \"apply\": true: the answer is the\n"
+    "plan. The store's history (metrics, backups, restores) is never touched, nor any file on a host.\n"
+    "\n"
+    "  data_dir  the data/ folder (default: this node's)\n"
+    "  apply     true to remove; absent or false answers the plan\n"
+    "\n"
+)
+
+ENTRY_REMOVE_USAGE = (
+    "usage: python -m dbabrain.common.cli entry-remove <json>|@<file>|-\n"
+    "\n"
+    "Removes ONE record of a list in one data/*.json file - a backup or restore entry, a SQL target,\n"
+    "a docker connection, a backup policy override - the one whose fields equal all of `match`.\n"
+    "\n"
+    '  {"file": "restore_config.json", "match": {"restore_id": "LAB_TO_DRILL"}}\n'
+    '  {"file": "sql_targets.json", "match": {"sql_id": 3, "target_no": 1}, "apply": true}\n'
+    "\n"
+    "  file   required. A data/*.json file name (users.json, db_instances.json and the secret store\n"
+    "         have commands of their own)\n"
+    "  match  required. The record's fields; exactly one record must match. Its own key (backup_id,\n"
+    "         restore_id, id, name, ...) is its name: refused while that name is anywhere else in data/.\n"
+    "         A record told only by a field pointing elsewhere (an override by server_id) names nothing\n"
+    "\n"
+) + _RETIRE_COMMON + "Prints JSON: {success, data: {command, file, record, list, pointers, applied, removed}}.\n"
+
+CREDENTIAL_REMOVE_USAGE = (
+    "usage: python -m dbabrain.common.cli credential-remove <json>|@<file>|-\n"
+    "\n"
+    "Removes ONE login of data/users.json - a database or an OS one - by its credential_name. Its\n"
+    "password_ref stays: removing the secret is the next step, secret-remove. A server's group goes\n"
+    "with its last login (it is only their container).\n"
+    "\n"
+    '  {"credential_name": "LAB_SA"}\n'
+    "\n"
+    "  credential_name  required\n"
+    "  server_id        the server whose login it is, where several servers' groups share the name\n"
+    "\n"
+) + _RETIRE_COMMON + ("Prints JSON: {success, data: {command, file, record, section, server_id, group_goes,\n"
+                      "group_removed, password_ref, pointers, applied, removed}}.\n")
+
+INSTANCE_REMOVE_USAGE = (
+    "usage: python -m dbabrain.common.cli instance-remove <json>|@<file>|-\n"
+    "\n"
+    "Removes ONE server's record from data/db_instances.json, with every block inside it (metric\n"
+    "switches, severity maps, metric env, report policy) - the twin of instance-add. Refused while its\n"
+    "server_id is named anywhere else in data/, except the report's inventory (database-inventory.json),\n"
+    "which is the last step.\n"
+    "\n"
+    '  {"server_id": "LAB-192-0-2-10"}\n'
+    "\n"
+    "  server_id  required\n"
+    "\n"
+) + _RETIRE_COMMON + "Prints JSON: {success, data: {command, file, record, next, pointers, applied, removed}}.\n"
+
+REPORT_SERVER_REMOVE_USAGE = (
+    "usage: python -m dbabrain.common.cli report-server-remove <json>|@<file>|-\n"
+    "\n"
+    "Takes ONE server off the report's canonical inventory, which keeps every server it ever saw\n"
+    "(add-only). Refused while db_instances.json still lists it: the next report run would put it\n"
+    "back. Its old pages and series files are left as they are; nothing links to them any more.\n"
+    "\n"
+    '  {"server_id": "LAB-192-0-2-10"}\n'
+    '  {"server_id": "LAB-192-0-2-10", "inventory": "runtime/reports/database-inventory.json"}\n'
+    "\n"
+    "  server_id  required\n"
+    "  inventory  the canonical inventory's path (default: data_dir's database-inventory.json - the\n"
+    "             copy a deploy ships; on the node that builds the reports, runtime/reports/...)\n"
+    "\n"
+) + _RETIRE_COMMON + "Prints JSON: {success, data: {command, file, record, list, pointers, applied, removed}}.\n"
+
+RETIRE_USAGE = {"entry-remove": ENTRY_REMOVE_USAGE, "credential-remove": CREDENTIAL_REMOVE_USAGE,
+                "instance-remove": INSTANCE_REMOVE_USAGE, "report-server-remove": REPORT_SERVER_REMOVE_USAGE}
 
 
 USAGE_APP_COMMAND_SET = """usage: python -m dbabrain.common.cli app-command-set <json>|@<file>|-

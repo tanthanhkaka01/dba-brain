@@ -234,8 +234,11 @@ esac
 # 1.00000081e17 (E3 an exponent), and double precision cannot tell ...67 from ...68. On the worker
 # (2026-10-29, 10:52Z) the catalog's newest name turned all-digit, and every WAL run listed old
 # segments again (a duplicate key) and missed the new one.
+# The backup-history file each base backup leaves (<segment>.<offset>.backup) is recorded too (0.40.0,
+# 1.386: the catalog records every file): a restore copies it with the WAL, and a restore read from the
+# server found it in no row. It sorts right after its segment, so the same cursor takes it.
 wal_names="$(run_db "ls -1 '${wal_dir}' 2>/dev/null" | tr -d '\r' \
-    | grep -E '^[0-9A-F]{24}$' | sort | awk -v after="$catalog_after" '($0 "") > (after "")' \
+    | grep -E '^[0-9A-F]{24}(\.[0-9A-F]{8}\.backup)?$' | sort | awk -v after="$catalog_after" '($0 "") > (after "")' \
     | head -n "$catalog_max" | tr '\n' ' ')"
 if [ -n "$wal_names" ]; then
     # One call for the whole batch: a docker exec per segment would cost more than the hashing.

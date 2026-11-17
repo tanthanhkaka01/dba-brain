@@ -1026,6 +1026,10 @@ Containers built before 0.37.0 keep their own PID 1 until they are recreated.
 instead of a named volume, the container run as `uid:gid` - an NFS share that squashes every client to
 one owner (the backup repository's `/mnt/nas`) is writable only as that owner.
 
+**`timezone`** (0.40.0, 1.385, a single instance of any engine): the container's `TZ`, an IANA name such as
+`Asia/Ho_Chi_Minh` - the clock the database reads its own time in. Empty: the image's own, UTC. Built to
+drill a point in time from a source off UTC; an `ha-lab` is refused it.
+
 An `ssh_login` (`remote`, and `source`/`destination` for a move) is `host`, `port`, `username` and
 a resolved `password` or an absolute `key_file` - never a ref. A **dry run connects to nothing**
 for `create-db-docker` and never installs Docker; `move-db-docker`'s reads the source to say what it
@@ -2651,6 +2655,62 @@ store is decrypted, the ref added, and the whole of it re-encrypted with the sam
   `secret-set` stored. The warning says which case applies. **`also_plaintext: true`** writes both,
   for a master whose deploy regenerates the store from that file.
 
+## Removing one secret (`secret-remove`, 0.40.0)
+
+The twin of `secret-set`, missing until 2026-11-17 (taking the master's dead MCP node token out
+meant decrypting two copies and comparing them by hand). The operator: *one secret at a time, and
+the value must match* (`lib.secret_text.remove_secret_text`).
+
+```powershell
+'{"ref": "DBABRAIN_MCP_NODE_TOKEN", "value": "<the value it holds>"}' | python -m dbabrain.common.cli secret-remove -
+```
+
+- **One ref, named and proven by its value.** A store holding a different value under the ref is
+  refused and nothing is written: a ref named by mistake, or a password rotated since, is never
+  removed by its name alone. No list form. A ref in neither place is refused.
+- **The plaintext source too.** Where `secrets/secret_text.json` exists (a master) it is held to the
+  same value and the ref removed there as well - deploy regenerates the store from it, so a ref
+  removed from the encrypted copy alone would come back at the next deploy. Both are checked, under
+  both locks, before either is written.
+- **Stdin only**, as `secret-set` (`STDIN_ONLY_COMMANDS`): the request carries the value. It is never
+  echoed, in the answer or an error. Answers `{ref, removed, plaintext_removed, store}`.
+- **Each node's store is its own.** Removing a ref on the master leaves the worker's; `deploy --merge`
+  unions the secrets, so a ref still on the worker comes back with it - remove it there too.
+- Refused through MCP like `secret-set` (`lib.mcp_tools.SECRET_VALUE_COMMANDS`). Held by
+  `tests/test_a_secret_is_removed_only_by_its_value.py`.
+- **Refused while a record names the ref** (0.41.0, 1.391): a login, an entry or a setting in `data/`
+  that still names it is said (file and path) and nothing is removed - step 3 of retiring a server.
+
+## Retiring a server, one record at a time (`entry-remove`, `credential-remove`, `instance-remove`, `report-server-remove`, 0.41.0)
+
+The operator, 2026-11-17 (translated): lab servers never used again come off the report *and off every
+JSON they are in*, by *commands step by step, not one command that cascades and deletes everything;
+delete from the deepest child up, otherwise the parent refuses* (1.391, `common.config_retire`).
+
+| Step | Command | Removes ONE |
+| ---: | --- | --- |
+| 1 | `entry-remove {"file", "match"}` | record of a list in a `data/*.json` - a backup / restore entry, a SQL target, a docker connection, a backup policy override - the one whose fields equal `match` |
+| 2 | `credential-remove {"credential_name"}` | login of `users.json`; the server's group goes with its last login; its `password_ref` is said and stays |
+| 3 | `secret-remove` (stdin) | secret, by its ref and value |
+| 4 | `instance-remove {"server_id"}` | server's record in `db_instances.json`, with every block inside it |
+| 5 | `report-server-remove {"server_id", "inventory"?}` | row of the report's canonical inventory (add-only otherwise) - `data_dir`'s `database-inventory.json`, or the node's `runtime/reports/...`; refused while the register lists the server; answers `servers_left`, what the report keeps |
+
+- **Refused while named.** Every `data/*.json` is walked; a value - or a key - equal to the record's
+  name anywhere but inside the record is a pointer, and the refusal lists each (file, path, the record
+  it is in) - the step to run before. The reference rules (`config_references.json`) are not the list:
+  a retired server is named in more places than they know (a login group, a backup policy override, a
+  docker connection). Exact values only. A file that cannot be read stops every removal past it. Not
+  walked: the secret store, the reference rules, `shared_config_objects*` and `*.example.json`; the
+  report's inventory is step 5's, never a pointer for step 4.
+- **A plan unless `"apply": true`.** Without it the answer is what would go; nothing is written.
+- **The file as it was**: its indent and its line endings, less the record (a CRLF file stays CRLF).
+- **What no step removes**: the store's history (metrics, backups, restores, the catalog) and any file
+  on a host; the report's old pages and series files beside it are left - nothing links to them.
+- Each works from its request alone (R09): `data_dir`, else this node's folder. Configuration changes
+  are the master's (CLAUDE.md, *Everything starts here*): steps 1-4 on the master's `data/`, the changed
+  files to the worker one at a time; step 5 also on the worker's `runtime/reports/database-inventory.json`.
+- Held by `tests/test_a_server_is_retired_one_record_at_a_time_the_leaf_first.py`.
+
 ## Checking a secret still works (`secret_check`)
 
 The read-only half of the pair. `rotate-password` changes a password; this proves one, and both
@@ -3269,6 +3329,11 @@ python -m dbabrain.common.cli relay-file '<json>'     # file_transfer: copy one 
 python -m dbabrain.common.cli rotate-password '<json>'  # password_rotation: change a login's password
 python -m dbabrain.common.cli check-secret '<json>'     # secret_check: prove each secret still logs in
 <request> | python -m dbabrain.common.cli secret-set -  # lib.secret_text: one secret into the encrypted store
+<request> | python -m dbabrain.common.cli secret-remove -  # lib.secret_text: one secret out, proven by its value
+python -m dbabrain.common.cli entry-remove '<json>'     # config_retire: one record of a data/*.json list, refused while named
+python -m dbabrain.common.cli credential-remove '<json>'  # config_retire: one login of users.json
+python -m dbabrain.common.cli instance-remove '<json>'  # config_retire: one server of db_instances.json
+python -m dbabrain.common.cli report-server-remove '<json>'  # config_retire: one server off the report's inventory
 python -m dbabrain.common.cli inventory-summary '<json>'  # inventory_render: merge overlay + render summary
 python -m dbabrain.common.cli host-facts '<json>'       # host_ops: one host's state (read-only)
 python -m dbabrain.common.cli host-service '<json>'     # host_ops: start/stop/restart services + wait

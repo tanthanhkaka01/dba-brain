@@ -32,6 +32,11 @@ class JobRun:
     #: claims its own key.
     claim_key: str | None = None
     metadata: dict[str, Any] | None = None
+    #: The claim holds across every node, not one host (0.40.0, 1.383): the row's ``host_name`` is
+    #: written ``""``, the one value the claim index reads alike from the master and the worker, and
+    #: the host that runs it goes into the claim's metadata, where every reader of a claim looks first.
+    #: An offload: a run by hand on the master and the worker's pass offloaded the same backup.
+    claim_global: bool = False
 
 
 def telegram_log_metadata(

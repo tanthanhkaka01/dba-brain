@@ -16,6 +16,11 @@ reach only their own node: the Worker keeps one relay per account.
   with the signed-in email as ``asked_by``.
 * **The connection** is kept: a dropped one is opened again after a back-off (1 s doubling to 60 s);
   a token the Worker refuses ends the process with the sentence that says so.
+* **As a service** (``--wait-for-link``, 0.40.0): the daemon keeps it running, so it never starts a
+  device link itself - a code nobody is looking at expires every ten minutes and is asked for again.
+  With no token it says once that the node is not linked and reads the secret store again every
+  minute; a token the Worker refuses is set aside the same way, until a new one is stored by a
+  ``dbabrain mcp connect`` run by hand.
 """
 
 from __future__ import annotations
@@ -33,6 +38,8 @@ DEFAULT_SERVER = "https://mcp.dbabrain.dev"
 NODE_TOKEN_REF = "DBABRAIN_MCP_NODE_TOKEN"
 #: The frames a node takes at once - more wait their turn, so one person cannot flood their own node.
 MAX_IN_FLIGHT = 8
+#: How often a node waiting for its link reads the secret store again (``--wait-for-link``).
+LINK_WAIT_SECONDS = 60
 
 
 class RelayError(errors.OperationFailed):
@@ -198,8 +205,43 @@ async def serve(node: Any, *, server: str, token: str, connect: Any = None, once
         raise refused
 
 
-def connect_node(node: Any, *, server: str = DEFAULT_SERVER, relink: bool = False) -> None:
+def wait_for_token(node: Any, *, refused: str = "", sleep: Any = time.sleep,
+                   wait: int = LINK_WAIT_SECONDS) -> str:
+    """The node token, waited for rather than asked for: the store is read again on every turn (the
+    token arrives from another process), and a token the Worker refused is not one to connect with."""
+    said = False
+    while True:
+        node._secrets = None
+        node._redactor = None
+        token = stored_token(node)
+        if token and token != refused:
+            return token
+        if not said:
+            if node.secrets_error:
+                why = f"the secret store cannot be read ({node.secrets_error}) - set DBABRAIN_SECRET_KEY"
+            elif refused:
+                why = "its token was refused - link it again by hand: `dbabrain mcp connect --relink`"
+            else:
+                why = "it is not linked - link it once by hand: `dbabrain mcp connect`"
+            _say(f"dbabrain node: {why}; waiting for a token (read again every {wait} s).")
+            said = True
+        sleep(wait)
+
+
+def connect_node(node: Any, *, server: str = DEFAULT_SERVER, relink: bool = False,
+                 wait_for_link: bool = False, sleep: Any = time.sleep, run: Any = None) -> None:
     """``dbabrain mcp connect``: link this machine once, then keep its node connected."""
+    run = run or (lambda token: asyncio.run(serve(node, server=server, token=token)))
+    if wait_for_link:
+        refused = ""
+        while True:
+            token = wait_for_token(node, refused=refused, sleep=sleep)
+            try:
+                run(token)
+                return
+            except RelayError as exc:
+                _say(str(exc))
+                refused = token
     token = "" if relink else stored_token(node)
     if not token:
         if node.secrets_error:
@@ -209,4 +251,4 @@ def connect_node(node: Any, *, server: str = DEFAULT_SERVER, relink: bool = Fals
         token = str(answer["node_token"])
         store_token(node, token)
         _say(f"linked to {answer.get('email') or 'your account'} - the token is in the encrypted secret store.")
-    asyncio.run(serve(node, server=server, token=token))
+    run(token)

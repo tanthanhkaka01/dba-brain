@@ -98,6 +98,13 @@ class ServerMetadataPlan:
     phases: tuple[str, ...] = DEFAULT_PHASES
     on_unsupported: str = "skip"
     extras: dict[str, Any] = field(default_factory=dict)
+    #: A restore's bundle (0.40.0, 1.376): ``node`` (where the export writes it), ``server`` (``server_id``
+    #: and ``path``) or ``repository`` (``path`` on the source's repository, sealed with age).
+    source: str = "node"
+    server_id: str = ""
+    path: str = ""
+    #: A backup's: where its offload carries the bundle on the repository - ``""``: not carried.
+    repository_path: str = ""
 
     def request(self, **overrides: Any) -> dict[str, Any]:
         """The JSON object handed to ``dbabrain.common.cli sqlserver-*-instance``.
@@ -110,6 +117,11 @@ class ServerMetadataPlan:
             payload["include"] = list(self.artifacts)
         payload.update(overrides)
         return payload
+
+
+#: Where a restore reads its bundle (``instance_bundle_store.SOURCES``) - repeated here: this module is
+#: read while a config entry is validated, before anything that fetches is imported.
+_SOURCES = ("node", "server", "repository")
 
 
 def parse_server_metadata(
@@ -178,9 +190,27 @@ def parse_server_metadata(
             f"{label}: server_metadata.on_unsupported must be 'skip' or 'fail'."
         )
 
+    # Where the bundle is read from, or carried to (0.40.0, 1.376 - the operator, 2026-11-16): stated
+    # when the block is on, never a default - a restore that read the wrong bundle replays another
+    # instance's logins.
+    source, server_id, path, repository_path = "node", "", "", ""
+    if for_restore:
+        # Left out, the entry still loads - one entry must not stop its file - and is refused inside its
+        # own run (lib.restore.stated: source, server_id, path). A value that is not one of them is a typo.
+        source = str(raw.get("source") or "node").strip().lower()
+        if source not in _SOURCES:
+            raise ServerMetadataConfigError(
+                f"{label}: server_metadata.source must be one of {', '.join(_SOURCES)} "
+                f"(where the bundle is read from), got {raw.get('source')!r}.")
+        server_id = str(raw.get("server_id") or "").strip()
+        path = str(raw.get("path") or "").strip()
+    else:
+        repository_path = str(raw.get("repository_path") or "").strip()
+
     extras = {
         key: value for key, value in raw.items()
-        if key not in {"enabled", "artifacts", "target", "phases", "on_unsupported"}
+        if key not in {"enabled", "artifacts", "target", "phases", "on_unsupported", "source", "server_id", "path",
+                       "repository_path"}
     }
     return ServerMetadataPlan(
         enabled=True,
@@ -189,6 +219,10 @@ def parse_server_metadata(
         phases=phases or DEFAULT_PHASES,
         on_unsupported=on_unsupported,
         extras=extras,
+        source=source,
+        server_id=server_id,
+        path=path,
+        repository_path=repository_path,
     )
 
 
@@ -330,6 +364,15 @@ def summarize(result: dict[str, Any] | None) -> dict[str, Any]:
     evidence = str(result.get("evidence_file") or "")
     if evidence:
         summary["evidence_file"] = evidence
+    # What a WARN warned about, gate by gate (the 1.376 drill, 2026-11-16: the chat read "replayed ·
+    # WARN" while a linked server had been skipped for a missing secret and two Windows logins did not
+    # exist on the target - the reader could not tell without the evidence file).
+    gates = result.get("gates") or []
+    warned = [f"{gate.get('name')}: {' '.join(str(gate.get('detail') or '').split())[:200]}"
+              for gate in (gates if isinstance(gates, list) else [])
+              if isinstance(gate, dict) and str(gate.get("status") or "").upper() == "WARN"]
+    if warned:
+        summary["warnings"] = warned[:5]
     return summary
 
 
@@ -377,7 +420,56 @@ def replay_phase(
     if not plan.enabled or phase not in plan.phases:
         return "", None
 
-    bundle_dir = instance_bundle_dir(source_server_id)
+    # The bundle from where the entry says (0.40.0, 1.376): the node's own export, a server's folder, or
+    # the repository's sealed copy decrypted on the node - fetched for this phase, removed after it.
+    from dbabrain.backup_restore import instance_bundle_store
+
+    opened = None
+    if str(getattr(plan, "source", "node") or "node") != "node":
+        try:
+            opened = instance_bundle_store.open_for_restore(
+                plan, source_server_id=source_server_id, data_dir=data_dir,
+                repository_server_id=repository_of(source_server_id), **_fetch_context(data_dir))
+        except Exception as exc:  # noqa: BLE001 - a bundle that cannot be had must not lose a good restore
+            why = f"the bundle could not be read from {plan.source} {plan.server_id or ''} {plan.path}: {exc}"
+            why = " ".join(why.split())[:500]
+            return f"PHASE=metadata-{phase} SKIPPED {why}\n", {"ok": False, "status": "SKIPPED", "error": why}
+        bundle_dir = opened.path
+    else:
+        bundle_dir = instance_bundle_dir(source_server_id)
+    try:
+        return _replay_from(plan, phase=phase, label=label, bundle_dir=bundle_dir, source_server_id=source_server_id,
+                            target_server_id=target_server_id, target_container=target_container,
+                            target_host=target_host, data_dir=data_dir, announce=announce)
+    finally:
+        if opened is not None:
+            opened.close()
+
+
+def repository_of(server_id: str) -> str:
+    """The repository the source's backup entries offload to - ``""`` when none does."""
+    try:
+        from dbabrain.backup_restore.offload import entries_to_offload
+
+        return next((str(entry.offload.server_id) for entry in entries_to_offload(None)
+                     if entry.server_id == server_id), "")
+    except Exception:  # noqa: BLE001 - said by the fetch that needs it
+        return ""
+
+
+def _fetch_context(data_dir: Any) -> dict[str, Any]:
+    """The node's own keys for a fetch: the secret store for the logins, the passphrase for the vault."""
+    from dbabrain.backup_restore.backup import _load_secrets
+    from dbabrain.lib.config import load_config
+    from dbabrain.lib.secret_text import resolve_key
+
+    return {"secrets": _load_secrets(data_dir=data_dir, key=None, key_base64=None),
+            "passphrase": resolve_key() or "", "app_config": load_config()}
+
+
+def _replay_from(plan: ServerMetadataPlan, *, phase: str, label: str, bundle_dir: Path, source_server_id: str,
+                 target_server_id: str, target_container: str, target_host: str, data_dir: Any,
+                 announce: Any) -> tuple[str, dict[str, Any] | None]:
     if not (bundle_dir / instance_bundle.SERVER_DIR).is_dir():
         # The bundle is written by the node that RUNS the source's backup entry, with its
         # server_metadata on. Asking for `server_metadata.enabled` was right for one cause and

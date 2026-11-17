@@ -511,7 +511,7 @@ def test_a_failed_backup_says_why_in_the_message_not_only_in_error_text():
 
     from dbabrain.backup_restore import backup
 
-    source = inspect.getsource(backup.run_backup)
+    source = inspect.getsource(backup.run_claimed_backup_job)
 
     assert "_reason" in source and "result.error_text" in source, (
         "the message must carry the script's own words when the job failed")
@@ -523,6 +523,6 @@ def test_the_reason_is_only_added_to_a_failure():
 
     from dbabrain.backup_restore import backup
 
-    source = inspect.getsource(backup.run_backup)
+    source = inspect.getsource(backup.run_claimed_backup_job)
 
     assert 'if result.status != "done" and _reason:' in source

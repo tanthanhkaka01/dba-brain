@@ -237,3 +237,30 @@ def test_every_shipped_ladder_prices_a_write_at_one_typed_yes(relative):
     operations = json.loads(path.read_text(encoding="utf-8-sig"))["operations"]
 
     assert operations[adhoc.WRITE_OPERATION]["level"] == 50
+
+
+# --------------------------------------------------------------------------- #
+# The second answer (1.403)
+# --------------------------------------------------------------------------- #
+# A ladder that does not price run-sql-adhoc prices it at the strictest: two answers, the target typed
+# back. The request refused `confirm_target` as an unknown field, so off a terminal such a write could
+# never be answered - on the worker (whose ladder lacked the entry) every hand write was refused,
+# 2026-11-17. The gate already read the field; the request now carries it there.
+def test_the_targets_id_typed_back_reaches_the_gate_with_the_yes(calls, capsys, tmp_path):
+    code, _out, _err = _run(capsys, {"server_id": SERVER, "sql_text": "UPDATE t SET x = 1", "commit": True,
+                                     "confirm": "yes", "confirm_target": f" {SERVER} "}, tmp_path=tmp_path)
+    assert code == 0
+    [gate] = calls["authorize"]
+    assert (gate["confirm"], gate["confirm_target"]) == ("yes", SERVER)
+
+
+def test_without_it_the_gate_is_asked_with_no_second_answer(calls, capsys, tmp_path):
+    _run(capsys, {"server_id": SERVER, "sql_text": "UPDATE t SET x = 1", "commit": True, "confirm": "yes"},
+         tmp_path=tmp_path)
+    assert "confirm_target" not in calls["authorize"][0]
+
+
+def test_a_second_answer_that_is_not_text_is_refused():
+    with pytest.raises(adhoc.AdhocRequestError, match="confirm_target must be a string"):
+        adhoc.checked({"server_id": SERVER, "sql_text": "UPDATE t SET x = 1", "commit": True,
+                       "confirm": "yes", "confirm_target": True})

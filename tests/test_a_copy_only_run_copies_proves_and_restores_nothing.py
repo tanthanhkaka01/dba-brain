@@ -95,7 +95,7 @@ def _share_driven(tmp_path, monkeypatch, *, copy_only):
         raise AssertionError("a copy-only run reached the restore or its cleanup")
 
     monkeypatch.setattr(cli, "run_copy_backup", copy)
-    monkeypatch.setattr(cli, "run_restore_all_latest", must_not_run if copy_only else lambda **_: {
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server", must_not_run if copy_only else lambda **_: {
         "status": "SUCCESS", "per_database_restore_status": {}})
     monkeypatch.setattr(cli, "run_delete_backup", lambda *a, **k: must_not_run())
     summary = cli.run_restore_workflow(
@@ -119,11 +119,12 @@ def test_a_copy_only_run_can_never_count_as_a_drill():
     """Drill status and the SLA read backup_restore_history, which only the RESTORE step writes."""
     import inspect
 
-    from dbabrain.backup_restore import cli, restore_database
+    from dbabrain.backup_restore import restore_database
 
     assert "start_restore(" in inspect.getsource(restore_database), "the RESTORE step is the writer"
-    workflow_source = inspect.getsource(cli.run_restore_workflow)
-    assert workflow_source.index("if copy_only:\n") < workflow_source.index("run_restore_all_latest("), \
+    # The share-driven restore's steps are the workflow's since 0.40.0 (1.375).
+    workflow_source = inspect.getsource(workflow.run_share_restore)
+    assert workflow_source.index("if copy_only:\n") < workflow_source.index("restore_share_server("), \
         "copy only returns before the RESTORE step is reached"
 
 
@@ -150,14 +151,16 @@ def test_an_entry_stating_copy_only_is_copied_and_says_nothing_was_restored(monk
     summary, calls, replayed = _scheduled(monkeypatch, action="copy_only")
 
     assert summary["succeeded"] == 1 and calls[0]["copy_only"] is True
-    assert replayed == [], "nothing replayed on the target instance - no logins, no Agent jobs"
-    assert harness.events[0]["message"] == "Copy only R1 started."
-    assert "Nothing restored" in harness.events[-1]["message"]
+    assert calls[0]["replay_metadata"] is False, "nothing replayed on the target instance - no logins, no Agent jobs"
+    assert replayed == []
+    assert harness.events[0]["message"].startswith("1. Copy only process started")
+    assert "nothing restored" in harness.events[-1]["message"]
 
 
 def test_an_entry_stating_restore_restores_and_one_run_can_be_made_copy_only(monkeypatch, harness):  # noqa: F811
     _summary, calls, replayed = _scheduled(monkeypatch, action="restore")
-    assert calls[0]["copy_only"] is False and replayed
+    # The metadata is replayed inside the share-driven run, between its copy and its databases (1.375).
+    assert calls[0]["copy_only"] is False and calls[0]["replay_metadata"] is True
 
     _summary, calls, replayed = _scheduled(monkeypatch, action="restore", copy_only=True)
     assert calls[0]["copy_only"] is True and replayed == [], "--copy-only wins for that run"

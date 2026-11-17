@@ -58,7 +58,9 @@ COMMANDS = _commands()
 #: Every other command is an operation and is held to its request alone.
 CONFIGURATION_IS_ITS_JOB = frozenset({
     "add-sql", "metric-toggle", "instance-add", "remote-credential-add", "sql-command-add",
-    "sql-target-add", "app-command-set", "secret-set", "rotate-password", "check-secret",
+    "sql-target-add", "app-command-set", "secret-set", "secret-remove", "rotate-password", "check-secret",
+    # 0.41.0, 1.391: retiring a server - each removes one record of the folder it is given.
+    "entry-remove", "credential-remove", "instance-remove", "report-server-remove",
     "check-secret-literals", "check-identifiers", "check-objects", "check-references",
     "describe-object", "standardize-field-names", "upgrade-config", "list-targets",
     "inventory-summary", "build-showcase",
@@ -286,6 +288,9 @@ def _prepare_work(work: Path) -> None:
     (work / "meta.sql").write_text("SELECT 1;\n", encoding="utf-8")
     (work / "secrets.json").write_text(json.dumps({"LAB_PW": "not-a-real-password"}), encoding="utf-8")
     (work / "inventory.json").write_text(json.dumps({"servers": []}), encoding="utf-8")
+    # A server the report still lists after it left the register (1.391): report-server-remove's plan.
+    (work / "retired_inventory.json").write_text(json.dumps({"servers": [{"server_id": "LAB-RETIRED"}]}),
+                                             encoding="utf-8")
     (work / "reports").mkdir(exist_ok=True)
     (work / "reports" / "index.html").write_text("<html><body>a report</body></html>", encoding="utf-8")
 
@@ -372,6 +377,7 @@ _ON_AN_EMPTY_ROOT = {
     "remote-credential-add": {"server_id": "LAB-192-0-2-10", "username": "tuser",
                               "password_ref": "LAB_OS_PASSWORD", "host": "192.0.2.10"},
     "secret-set": {"ref": "LAB_PASSWORD", "value": "not-a-real-password"},
+    "secret-remove": {"ref": "LAB_PASSWORD", "value": "not-a-real-password"},
     "ai-key": {"value": "sk-ant-not-a-real-key"},
     "list-targets": {}, "check-objects": {}, "check-references": {}, "describe-object": {},
     "standardize-field-names": {}, "upgrade-config": {}, "check-secret": {},
@@ -413,6 +419,19 @@ def _on_a_root_init_wrote(work: Path, root: Path) -> dict[str, list[tuple[str, d
                             ("instance-active", {"server_id": _INSTANCE["server_id"], "active": False})],
         "metric-env": [("instance-add", _INSTANCE),
                        ("metric-env", {"server_id": _INSTANCE["server_id"], "env": {"PG_BACKUP_DIR": "/backup"}})],
+        # 0.41.0, 1.391: retiring, the leaf first - a SQL target, then the server it named.
+        "entry-remove": [("instance-add", _INSTANCE),
+                         ("sql-command-add", {"display_name": "count", "db_type": "sqlserver", "sql_text": "select 1"}),
+                         ("sql-target-add", {"sql_id": 1, "server_id": _INSTANCE["server_id"]}),
+                         ("entry-remove", {"file": "sql_targets.json", "match": {"sql_id": 1}, "apply": True})],
+        "report-server-remove": [("report-server-remove", {"server_id": "LAB-RETIRED",
+                                                   "inventory": str(work / "retired_inventory.json")})],
+        "instance-remove": [("instance-add", _INSTANCE),
+                            ("instance-remove", {"server_id": _INSTANCE["server_id"], "apply": True})],
+        "credential-remove": [("remote-credential-add", {"server_id": "LAB-192-0-2-11", "username": "tuser",
+                                                          "password_ref": "LAB_OS_PASSWORD", "host": "192.0.2.11",
+                                                          "credential_name": "LAB_OS_TUSER"}),
+                              ("credential-remove", {"credential_name": "LAB_OS_TUSER", "apply": True})],
         "sql-target-add": [("instance-add", _INSTANCE),
                            ("sql-command-add", {"display_name": "count", "db_type": "sqlserver",
                                                 "sql_text": "select 1"}),

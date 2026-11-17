@@ -35,6 +35,7 @@ from typing import Any
 from dbabrain.transport import common_cli
 from dbabrain.backup_restore import verified_cleanup
 from dbabrain.backup_restore.backup import _load_secrets, load_backup_jobs, resolve_backup_target
+from dbabrain.lib import integrity
 from dbabrain.lib import verified_cleanup as rules
 from dbabrain.backup_restore.events import emit_backup_restore_event
 from dbabrain.lib.backupfiles_retention import AGE, DEFAULT_RETENTION_DAYS
@@ -284,11 +285,12 @@ def catalog_facts(catalog: Any, *, server_id: str, paths: list[str]) -> dict[str
     """
     if catalog is None or not paths:
         return {}
-    names = sorted({rules.last_part(path) for path in paths})
+    # By the name each file is catalogued under - a base backup's file from its directory on (1.386).
+    names = sorted({integrity.catalog_name(path) for path in paths})
     rows = catalog.stored_files(server_id=server_id, file_names=names)
     facts: dict[str, dict[str, Any]] = {}
     for path in paths:
-        row = rows.get(rules.last_part(path))
+        row = rows.get(integrity.catalog_name(path))
         if not row:
             continue
         recorded = [str(row.get(field) or "") for field in ("file_path", "host_path")]

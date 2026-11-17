@@ -130,7 +130,8 @@ def test_every_phase_is_either_a_run_bracket_or_a_step():
                             + "; ".join(offenders)
 
 
-@pytest.mark.parametrize("module", ["backup.py", "prune.py", "cli.py"])
+# A backup is bracketed where it is run and said: the workflow (0.40.0, 1.374) - backup.py only answers.
+@pytest.mark.parametrize("module", ["workflow.py", "prune.py", "cli.py"])
 def test_every_module_that_runs_something_brackets_it(module):
     """Each of these reported half a run or none of it.
 

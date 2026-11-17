@@ -56,6 +56,8 @@ ALL_COMMANDS = [
     "instance-active",
     # 2026-10-19. A collector script's inputs on one instance; the .251 PostgreSQL lab lacked one.
     "metric-env",
+    # 0.41.0, 1.391: retiring a server, one record per call, the leaf first - each refused while named.
+    "entry-remove", "credential-remove", "instance-remove", "report-server-remove",
     "inventory-summary", "list-backup-files",
     "pack-backup", "pull-file", "push-file",
     # 0.34.0 (1.210): hash files where they are - a backup, a restore's copy, the scrub.
@@ -113,6 +115,7 @@ ALL_COMMANDS = [
 #: and has checks of its own (below), and the drift guard counts these too.
 STDIN_ONLY_COMMANDS = [
     "secret-set",       # 2026-09-11: one secret into the encrypted store, never in clear
+    "secret-remove",    # 0.40.0: one secret out, proven by its value - which is why it is stdin
     "ai-key",           # 0.39.0: the AI assistant's key - stdin, or the prompt when bare on a terminal
     # 0.23.0, moved from the sre app: a database password and one or two SSH passwords, resolved
     # by the caller, travel in the request.

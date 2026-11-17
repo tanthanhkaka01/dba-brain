@@ -121,7 +121,8 @@ def _stub_the_passes(monkeypatch, failed=None):
 
     monkeypatch.setattr(workflow, "run_backup", a_pass("backup"))
     monkeypatch.setattr(workflow, "run_scheduled_restores", a_pass("restore"))
-    monkeypatch.setattr(offload, "run_offloads", a_pass("offload"))
+    # The offload pass is the workflow's own since 0.40.0 (1.374): it says the steps.
+    monkeypatch.setattr(workflow, "run_offloads", a_pass("offload"))
     return order
 
 

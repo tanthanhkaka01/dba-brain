@@ -114,8 +114,15 @@ class _Entry:
 
 def entries_to_offload(config_path: str | Path) -> list[_Entry]:
     """Every backup entry whose offload is on, one per ``backup_id``."""
+    return entries_from_jobs(load_backup_jobs(config_path))
+
+
+def entries_from_jobs(jobs: Any) -> list[_Entry]:
+    """The offload entries of jobs already loaded - the workflow's backup pass reads its own (1.374)."""
     grouped: dict[str, list[BackupJob]] = defaultdict(list)
-    for job in load_backup_jobs(config_path):
+    for job in jobs:
+        if getattr(job, "offload", None) is None:
+            continue
         grouped[job.backup_id].append(job)
     entries = []
     for backup_id, jobs in grouped.items():
@@ -355,7 +362,7 @@ def _items(entry: _Entry, rows: list[dict[str, Any]], hosts: _Hosts) -> tuple[li
                       database_name=str(row.get("database_name") or ""), engine=str(row.get("engine") or ""),
                       file_id=int(row["file_id"]), backup_taken_at=row.get("backup_ended_at"),
                       chain_position=row.get("chain_position"))
-        member = I.HASHED_MEMBER.get(file_type.upper())
+        member = I.directory_member(file_type, row.get("file_name"))
         if member:
             listing = _list_folder(hosts, hosts.source_host, source_path)
             base = str(listing.get("host_folder") or source_path).rstrip("/")
@@ -522,7 +529,19 @@ def release_sources(entry: _Entry, *, catalog: BackupCatalogStore, hosts: _Hosts
     for row in catalog.newest_full_per_database(backup_id=entry.backup_id):
         newest_full[str(row["database_name"] or "")] = str(row["at"] or "")
     keep, candidates = [], []
+    newest_manifest: dict[str, int | None] = {}
     for row in rows:
+        name = str(row.get("file_name") or "")
+        if not keep_chain and name.endswith("/backup_manifest"):
+            # A base backup recorded file by file (1.386): its newest manifest stays - what MANIFEST_KEPT
+            # did for a base recorded as its directory.
+            database = str(row.get("database_name") or "")
+            if database not in newest_manifest:
+                newest_manifest[database] = catalog.newest_base_manifest(
+                    server_id=str(row.get("server_id") or entry.server_id), database_name=database)
+            if newest_manifest[database] == int(row["file_id"]):
+                keep.append(f"{name}: the newest base backup's manifest - the next incremental chains onto it")
+                continue
         if int(row["file_id"]) in encrypted and int(row["file_id"]) not in sealed:
             keep.append(f"{row['file_name']}: its repository copy is not wholly encrypted and proven yet - "
                         "kept at the source")
@@ -539,7 +558,7 @@ def release_sources(entry: _Entry, *, catalog: BackupCatalogStore, hosts: _Hosts
     members: dict[int, list[dict[str, Any]]] = {}
     refused: list[str] = []
     for row in list(candidates):
-        if I.HASHED_MEMBER.get(str(row["file_type"]).upper()):
+        if I.is_base_directory(row["file_type"], row["file_name"]):
             members[int(row["file_id"])] = catalog.offload_members(int(row["file_id"]))
             if not members[int(row["file_id"])]:
                 candidates.remove(row)
@@ -590,22 +609,26 @@ def release_sources(entry: _Entry, *, catalog: BackupCatalogStore, hosts: _Hosts
             continue
         to_delete.append(row)
     deleted = 0
+    # Which files went, not only how many: a backup's step 8 tells its own from earlier backups' (1.374).
+    deleted_ids: list[int] = []
     for row in to_delete:
         if int(row["file_id"]) in members:
             newest = (not keep_chain and catalog.newest_base_directory(
                 server_id=str(row.get("server_id") or entry.server_id),
                 database_name=str(row.get("database_name") or "")) == int(row["file_id"]))
-            manifest = I.HASHED_MEMBER.get(str(row["file_type"]).upper()) if newest else None
+            manifest = I.directory_member(row["file_type"], row["file_name"]) if newest else None
             done, why = _release_directory(entry, row, members[int(row["file_id"])], hosts, keep_member=manifest)
             if done and manifest:
                 # The newest base: its data is gone, its manifest stays for the next incremental.
                 catalog.set_backup_file(int(row["file_id"]), pruned_by=MANIFEST_KEPT)
                 deleted += 1
+                deleted_ids.append(int(row["file_id"]))
             elif done:
                 catalog.set_backup_file(int(row["file_id"]), state="pruned", on_disk=0,
                                         source_deleted_at=utc_now_text(),
                                         pruned_by="offload: released file by file after its copy was verified")
                 deleted += 1
+                deleted_ids.append(int(row["file_id"]))
             else:
                 refused.append(f"{row['file_name']}: {why}"[:500])
             continue
@@ -626,11 +649,46 @@ def release_sources(entry: _Entry, *, catalog: BackupCatalogStore, hosts: _Hosts
                                     source_deleted_at=utc_now_text(),
                                     pruned_by="offload: released after its copy was verified")
             deleted += 1
+            deleted_ids.append(int(row["file_id"]))
         else:
             # One file refused is that file's; the rest go on, each with its own command.
             refused.append(f"{row['file_name']}: delete {line.get('status') or 'refused'} - "
                            f"{line.get('reason') or error}"[:500])
-    return {"deleted": deleted, "kept": len(keep), "refused": refused}
+    refused.extend(_remove_emptied_base_folders(entry, catalog, hosts, [
+        row for row in to_delete if int(row["file_id"]) in set(deleted_ids) and "/" in str(row.get("file_name") or "")]))
+    return {"deleted": deleted, "kept": len(keep), "refused": refused, "deleted_ids": deleted_ids}
+
+
+def _remove_emptied_base_folders(entry: _Entry, catalog: BackupCatalogStore, hosts: _Hosts,
+                                 rows: list[dict[str, Any]]) -> list[str]:
+    """The folder of each base backup recorded file by file (1.386) whose every file is now released:
+    deleted when empty (``delete-empty-folder``), as a base recorded as its directory always was - an
+    empty ``base/<stamp>_<level>/`` left at the source reads as a backup with nothing in it."""
+    if not rows:
+        return []
+    inside = bool(getattr(hosts, "share", None)) or bool(getattr(hosts, "container", ""))
+    refused: list[str] = []
+    folders: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        folders.setdefault(str(row["file_name"]).split("/", 1)[0], row)
+    timeout = min(int(entry.offload.hash_timeout_seconds), 3600)
+    for directory, row in folders.items():
+        if catalog.base_files_present(server_id=str(row.get("server_id") or entry.server_id), directory=directory):
+            continue                       # its manifest kept, or a file not released yet: the folder stays
+        path = str(row["file_path"] if inside else (row.get("host_path") or row["file_path"])).replace("\\", "/")
+        marker = f"/{directory}/"
+        if marker not in path:
+            continue
+        folder = path[: path.index(marker) + len(marker) - 1]
+        ok, answer, error = common_cli.run_allowing_failure(
+            "delete-empty-folder", {"host": hosts.source_host, "path": folder,
+                                    "must_be_under": _release_root(entry, row, hosts), "timeout_seconds": timeout},
+            timeout_seconds=timeout + _PROCESS_MARGIN_SECONDS)
+        status = ((answer or {}).get("folder") or {}).get("status")
+        if status not in ("deleted", "not_found"):
+            reason = ((answer or {}).get("folder") or {}).get("reason") or error or ""
+            refused.append(f"{directory}: its files are released, its folder is not - {status}: {reason}"[:500])
+    return refused
 
 
 def _release_root(entry: _Entry, row: dict[str, Any], hosts: _Hosts) -> str:
@@ -703,15 +761,18 @@ def release_request(entry: _Entry, row: dict[str, Any], hosts: _Hosts) -> dict[s
         raise OffloadRefused("no sha256 recorded for it - a file is deleted only with its checksum stated")
     if isinstance(size, bool) or not isinstance(size, int) or size < 0:
         raise OffloadRefused(f"no size recorded for it ({size!r}) - a file is deleted only with its bytes stated")
-    if name != _last_part(path):
-        raise OffloadRefused(f"its catalog name {name!r} is not the last part of {path!r}")
+    if name != I.catalog_name(path):
+        raise OffloadRefused(f"its catalog name {name!r} is not the name {path!r} is catalogued under")
     root = _release_root(entry, row, hosts)
-    return {"host": hosts.source_host, "path": path, "file_name": name, "size_bytes": size,
+    # The command holds the name to the path's last part; a base backup's file is catalogued from its
+    # directory on (1.386), and checked against that above.
+    return {"host": hosts.source_host, "path": path, "file_name": _last_part(path), "size_bytes": size,
             "sha256": sha256, "must_be_under": root,
             "timeout_seconds": int(entry.offload.hash_timeout_seconds)}
 
 
-def repository_source(locations: list[dict[str, Any]], host_dir: str) -> tuple[str, str]:
+def repository_source(locations: list[dict[str, Any]], host_dir: str,
+                      *, names: Any = None) -> tuple[str, str]:
     """``(repository server_id, folder)`` holding the copies of ``host_dir``, a folder on the server.
 
     The repository keeps the server's own layout under ``<offload_folder>/<server_id>/``, so a copy's
@@ -719,10 +780,29 @@ def repository_source(locations: list[dict[str, Any]], host_dir: str) -> tuple[s
     the same folder on each side; ``host_dir`` is translated through it. Read from the catalog's
     verified copies - no entry is looked up, and a server whose copies went to more than one
     repository is refused by name rather than half-read from one of them.
+
+    ``names`` - the file names the restore will read, when the caller knows them before the copy
+    (Oracle's chain recorded at backup time): only their copies decide. An Oracle entry offloaded
+    before 0.40.0 named its database ``database``, and one since names it by its SID, so the same
+    server folder has copies in two repository folders; a chain lies in one of them, and reading all
+    the copies refused every restore of that entry (1.402, a lab drill, 2026-11-17).
     """
+    from dbabrain.lib.repository_keys import SUFFIX
+
     if not locations:
         raise OffloadRefused(f"no verified repository copy of {host_dir} - offload the backups first, or "
                              "state restore_from: server.")
+    if names is not None:
+        wanted = {str(name) for name in names}
+
+        def _plain_name(row: dict[str, Any]) -> str:
+            name = posixpath.basename(str(row.get("offload_path") or ""))
+            return name[: -len(SUFFIX)] if name.endswith(SUFFIX) else name
+
+        locations = [row for row in locations if _plain_name(row) in wanted]
+        if not locations:
+            raise OffloadRefused(f"no verified repository copy of the {len(wanted)} file(s) this restore reads "
+                                 f"from {host_dir}.")
     want = host_dir.replace("\\", "/").rstrip("/")
     found: set[tuple[str, str]] = set()
     for row in locations:
@@ -743,7 +823,8 @@ def repository_source(locations: list[dict[str, Any]], host_dir: str) -> tuple[s
         raise OffloadRefused(f"no verified repository copy lies under {host_dir} - the copies are of another "
                              "folder of this server.")
     if len(found) > 1:
-        raise OffloadRefused(f"the copies of {host_dir} are in {len(found)} places "
+        what = f"the {len(set(names))} file(s) this restore reads from" if names is not None else "the copies of"
+        raise OffloadRefused(f"{what} {host_dir} are in {len(found)} places "
                              f"({', '.join(sorted(f'{s}:{d}' for s, d in found))}) - one restore reads one.")
     return found.pop()
 
@@ -887,7 +968,7 @@ def prune_repository(entry: _Entry, *, catalog: BackupCatalogStore, hosts: _Host
     expired = 0
     for row in expire:
         file_id, name = int(row["file_id"]), str(row["file_name"])
-        directory = bool(I.HASHED_MEMBER.get(str(row["file_type"]).upper()))
+        directory = I.is_base_directory(row["file_type"], name)
         if file_id in encrypted and file_id not in sealed:
             kept.append(f"{name}: past its retention, kept - its repository copy is encrypted in part; it "
                         "expires once the encryption finishes")
@@ -949,66 +1030,22 @@ def prune_repository(entry: _Entry, *, catalog: BackupCatalogStore, hosts: _Host
 # --------------------------------------------------------------------------- #
 # The pass
 # --------------------------------------------------------------------------- #
-def run_offloads(
-    *,
-    app_config: Any,
-    config_path: str | Path,
-    logger: Any = None,
-    backup_id: str | None = None,
-    data_dir: str | Path | None = None,
-    key: str | None = None,
-    key_base64: str | None = None,
-    dry_run: bool = False,
-    limit: int | None = None,
-    sleep=time.sleep,
-) -> dict[str, Any]:
-    """Every entry with ``offload_enabled``: copy what is still to copy, release what may be released.
+def backup_runs_still_running(store: Any) -> set[int]:
+    """The ``job_runs`` ids of the backups running now. Unreadable is none: the files are then taken as
+    before, and the worst is a step 4 a few seconds early."""
+    try:
+        return {int(row["log_id"]) for row in store.fetch_running_job_runs(schedule.BACKUP_JOB_PREFIX + ".")}
+    except Exception:  # noqa: BLE001
+        return set()
 
-    An entry with nothing to do writes nothing - no run row, no event - so a pass a second costs a
-    few catalog reads per entry. A failed copy is tried again after ``offload_retry_interval_seconds``,
-    not every second. ``limit`` overrides the entry's ``offload_files_per_pass`` for this pass only.
-    """
-    entries = [e for e in entries_to_offload(config_path) if not backup_id or e.backup_id == backup_id]
-    summary: dict[str, Any] = {"entries": len(entries), "ran": 0, "succeeded": 0, "failed": 0, "jobs": []}
-    if not entries:
-        summary["said"] = said(summary, backup_id=backup_id, dry_run=dry_run)
-        return summary
-    store = DbaBrainStore.from_config(app_config)
-    catalog = BackupCatalogStore.from_config(app_config)
-    schedule.reap_stale_runs(
-        store=store, app_config=app_config, logger=logger,
-        timeouts={schedule.offload_job_code(e.backup_id): e.timeout_seconds for e in entries},
-        notify={schedule.offload_job_code(e.backup_id): e.first.notify for e in entries})
-    from dbabrain.db.lockdown_store import lockdown_on
 
-    locked = lockdown_on(app_config)
-    for entry in entries:
-        retry_before = (datetime.now(timezone.utc) - timedelta(seconds=entry.retry_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        per_pass = int(limit or entry.offload.files_per_pass)
-        rows = catalog.files_to_offload(backup_id=entry.backup_id, limit=per_pass, retry_before=retry_before,
-                                        since=entry.offload.files_since)
-        # The delete at the source waits out a lockdown (1.220); the copy off the host goes on.
-        releasable = (catalog.files_to_release(backup_id=entry.backup_id, limit=per_pass,
-                                               keep_newest_chain=entry.offload.source_keeps_newest_chain)
-                      if entry.offload.delete_source and not locked else [])
-        expirable = _expirable(entry, catalog)
-        encryptable = _encryptable(entry, catalog, app_config)
-        if not rows and not releasable and not expirable and not encryptable:
-            continue
-        if dry_run:
-            summary["jobs"].append({"backup_id": entry.backup_id, "status": "dry-run", "to_copy": len(rows),
-                                    "to_release": len(releasable), "to_expire": len(expirable),
-                                    "to_encrypt": len(encryptable)})
-            continue
-        refresh = ((lambda entry=entry, per_pass=per_pass: catalog.files_to_release(
-            backup_id=entry.backup_id, limit=per_pass, keep_newest_chain=entry.offload.source_keeps_newest_chain))
-            if entry.offload.delete_source and not locked else None)
-        summary["jobs"].append(_run_one(entry, rows=rows, releasable=releasable, expirable=expirable,
-                                        store=store, catalog=catalog, refresh_release=refresh,
-                                        app_config=app_config, logger=logger, data_dir=data_dir, key=key,
-                                        key_base64=key_base64, sleep=sleep, summary=summary))
-    summary["said"] = said(summary, backup_id=backup_id, dry_run=dry_run)
-    return summary
+def by_backup_run(rows: list[dict[str, Any]]) -> list[tuple[int | None, list[dict[str, Any]]]]:
+    """``rows`` grouped by their backup run, in the order the runs first appear (oldest first)."""
+    groups: dict[int | None, list[dict[str, Any]]] = {}
+    for row in rows:
+        run_id = row.get("backup_run_id")
+        groups.setdefault(int(run_id) if run_id is not None else None, []).append(row)
+    return list(groups.items())
 
 
 def said(summary: dict[str, Any], *, backup_id: str | None, dry_run: bool) -> str:
@@ -1096,13 +1133,34 @@ def check_repository(entry: _Entry, *, catalog: BackupCatalogStore, app_config: 
         message = (f"{folder}: holds more than {len(listing.get('files') or [])} entries - listed in part, "
                    "so not checked")
         return {"folder": folder, "clean": False, "files": listing.get("listed"), "message": message}
-    found = RC.findings(expected, listing.get("files") or [])
+    found = RC.findings(expected, listing.get("files") or [], allowed=instance_bundle_paths(entry.server_id))
     clean = RC.is_clean(found)
     return {"folder": folder, "clean": clean, "files": len(listing.get("files") or []),
             "expected": len(expected), "counts": {kind: len(found[kind]) for kind in RC.KINDS},
             # The first of each kind travel with the run; the message names the first three.
             "findings": {kind: found[kind][:20] for kind in RC.KINDS if found[kind]},
             "message": RC.describe(folder, found)}
+
+
+def instance_bundle_paths(server_id: str) -> set[str]:
+    """The two files of each sealed instance bundle the configuration carries for ``server_id`` - every
+    backup entry of it with ``server_metadata`` on and a ``repository_path`` (0.40.0, 1.384). A bundle
+    inside the server's repository folder failed every offload of that server as two strays (the 1.376
+    drill, 2026-11-16). A configuration that does not load allows none: the check stays strict."""
+    from dbabrain.backup_restore.backup import load_backup_jobs
+    from dbabrain.backup_restore.instance_bundle_store import MANIFEST_NAME, SEALED_NAME
+
+    try:
+        jobs = load_backup_jobs(None)
+    except Exception:  # noqa: BLE001 - nothing allowed: a stray is then said, never hidden
+        return set()
+    paths: set[str] = set()
+    for job in jobs:
+        plan = job.server_metadata
+        where = str(getattr(plan, "repository_path", "") or "").rstrip("/")
+        if job.server_id == server_id and getattr(plan, "enabled", False) and where:
+            paths.update({f"{where}/{MANIFEST_NAME}", f"{where}/{SEALED_NAME}"})
+    return paths
 
 
 def _encryptable(entry: _Entry, catalog: BackupCatalogStore, app_config: Any) -> list[dict[str, Any]]:
@@ -1143,16 +1201,6 @@ def _entry_expiry(entry: _Entry, catalog: BackupCatalogStore, *, now: datetime) 
     return own, [line for line in kept if line.split(":", 1)[0] in names or line.split(":", 1)[0] == ""]
 
 
-#: A copy this big - or a base backup directory, whose size is known only as it is copied - is a long
-#: step: its own start message before its done one (1.306).
-LONG_COPY_BYTES = 1024 ** 3
-
-
-def is_long_copy(rows: list[dict[str, Any]]) -> bool:
-    return (sum(int(r.get("size_bytes") or 0) for r in rows) >= LONG_COPY_BYTES
-            or any(I.HASHED_MEMBER.get(str(r.get("file_type")).upper()) for r in rows))
-
-
 def _key_until(app_config: Any, result: dict[str, Any]) -> str:
     key_id = (result.get("encrypt") or {}).get("key_id")
     if not key_id:
@@ -1165,180 +1213,149 @@ def _key_until(app_config: Any, result: dict[str, Any]) -> str:
         return ""
 
 
-def offload_flow_lines(entry: _Entry, result: dict[str, Any], *, error: str, status: str,
-                       key_until: str = "") -> dict[str, Any]:
-    """Steps 2-5 of a backup flow, as its message reads them (1.306, the format the operator approved
-    2026-11-11): one line per step - what it did, of how many, where - a failed step named with why,
-    a step the failure stopped "not run", a step with nothing to do this pass said so."""
-    copied, encrypted = result.get("copy") or {}, result.get("encrypt") or {}
-    released, expired = result.get("release") or {}, result.get("expire") or {}
-    checked = result.get("repository_check") or {}
-    stopped = bool(error)
+@dataclass
+class OffloadPlan:
+    """What one entry has for the repository this pass: files to copy, to release, to expire, to seal."""
 
-    def idle(what: str) -> str:
-        return f"- {what}: not run" if stopped else f"- {what}: nothing this pass"
+    rows: list[dict[str, Any]]
+    releasable: list[dict[str, Any]]
+    expirable: list[dict[str, Any]]
+    encryptable: list[dict[str, Any]]
+    per_pass: int
 
-    lines = []
-    if copied:
-        bad = copied.get("failed") or []
-        lines.append(f"{'❌' if bad else '✅'} 2. Copy {copied.get('verified', 0)}/{copied.get('files', 0)} -> "
-                     f"{entry.offload.server_id} · bytes + SHA-256 = server" + (f" - {bad[0]}"[:300] if bad else ""))
-    else:
-        lines.append(idle("2. Copy"))
+    @property
+    def empty(self) -> bool:
+        return not self.rows and not self.releasable and not self.expirable and not self.encryptable
+
+
+def plan_entry(entry: _Entry, *, catalog: BackupCatalogStore, app_config: Any, running: set[int], locked: bool,
+               limit: int | None = None) -> OffloadPlan:
+    """An entry's work this pass. A backup still running is not taken (0.40.0, 1.374): the workflow
+    copies a backup's files right after it, and a pass of its own takes only what is left."""
+    retry_before = (datetime.now(timezone.utc) - timedelta(seconds=entry.retry_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    per_pass = int(limit or entry.offload.files_per_pass)
+    rows = [row for row in catalog.files_to_offload(backup_id=entry.backup_id, limit=per_pass,
+                                                    retry_before=retry_before, since=entry.offload.files_since)
+            if row.get("job_run_id") is None or int(row["job_run_id"]) not in running]
+    # The delete at the source waits out a lockdown (1.220); the copy off the host goes on.
+    releasable = (catalog.files_to_release(backup_id=entry.backup_id, limit=per_pass,
+                                           keep_newest_chain=entry.offload.source_keeps_newest_chain)
+                  if entry.offload.delete_source and not locked else [])
+    return OffloadPlan(rows=rows, releasable=releasable, expirable=_expirable(entry, catalog),
+                       encryptable=_encryptable(entry, catalog, app_config), per_pass=per_pass)
+
+
+def run_rows(entry: _Entry, *, catalog: BackupCatalogStore, backup_run_id: int) -> list[dict[str, Any]]:
+    """One backup run's files still to copy - all of them, the pass's limit applied by the caller."""
+    return catalog.files_to_offload(backup_id=entry.backup_id, limit=int(entry.offload.files_per_pass),
+                                    since=entry.offload.files_since, backup_run_id=int(backup_run_id))
+
+
+def files_left(entry: _Entry, *, catalog: BackupCatalogStore, backup_run_id: int) -> int:
+    """How many of a backup's files are still to copy (a failed one not counted: it waits its pause)."""
+    return len(catalog.files_to_offload(backup_id=entry.backup_id, limit=100_000, retry_before="0",
+                                        since=entry.offload.files_since, backup_run_id=int(backup_run_id)))
+
+
+def release_refresher(entry: _Entry, *, catalog: BackupCatalogStore, locked: bool, per_pass: int) -> Any:
+    """What may be released at the source now - read again after a copy, so a backup copied and sealed
+    in this pass is released in it too. ``None`` when the entry releases nothing (or a lockdown is on)."""
+    if not entry.offload.delete_source or locked:
+        return None
+    return lambda: catalog.files_to_release(backup_id=entry.backup_id, limit=per_pass,
+                                            keep_newest_chain=entry.offload.source_keeps_newest_chain)
+
+
+def start_offload_run(entry: _Entry, *, store: Any, metadata: dict[str, Any]) -> tuple[int, str]:
+    """Claim the entry's offload run row - raises ``RunAlreadyClaimed`` when another pass holds it, on
+    any node (the operator, 2026-11-16, 1.383: a run by hand on the master and the worker's pass both
+    offloaded the same backup, each claim held on its own host)."""
+    return schedule.start_run(store=store, job_code=schedule.offload_job_code(entry.backup_id),
+                              message=f"Offload {entry.backup_id} started.", metadata=metadata,
+                              every_node=True)
+
+
+def open_hosts(entry: _Entry, *, data_dir: Any, key: str | None, key_base64: str | None) -> tuple[_Hosts, dict[str, str]]:
+    """The source and the repository, reached - or refused by name before anything is copied."""
+    why = refusal(entry)
+    if why:
+        raise OffloadRefused(f"{entry.backup_id}: {why}")
+    source = resolve_backup_target(entry.first, data_dir=data_dir)
+    repository = resolve_ssh_target(entry.offload.server_id, label=f"{entry.backup_id} repository",
+                                    data_dir=data_dir, require_container=False)
+    if repository.access != "ssh" or repository.platform == "windows":
+        raise OffloadRefused(f"{entry.backup_id}: the repository {entry.offload.server_id} is reached over "
+                             f"{repository.access} on {repository.platform}; only an SSH (Linux) repository is "
+                             "built - a Windows share as the repository is a later item.")
+    if source.platform == "windows" and not entry.offload.source_share and source.access != "ssh":
+        raise OffloadRefused(f"{entry.backup_id}: {entry.server_id} is a Windows server reached over "
+                             f"{source.access} - read it over its share (offload_source_share, _username, "
+                             "_password_ref) or over SSH.")
+    if source.platform == "windows" and not entry.offload.source_share and entry.offload.transfer == "cat":
+        # A Windows server over SSH answers in PowerShell, where "cat" is Get-Content - text, not
+        # the file's bytes. Its OpenSSH serves SFTP, which reads the bytes as they are.
+        raise OffloadRefused(f"{entry.backup_id}: {entry.server_id} is a Windows server read over SSH - "
+                             "state offload_transfer: sftp.")
+    secrets = _load_secrets(data_dir=data_dir, key=key, key_base64=key_base64)
+    return _Hosts(entry, source=source, repository=repository, secrets=secrets, data_dir=data_dir), secrets
+
+
+def sealing_of(entry: _Entry, *, app_config: Any, secrets: dict[str, str], key: str | None,
+               key_base64: str | None) -> Any:
+    """1.330: the key to encrypt on the way, taken before the copy - ``None`` when the entry does not
+    encrypt, or the key cannot be had here (the copy is then plain, and :func:`encrypt_copies` says why)."""
     if not entry.offload.encrypt:
-        lines.append("- 3. Encrypt: off for this entry")
-    elif encrypted.get("waiting") and not encrypted.get("encrypted") and not encrypted.get("failed"):
-        lines.append(f"⏳ 3. Encrypt: waiting - {encrypted['waiting'][0]}"[:300])
-    elif encrypted.get("rows"):
-        bad = encrypted.get("failed") or []
-        lines.append(f"{'❌' if bad else '✅'} 3. Encrypt {encrypted.get('encrypted', 0)}/{encrypted.get('rows', 0)} · "
-                     f"age key #{encrypted.get('key_id')}" + (f" (encrypts until {key_until[:10]})" if key_until else "")
-                     + " · decrypted back = server" + (" · on the way" if encrypted.get("on_the_way") else "")
-                     + (f" - {bad[0]}"[:300] if bad else ""))
-    else:
-        lines.append(idle("3. Encrypt"))
-    if not entry.offload.delete_source:
-        lines.append("- 4. Delete at the source: off for this entry")
-    elif released:
-        bad = released.get("refused") or []
-        lines.append(f"{'❌' if bad else '✅'} 4. Delete at the source {released.get('deleted', 0)} on {entry.server_id}, "
-                     "file by file" + (f" - {bad[0]}"[:300] if bad else ""))
-    else:
-        lines.append(idle("4. Delete at the source"))
-    if expired:
-        bad = expired.get("refused") or []
-        lines.append(f"{'❌' if bad else '✅'} Retention: {expired.get('expired', 0)} copy(ies) past their window "
-                     "deleted on the repository" + (f" - {bad[0]}"[:300] if bad else ""))
-    if checked.get("skipped"):
-        lines.append("- 5. Repository check: next pass (another offload of this server is writing there)")
-    elif checked:
-        lines.append(f"✅ 5. Repository check: clean · {checked.get('files', 0)} file(s)" if checked.get("clean")
-                     else f"❌ 5. Repository check: {checked.get('message', '')}"[:400])
-    elif entry.offload.repository_check:
-        lines.append(idle("5. Repository check"))
-    if error:
-        lines.append(f"❌ {error}"[:400])
-    title = f"{entry.backup_id} · 2-5. Repository {'done' if status == 'done' else 'ERROR'}"
-    return {"flow_title": title, "flow_lines": lines}
+        return None
+    from dbabrain.backup_restore.repository_encryption import sealing_for
+    from dbabrain.lib.secret_text import resolve_cli_key, resolve_key
 
-
-def _run_one(entry: _Entry, *, rows, releasable, expirable=(), store, catalog, app_config, logger, data_dir, key,
-             key_base64, sleep, summary, refresh_release=None) -> dict[str, Any]:
-    job_code = schedule.offload_job_code(entry.backup_id)
-    metadata = {"backup_id": entry.backup_id, "server_id": entry.server_id,
-                "repository_server_id": entry.offload.server_id, "to_copy": len(rows), "to_release": len(releasable),
-                "to_expire": len(expirable)}
     try:
-        log_id, started_at = schedule.start_run(
-            store=store, job_code=job_code, message=f"Offload {entry.backup_id} started.", metadata=metadata)
-    except RunAlreadyClaimed:
-        return {"backup_id": entry.backup_id, "status": "already_running"}
-    summary["ran"] += 1
-    started = time.monotonic()
-    result: dict[str, Any] = {}
-    error = ""
-    hosts = None
-    try:
-        why = refusal(entry)
-        if why:
-            raise OffloadRefused(f"{entry.backup_id}: {why}")
-        source = resolve_backup_target(entry.first, data_dir=data_dir)
-        repository = resolve_ssh_target(entry.offload.server_id, label=f"{entry.backup_id} repository",
-                                        data_dir=data_dir, require_container=False)
-        if repository.access != "ssh" or repository.platform == "windows":
-            raise OffloadRefused(f"{entry.backup_id}: the repository {entry.offload.server_id} is reached over "
-                                 f"{repository.access} on {repository.platform}; only an SSH (Linux) repository is "
-                                 "built - a Windows share as the repository is a later item.")
-        if source.platform == "windows" and not entry.offload.source_share and source.access != "ssh":
-            raise OffloadRefused(f"{entry.backup_id}: {entry.server_id} is a Windows server reached over "
-                                 f"{source.access} - read it over its share (offload_source_share, _username, "
-                                 "_password_ref) or over SSH.")
-        if source.platform == "windows" and not entry.offload.source_share and entry.offload.transfer == "cat":
-            # A Windows server over SSH answers in PowerShell, where "cat" is Get-Content - text, not
-            # the file's bytes. Its OpenSSH serves SFTP, which reads the bytes as they are.
-            raise OffloadRefused(f"{entry.backup_id}: {entry.server_id} is a Windows server read over SSH - "
-                                 "state offload_transfer: sftp.")
-        secrets = _load_secrets(data_dir=data_dir, key=key, key_base64=key_base64)
-        hosts = _Hosts(entry, source=source, repository=repository, secrets=secrets, data_dir=data_dir)
-        if rows and is_long_copy(rows):
-            # A long step a start and a done (1.306): a FULL's copy and encryption take minutes to hours.
-            size = sum(int(r.get("size_bytes") or 0) for r in rows)
-            emit_backup_restore_event(
-                app_config=app_config, command="offload", phase="START", level="logging",
-                message=f"Offload {entry.backup_id} started: {len(rows)} file(s).", logger=logger,
-                started_at=started_at, notify=entry.first.notify,
-                metadata={**metadata, "flow_title": f"{entry.backup_id} · 2-3. Copy + encrypt started",
-                          "flow_lines": [f"{len(rows)} file(s), {size / 1024 ** 3:.1f} GB -> {entry.offload.server_id}"
-                                         + (" (a base backup directory: its size is read as it is copied)"
-                                            if any(I.HASHED_MEMBER.get(str(r.get('file_type')).upper()) for r in rows)
-                                            else "")]})
-        sealing = None
-        if rows and entry.offload.encrypt:
-            # 1.330: encrypted on the way - the key is taken before the copy. A key that cannot be had
-            # here (the vault not set up) leaves the copy plain, and the after-copy encryption below
-            # says why, as it did before.
-            from dbabrain.backup_restore.repository_encryption import sealing_for
-            from dbabrain.lib.secret_text import resolve_cli_key, resolve_key
+        return sealing_for(entry, app_config=app_config, secrets=secrets,
+                           passphrase=resolve_cli_key(key, key_base64) or resolve_key())
+    except Exception:  # noqa: BLE001 - named by encrypt_copies, which meets the same refusal
+        return None
 
-            try:
-                sealing = sealing_for(entry, app_config=app_config, secrets=secrets,
-                                      passphrase=resolve_cli_key(key, key_base64) or resolve_key())
-            except Exception:  # noqa: BLE001 - named by encrypt_rows below, which meets the same refusal
-                sealing = None
-        if rows:
-            result["copy"] = offload_entry(entry, catalog=catalog, hosts=hosts, rows=rows, sleep=sleep,
-                                           sealing=sealing)
-        encrypted: set[int] = set()
-        sealed: dict[int, list[dict[str, Any]]] = {}
-        if entry.offload.encrypt:
-            # 0.37.0: each proven copy encrypted at the repository, proven, its plain file gone there.
-            from dbabrain.backup_restore.repository_encryption import encrypt_rows
-            from dbabrain.db.repository_encryption_store import RepositoryEncryptionStore
-            from dbabrain.lib.secret_text import resolve_cli_key, resolve_key
 
-            enc_store = RepositoryEncryptionStore.from_config(app_config)
-            after = encrypt_rows(
-                entry, app_config=app_config, store=enc_store, hosts=hosts,
-                rows=catalog.repository_copies(backup_id=entry.backup_id), secrets=secrets,
-                passphrase=resolve_cli_key(key, key_base64) or resolve_key())
-            # One step-3 line for the pass: what was sealed on the way, and what the after-copy
-            # encryption did for copies made plain (before 1.330, or with no key at copy time).
-            on_the_way = (result.get("copy") or {}).pop("sealed", None)
-            result["encrypt"] = _merge_encrypt(on_the_way, after)
-        if refresh_release is not None and (rows or result.get("encrypt")):
-            # This pass's own copies, verified (and encrypted) just now, are released in this pass too:
-            # the flow reaches its end in one run and one message (1.306) - before, the delete at the
-            # source waited for the next pass and came as a message of its own.
-            releasable = refresh_release()
-        if entry.offload.encrypt or releasable or expirable:
-            # Read whether or not this entry encrypts now: one that did and was switched off still has
-            # .age copies, and a plain release or delete would take them for missing plain files.
-            from dbabrain.backup_restore.repository_encryption import is_encrypted, sealed_rows
-            from dbabrain.db.repository_encryption_store import RepositoryEncryptionStore
+def encrypt_copies(entry: _Entry, *, app_config: Any, catalog: BackupCatalogStore, hosts: _Hosts,
+                   secrets: dict[str, str], key: str | None, key_base64: str | None) -> dict[str, Any]:
+    """0.37.0: each proven copy not yet sealed, encrypted at the repository, proven, its plain file gone
+    there - this backup's (made plain, with no key at copy time) and earlier ones'."""
+    from dbabrain.backup_restore.repository_encryption import encrypt_rows
+    from dbabrain.db.repository_encryption_store import RepositoryEncryptionStore
+    from dbabrain.lib.secret_text import resolve_cli_key, resolve_key
 
-            enc_store = RepositoryEncryptionStore.from_config(app_config)
-            encrypted = is_encrypted(enc_store, backup_id=entry.backup_id)
-            sealed = sealed_rows(enc_store, backup_id=entry.backup_id)
-        if releasable:
-            result["release"] = release_sources(entry, catalog=catalog, hosts=hosts, rows=releasable,
-                                                encrypted=encrypted, sealed=sealed)
-        if expirable:
-            result["expire"] = prune_repository(entry, catalog=catalog, hosts=hosts, encrypted=encrypted,
-                                                sealed=sealed)
-        busy = offloads_running_beside(store, entry) if entry.offload.repository_check else []
-        if busy:
-            # Another entry of this server is copying or encrypting into the same folder right now: its
-            # partial and not-yet-recorded files would read as strays (2026-11-11, a LOG pass beside its
-            # server's FULL failed on them). Checked by the next pass, never judged mid-copy.
-            result["repository_check"] = {"clean": True, "skipped": True,
-                                          "message": f"repository folder not checked this pass - {', '.join(busy)} "
-                                                     "of this server is offloading into it now"}
-        elif entry.offload.repository_check:
-            # Last, after this pass's own copies, encryptions and expiries: what the folder holds now.
-            result["repository_check"] = check_repository(entry, catalog=catalog, app_config=app_config,
-                                                          hosts=hosts)
-    except Exception as exc:  # noqa: BLE001 - one entry's failure is its own run's, never the pass's
-        error = f"{type(exc).__name__}: {exc}"[:2000]
+    return encrypt_rows(entry, app_config=app_config, store=RepositoryEncryptionStore.from_config(app_config),
+                        hosts=hosts, rows=catalog.repository_copies(backup_id=entry.backup_id), secrets=secrets,
+                        passphrase=resolve_cli_key(key, key_base64) or resolve_key())
+
+
+def encryption_state(entry: _Entry, *, app_config: Any) -> tuple[set[int], dict[int, list[dict[str, Any]]]]:
+    """Which of the entry's copies are sealed, and their ``.age`` files - read whether or not the entry
+    encrypts now: one that did and was switched off still has .age copies, and a plain release or delete
+    would take them for missing plain files."""
+    from dbabrain.backup_restore.repository_encryption import is_encrypted, sealed_rows
+    from dbabrain.db.repository_encryption_store import RepositoryEncryptionStore
+
+    enc_store = RepositoryEncryptionStore.from_config(app_config)
+    return is_encrypted(enc_store, backup_id=entry.backup_id), sealed_rows(enc_store, backup_id=entry.backup_id)
+
+
+def check_folder(entry: _Entry, *, store: Any, catalog: BackupCatalogStore, app_config: Any,
+                 hosts: _Hosts) -> dict[str, Any]:
+    """The repository folder checked once a pass, last - or skipped, said why, while another entry of
+    the server is writing into it (2026-11-11, a LOG pass beside its server's FULL failed on its
+    partial and not-yet-recorded files): checked by the next pass, never judged mid-copy."""
+    busy = offloads_running_beside(store, entry)
+    if busy:
+        return {"clean": True, "skipped": True,
+                "message": f"repository folder not checked this pass - {', '.join(busy)} "
+                           "of this server is offloading into it now"}
+    return check_repository(entry, catalog=catalog, app_config=app_config, hosts=hosts)
+
+
+def finish_offload_run(entry: _Entry, *, store: Any, log_id: int, started: float, result: dict[str, Any],
+                       error: str, metadata: dict[str, Any]) -> tuple[str, str]:
+    """Close the offload run row with its summary; answers ``(status, finished_at)``."""
     copied = result.get("copy") or {}
     released = result.get("release") or {}
     expired = result.get("expire") or {}
@@ -1361,13 +1378,51 @@ def _run_one(entry: _Entry, *, rows, releasable, expirable=(), store, catalog, a
     finished_at = schedule.finish_run(
         store=store, log_id=log_id, status=status, message=message,
         duration_ms=int((time.monotonic() - started) * 1000), error_text=error or "; ".join(problems)[:2000] or None,
-        metadata={**metadata, **result})
-    emit_backup_restore_event(
-        app_config=app_config, command="offload", phase="END" if status == "done" else "ERROR",
-        level="logging" if status == "done" else "error", message=message, logger=logger,
-        started_at=started_at, finished_at=finished_at, error_text=error or None,
-        metadata={**metadata, **result, **offload_flow_lines(entry, result, error=error, status=status,
-                                                             key_until=_key_until(app_config, result))},
-        notify=entry.first.notify)
-    summary["succeeded" if status == "done" else "failed"] += 1
-    return {"backup_id": entry.backup_id, "status": status, **result, **({"error": error} if error else {})}
+        # The release's file ids say which files went, for the workflow's messages - not for the run row.
+        metadata={**metadata, **{k: v for k, v in result.items() if k != "release"},
+                  **({"release": {k: v for k, v in released.items() if k != "deleted_ids"}} if released else {})})
+    return status, finished_at
+
+
+def rows_of(answer: dict[str, Any], *, only: set[int] | None = None, exclude: set[int] | None = None) -> dict[str, Any]:
+    """The part of an ``encrypt_rows`` answer about some rows: how many sealed, failed, waiting."""
+    def keep(file_id: Any) -> bool:
+        return (only is None or int(file_id) in only) and (exclude is None or int(file_id) not in exclude)
+
+    ids = [int(i) for i in answer.get("file_ids") or [] if keep(i)]
+    failed = [text for i, text in zip(answer.get("failed_ids") or [], answer.get("failed") or []) if keep(i)]
+    waiting = [int(i) for i in answer.get("waiting_ids") or [] if keep(i)]
+    return {"rows": len(ids) + len(failed) + len(waiting), "encrypted": len(ids), "failed": failed,
+            "waiting_ids": waiting, "file_ids": ids, "key_id": answer.get("key_id")}
+
+
+def waiting_backups(store: Any, entry: _Entry) -> dict[int, list[int]]:
+    """The backup runs of this entry whose step 7 a pass said "waiting" and no pass has finished since -
+    read from the offload's own run rows (``encrypt_waiting`` / ``encrypt_finished_runs``), oldest first.
+    Unreadable is none: the files are then sealed as before, said as late encryption in step 9."""
+    import json
+
+    try:
+        rows = store.fetch_terminal_job_runs(job_codes=[schedule.offload_job_code(entry.backup_id)],
+                                             since_created_at="", limit=500)
+    except Exception:  # noqa: BLE001
+        return {}
+    waiting: dict[int, list[int]] = {}
+    finished: set[int] = set()
+    for row in rows:  # newest first
+        try:
+            meta = json.loads(row["metadata_json"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        finished.update(int(i) for i in meta.get("encrypt_finished_runs") or [])
+        run_id = meta.get("backup_run_id")
+        if meta.get("encrypt_waiting") and run_id is not None and int(run_id) not in finished \
+                and int(run_id) not in waiting:
+            waiting[int(run_id)] = [int(i) for i in meta["encrypt_waiting"]]
+    return dict(sorted(waiting.items()))
+
+
+def repository_files(catalog: BackupCatalogStore, run_id: int) -> list[dict[str, Any]]:
+    """A run's files the repository takes - intact, and not a certificate or key."""
+    return [f for f in catalog.backup_run_rows(run_id)
+            if str(f.get("file_type") or "").upper() not in I.NEVER_ON_REPOSITORY and str(f.get("verdict")) == "ok"]

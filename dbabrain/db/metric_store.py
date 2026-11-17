@@ -791,6 +791,19 @@ class MetricStore:
                 )
             )
 
+    def latest_values(self, *, metric_code: str, since: str) -> dict[tuple[str, str], str]:
+        """``{(server_id, metric_item): metric_value}`` - each item's newest value of ``metric_code``
+        collected since ``since`` (UTC text). The backup page's coverage reads each database's
+        recovery model from ``DATABASE_CONFIG`` with it (0.41.0, 1.396): a SIMPLE database has no log
+        to back up, and was called incomplete for want of one."""
+        self.initialize()
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT server_id, metric_item, metric_value FROM metric_results "
+                "WHERE metric_code = ? AND collected_at >= ? ORDER BY collected_at, result_id;",
+                (metric_code, since)).fetchall()
+        return {(str(row["server_id"]), str(row["metric_item"])): str(row["metric_value"] or "") for row in rows}
+
     def fetch_alert_results(
         self,
         *,

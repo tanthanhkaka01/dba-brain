@@ -411,7 +411,7 @@ def parse_file_lines(text: str) -> list[dict[str, Any]]:
         started = str(fields.get("start") or "").strip()
         files.append({
             "path": path,
-            "file_name": path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1],
+            "file_name": catalog_name(path),
             "file_folder": path.replace("\\", "/").rstrip("/").rsplit("/", 1)[0] if "/" in path.replace("\\", "/") else "",
             "database_name": str(fields.get("db") or ""),
             # No container: the path the engine wrote IS the server's own.
@@ -430,14 +430,48 @@ def parse_file_lines(text: str) -> list[dict[str, Any]]:
 
 
 #: The file a type's stored checksum was taken of, when it is not the catalogued path itself: a
-#: PostgreSQL base backup is a directory, and its checksum is its manifest's.
+#: PostgreSQL base backup catalogued before 0.40.0 is a directory, and its checksum is its manifest's.
 HASHED_MEMBER = {"FULL_BASE": "backup_manifest", "INCR_BASE": "backup_manifest"}
+
+#: A PostgreSQL base backup's directory, as pg_basebackup_database.sh names it: its UTC start and its level.
+_BASE_DIRECTORY = re.compile(r"^\d{8}T\d{6}Z_(FULL|INCR)$", re.IGNORECASE)
+
+
+def catalog_name(path: str) -> str:
+    """The name a backup file is catalogued under - what makes it the one file of that name on its server.
+
+    A backup's own file name carries its database and its UTC stamp. A PostgreSQL base backup's files do
+    not: every one holds a ``base.tar.zst`` and a ``backup_manifest``. Since 0.40.0 (1.386; the operator,
+    2026-11-16: *the catalog records every file*, *3NF*) each is its own row, named from its backup's
+    directory on - ``20261116T093216Z_FULL/base.tar.zst`` - so a name is still one file.
+    """
+    parts = [part for part in str(path or "").replace("\\", "/").rstrip("/").split("/") if part]
+    for index in range(len(parts) - 2, -1, -1):
+        if _BASE_DIRECTORY.match(parts[index]):
+            return "/".join(parts[index:])
+    return parts[-1] if parts else ""
+
+
+def is_base_directory(file_type: Any, file_name: Any) -> bool:
+    """A PostgreSQL base backup catalogued as ONE row for its whole directory - the shape before 0.40.0
+    (1.386). Such rows stay readable until their retention removes them; a backup since is a row per file."""
+    return str(file_type or "").upper() in HASHED_MEMBER and bool(_BASE_DIRECTORY.match(str(file_name or "").strip()))
+
+
+def directory_member(file_type: Any, file_name: Any) -> str | None:
+    """``backup_manifest`` for a base backup catalogued as its directory (before 1.386) - the file its
+    checksum was taken of - else ``None``: every other row is one file."""
+    return HASHED_MEMBER.get(str(file_type or "").upper()) if is_base_directory(file_type, file_name) else None
 
 
 def hashed_path(file_type: str, path: str) -> str:
-    """The path whose sha256 is the catalogued checksum of a file of ``file_type`` at ``path``."""
+    """The path whose sha256 is the catalogued checksum of a file of ``file_type`` at ``path``: the
+    manifest of a base backup directory (the shape before 1.386), else the file itself."""
     member = HASHED_MEMBER.get(str(file_type or "").upper())
     if not member or not path:
+        return path
+    last = str(path).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    if not _BASE_DIRECTORY.match(last):
         return path
     sep = "\\" if "\\" in path and "/" not in path else "/"
     return path.rstrip("/\\") + sep + member
@@ -667,6 +701,9 @@ def postgresql_wal_break(start_wal: str, segments: list[str], *, to_latest: bool
 #: A PostgreSQL WAL segment's name: 24 hex digits (timeline, log, segment). ``.partial`` and
 #: ``.history`` files are not segments a restore replays.
 WAL_SEGMENT_NAME = re.compile(r"^[0-9A-F]{24}$")
+#: The backup-history file a base backup leaves in the archive (``<segment>.<offset>.backup``) - not a
+#: segment a restore replays, but a file it copies, so the WAL job records it (1.386). Matched upper-cased.
+WAL_HISTORY_NAME = re.compile(r"^[0-9A-F]{24}\.[0-9A-F]{8}\.BACKUP$")
 
 
 def file_verdict(item: dict[str, Any]) -> str:

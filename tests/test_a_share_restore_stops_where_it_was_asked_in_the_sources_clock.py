@@ -205,7 +205,7 @@ def test_the_workflow_fails_before_the_cleanup_when_a_database_stopped_short(tmp
     monkeypatch.setattr(cli, "run_copy_backup", lambda step_config, logger=None, force=False, catalog=None: CopyBackupResult(
         returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path, files_considered=2,
         copied=2, skipped=0, file_results=()))
-    monkeypatch.setattr(cli, "run_restore_all_latest", lambda **_: {
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server", lambda **_: {
         "status": "SUCCESS", "per_database_restore_status": {"SALESDB_COPY": "SUCCESS"},
         "results": [{"status": "SUCCESS", "database_name": "SALESDB_COPY", "expect": expect}]})
     monkeypatch.setattr(cli, "run_delete_backup", lambda *a, **k: deleted.append(1))

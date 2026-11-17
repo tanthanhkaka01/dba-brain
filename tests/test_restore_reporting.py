@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from dbabrain.backup_restore import workflow
-from conftest import shipped_config
+from conftest import run_restore_said, shipped_config
 
 # Its restore targets are lab machines the tests do not list in an inventory; a target whose
 # environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
@@ -92,8 +92,10 @@ def test_a_successful_restore_announces_that_it_finished(monkeypatch, harness):
     summary = _run(monkeypatch, harness, outcome="done")
 
     assert summary["succeeded"] == 1
-    assert harness.phases() == ["START", "END"]
-    assert "finished: done" in harness.events[-1]["message"]
+    # Step 1 first and 11 last (0.40.0, 1.375); the inner run is stood in for, so the steps between it
+    # would say are said as not run.
+    assert harness.phases()[0] == "START" and harness.phases()[-1] == "END"
+    assert harness.events[-1]["message"].startswith("11. Restore process done")
 
 
 def test_a_failed_restore_reports_the_failure_rather_than_going_quiet(monkeypatch, harness):
@@ -146,7 +148,9 @@ def test_a_restore_where_every_database_came_back_still_reports_done(monkeypatch
     })
 
     assert summary["succeeded"] == 1
-    assert harness.phases() == ["START", "END"]
+    # Step 1 first and 11 last (0.40.0, 1.375); the inner run is stood in for, so the steps between it
+    # would say are said as not run.
+    assert harness.phases()[0] == "START" and harness.phases()[-1] == "END"
 
 
 def test_the_copy_boundaries_are_announced_by_whoever_does_the_copy(monkeypatch):
@@ -181,12 +185,16 @@ def test_the_copy_boundaries_are_announced_by_whoever_does_the_copy(monkeypatch)
     monkeypatch.setattr("dbabrain.backup_restore.restore_script.prune_staged_backups",
                         lambda *a, **k: {"pruned": 0, "retention_seconds": 86400})
 
-    module.restore_by_id({"cleanup_retention": 691200, "restore_id": "R1"}, on_phase=lambda p, m, e=None: seen.append(p))
+    said = []
+    run_restore_said(monkeypatch, {"cleanup_retention": 691200, "restore_id": "R1"}, said, engine="oracle",
+                     target="DST", source="SRC")
+    seen.extend(phase for phase, _m, _e in said)
 
-    # An empty plan restores nothing, so no RESTORE_/VERIFY_ events; the metadata step still says
-    # why it did nothing, and the staging cleanup follows the (empty) restore - the whole order is
-    # in test_a_restore_reports_every_step_in_order.py.
-    assert seen == ["COPY_START", "COPY_DONE", "METADATA_SKIP", "DELETE_START", "DELETE_DONE"]
+    # An empty plan restores nothing, so no full, check or log; the metadata steps still say why
+    # they did nothing, the diff and the log say they are inside the duplicate, and the staging
+    # cleanup follows the (empty) restore - the whole order is in test_a_restore_reports_every_step_in_order.py.
+    assert seen == ["COPY_START", "COPY_DONE", "METADATA_DONE", "CERT_DONE", "STEP_SKIP", "STEP_SKIP",
+                    "METADATA_DONE", "PLAIN_DONE"]
 
 
 def test_a_caller_that_wants_no_events_still_restores():
@@ -236,19 +244,20 @@ def test_script_restores_report_too(monkeypatch, harness):
     # The seam moved in 2.69.52: the scheduled restore drives dbabrain.common's primitives through
     # restore_by_id instead of shipping a shell script. What this test is about - that a
     # script-driven entry reports START and END like every other job - is unchanged.
-    monkeypatch.setattr("dbabrain.backup_restore.restore_by_id.restore_by_id",
+    # Since 0.40.0 (1.375) the workflow runs the restore's steps itself: its run of them is stood in for.
+    monkeypatch.setattr(workflow, "run_restore_by_id",
                         lambda *a, **k: {"cleanup_retention": 691200, "restore_id": "X", "db_type": "oracle", "steps": []})
 
     workflow.run_scheduled_restores(
         app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x.json", force=True,
     )
 
-    assert harness.phases() == ["START", "END"]
+    assert harness.phases()[0] == "START" and harness.phases()[-1] == "END"
     assert all(e["metadata"]["restore_mode"] == "LATEST" for e in harness.events)
     assert harness.events[0]["metadata"]["restore_id"] == "CLOUD_ORA_TO_CLOUD2"
     # The two fields this branch used to omit, checked where they are actually produced.
     assert harness.events[0]["metadata"]["target_id"] == "DST"
-    assert harness.events[1]["metadata"]["status"] == "done"
+    assert harness.events[-1]["metadata"]["status"] == "done"
 
 
 # --------------------------------------------------------------------------------------------
@@ -349,16 +358,16 @@ def test_a_point_in_time_script_restore_says_so_on_every_message(monkeypatch, ha
 
     def fake_restore(request, **kwargs):
         seen.update(request)
-        kwargs["on_phase"]("RESTORE_START", "restoring ...", {})
+        kwargs["say"].chain("full", "start", {"summary": "base backup B"})
         return {"restore_id": "LAB_PG_A_TO_B", "db_type": "postgresql", "steps": [], "plan": "p"}
 
-    monkeypatch.setattr("dbabrain.backup_restore.restore_by_id.restore_by_id", fake_restore)
+    monkeypatch.setattr(workflow, "run_restore_by_id", fake_restore)
 
     workflow.run_scheduled_restores(app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x.json",
                                     force=True, point_in_time="2026-09-25 12:37:42 +08:00")
 
     assert seen["point_in_time"] == "2026-09-25 12:37:42 +08:00"
-    assert harness.phases() == ["START", "RESTORE_START", "END"]
+    assert harness.phases()[0] == "START" and "FULL_START" in harness.phases() and harness.phases()[-1] == "END"
     for event in harness.events:
         assert event["metadata"]["restore_mode"] == "POINT_IN_TIME", event["phase"]
         assert event["metadata"]["point_in_time_original"] == "2026-09-25 12:37:42 +08:00"

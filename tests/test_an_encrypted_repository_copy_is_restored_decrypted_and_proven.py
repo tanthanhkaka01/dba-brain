@@ -450,3 +450,77 @@ def test_without_a_catalog_a_decrypted_file_keeps_the_decryptions_time_and_the_r
 
     finished = next(r for c, r in staging.calls if c == "finish-staging")
     assert [f["mtime"] for f in finished["files"]] == [None, None]
+
+
+# --------------------------------------------------------------------------- #
+# A file that is not its backup stops everything, and leaves nothing behind (2026-11-17)
+# --------------------------------------------------------------------------- #
+# The operator, 2026-11-17: *when a decrypted file's checksum or bytes differ, it stops at once and
+# says so - is that tested closely?* It was, file by file; these hold the rest of the answer: the
+# chain stops at that file, its partial is gone, and a wrong byte count alone is enough.
+
+def _no_partial(target) -> bool:
+    from dbabrain.common import filecopy
+
+    return not any(path.endswith(filecopy.PARTIAL_SUFFIX) for path in target.files)
+
+
+@pytest.mark.parametrize("case", ["plaintext differs", "age differs", "damaged"])
+def test_a_file_that_fails_its_facts_leaves_no_partial_behind(case):
+    identity, recipient = V.new_identity()
+    target = _Sftp()
+    sealed = _sealed(recipient)
+    over = {"plaintext differs": {"plain_sha256": "0" * 64},
+            "age differs": {"sha256": "0" * 64},
+            "damaged": {}}[case]
+    data = sealed if case != "damaged" else sealed[:-30] + bytes([sealed[-30] ^ 1]) + sealed[-29:]
+    with pytest.raises(repoencrypt.RepoEncryptError):
+        _fetch(data, identity, target=target, size_bytes=len(data), sha256=over.get("sha256", _sha(data)),
+               **{k: v for k, v in over.items() if k != "sha256"})
+    assert "/stage/base/X_FULL/base.tar.zst" not in target.files
+    assert _no_partial(target), f"a partial was left on the target: {sorted(target.files)}"
+
+
+def test_the_right_hash_with_the_wrong_byte_count_is_refused_for_the_plaintext():
+    """sha256 alone is not the check: the plain file's size is held as well."""
+    identity, recipient = V.new_identity()
+    target = _Sftp()
+    with pytest.raises(repoencrypt.RepoEncryptError, match=f"decrypts to {len(PLAIN)} bytes"):
+        _fetch(_sealed(recipient), identity, target=target, plain_size_bytes=len(PLAIN) + 1)
+    assert "/stage/base/X_FULL/base.tar.zst" not in target.files and _no_partial(target)
+
+
+def test_the_right_hash_with_the_wrong_byte_count_is_refused_for_the_age_file():
+    identity, recipient = V.new_identity()
+    sealed = _sealed(recipient)
+    target = _Sftp()
+    with pytest.raises(repoencrypt.RepoEncryptError, match=f"encrypted file is {len(sealed)} bytes"):
+        _fetch(sealed, identity, target=target, size_bytes=len(sealed) - 1)
+    assert "/stage/base/X_FULL/base.tar.zst" not in target.files and _no_partial(target)
+
+
+def test_a_chain_stops_at_the_first_file_that_fails_and_nothing_after_it_runs(staging, monkeypatch):
+    """The second file is never fetched, the staging is never finished (nor opened for the engine)
+    and nothing is recorded as decrypted: the error is the restore's, raised from step 2."""
+    from dbabrain.lib.common_cli import CommonCliError
+
+    answering = staging.R.common_cli.run
+
+    def run(command, request, **k):
+        if command == "fetch-decrypted-file":
+            staging.calls.append((command, request))
+            raise CommonCliError(f"{request['path']}: not restored - it decrypts to 9 bytes / {'1' * 64}, "
+                                 f"not the plain file's 10 / {'a' * 64}.")
+        return answering(command, request, **k)
+
+    monkeypatch.setattr(staging.R.common_cli, "run", run)
+    recorded = []
+    monkeypatch.setattr(staging.R, "_record_decrypted", lambda *a, **k: recorded.append(1))
+
+    with pytest.raises(CommonCliError, match="not the plain file's"):
+        _stage(staging, monkeypatch)
+
+    fetched = [r["path"] for c, r in staging.calls if c == "fetch-decrypted-file"]
+    assert fetched == ["/r/S/base/X_FULL/base.tar.zst.age"], "a file after the one that failed was fetched"
+    assert not [c for c, _r in staging.calls if c == "finish-staging"]
+    assert recorded == []

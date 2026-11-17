@@ -384,7 +384,7 @@ def confirm_on_target(
         # A PostgreSQL base backup is hashed through its manifest, and its recorded size is the whole
         # directory's: held to the manifest's size, a backup already on the target never matched and
         # was copied again (found 2026-11-02, 1.215). The manifest's checksum covers every file.
-        recorded = None if str(item.file_type or "").upper() in I.HASHED_MEMBER else item.size_after_backup
+        recorded = None if I.is_base_directory(item.file_type, item.file_name) else item.size_after_backup
         if not same_bytes(target, item.checksum_after_backup, recorded):
             remaining.append(index)
             continue

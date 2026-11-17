@@ -171,30 +171,49 @@ def _linux(root, rel, body, mtime=OLD):
 
 
 PG_FILES = [_linux(PG, "base/20261020T010000Z_FULL/backup_manifest", b"manifest-full"),
+            _linux(PG, "base/20261020T010000Z_FULL/base.tar.zst", b"base-full"),
+            _linux(PG, "base/20261020T010000Z_FULL/pg_wal.tar", b"walTar"),
             _linux(PG, "base/20261021T010000Z_INCR/backup_manifest", b"manifest-incr"),
+            _linux(PG, "base/20261021T010000Z_INCR/base.tar.zst", b"base-incr"),
             _linux(PG, "wal/000000010000000000000042", b"segment"),
+            _linux(PG, "wal/000000010000000000000042.00000028.backup", b"history-of-a-base"),
             _linux(PG, "wal/000000010000000000000043.partial", b"partial"),
             _linux(PG, "wal/00000002.history", b"history"),
             _linux(PG, "base/20261020T010000Z_FULL/pg_wal/000000010000000000000041", b"inside")]
 
 
-def test_a_postgresql_base_backup_is_catalogued_as_its_directory_by_its_manifest(monkeypatch, catalog):
-    """As the receipt does: one row per base backup, its directory, the sha256 of its manifest."""
+def test_every_file_of_a_postgresql_base_backup_is_its_own_row_of_its_level(monkeypatch, catalog):
+    """As the receipt does since 1.386 (the operator, 2026-11-16: *the catalog records every file*, *3NF*):
+    one row per file, named from its backup's directory on, its manifest of its backup's level too."""
     summary, asked = _backfill(monkeypatch, catalog, PG_FILES, apply=True, engine="postgresql", folder=PG)
 
-    assert asked[0]["include"] == ["backup_manifest", "?" * 24]
-    rows = catalog.stored_files(server_id="ACME-192-0-2-245", file_names=[
-        "20261020T010000Z_FULL", "20261021T010000Z_INCR", "000000010000000000000042"])
-    full = rows["20261020T010000Z_FULL"]
-    assert (full["file_type"], full["database_name"], full["checksum_after_backup"]) == \
-        ("FULL_BASE", "cluster", sha(b"manifest-full"))
-    assert full["file_path"] == full["host_path"] == f"{PG}/base/20261020T010000Z_FULL"
-    assert (full["size_bytes"], full["verdict"]) == (None, "size_failed"), "the manifest's size is not the directory's"
-    assert rows["20261021T010000Z_INCR"]["file_type"] == "INCR_BASE"
-    wal = rows["000000010000000000000042"]
-    assert (wal["file_type"], wal["size_bytes"]) == ("WAL", 7)
-    # A .partial or .history file, and a segment inside a base backup's own pg_wal, are not catalogued.
-    assert summary["written"] == 3 and summary["not_a_backup"] == 3
+    assert asked[0]["include"] == ["*"]
+    names = ["20261020T010000Z_FULL/backup_manifest", "20261020T010000Z_FULL/base.tar.zst",
+             "20261020T010000Z_FULL/pg_wal.tar", "20261020T010000Z_FULL/pg_wal/000000010000000000000041",
+             "20261021T010000Z_INCR/backup_manifest", "20261021T010000Z_INCR/base.tar.zst",
+             "000000010000000000000042", "000000010000000000000042.00000028.backup"]
+    rows = catalog.stored_files(server_id="ACME-192-0-2-245", file_names=names)
+    assert {name: row["file_type"] for name, row in rows.items()} == {
+        **{name: "FULL_BASE" for name in names[:4]}, **{name: "INCR_BASE" for name in names[4:6]},
+        "000000010000000000000042": "WAL", "000000010000000000000042.00000028.backup": "WAL"}
+    base = rows["20261020T010000Z_FULL/base.tar.zst"]
+    assert (base["checksum_after_backup"], base["size_bytes"], base["verdict"]) == (sha(b"base-full"), 9, "ok")
+    assert base["file_path"] == base["host_path"] == f"{PG}/base/20261020T010000Z_FULL/base.tar.zst"
+    assert base["file_folder"] == f"{PG}/base/20261020T010000Z_FULL", "the file's own folder, not cut by its name"
+    # A .partial or .history file is not catalogued.
+    assert summary["written"] == 8 and summary["not_a_backup"] == 2
+
+
+def test_a_base_backup_catalogued_as_its_directory_before_is_left_in_that_shape(monkeypatch, catalog):
+    """One backup, one shape: the files of a base catalogued before 1.386 as its directory are not added."""
+    catalog.record_backup_file(server_id="ACME-192-0-2-245", backup_id="ACME_PG", engine="postgresql",
+                               file_name="20261020T010000Z_FULL", file_type="FULL_BASE",
+                               file_path=f"{PG}/base/20261020T010000Z_FULL", verdict="size_failed",
+                               checksum_after_backup=sha(b"manifest-full"), database_name="cluster")
+    summary, _asked = _backfill(monkeypatch, catalog, PG_FILES, apply=True, engine="postgresql", folder=PG)
+
+    assert summary["catalogued_already"] == 4 and summary["written"] == 4
+    assert not catalog.stored_files(server_id="ACME-192-0-2-245", file_names=["20261020T010000Z_FULL/base.tar.zst"])
 
 
 ORA = "/opt/oracle/backup"

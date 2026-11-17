@@ -59,7 +59,7 @@ An app (R03): it never imports `common` - each command runs as `python -m dbabra
    ...) anywhere in it, or `secret-set` / `ai-key`'s `value` - is refused before it runs, without echoing
    it, and says where to type it instead: on the node (`dbabrain common secret-set -`, `dbabrain
    ai-key`), then named here by its reference (`password_ref`). A command that could only be refused
-   (`secret-set`, `ai-key`, the three that need an age `identity`) is not offered. A login the node
+   (`secret-set`, `secret-remove`, `ai-key`, the three that need an age `identity`) is not offered. A login the node
    completes from its own store is not one - name the `server_id`.
 4. **Every answer is capped** at `max_chars` and says how much was cut.
 5. **Every call is recorded** (`log_calls`): a `job_runs` row `mcp.<tool>` - the tool, the
@@ -98,6 +98,9 @@ writes any field a node lacks.
 
 1. `pip install "dbabrain[mcp]"` (the SDK is the `mcp` extra, D-38.1 - the base install does not grow
    for a user who never uses Claude); `dbabrain mcp serve` without it says which extra to install.
+   **The Docker image carries it** (0.40.0): the image is built from `requirements.txt`, which lists
+   `mcp` and `websockets` beside the engine drivers, so a container node can `dbabrain mcp connect`
+   (until then the worker had the code and not the SDK).
 2. `dbabrain init` in a folder of its own (the tool root), and fill `data/*.json` - at least
    `db_instances.json` and `users.json`, and the secret store.
 3. The secret key in **your own environment**, never in Claude's config file:
@@ -211,7 +214,9 @@ submission): submitted by the operator at claude.ai/directory/manage -> Submit n
 | `dbabrain mcp serve [--home DIR]` | the MCP server on stdio |
 | `dbabrain mcp tools [--home DIR] [--json]` | the tools this node offers, each read-only / changes / DESTRUCTIVE |
 | `dbabrain mcp serve --http [--bind ADDR] [--port N] [--allowed-host HOST]` | way 2's origin: Streamable HTTP on `/mcp`, stateless, JSON answers; every request needs `Authorization: Bearer <DBABRAIN_MCP_HTTP_TOKEN>` (32 characters or more, from the environment only - the Worker on dbabrain.dev holds it); `/healthz` answers `ok` without it; `--allowed-host` is the Host the tunnel delivers (DNS-rebinding protection) |
-| `dbabrain mcp connect [--home DIR] [--relink]` | this machine as YOUR node of dbabrain.dev: links it once (a code to approve after signing in), then keeps one outbound WebSocket; every request is answered by the SDK's own server in this process and logged with `asked_by` |
+| `dbabrain mcp connect [--home DIR] [--relink]` | this machine as YOUR node of dbabrain.dev: links it once (a code to approve after signing in), then keeps one outbound WebSocket; every request is answered by the SDK's own server in this process and logged with `asked_by`. A link not approved, or a token refused, ends in one sentence (exit 1) |
+| `dbabrain mcp connect --wait-for-link` | the same, **as a service** (0.40.0): never starts a link - with no token it says once that the node is not linked and reads the secret store again every minute; a refused token is set aside until a new one is stored. The token comes from a `connect` run once by hand. The estate runs it on the worker as `APP-MCP-CONNECT` (repeat 0, timeout 0, retry 60); it is not in the shipped schedule, which holds only what runs on an empty install. Held by `tests/test_a_node_service_waits_for_its_link.py` |
+| (the node's secrets) | read again when `data/encrypted_secret_text.json` changes (its mtime and size; 0.40.0): a secret a config push brings is usable, and redacted, at the next request, with no restart. Held by `tests/test_an_mcp_node_reads_a_secret_stored_after_it_started.py` |
 | `dbabrain mcp call TOOL ARGS [--home DIR]` | one tool without Claude; `ARGS` is JSON, `@file` or `-`; a command tool takes `{"request": {...}}` |
 
 Proven 2026-11-11 on the master: the SDK's own stdio client listed 101 tools (99 commands, 2 on the

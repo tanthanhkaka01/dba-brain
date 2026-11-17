@@ -168,7 +168,7 @@ def test_the_page_says_restore_fail_its_reason_and_the_tally_never_the_bare_phas
         'const when = v => v ? String(v) : "";\n'
         + SHARED_JS.read_text(encoding="utf-8")
         + f"\nprocess.stdout.write(backupFilesBlock({json.dumps(section)}, {{fleet: false}}));\n")
-    done = subprocess.run([NODE, "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    done = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert done.returncode == 0, done.stderr
     page = done.stdout
 

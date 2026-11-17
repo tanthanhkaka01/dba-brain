@@ -263,10 +263,10 @@ def _base_full(row: dict, fulls: list[dict]) -> dict | None:
     return earlier[-1] if earlier else None
 
 
-def load_chains(catalog: Any, backup_rows: list[dict]) -> dict[int, dict]:
+def load_chains(catalog: Any, backup_rows: list[dict], *, limit: int = ROW_LIMIT) -> dict[int, dict]:
     """``{file_id: chain}`` for the diff and log rows a page shows (:func:`build_chains`): per server,
     its fulls, then every diff and log since the oldest full one of those rows builds on."""
-    wanted = [r for r in backup_rows[:ROW_LIMIT] if _level(r) in ("diff", "log")]
+    wanted = [r for r in backup_rows[:limit] if _level(r) in ("diff", "log")]
     chains: dict[int, dict] = {}
     for server_id in sorted({_of(r)[0] for r in wanted}):
         rows = [r for r in wanted if _of(r)[0] == server_id]
@@ -352,7 +352,8 @@ def build_chains(backup_rows: list[dict], chain_rows: list[dict]) -> dict[int, d
 
 
 def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id: str,
-                repository: dict[int, dict] | None = None, chains: dict[int, dict] | None = None) -> dict:
+                repository: dict[int, dict] | None = None, chains: dict[int, dict] | None = None,
+                limit: int = ROW_LIMIT) -> dict:
     """``backup_rows``: ``BackupCatalogStore.server_backup_files``; ``restore_rows``:
     ``server_restore_files`` - both newest first already; ``repository``: :func:`load_repository`;
     ``chains``: :func:`load_chains`."""
@@ -370,7 +371,7 @@ def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id:
 
     files: list[dict] = []
     attached: set[int] = set()
-    for row in backup_rows[:ROW_LIMIT]:
+    for row in backup_rows[:limit]:
         restores = by_id.get(int(row["file_id"]), []) + by_name.get(str(row.get("file_name") or ""), [])
         restores.sort(key=lambda r: str(r.get("run_started_at") or ""), reverse=True)
         attached.update(int(r["run_file_id"]) for r in restores)
@@ -423,10 +424,16 @@ def build_files(backup_rows: list[dict], restore_rows: list[dict], *, server_id:
 
     # Restores of another server's files onto this one, and this server's files that no catalogued
     # backup matches - each its own row, so no copy of or onto this server is missing.
-    for row in restore_rows[:ROW_LIMIT]:
+    for row in restore_rows[:limit]:
         if int(row["run_file_id"]) in attached:
             continue
         incoming = row.get("target_server_id") == server_id and row.get("source_server_id") != server_id
+        # A copy of another server's catalogued backup - read from the repository, which it names as its
+        # source - is that backup's: its row carries the mark and the counts (0.41.0, 1.395). Listed here
+        # as a file of its own, each restore from the repository added a row per file under the repository.
+        owner = row.get("backup_server_id")
+        if not incoming and owner and owner != server_id:
+            continue
         restore = _restore(row)
         files.append({
             "kind": "restored_here" if incoming else "restore_out",
@@ -513,7 +520,8 @@ def build_retention(rows: list[dict]) -> list[dict]:
 
 
 def build_fleet(per_server: dict[str, tuple[list[dict], list[dict]]],
-                repository: dict[int, dict] | None = None, chains: dict[int, dict] | None = None) -> dict:
+                repository: dict[int, dict] | None = None, chains: dict[int, dict] | None = None,
+                *, limit: int = ROW_LIMIT) -> dict:
     """Every server's files in one table - the fleet page, ``backup-restore.html``.
 
     ``per_server``: ``{server_id: (server_backup_files, server_restore_files)}``. Each server's rows
@@ -525,11 +533,45 @@ def build_fleet(per_server: dict[str, tuple[list[dict], list[dict]]],
     files: list[dict] = []
     total = 0
     for server_id, (backup_rows, restore_rows) in sorted(per_server.items()):
-        table = build_files(backup_rows, restore_rows, server_id=server_id, repository=repository, chains=chains)
+        table = build_files(backup_rows, restore_rows, server_id=server_id, repository=repository, chains=chains,
+                            limit=limit)
         total += table["total"]
         files += [{**row, "host": server_id} for row in table["files"] if row["kind"] != "restored_here"]
     files.sort(key=lambda f: str(f.get("at") or ""), reverse=True)
     return summarize(files, total=total)
+
+
+#: The newest log files of a server its own log file holds (0.41.0, 1.393) - fetched only when the
+#: page's *Log backups* is opened on that server, so a larger window costs the page nothing.
+LOG_ROW_LIMIT = 1000
+
+
+def is_log(row: dict) -> bool:
+    """A file of the log stream (``LOG`` / ``WAL`` / ``ARCHIVELOG``) - by the catalog's own level map."""
+    return integrity.LEVEL_OF_FILE_TYPE.get(str(row.get("file_type") or "").upper()) == "log"
+
+
+#: What a row carries that the page's script never reads (0.41.0, 1.392): written once for every file
+#: of the fleet, they were a third of an 11.8 MB page. The page's script is the measure - a field it
+#: comes to read goes back here by being taken off this list.
+_UNREAD_REPO_MEMBER = ("serverPath", "repoPath")
+_UNREAD_RESTORE = ("sourcePath", "targetPath", "sha256SourceBefore", "pointInTime", "sourceOnDisk",
+                   "sourceMatches", "testedOk")
+
+
+def for_the_page(table: dict) -> dict:
+    """``table`` (:func:`summarize`'s answer) without the fields the page's script never reads."""
+    def slim_row(row: dict) -> dict:
+        row = dict(row)
+        repo = row.get("repo")
+        if isinstance(repo, dict) and repo.get("files"):
+            row["repo"] = {**repo, "files": [{k: v for k, v in m.items() if k not in _UNREAD_REPO_MEMBER}
+                                             for m in repo["files"]]}
+        last = row.get("lastRestore")
+        if isinstance(last, dict):
+            row["lastRestore"] = {k: v for k, v in last.items() if k not in _UNREAD_RESTORE}
+        return row
+    return {**table, "files": [slim_row(row) for row in table.get("files") or []]}
 
 
 
@@ -669,11 +711,16 @@ def build_restores(runs: list[dict]) -> list[dict]:
     return out
 
 
-def build_coverage(rows: list[dict]) -> list[dict]:
+def build_coverage(rows: list[dict], *, recovery_models: dict[tuple[str, str], str] | None = None) -> list[dict]:
     """Per server and database (1.252): the levels its present backups hold, how many are copied
     off the host, the last restore that used one - and what is missing, named. Complete is: a full,
     log or WAL backups, a copy off the host, a drill. A repository and a virus scan are not counted
-    until they exist (1.240 is off until V-1; 1.242)."""
+    until they exist (1.240 is off until V-1; 1.242).
+
+    ``recovery_models`` - ``{(server_id, database): model}`` as collected (``DATABASE_CONFIG``,
+    0.41.0, 1.396): a database in SIMPLE recovery has no log to back up, so none is asked of it; its
+    model is said. Not collected, nothing is assumed: log backups stay asked for."""
+    recovery_models = recovery_models or {}
     grouped: dict[tuple[str, str], dict] = {}
     for row in rows:
         key = (str(row.get("server_id") or ""), str(row.get("database_name") or ""))
@@ -696,11 +743,14 @@ def build_coverage(rows: list[dict]) -> list[dict]:
             item["newest_log"] = max(filter(None, [item["newest_log"], row.get("newest")]), default=None)
         item["last_restored"] = max(filter(None, [item["last_restored"], row.get("last_restored")]), default=None)
     out = []
+    lowered = {(server.lower(), database.lower()): model for (server, database), model in recovery_models.items()}
     for item in grouped.values():
+        model = lowered.get((item["server_id"].lower(), item["database_name"].lower()), "")
+        item["recovery_model"] = model
         missing = []
         if "full" not in item["levels"]:
             missing.append("a full backup")
-        if "log" not in item["levels"]:
+        if "log" not in item["levels"] and model.upper() != "SIMPLE":
             missing.append("log / WAL backups")
         if not item["offloaded"]:
             missing.append("a copy off the host")

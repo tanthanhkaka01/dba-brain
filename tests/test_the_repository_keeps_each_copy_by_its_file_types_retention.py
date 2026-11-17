@@ -303,10 +303,13 @@ def test_a_pass_takes_the_entrys_files_per_pass_unless_told_otherwise(catalog, n
     monkeypatch.setattr(O.DbaBrainStore, "from_config", classmethod(lambda cls, _c: object()))
     monkeypatch.setattr(O.BackupCatalogStore, "from_config", classmethod(lambda cls, _c: catalog))
     monkeypatch.setattr(O.schedule, "reap_stale_runs", lambda **_k: [])
-    monkeypatch.setattr(O, "_run_one", lambda e, **k: taken.append(len(k["rows"])) or {"status": "done"})
+    from dbabrain.backup_restore import workflow
 
-    O.run_offloads(app_config=None, config_path="x")
-    O.run_offloads(app_config=None, config_path="x", limit=5)
+    # The workflow runs each offload and says its steps (0.40.0, 1.374).
+    monkeypatch.setattr(workflow, "_offload", lambda e, **k: taken.append(len(k["rows"])) or {"status": "done"})
+
+    workflow.run_offloads(app_config=None, config_path="x")
+    workflow.run_offloads(app_config=None, config_path="x", limit=5)
     assert taken == [1, 2]
 
 
@@ -452,7 +455,8 @@ def _base(file_id, stamp, ended):
     members = {f"{folder}/base.tar.zst": b"base " + stamp.encode(), f"{folder}/pg_wal.tar": b"wal " + stamp.encode(),
                f"{folder}/backup_manifest": b"manifest " + stamp.encode()}
     row = {"file_id": file_id, "backup_id": "SRC01_MSSQL", "file_type": "FULL_BASE", "database_name": "cluster",
-           "file_name": "backup_manifest",
+           # Catalogued as its directory, as before 1.386: the row's name is the directory's.
+           "file_name": f"{stamp}_FULL",
            "backup_ended_at": ended, "chain_start": ended, "offload_path": folder,
            "size_bytes": None, "checksum_after_backup": _sha(members[f"{folder}/backup_manifest"])}
     proofs = {path: {"file_id": file_id, "size_bytes": len(data), "checksum_after_backup": _sha(data)}

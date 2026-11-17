@@ -120,8 +120,10 @@ def run_time(row: Any) -> datetime | None:
 # whether a drill counts, which is not a rule that should have had two copies.
 
 
-def start_run(*, store: DbaBrainStore, job_code: str, message: str, metadata: dict[str, Any]) -> tuple[int, str]:
-    """Record the RUNNING row that both the operator and the next due check read."""
+def start_run(*, store: DbaBrainStore, job_code: str, message: str, metadata: dict[str, Any],
+              every_node: bool = False) -> tuple[int, str]:
+    """Record the RUNNING row that both the operator and the next due check read - claimed on this
+    host, or on every node when ``every_node`` (an offload, 1.383)."""
     started_at = utc_now_text()
     log_id = store.insert_job_run(
         JobRun(
@@ -136,6 +138,7 @@ def start_run(*, store: DbaBrainStore, job_code: str, message: str, metadata: di
             started_at=started_at,
             host_name=socket.gethostname(),
             metadata=metadata,
+            claim_global=every_node,
         )
     )
     return log_id, started_at

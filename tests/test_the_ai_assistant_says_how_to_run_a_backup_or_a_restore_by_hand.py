@@ -363,7 +363,11 @@ def test_the_flow_says_which_steps_this_entry_runs_and_how_its_server_is_read():
     store = _backup("ACME_STORE_PG")
     assert [step["step"] for step in store["flow"]] == [
         "Backup", "Copy to the repository", "Verify the copy", "Encrypt", "Verify the encryption",
-        "Delete at the source", "Repository check"]
+        "Delete at the source", "Repository check", "The process done"]
+    # Each names the step of a backup's ten its message carries (0.40.0, 1.374).
+    assert [step["message"] for step in store["flow"]] == [
+        "1-3. Backup", "4-5. Copy", "5. Copy ... done", "6-7. Encrypt", "7. Encrypt done", "8. Plain files cleared",
+        "9. Repository upkeep", "10. Backup process done"]
     assert all(step["state"] == "on" for step in store["flow"])
     assert f"{REPOSITORY}:/mnt/repo/{STORE}/" in store["flow"][1]["does"]
     assert "every file goes, the newest chain too" in store["flow"][5]["does"]
@@ -376,7 +380,9 @@ def test_the_flow_says_which_steps_this_entry_runs_and_how_its_server_is_read():
         "off - offload_encrypt is false", "off - offload_encrypt is false", "off - offload_delete_source is false"]
     # An entry with no repository has no repository command to be given.
     log = _backup("ACME_APPDB_LOG")
-    assert [step["state"] for step in log["flow"]] == ["on", "off - offload_enabled is false"]
+    # Its own step 10 ends the process: nothing goes to a repository (1.374).
+    assert [step["state"] for step in log["flow"]] == ["on", "off - offload_enabled is false", "on"]
+    assert log["flow"][-1]["message"] == "10. Backup process done"
     assert not any("offload" in step.get("cli", "") for step in log["steps"])
 
 
@@ -445,7 +451,8 @@ def test_an_in_place_restore_copies_nothing_and_is_given_no_copy_only_line():
 
 def test_an_answer_says_where_to_watch_the_run():
     watch = " ".join(_backup("ACME_APPDB_FULL")["watch"])
-    for needed in ("ACME_APPDB_FULL · 1. Backup", "2-5. Repository", "the chat of level backup", "job_runs",
+    for needed in ("ACME_APPDB_FULL · 1. Backup process started", "10. Backup process done", "the chat of level backup",
+                   "job_runs",
                    "backup_files", "http://192.0.2.115:8080/report_dba/backup-restore.html"):
         assert needed in watch, needed
     restore = " ".join(_restore("ACME_STORE_TO_LAB")["watch"])

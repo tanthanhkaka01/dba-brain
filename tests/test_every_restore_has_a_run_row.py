@@ -73,7 +73,7 @@ def _share_driven(tmp_path, monkeypatch, catalog, *, unusable=0):
                                 restore_run_id=run_id, integrity={"proven": True})
 
     monkeypatch.setattr(cli, "run_copy_backup", copy)
-    monkeypatch.setattr(cli, "run_restore_all_latest", lambda **_: {
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server", lambda **_: {
         "status": "SUCCESS", "per_database_restore_status": {"SALES": "SUCCESS", "ORDERS": "SUCCESS"}})
     monkeypatch.setattr(cli, "run_delete_backup", lambda *a, **k: DeleteBackupResult(
         returncode=0, target_backup_dir=tmp_path, cleanup_retention=0, files_considered=0, deleted=0,
@@ -127,7 +127,7 @@ def _script(monkeypatch, catalog, *, remote, checked=2, failed=0):
     monkeypatch.setattr(restore_by_id, "_host_block", lambda j, **_: {"host": "h"})
     monkeypatch.setattr(restore_by_id, "assert_target_is_not_source", lambda *a, **k: None)
     monkeypatch.setitem(restore_by_id._PLANNERS, "postgresql", lambda *a, **k: [dict(s) for s in PLAN])
-    monkeypatch.setattr(restore_by_id, "_metadata_phase", lambda *a, **k: "")
+    monkeypatch.setattr(restore_by_id, "metadata", lambda *a, **k: {"ok": True, "status": "OFF", "reason": "off"})
     monkeypatch.setattr("dbabrain.backup_restore.backup.resolve_ssh_target", lambda *a, **k: SimpleNamespace(host="h"))
     monkeypatch.setattr(restore_by_id, "_execute", lambda op, request: (
         {"ok": not failed, "checked": checked, "failed": failed} if op == "verify-restore" else {"ok": True}))
@@ -153,7 +153,8 @@ def test_a_restore_that_copies_nothing_still_has_its_row(monkeypatch, catalog):
     assert (row["action"], row["source_server_id"], row["target_server_id"]) == ("restore", "LAB-A", "LAB-A")
     assert catalog.phases[1] == ["restoring", "verifying_db", "done"]
     assert (row["databases_ok"], row["databases_failed"], row["job_run_id"]) == (2, 0, 99)
-    assert row["point_in_time"] == "2026-10-29 08:00:00 +07:00"
+    # The moment in UTC with its offset stated (1.385): the same instant, no longer read by a clock.
+    assert row["point_in_time"] == "2026-10-29 01:00:00 +00:00"
     with catalog.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM restore_run_files").fetchone()[0] == 0, "nothing was copied"
 

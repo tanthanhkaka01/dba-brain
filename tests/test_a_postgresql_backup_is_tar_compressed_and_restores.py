@@ -24,6 +24,7 @@ import os
 import shutil
 import subprocess
 import tarfile
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,13 @@ def _posix(path: Path | str) -> str:
 
 
 def _sh(command: str) -> subprocess.CompletedProcess:
-    return subprocess.run([SH, "-c", command], capture_output=True, text=True, timeout=120)
+    # Through a script file, not `-c`: Git Bash on Windows cuts a `-c` argument past about 8 KB, and
+    # under pytest's default basetemp (the public tree has no pytest.ini) the paths made the restore's
+    # command long enough to be cut mid-`case`. The step itself runs on the target's own shell.
+    with tempfile.TemporaryDirectory() as folder:
+        script = Path(folder) / "step.sh"
+        script.write_text(command + "\n", encoding="utf-8", newline="\n")
+        return subprocess.run([SH, _posix(script)], capture_output=True, text=True, timeout=120)
 
 
 # --------------------------------------------------------------------------- #

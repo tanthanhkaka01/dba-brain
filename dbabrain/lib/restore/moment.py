@@ -69,3 +69,36 @@ def server_clock_text(text: str, *, server_utc_offset_hours: float | None = None
     listings' finish times all are. UTC unless the server's offset is stated: every container
     target here runs on UTC."""
     return parse_moment(text, server_utc_offset_hours=server_utc_offset_hours).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def utc_moment_text(text: str, *, source_offset_minutes: int | None) -> str:
+    """``text`` as ``YYYY-MM-DD HH:MM:SS +00:00`` - the moment in UTC, its offset stated (0.40.0, 1.385).
+
+    A moment with an offset is converted. One without is in the SOURCE's clock (the module's rule: the
+    only thing it can mean), so it needs that clock's offset - ``source_offset_minutes``, read off the
+    source database; without it the moment is refused, never taken as UTC. An Oracle or PostgreSQL point
+    in time is carried in this form from then on: the chain chosen by it, PostgreSQL's
+    ``recovery_target_time`` honouring the offset, Oracle's ``UNTIL TIME`` turned back into the
+    source's clock by :func:`server_clock_text`.
+    """
+    from datetime import timedelta
+
+    raw = str(text or "").strip()
+    if not raw:
+        raise MomentError("point_in_time is empty.")
+    for fmt in _FORMATS:
+        try:
+            parsed = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        if parsed.tzinfo is not None:
+            utc = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        elif source_offset_minutes is None:
+            raise MomentError(
+                f"point_in_time {raw!r} states no offset, so it is in the source's clock - and the source's "
+                "clock could not be read. State it with its offset: 'YYYY-MM-DD HH:MM:SS +HH:MM'.")
+        else:
+            utc = parsed - timedelta(minutes=int(source_offset_minutes))
+        return utc.strftime("%Y-%m-%d %H:%M:%S") + " +00:00"
+    raise MomentError(
+        f"point_in_time {raw!r} is not a moment this understands. Use 'YYYY-MM-DD HH:MM:SS +HH:MM'.")

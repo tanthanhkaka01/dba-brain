@@ -617,20 +617,27 @@ def plan_transfer(
     proofs: dict[str, dict[str, Any]] | None = None
     source_dir = job.source_backup_host_dir
     if getattr(job, "restore_from", None) == "repository":
-        source, source_dir, proofs = _repository_source(job, catalog=catalog, data_dir=data_dir)
+        source, source_dir, proofs = _repository_source(job, catalog=catalog, data_dir=data_dir,
+                                                         point_in_time=point_in_time)
     source_login = _ssh_login(source, data_dir=data_dir, key=key, key_base64=key_base64)
     target_login = _ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64)
     window = job.copy_selection == "window"
     request = {"source": source_login, "source_dir": source_dir, "make_readable": False, "plan_only": True,
                **({"window_hours": job.copy_recent_hours} if window and job.copy_recent_hours > 0 else {})}
+    recorded: tuple[list[str], str] | None = None
     if window and job.copy_recent_hours <= 0:
         request["include"] = []
+    elif proofs is not None and str(job.db_type).lower() == "oracle":
+        # 0.40.0 (1.380): the chain RMAN named at backup time, from the catalog - never asked here.
+        recorded = _oracle_recorded_pieces(job, catalog=catalog, point_in_time=point_in_time)
+        request["include"] = recorded[0]
     else:
         request["chain"] = {"db_type": job.db_type, "backup_dir": job.backup_dir,
                             "container": source.container_name, "point_in_time": point_in_time,
                             **_chain_databases(job)}
     plan = common_cli.run("prepare-staging", request, stream_stderr=True)
     selected = [(str(item["path"]), int(item.get("size_bytes") or 0)) for item in plan.get("files") or []]
+    missing = _pieces_missing(recorded[0], plan) if recorded else []
     encrypted = any(rel.endswith(SUFFIX) for rel, _size in selected)
     not_proven: list[str] = []
     incoming: list[tuple[str, int]] = []
@@ -663,7 +670,8 @@ def plan_transfer(
             stream_stderr=True)
     total = sum(size for _rel, size in incoming)
     room = measured.get("space_check") or {}
-    refusals = ([f"{len(not_proven)} file(s) of the chain no offload proved on the repository - "
+    refusals = ([f"{len(missing)} piece(s) of the recorded RMAN chain not on the repository - "
+                 f"{', '.join(missing[:5])}: the restore refuses"] if missing else [])         + ([f"{len(not_proven)} file(s) of the chain no offload proved on the repository - "
                  f"{', '.join(not_proven[:5])}: the restore refuses them"] if not_proven else []) \
         + ([measured["staging"]] if measured.get("refused") else []) \
         + ([str(room.get("detail"))] if room and room.get("ok") is False else []) \
@@ -673,6 +681,7 @@ def plan_transfer(
         "source_server_id": source.server_id, "source_dir": source_dir,
         "target_server_id": getattr(job, "target_server_id", ""), "target_dir": job.target_backup_dir,
         "include": list(plan.get("include") or []),
+        **({"chain_said": recorded[1]} if recorded else {}),
         "files": [{"path": rel, "size_bytes": size} for rel, size in incoming],
         "file_count": len(incoming), "bytes": total,
         # The same test the decryption makes (_stage_decrypted): the target's server_id, or its login's host.
@@ -727,7 +736,8 @@ def transfer_backup_to_target(
     proofs: dict[str, dict[str, Any]] | None = None
     source_dir = job.source_backup_host_dir
     if getattr(job, "restore_from", None) == "repository":
-        source, source_dir, proofs = _repository_source(job, catalog=catalog, data_dir=data_dir)
+        source, source_dir, proofs = _repository_source(job, catalog=catalog, data_dir=data_dir,
+                                                         point_in_time=point_in_time)
     source_login = _ssh_login(source, data_dir=data_dir, key=key, key_base64=key_base64)
     target_login = _ssh_login(target, data_dir=data_dir, key=key, key_base64=key_base64)
     window = job.copy_selection == "window"
@@ -748,6 +758,17 @@ def transfer_backup_to_target(
     if window and job.copy_recent_hours <= 0:
         # A window with no limit is the whole directory; there is no chain to narrow it to.
         plan = common_cli.run("prepare-staging", {**request, "include": [], "plan_only": True}, stream_stderr=True)
+    elif proofs is not None and str(job.db_type).lower() == "oracle":
+        # 0.40.0 (1.380): from the repository the chain is the one RMAN named at backup time, read
+        # from the catalog; a piece of it the repository does not hold refuses the copy.
+        pieces, _said = _oracle_recorded_pieces(job, catalog=catalog, point_in_time=point_in_time)
+        plan = common_cli.run("prepare-staging", {**request, "plan_only": True, "include": pieces},
+                              stream_stderr=True)
+        missing = _pieces_missing(pieces, plan)
+        if missing:
+            raise CopyNotProvenError(
+                f"{job.label}: {len(missing)} piece(s) of the RMAN chain recorded at backup time are not on the "
+                f"repository {source.server_id}:{source_dir} - {', '.join(missing[:5])}. Nothing was copied.")
     else:
         # The chain is read once, with the plan (RMAN's preview is not cheap), and stated from then on.
         plan = common_cli.run("prepare-staging", {**request, "plan_only": True, "chain": {
@@ -827,13 +848,13 @@ def _record_decrypted(job: Any, catalog: Any, *, source_server_id: str, source_d
     # which restore a file went into (the operator, 2026-11-13).
     try:
         known = catalog.backup_file_facts(
-            server_id=job.server_id, file_names=sorted({posixpath.basename(str(one["path"])) for one in files}))
+            server_id=job.server_id, file_names=sorted({restore_integrity.catalog_name(str(one["path"])) for one in files}))
     except Exception:  # noqa: BLE001 - the tie is evidence, not a condition of the restore
         known = {}
     for position, one in enumerate(files, start=1):
         target_path = str(one["path"])
         relative = target_path[len(target_dir) + 1:] if target_path.startswith(target_dir + "/") else posixpath.basename(target_path)
-        fact = known.get(posixpath.basename(target_path)) or {}
+        fact = known.get(restore_integrity.catalog_name(target_path)) or {}
         catalog.add_run_file(
             restore_run_id=run_id, source_server_id=source_server_id, target_server_id=job.target_server_id,
             **({"file_id": fact["file_id"], "database_name": str(fact.get("database_name") or ""),
@@ -1034,11 +1055,45 @@ def _transfer_of(job: Any) -> str:
 from dbabrain.lib.restore.kind import REPOSITORY_ENGINES  # noqa: E402 - re-exported where it always lived
 
 
-def _repository_source(job: Any, *, catalog: Any, data_dir: Any) -> tuple[BackupTarget, str, dict[str, Any]]:
+def _oracle_recorded_pieces(job: Any, *, catalog: Any, point_in_time: str) -> tuple[list[str], str]:
+    """The RMAN pieces an Oracle restore from the repository copies, and the sentence saying which
+    (0.40.0, 1.380): chosen by ``lib.restore.oracle_chain`` from the chains recorded at backup time."""
+    from dbabrain.lib.restore import oracle_chain
+    from dbabrain.lib.restore.moment import parse_moment
+
+    if catalog is None:
+        raise CopyNotProvenError(f"{job.label}: an Oracle restore from the repository reads the RMAN chain the "
+                                 "backup catalog recorded, and no catalog is open.")
+    runs, files = catalog.oracle_chain_rows(server_id=job.server_id)
+    try:
+        chosen = oracle_chain.choose(oracle_chain.runs_from_rows(runs, files),
+                                     point_in_time=parse_moment(point_in_time) if point_in_time else None,
+                                     server_id=job.server_id)
+    except oracle_chain.ChainNotRecorded as exc:
+        raise CopyNotProvenError(f"{job.label}: {exc}") from exc
+    return list(chosen.pieces), chosen.said
+
+
+def _pieces_missing(pieces: list[str], plan: dict[str, Any]) -> list[str]:
+    """The recorded pieces no file of the repository's plan answers - a ``.age`` answers its plain name."""
+    from dbabrain.lib.repository_keys import SUFFIX
+
+    found = set()
+    for item in plan.get("files") or []:
+        name = str(item.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+        found.add(name[: -len(SUFFIX)] if name.endswith(SUFFIX) else name)
+    return [piece for piece in pieces if piece not in found]
+
+
+def _repository_source(job: Any, *, catalog: Any, data_dir: Any,
+                       point_in_time: str = "") -> tuple[BackupTarget, str, dict[str, Any]]:
     """``restore_from: repository`` (0.34.0): the repository host as the copy's source, the folder there
-    that stands for the entry's ``source_backup_host_dir``, and every repository file's offload proof."""
+    that stands for the entry's ``source_backup_host_dir``, and every repository file's offload proof.
+
+    For Oracle the folder is the one holding the chain this restore reads (1.402): its pieces are
+    known before the copy, from the chain recorded at backup time, and only their copies decide."""
     from dbabrain.backup_restore.backup import resolve_ssh_target
-    from dbabrain.backup_restore.offload import repository_source
+    from dbabrain.backup_restore.offload import OffloadRefused, repository_source
 
     engine = str(job.db_type or "").lower()
     if engine not in REPOSITORY_ENGINES:
@@ -1047,9 +1102,20 @@ def _repository_source(job: Any, *, catalog: Any, data_dir: Any) -> tuple[Backup
     if catalog is None:
         raise CopyNotProvenError(f"{job.label}: restore_from repository reads the backup catalog - where each "
                                  "copy is and what it was proven as - and no catalog is open.")
-    server_id, folder = repository_source(
-        catalog.repository_locations(server_id=job.server_id, under=job.source_backup_host_dir),
-        job.source_backup_host_dir)
+    names = None
+    if engine == "oracle":
+        names = set(_oracle_recorded_pieces(job, catalog=catalog, point_in_time=point_in_time)[0])
+    try:
+        server_id, folder = repository_source(
+            catalog.repository_locations(server_id=job.server_id, under=job.source_backup_host_dir),
+            job.source_backup_host_dir, names=names)
+    except OffloadRefused as exc:
+        if names is None or "places" not in str(exc):
+            raise
+        # The one way an Oracle chain lands in two folders: begun before 0.40.0 named its database by its
+        # SID (1.387) - the copies before it are under `database`. A level 0 starts a chain in one place.
+        raise OffloadRefused(f"{exc} The chain was begun before its database was named by its SID (0.40.0): "
+                             "take a level 0, then restore from it.") from exc
     repository = resolve_ssh_target(server_id, label=f"{job.label} repository", data_dir=data_dir,
                                     require_container=False)
     proofs = catalog.repository_proofs(server_id=job.server_id, repository_server_id=server_id)
@@ -1128,7 +1194,8 @@ def _copy_gated_between_hosts(job: ScriptRestore, request: dict[str, Any], *, so
 
     stored: dict[str, dict[str, Any]] = dict(proofs or {})
     if proofs is None and catalog is not None and selected:
-        names = sorted({posixpath.basename(rel) for rel, _size in selected})
+        # Asked by the name each file is catalogued under: a base backup's file from its directory on (1.386).
+        names = sorted({restore_integrity.catalog_name(rel) for rel, _size in selected})
         for name, row in catalog.stored_files(server_id=job.server_id, file_names=names).items():
             # A name is held to its stored checksum only at the path the backup recorded it: a
             # rebuilt PostgreSQL cluster names its WAL from ...0001 again, and every base backup

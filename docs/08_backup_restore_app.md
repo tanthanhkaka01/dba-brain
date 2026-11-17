@@ -1015,6 +1015,20 @@ listing truncated is not a check and fails too. Each entry of a server checks th
 two entries of one server each say it. It runs when the pass has something to do - every backup
 gives it some.
 
+**A sealed instance bundle the configuration puts there is not a stray** (0.40.0, 1.384; the operator,
+2026-11-16: *anywhere, and the check knows it*): `instance_bundle.json` and `instance_bundle.tar.age` at
+the `server_metadata.repository_path` of any backup entry of the server with its metadata on
+(`offload.instance_bundle_paths`) are neither stray nor required; anything else beside them still
+is, and a link at their names is still a finding. A configuration that does not load allows none.
+The 1.376 drill put a bundle in `/mnt/nas/<server_id>/_instance` before this, and the server's next
+LOG offload failed on the two files.
+
+**An offload is claimed on every node** (0.40.0, 1.383): its run row is the claim of
+`offload_job.<backup_id>` across the master and the worker - `host_name` written `""`, the host that
+runs it in the claim's metadata - where a backup job and a restore claim on their own host. On
+2026-11-16 a FULL run by hand on the master and the worker's pass both offloaded that backup (each
+claim on its host); the repository was not harmed, the chat read steps 4-10 twice.
+
 **A pass of its own.** The scheduled `workflow` runs the backups, then the restores, then
 `run_offloads` (`--skip-offload` leaves it for the next pass; `backup_restore.cli offload
 [--backup-id] [--dry-run] [--limit N]` runs it alone). It is not a step inside the backup run. A
@@ -1053,8 +1067,10 @@ backup folder goes under its database (or type).
 4. A copy that is not equal is copied again, up to `offload_copy_max_retry` times, after
    `offload_copy_retry_interval_seconds`.
 
-A base backup (a directory) is copied file by file. Its `backup_manifest` is held to the checksum
-the backup recorded; the other files are compared against the source as it is now.
+A base backup is catalogued file by file since 0.40.0 (1.386, below), and each of its files is copied
+as any other file, held to the checksum its backup recorded. One catalogued before as its directory is
+copied file by file: its `backup_manifest` is held to the checksum the backup recorded; the other files
+are compared against the source as it is now.
 
 **`verified`** (1.247) means all of that held. The row then names the copy - `offload_server_id`,
 `offload_path`, the `offload_run_id` that proved it, `offload_verified_at` - and a
@@ -1098,7 +1114,11 @@ from before the repository; the PostgreSQL store's two entries state `keep`.
   had no full, so none of it was ever released. A database with no full on the server releases
   nothing. The rule is in the catalog's query (`files_to_release`), so a file that may never be
   released is never offered, and a pass with nothing to release writes nothing;
-- **a base backup directory goes file by file, its folder only once empty** (2026-11-11, the
+- **a base backup recorded file by file (1.386)** goes as every other file, each by its own row, and its
+  folder (`base/<stamp>_<level>/`) once none of its files is left (`delete-empty-folder`). With
+  `offload_source_keeps_newest_chain` false, the newest base's `backup_manifest` stays - the next
+  incremental chains onto it - and is never offered (`files_to_release`, `newest_base_manifest`);
+- **a base backup directory (catalogued before 1.386) goes file by file, its folder only once empty** (2026-11-11, the
   operator: *delete at the server_id once verified on the repository; one file per delete, a folder
   only when empty*): each of its files by the path, bytes and sha256 its offload measured on the
   server (`offload_members`), in one `delete-verified-files`, then `delete-empty-folder`. A file of
@@ -1191,8 +1211,8 @@ own copy is not the repository's to touch.
 
 ### Restoring from the repository (`restore_from: repository`)
 
-For the script-driven PostgreSQL and SQL Server restores onto another server
-(`restore_script.REPOSITORY_ENGINES`):
+For the script-driven PostgreSQL, SQL Server and (0.40.0) Oracle restores onto another server
+(`lib.restore.kind.REPOSITORY_ENGINES`):
 - **The folder is found from the catalog.** The repository keeps the server's layout, so a verified
   copy's path and its file's path on the server end the same way. `repository_source` translates the
   entry's `source_backup_host_dir` through that common ending. No entry is looked up. A server whose
@@ -1211,8 +1231,97 @@ For the script-driven PostgreSQL and SQL Server restores onto another server
   are marked as used, as from the server.
 
 **Refused by name:** a share-driven SQL Server entry (that path reads a Windows share; the repository
-is an SSH host), Oracle (RMAN catalogs its own pieces - a later item), and an in-place entry (it
-copies nothing, so it would read the server's own folder).
+is an SSH host), MySQL, and an in-place entry (it copies nothing, so it would read the server's own
+folder).
+
+#### Oracle: the chain its RMAN named at backup time (0.40.0, 1.380)
+
+An RMAN folder is flat and its names are RMAN's, so Oracle's chain cannot be read from the names on
+the repository; from the server the copy asks the source's RMAN (`oracle_chain_include`). The operator,
+2026-11-16: the chain is **recorded at backup time**, a **point in time** is built too, and a backup
+whose chain could not be asked **stands** while a restore that finds no recorded chain **refuses**.
+
+- **`record_chain`** (required on every Oracle backup entry, `true` / `false`): after each run of the
+  entry, `workflow._record_rman_chain` asks the source the same question a copy from the server asks
+  (`prepare-staging`, plan only, with the Oracle `chain`) and keeps the piece names on the run -
+  `backup_runs.rman_chain_json`, catalog **schema 10**. Step 3 says `✅ RMAN chain recorded: N
+  piece(s)`, or `⚠ RMAN chain not recorded - why` at warning level; the backup itself stands either way.
+  `upgrade-config` writes `true` where the entry offloads (`offload_enabled`), `false` elsewhere.
+- **Which pieces** (`lib.restore.oracle_chain.choose`): for a moment M (the newest: the newest run's
+  end) - E, the first run that ended at or after M; L, the newest level 0 that ended at or before M;
+  B, the newest run from L to E whose recorded chain holds L's pieces. The copy takes B's recorded
+  chain and every file of the runs after B up to E; RMAN's `UNTIL TIME` decides what of them a moment
+  needs. A run whose question failed is still reached through an earlier run's record.
+- **Refused before anything is copied**, by name: no finished run, no level 0 before M, no run past M
+  yet (its logs are not backed up), no chain recorded from L on, and any recorded piece the
+  repository does not hold (a `.age` answers its plain name). Never the whole folder instead
+  (review 0.25.0, G2.9).
+- **The folder is the chain's** (0.41.0, 1.402): the repository keeps a copy under
+  `<server_id>/<database>/`, and an Oracle backup named its database `database` until its SID was
+  stated (0.40.0, 1.387) - by the SID since. An entry offloaded across that change has copies in two
+  folders, and reading every copy of the entry refused each restore (*in 2 places*). Only the copies of
+  the chosen pieces decide the folder (`offload.repository_source(..., names=)`); a chain begun before
+  the change and continued after it is the one still refused, by name: take a level 0 and restore from it.
+- The restore's dry run says which (`transfer_plan.chain_said`) and names a missing piece among what
+  it `would_refuse`.
+- Held by `tests/test_an_oracle_restore_from_the_repository_copies_the_chain_recorded_at_backup.py`.
+
+#### A PostgreSQL base backup is catalogued file by file (0.40.0, 1.386)
+
+The operator, 2026-11-16: *the catalog records every file*, and *the design as 3NF - no two fields holding
+the same value*. A base backup was ONE row for its directory, the sha256 of its manifest standing for
+every file in it: a restore read from the server found `base.tar.zst` in no row, and an entry with
+`integrity.uncatalogued: refuse` could never restore PostgreSQL from its server (the 1.385 drill).
+
+- **One row per file of the backup's run** - `base.tar.zst`, `pg_wal.tar`, each tablespace's
+  `<oid>.tar.zst` (in the plain format of a PostgreSQL before 15, every file of the data directory),
+  and `backup_manifest` - each with its own size and sha256, all of the backup's level (`FULL_BASE` /
+  `INCR_BASE`: the manifest is a file of its backup, and retention and the chain hold it with the rest).
+  The backup itself is the run (`backup_runs`); no row stands for the directory.
+- **A name is still one file on its server** (`integrity.catalog_name`): a base backup's file is named
+  from its directory on - `20261116T093216Z_FULL/base.tar.zst` - and every lookup by name (the copy
+  gate, a restore's chain record, the release, prune, the backfill) asks by that name. The release
+  hands `delete-verified-file` the path's own last part, holding the catalog's name to the path first.
+- **The WAL job records the backup-history file** (`<segment>.<offset>.backup`) beside the segments: a
+  restore copies it.
+- A file's size is held to the same part of earlier backups (`earlier_sizes`): a manifest beside
+  manifests, a `base.tar.zst` beside `base.tar.zst`.
+- **The shape before stays readable** (`integrity.is_base_directory`): a row named as a base directory
+  (`<stamp>_<level>`) is copied, released, expired and scrubbed as before, by its offload's member
+  proofs and its manifest, until its retention removes it. The backfill leaves such a backup in that
+  shape - one backup, one shape.
+- Held by `tests/test_a_base_backup_is_catalogued_file_by_file.py`.
+
+#### The SID an Oracle entry backs up: `oracle_sid` (0.40.0, 1.387)
+
+The operator, 2026-11-16: *Oracle must have its SID; missing is wrong*. Every Oracle backup entry states
+`oracle_sid` once (an entry backs up one instance, so it is the entry's, not each job's); the loader hands
+it to each job's script as `ORACLE_SID`, and a job whose own `env.ORACLE_SID` names another is refused.
+`upgrade-config` writes nothing for it - an entry without one is refused inside its run, naming the field.
+Both RMAN scripts refuse to run without it, and hold it to the instance that answers (`v$instance` through
+the login RMAN uses) before a piece is written; the receipt names each piece's database by it, where it
+used to say `database`. Before 0.40.0 no entry stated one, and a run backed up whatever the container's
+profile exported.
+
+#### A point in time in the source's clock (0.40.0, 1.385)
+
+Oracle's `UNTIL TIME` is read against the times the source's archived logs carry; PostgreSQL's
+`recovery_target_time` without an offset in the cluster's own `timezone`. The restore took the
+database's clock to be UTC - from a source on +07 an Oracle restore would have stopped seven hours off
+and said it was done. The operator, 2026-11-16: *build it in 0.40.0*.
+
+- `restore_by_id.prepare` asks the source database its offset (`backup_restore.source_clock`: `run-sql`,
+  read only, Oracle `SYSTIMESTAMP`, PostgreSQL `now()`, the login the inventory names). An Oracle backup
+  that records its chain records the offset beside it (`clock_offset_minutes` in `rman_chain_json`), and
+  stands in when the source does not answer.
+- The moment is carried in UTC with its offset stated (`lib.restore.moment.utc_moment_text`,
+  `YYYY-MM-DD HH:MM:SS +00:00`): one with an offset is converted; one without is in the source's clock.
+  The chain is chosen by it, PostgreSQL's `recovery_target_time` honours the offset, and Oracle's `UNTIL
+  TIME` is turned back into the source's clock (`_plan_oracle`).
+- **Refused before a file is copied**: a moment without an offset whose source clock could not be had,
+  and any Oracle point in time without the clock - each with why. Never assumed UTC.
+- Held by `tests/test_a_point_in_time_is_read_in_the_sources_clock.py`; the suite never asks a real
+  database (`conftest`'s `_no_source_database_is_asked_its_clock`, marker `real_source_clock`).
 
 **Catalog schema 2** adds the columns above to `backup_files`, the `offload` run action, the
 `repository` check location, and a proven copy's size held to its source's. **Schema 3** adds
@@ -1438,7 +1547,9 @@ and `backup-add` write every one into a new record (a new staging folder gets th
 | backup job, script-driven restore | `env` | `{}` |
 | backup entry, script-driven restore | `env_secrets` | `{}` |
 | backup entry | `active`, `scrub_files_per_run` | `true`, `20` |
-| backup entry (SQL Server), restore entry (SQL Server) | `server_metadata.enabled` | `false` |
+| backup entry (SQL Server), restore entry (every engine; PostgreSQL / Oracle only `false`) | `server_metadata.enabled` | `false` |
+| restore entry replaying metadata | `server_metadata.source` (`node` / `server` / `repository`); `server_id` for `server`; `path` for `server` and `repository` | `node` (what it ran on); none for `server_id` / `path` |
+| backup entry exporting metadata | `server_metadata.repository_path` - where the offload carries the bundle (`""`: not carried) | `""` |
 | restore entry | `space_check.enabled`; `factor`, `on_unknown` while it is on | `true`; `2.0`, `refuse` |
 | restore entry | `checkdb_timeout_seconds`, `checkdb_jobs` | `3600`, `1` |
 | restore entry | `tier` | `null` - stated null is a drill nobody tiered |
@@ -1489,7 +1600,7 @@ left out is the field's own meaning, no restriction on that dimension.
   already required.
 - `vm_log_unc`, `vm_log_local`, `vm_import_linux_log_path` - where the copy writes its own log.
 - `space_check.measure_restore` - an opt-in only the share-driven SQL Server restore offers.
-- `server_metadata` on an engine other than SQL Server - it cannot apply there.
+- `server_metadata` on a backup entry of an engine other than SQL Server - it cannot apply there.
 - `restore_all_databases` with `database_mappings` stated - the entry names its databases one way.
 
 **No fallback for a backup's timeout either** (the operator, 2026-11-14: *remove it*). The request
@@ -2468,6 +2579,38 @@ convention, at the cost of one round trip per candidate file. That is a reasonab
 name rule is what is implemented today, so a file that does not follow the convention is ignored
 rather than guessed at.
 
+## Where a Restore Reads the Instance's Metadata Bundle (0.40.0, 1.376)
+
+The operator, 2026-11-15: *restoring metadata must be a field of its own, required ... and when yes,
+from the repository or from a server_id, and from which path - it can be another folder than the one
+holding the backup files*. Decided 2026-11-16, the existing `server_metadata` block:
+
+```json
+"server_metadata": {"enabled": true, "source": "repository", "path": "/mnt/nas/SRV-01/_instance",
+                    "artifacts": [...], "phases": [...]}
+```
+
+- `enabled` is required on every restore entry - `false` on PostgreSQL and Oracle, whose logins are
+  inside the physical backup the restore lays down.
+- `source` (required when on): `node` - the dbabrain node's own export, `runtime/instance_bundles/<server_id>`;
+  `server` - a folder (`path`) on a `server_id`, every file pulled to the node; `repository` - `path` on
+  the source's repository (its backup entries' `offload_server_id`), the sealed bundle pulled and
+  decrypted on the node.
+- A backup entry's `repository_path` is where its offload carries the bundle after each backup that
+  exported one: the bundle folder packed into one tar, **sealed with age for the server's repository
+  key on the node** (the repository never holds it in the clear - it holds login password hashes and
+  credentials), pushed with a manifest (`instance_bundle.tar.age`, `instance_bundle.json`: sizes,
+  sha256, the key) - each push proven on arrival. Step 5 of the backup says it; a bundle that could not
+  be carried is a `❌` line there and the backup stands.
+- A restore that fetched a bundle replays from a folder of its own and removes it when the phase is
+  done; a bundle that cannot be had skips the phase with why (step 3 / 9 FAILED, a warning) and never
+  loses a restore.
+- `upgrade-config` (`stated-integrity`) writes `enabled: false` where an entry said nothing, `source:
+  "node"` where one replayed metadata (the export it read), and `repository_path: ""` on backup entries
+  that export it.
+- `dbabrain.backup_restore.instance_bundle_store`; held by
+  `tests/test_a_restores_metadata_comes_from_where_its_entry_says.py`.
+
 ## A Physical Restore Brings the Source's Logins With It
 
 Oracle RMAN duplicate and PostgreSQL `pg_basebackup` restores are *byte* copies, so the restored
@@ -2636,13 +2779,11 @@ writes nothing new.
 | Engine | What is catalogued | Type | Database |
 | --- | --- | --- | --- |
 | SQL Server | `<DB>/FULL|DIFF|LOG/<file>`, `_cert/` | FULL / DIFF / LOG / CERT | the folder's `<DB>` |
-| PostgreSQL | each `base/<stamp>_<level>/` directory, **by the sha256 of its `backup_manifest`** - as its receipt does; each `wal/` segment (24 hex digits; not `.partial`, `.history`, nor a base backup's own `pg_wal`) | FULL_BASE / INCR_BASE, WAL | `cluster` |
+| PostgreSQL | **every file under each `base/<stamp>_<level>/`** (1.386), named `<stamp>_<level>/<file>`, its `backup_manifest` too - as its receipt does; each `wal/` segment (24 hex digits) and backup-history file (`<segment>.<offset>.backup`); not `.partial` or `.history`; a base catalogued before as its directory is left in that shape | FULL_BASE / INCR_BASE, WAL | `cluster` |
 | Oracle | every `*.bkp`, `autobackup_*` and `c-*` piece, typed by the names the scripts give it (`_L0_`, `_L1_`, `arch_`, `ctl_`, `spfile_`, the autobackup) | RMAN_L0 / RMAN_L1 / ARCHIVELOG / CONTROLFILE / SPFILE | the entry's `ORACLE_SID` |
 
-Two things a listing cannot give, said rather than guessed: a base backup's size is its whole
-directory's, so the row keeps no size and the verdict `size_failed` (the manifest's checksum still
-covers every file); and a level run's controlfile piece is written under the level's FORMAT, so its
-name reads as that level. A listed file the layout does not catalogue is counted in `not_a_backup`.
+One thing a listing cannot give, said rather than guessed: a level run's controlfile piece is written
+under the level's FORMAT, so its name reads as that level. A listed file the layout does not catalogue is counted in `not_a_backup`.
 
 ## What `RESULT=ok` Proves — Liveness Is Not Enough
 
@@ -2710,119 +2851,101 @@ so no call site can publish a message without one:
 - **When it is missing.** The event says `restore_id=<unknown>` rather than omitting it.
   Silence is what let this go unnoticed: a message with no id looked perfectly normal.
 
-## A Backup's Messages Follow Its Flow (1.306)
+## A Backup's Messages: Ten Steps, Said by the Workflow (1.374)
 
-The operator, 2026-11-11: *backup and restore are many steps now and the messages do not follow
-them*; the format approved the same day. A backup's messages are named by its `backup_id` and
-follow its steps; each carries `flow_title` / `flow_lines` in its metadata, and
-`events._format_flow_message` renders them - the title on the first line, one line per step, no
-JSON (the run's whole output stays on its `job_runs` row):
+The operator, 2026-11-15, reading a night's DIFF: *these messages are not quite right* - no start or
+end of the process, the repository's copy told before the backup's own end, step numbers that were
+ranges. Decided 2026-11-16: ten steps, one message each, for every level alike (*full, diff, log
+share one code path* - no rule in the code picks which level's start reaches a chat), and said by
+`run_workflow`, never by the procs under it (*the messages are handled in the outermost code*):
 
 ```
-SRV01_MSSQL_FULL · 1. Backup full done
-2026-11-11 11:17:02 +07 -> 11:19:28 +07 · 13 file(s) · 13/13 hashed and verified
-⚠ server metadata export failed: Login failed for user 'sysbackupadmin'...
-next: 2. copy to REPO-01, 3. encrypt, 4. delete at the source, 5. check
-
-SRV01_MSSQL_FULL · 2-5. Repository done
-✅ 2. Copy 13/13 -> REPO-01 · bytes + SHA-256 = server
-✅ 3. Encrypt 13/13 · age key #2 (encrypts until 2027-02-09) · decrypted back = server
-✅ 4. Delete at the source 13 on SRV-01, file by file
-✅ 5. Repository check: clean · 13 file(s)
+SRV01_MSSQL_FULL · 1. Backup process started
+SRV-01 · full · started 2026-11-16 03:00:16 +07
+steps: 2-3 backup on SRV-01, 4-5 copy -> REPO-01, 6-7 encrypt (age, on the way), 8 plain files cleared (...), 9 repository upkeep, 10 done
+SRV01_MSSQL_FULL · 2. Backup on SRV-01 started
+SRV01_MSSQL_FULL · 3. Backup on SRV-01 done
+SRV01_MSSQL_FULL · 4. Copy to REPO-01 started        · 6. Encrypt started
+SRV01_MSSQL_FULL · 5. Copy to REPO-01 done           · 7. Encrypt done
+SRV01_MSSQL_FULL · 8. Plain files cleared            (this backup's, at the source and on the repository)
+SRV01_MSSQL_FULL · 9. Repository upkeep done         (earlier backups released, retention, late encryption, the check)
+SRV01_MSSQL_FULL · 10. Backup process done
 ```
 
-- **Step 1 the backup** (`backup.backup_flow_lines`); **steps 2-5 the repository in one pass** -
-  the pass that copies and encrypts a backup also releases it (`run_offloads` hands `_run_one` a
-  fresh `files_to_release`), so its delete at the source is no longer a later message of its own.
-- **A short step one line, a long step a start and a done.** A FULL or an RMAN level 0
-  (`backup.is_long_level`) sends its start; a DIFF, an incremental, a log does not. A copy of a GiB
-  or more, or of a base backup directory (`offload.is_long_copy`), sends "2-3. Copy + encrypt
-  started" before its done. `emit_backup_restore_event(telegram=False)` keeps a short step's start
-  off Telegram (the run row and the log still have it).
-- **A failure** names its step with why (`❌ 2. Copy 12/13 - <file>: <why>`); the steps it
-  stopped read *not run*, a step with nothing to do *nothing this pass*, a step the entry has off
-  *off for this entry*. The level is the run's: ERROR when a step failed.
+- **Who does what.** `backup.py` answers (`plan_backup_pass`, `claim_backup_job`,
+  `run_claimed_backup_job`, `close_backup_job`) and `offload.py` answers (`plan_entry`, `open_hosts`,
+  `offload_entry`, `encrypt_copies`, `release_sources`, `prune_repository`, `check_folder`); neither
+  says a step. `workflow.run_backup` runs each due job through its whole process: 1 and 2, the backup,
+  3, then the backup's files copied right there and 4-10. `workflow.run_offloads` is the pass for what
+  a process left (a copy to try again, files past `offload_files_per_pass`, an encryption still
+  running, the upkeep) - its messages are said there too. The command-line `backup` and `offload`
+  and `/spbot_offload` go through the same two functions.
+- **Order.** Step 3 is said before the backup's run row closes, and the offload is claimed before it
+  closes: no pass can copy a backup that is still running or tell its copy first. A pass works one
+  backup after another, so their messages never interleave.
+- **What each step says is read, not assumed.** 8 counts this backup's files deleted and kept at the
+  source and the ones not sealed on the repository; 9 says each part's work, `nothing`, or `off` as
+  its config has it (`offload_delete_source`, `offload_retention`, `offload_encrypt`,
+  `offload_repository_check`). A step the entry has off is said `off` in step 1's plan line.
+- **A failure** ends the process at its step: `10. Backup process FAILED at step N`, with why. A
+  backup that failed on its server but wrote good files still has them copied; its 10 says step 3.
+- **An encryption still running** (an earlier pass's `age` still writing a file) is not a failure:
+  the pass says `7. Encrypt waiting`, `8. Plain files waiting`, 9 and 10, and the pass that finishes
+  the encryption says that backup's 7, 8 and 10 again (the operator, 2026-11-16). The waiting backup
+  is read back from the offload's own run rows (`encrypt_waiting`, `encrypt_finished_runs`).
+- **A backup with nothing for a repository** (its entry offloads nothing, or it wrote no file to copy)
+  says 1, 2, 3 and its own 10. `--skip-offload` stops at 3; a later pass says 4-10.
+- **Which chat** is the job's `notify`: a step that worked is `logging_on_run`'s, a step with a `❌`
+  or `FAILED` is an error and `alert_on_error`'s. A LOG job that should say only its errors states
+  `logging_on_run.enabled: false` - a config, not a rule here.
 - **A file known lost is said once.** The scrub no longer re-checks a file it already found
   `missing` (`files_to_check`), so the next runs of its entry are not CRITICAL for the same loss.
-- Which runs send at all is the entry's `notify`: FULL and DIFF send their run message, LOG / WAL /
-  archivelog only their errors (the operator, 2026-11-11).
+- Held by `tests/test_a_backups_messages_follow_the_steps_of_its_flow.py`: each config (no repository,
+  every step on, encryption off, the delete off, the check off, no retention, the offload skipped), each
+  failure and wait, every level, and every message through the real `notify` rules (logging and alert
+  each on and off).
 
-## A Restore's Messages Follow Its Flow (1.370)
+## A Restore's Messages: Eleven Steps, Called and Said by the Workflow (1.375)
 
-The operator, 2026-11-13: *restore is like backup - it must message every step of its flow the
-same way; restore has restore full -> diff -> log as well, a message for each*. A script-driven
-restore's messages were still the older shape - a fixed header and `key=value` lines - with one
-line for the whole of full, differential and logs. They are flow messages now, in the backup's
-format (`restore_messages.py` builds `flow_title` / `flow_lines`; `events._format_telegram_message`
-asks for a flow before it asks whether the command is `restore-workflow`):
+The operator, 2026-11-15: *a restore's messages step by step, concrete, like the backup's* - full and
+diff a start and a done per database, each log its own message numbered under its step, the instance
+metadata and the certificate always said, also when there is none. Confirmed 2026-11-16, the same
+numbers for every engine, a step that does not apply said with why:
 
 ```
-APP_TO_DRILL · Restore started
-SRC-01 -> DRILL-01 · from the repository · to the newest backup
-next: 1. copy, 2. restore full -> diff -> log, 3. check, 4. clean up
-
-APP_TO_DRILL · 1. Copy done
-✅ 1. Copy 48 file(s) · 104.5 MB -> DRILL-01 · decrypted from the repository's encrypted copies · bytes + SHA-256 proven
-
-APP_TO_DRILL · 2. Restore full done (1 of 3)
-✅ APPDB as APPDB_COPY: full APPDB_FULL.bak (backup finished 2026-11-12 04:35:48) - left restoring for the next step · 41 s
-
-APP_TO_DRILL · 2. Restore log done (3 of 48)
-✅ APPDB as APPDB_COPY: log APPDB_LOG_0700.trn (1 of 46 logs) (backup finished ...) - left restoring for the next step · 1 s
-
-... one message per log file ...
-
-APP_TO_DRILL · 2. Restore log done (48 of 48)
-✅ APPDB as APPDB_COPY: log APPDB_LOG_2300.trn (46 of 46 logs) (backup finished ...) - recovered, the database is open · 1 s
-
-APP_TO_DRILL · 3. Check done
-✅ 3. Check 1 database(s) checked, 0 unusable
-
-APP_TO_DRILL · 4. Clean up done
-✅ 4. Clean up: plain files 48/48 deleted on DRILL-01 (104.5 MB)
-- staged backups past retention: 0 removed
-
-APP_TO_DRILL · Restore done
-✅ restored: APPDB as APPDB_COPY: full APPDB_FULL.bak + diff ... + 46 log(s)
-✅ checked: 1 database(s) checked, 0 unusable
-✅ stopped: APPDB as APPDB_COPY: last backup applied ended ... (restored to the end of its chain)
-✅ plain files deleted: 48 of 48 decrypted file(s), 109576192 bytes
+APP_TO_DRILL · 1. Restore process started            (with a line of the steps it runs)
+APP_TO_DRILL · 2. Copy to DRILL-01 started / done     (decrypted on the way from the repository)
+APP_TO_DRILL · 3. Instance metadata before the restore[: not restored - why]
+APP_TO_DRILL · 4. Certificate restored | 4. Certificate: none - why
+APP_TO_DRILL · 5.1 Restore full APPDB started / done  (5.2 ... per database)
+APP_TO_DRILL · 6.1 Restore diff APPDB started / done  | 6. Restore diff: none - why
+APP_TO_DRILL · 7.1 Restore log APPDB_LOG_0001.trn done (one per file; skipped / FAILED with why)
+APP_TO_DRILL · 8. Check started / done
+APP_TO_DRILL · 9. Instance metadata after the restore
+APP_TO_DRILL · 10. Plain files cleared
+APP_TO_DRILL · 11. Restore process done | 11. Restore process FAILED at step N
 ```
 
-- **Each step of the chain is a message of its own** as it finishes (`RESTORE_STEP`): the full,
-  the differential, **each log file** - per database, numbered across the run - with the backup it
-  applied, when that backup finished, a STOPAT it carried, whether it left the database open, and how
-  long it took (`restore_by_id.step_said`). The certificate import and the check are not numbered
-  among them.
-- **One log file, one step** (SQL Server; the operator, 2026-11-14: *one message for each log
-  file*). The planner wrote a database's logs as one `restore-log` command carrying every file - one
-  message for 46 logs, and a failure on the seventeenth recorded on all 46 in `restore_chain_files`.
-  Each log is its own step now (`backup_path`, `log_number` / `log_total`): its own message, *log
-  <file> (k of n logs)*, and its own chain row `applied` or `failed`. The statements are the ones the
-  single command sent - NORECOVERY on each, the recovery and the STOPAT on the last only. The plan
-  still says *46 log(s)*; a single log is named. PostgreSQL's WAL is replayed by the server at start
-  and Oracle's archived logs are RMAN's to pick: each stays one step.
-- **A step that fails is named the same way in the error**: *step 2 of 3 failed - APPDB as
-  APPDB_COPY: diff APPDB_DIFF.bak ...: <the engine's error>*. Until now the chat had the engine's
-  error and no word of which backup was going in.
-- **A short step one line, a long step a start and a done** - the backup's rule: the copy, the
-  restore and the check send their start; the clean-up's start and the restore's own closing line
-  (the last step said it) stay on the run row and in the log file, off Telegram (`telegram: False`,
-  honoured by the workflow's `on_phase`).
-- **The END message** says what went in, what the check found, where each database stopped, what a
-  continued run took up (1.372) and the plain files deleted (1.371); each warning a line; an ERROR
-  the reason.
-
-**The share-driven SQL Server path too** (`restore-workflow` on an entry with `source` / `target`;
-0.39.0, built 2026-11-14 at the operator's word *finish all of 0.39*): its START and END/ERROR
-(`workflow.run_scheduled_restores`; `_share_restored` gives the END what was restored, the check and
-where each database stopped), its copy, *2. Restore started* (the databases, the moment), **each file
-of each database as it goes in** (`restore_database.run_restore_database` -> `announce` with
-`restore_messages.share_step`: *2. Restore log done (3 of 48)*, numbered within the database; a log
-SQL Server refused that the restore passed over is *skipped* with the reason, a failure *failed*
-with the engine's error), the check and the clean-up (`share_cleanup_done`) carry the flow fields. A
-short step's start (`telegram: False`) stays off Telegram on this path's two announcers as well. A
-`restore-by-id` run by hand announces to whoever calls it.
+- **Who does what** (the operator, 2026-11-16: *the workflow calls each step*). `restore_by_id` is a
+  set of steps that only answer (`prepare`, `copy`, `metadata`, `certificate`, `plan_chain`, `apply`,
+  `cleanup`); `workflow.run_restore_by_id` calls them in order and `workflow._RestoreSay` says each.
+  The share-driven path the same: `restore_database` answers (`plan_database`, `begin_database`,
+  `apply_full`, `apply_diff`, `LogChain` - each log yielded as it goes in, a Msg 4305 decided by what
+  follows it - `finish_database`); `workflow.run_share_restore`, `restore_share_server` and
+  `restore_share_database` call and say. `restore_by_id(...)`, `run_restore_database(...)` and
+  `cli.run_restore_workflow(...)` remain as doors onto the same runs.
+- **Engines.** PostgreSQL: 5 is the base backup (its incrementals combined), 6 and 7 said as part of
+  it; Oracle: 5 is the RMAN duplicate, 6 and 7 inside it; both: 3, 4 and 9 said as not applying (their
+  logins are inside the physical backup; no certificate step). In place: 2 and 10 said as not applying.
+- **Metadata** between the copy and the certificate (3), after the check (9); a phase asked for and
+  not replayed is a warning, and the restore still ends done with it.
+- **A failure** ends the restore at the step it was in - `11. Restore process FAILED at step N` with
+  the engine's words. A copy-only run says 1, 2 and 11.
+- **Which chat** is the entry's `notify`, as for a backup.
+- Held by `tests/test_a_restores_messages_follow_its_steps_and_its_notify.py` (each engine, in place
+  and remote, server and repository, metadata on and off, encrypted or not, copy only, a failure at each
+  step, and every message through the real `notify` rules) and `test_a_restores_messages_follow_its_flow.py`
+  (the words).
 
 ## Per-Job Telegram Routing (`notify`)
 

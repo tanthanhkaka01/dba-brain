@@ -428,47 +428,50 @@ def _repository(entry: dict[str, Any]) -> dict[str, Any]:
 def _backup_flow(entry: dict[str, Any], repository: dict[str, Any]) -> list[dict[str, str]]:
     """The flow of this entry, step by step, each on or off as the entry states it.
 
-    ``message`` is the step's number in the run's Telegram messages (``<backup_id> · 1. Backup ...``,
-    ``<backup_id> · 2-5. Repository ...``), so a reader can match what they see to what ran.
+    ``message`` is the step's number in the run's Telegram messages - a backup's ten (0.40.0, 1.374):
+    ``<backup_id> · 1. Backup process started`` to ``<backup_id> · 10. Backup process done`` - so a
+    reader can match what they see to what ran.
     """
     server, folder = _text(entry.get("server_id")), _text(entry.get("backup_dir"))
     on = bool(repository.get("enabled"))
     off = "off - offload_enabled is false"
     if not on:
         return [
-            {"step": "Backup", "message": "1. Backup", "command": "backup", "state": "on",
+            {"step": "Backup", "message": "1-3. Backup", "command": "backup", "state": "on",
              "does": f"the job's script writes the backup into {folder} on {server}; every file is hashed there "
                      "and recorded in the catalog (backup_runs, backup_files)"},
-            {"step": "Copy to the repository, verify, encrypt, verify, delete at the source, repository check",
-             "message": "2-5. Repository", "command": "offload", "state": off,
+            {"step": "Copy to the repository, verify, encrypt, verify, delete at the source, repository upkeep",
+             "message": "4-9", "command": "offload", "state": off,
              "does": "nothing: the backup stays on the server, and `offload` has nothing to do for this entry"},
+            {"step": "The process done", "message": "10. Backup process done", "command": "backup", "state": "on",
+             "does": "said by the backup itself: there is nothing for a repository"},
         ]
     where = f"{repository.get('server_id')}:{repository.get('folder')}/{server}/" if on else ""
     encrypt = on and bool(repository.get("encrypt"))
     delete = on and bool(repository.get("delete_at_the_source"))
     return [
-        {"step": "Backup", "message": "1. Backup", "command": "backup", "state": "on",
+        {"step": "Backup", "message": "1-3. Backup", "command": "backup", "state": "on",
          "does": f"the job's script writes the backup into {folder} on {server}; every file is hashed there and "
                  "recorded in the catalog (backup_runs, backup_files)"},
-        {"step": "Copy to the repository", "message": "2. Copy", "command": "offload", "state": "on" if on else off,
+        {"step": "Copy to the repository", "message": "4-5. Copy", "command": "offload", "state": "on" if on else off,
          "does": (f"each catalogued file without a proven copy goes to {where}, oldest first, at most "
                   f"{repository.get('files_per_pass')} a pass, the server read {repository.get('source_read')}; "
                   "the source is hashed first and a backup that changed since it was written is never copied")
          if on else "nothing: the files stay on the server"},
-        {"step": "Verify the copy", "message": "2. Copy", "command": "offload", "state": "on" if on else off,
+        {"step": "Verify the copy", "message": "5. Copy ... done", "command": "offload", "state": "on" if on else off,
          "does": (f"the copy is held to the server's bytes and SHA-256; a difference is copied again, up to "
                   f"{repository.get('copy_max_retry')} time(s), then the row is failed and its source kept")
          if on else "nothing"},
-        {"step": "Encrypt", "message": "3. Encrypt", "command": "offload",
+        {"step": "Encrypt", "message": "6-7. Encrypt", "command": "offload",
          "state": "on" if encrypt else ("off - offload_encrypt is false" if on else off),
          "does": ("the file is encrypted with the server's repository key (age) as it is copied, and lands on "
                   "the repository only as <file>.age - the repository cannot decrypt what it holds")
          if encrypt else "nothing: the copy stays plain on the repository"},
-        {"step": "Verify the encryption", "message": "3. Encrypt", "command": "offload",
+        {"step": "Verify the encryption", "message": "7. Encrypt done", "command": "offload",
          "state": "on" if encrypt else ("off - offload_encrypt is false" if on else off),
          "does": "the .age is streamed back and decrypted; its plaintext must be the backup's bytes and SHA-256"
          if encrypt else "nothing"},
-        {"step": "Delete at the source", "message": "4. Delete at the source", "command": "offload",
+        {"step": "Delete at the source", "message": "8. Plain files cleared", "command": "offload",
          "state": "on" if delete else ("off - offload_delete_source is false" if on else off),
          "does": ("a file whose repository copy is proven" + (" and wholly encrypted" if encrypt else "")
                   + f" is deleted on {server}, one verified file per command, after the copy is hashed again; "
@@ -478,11 +481,14 @@ def _backup_flow(entry: dict[str, Any], repository: dict[str, Any]) -> list[dict
                      "server then holds no restorable backup")
                   + "; it waits while a lockdown is on")
          if delete else "nothing: the backup stays on the server"},
-        {"step": "Repository check", "message": "5. Repository check", "command": "offload",
+        {"step": "Repository check", "message": "9. Repository upkeep", "command": "offload",
          "state": "on" if on and repository.get("repository_check") else
                   ("off - offload_repository_check is false" if on else off),
          "does": f"{where} is listed against the catalog: a stray, missing or changed file fails the run"
          if on else "nothing"},
+        {"step": "The process done", "message": "10. Backup process done", "command": "offload", "state": "on",
+         "does": "from step 1's start to now, and where the backup is - said once its last file is through, or at "
+                 "the step that failed"},
     ]
 
 
@@ -492,9 +498,9 @@ def _watch(*, kind: str, entry_id: str, notify: dict[str, str], report_base: str
     url = (report_base.rstrip("/") + "/" + page) if report_base else ""
     lines = []
     if kind == "backup":
-        lines.append(f"the run's messages in Telegram, named by the entry: `{entry_id} · 1. Backup <job> ...`, then "
-                     f"`{entry_id} · 2-5. Repository ...` - each run to {notify['each run']}, an error to "
-                     f"{notify['an error']}")
+        lines.append(f"the run's messages in Telegram, named by the entry, one per step: `{entry_id} · 1. Backup "
+                     f"process started` to `{entry_id} · 10. Backup process done` - each step to "
+                     f"{notify['each run']}, a failed one to {notify['an error']}")
         lines.append("the store: job_runs (job_code ending ." + entry_id + ".<job>"
                      + (f", jobs {', '.join(jobs)}" if jobs else "") + "; status RUNNING, DONE or ERROR, "
                      "error_text), and the catalog - backup_runs and backup_files by backup_id")

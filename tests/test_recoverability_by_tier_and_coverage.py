@@ -196,3 +196,78 @@ def test_two_servers_with_one_database_name_are_two_drills():
             {"database_name": "SALES", "server_id": "S2", "status": "FAILED", "restore_start": _at(5)}]
     verdicts = {v["server_id"]: v["status"] for v in restore_drill.evaluate(rows, policy={}, now=NOW)}
     assert verdicts == {"S1": "OK", "S2": "CRITICAL"}
+
+
+# --------------------------------------------------------------------------- #
+# What the section leaves aside, and a database that has no log (0.41.0, 1.395 / 1.396)
+# --------------------------------------------------------------------------- #
+# The operator, 2026-11-17, reading the page: drills made on scratch copies of the data ("no longer
+# configured") and their servers sat among the estate's; every drill read "-" / UNTIERED in two
+# columns; and 1.248's DtradeProduction - SIMPLE recovery, it can have no log backup - read
+# incomplete for want of log backups.
+def _drill(catalog, restore_id, *, source="S1", tier=None):
+    run = catalog.start_restore_run(action="restore", restore_id=restore_id, source_server_id=source,
+                                    target_server_id="LAB", copy_max_retry=3, tier=tier, started_at=_at(3),
+                                    phase="restoring")
+    catalog.set_restore_run(run, phase="done", databases_ok=1, databases_failed=0, ended_at=_at(2))
+
+
+def test_a_simple_database_is_asked_for_no_log_and_says_why():
+    rows = [{"server_id": "S1", "database_name": "DtradeProduction", "engine": "sqlserver", "file_type": "FULL",
+             "files": 1, "newest": _at(5), "offloaded": 1, "last_restored": _at(4)}]
+
+    simple = S.build_coverage(rows, recovery_models={("s1", "dtradeproduction"): "SIMPLE"})[0]
+    unknown = S.build_coverage(rows)[0]
+
+    assert simple["status"] == "complete" and simple["recovery_model"] == "SIMPLE"
+    assert unknown["missing"] == ["log / WAL backups"], "a model not collected assumes nothing"
+
+
+def test_retired_drills_and_unregistered_servers_are_folded_away_as_history(tmp_path):
+    catalog = BackupCatalogStore(tmp_path / "catalog.sqlite")
+    catalog.initialize()
+    _drill(catalog, "SALES_DRILL")
+    _drill(catalog, "SCRATCH_DRILL", source="SCRATCH-1")
+    _full_backup(catalog)
+    catalog.record_backup_file(server_id="SCRATCH-1", backup_id="X", engine="sqlserver", file_name="X_FULL.bak",
+                               file_type="FULL", database_name="X", file_path="/b/X_FULL.bak", verdict="ok",
+                               size_bytes=10, checksum_after_backup="0" * 64, backup_ended_at=_at(30))
+    entries = [{"restore_id": "SALES_DRILL", "server_id": "S1", "target_server_id": "LAB", "active": True}]
+
+    html = backup_restore_report.render_recoverability(catalog, now=NOW, entries=entries, servers={"S1"})
+    live, folds = html.split("<details class='rc-gone'>", 1)
+
+    assert "SALES_DRILL" in live and "SCRATCH_DRILL" not in live and "SCRATCH-1" not in live.split("Retention")[0]
+    assert "<summary>1 drill(s) no longer configured - history, not counted above</summary>" in html
+    assert "<summary>1 database(s) of servers no longer in the register - history" in html
+    assert "SCRATCH_DRILL" in folds and "SCRATCH-1" in folds, "kept, not lost"
+
+
+def test_the_tier_and_state_columns_are_drawn_once_a_drill_states_a_tier(tmp_path):
+    catalog = BackupCatalogStore(tmp_path / "catalog.sqlite")
+    catalog.initialize()
+    _drill(catalog, "SALES_DRILL")
+    untiered = backup_restore_report.render_recoverability(catalog, now=NOW)
+    _drill(catalog, "SALES_WEEKLY", tier="weekly")
+    tiered = backup_restore_report.render_recoverability(catalog, now=NOW)
+
+    assert "<th>Tier</th>" not in untiered and "UNTIERED" not in untiered
+    assert "no drill states a tier yet" in untiered
+    assert "<th>Tier</th><th>State</th>" in tiered and "st-UNTIERED" in tiered and "st-OK" in tiered
+
+
+def test_the_page_reads_each_databases_recovery_model_as_collected(tmp_path):
+    from dbabrain.db.metric_store import MetricStore
+
+    store = MetricStore(tmp_path / "metrics.sqlite")
+    store.initialize()
+    with store.connect() as conn:
+        for at, model in (("2026-11-15T18:00:00Z", "FULL"), ("2026-11-16T18:00:00Z", "SIMPLE")):
+            conn.execute("INSERT INTO metric_results (run_id, collected_at, target_id, server_id, metric_code, "
+                         "metric_item, metric_value, status, importance) VALUES (1, ?, 'S1', 'S1', 'DATABASE_CONFIG', "
+                         "'DtradeProduction', ?, 'OK', 0)", (at, model))
+
+    assert store.latest_values(metric_code="DATABASE_CONFIG", since="2026-11-14T00:00:00Z") == {
+        ("S1", "DtradeProduction"): "SIMPLE"}, "the newest value of each item"
+    assert backup_restore_report._recovery_models(tmp_path / "no-such" / "x\0.sqlite") is None, \
+        "a store that cannot be read assumes nothing"

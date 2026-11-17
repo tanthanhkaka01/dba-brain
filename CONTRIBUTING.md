@@ -127,9 +127,38 @@ talking; the file on disk is English, so that it can be searched and read by eve
 - [ ] New behaviour has tests, and they are offline.
 - [ ] The affected component's documentation is updated in the same PR.
 - [ ] `CHANGELOG.md` has an entry under `Unreleased` describing the change for a *user*, not for a
-      reviewer.
+      reviewer - in the short form below.
 - [ ] No real host, account, or credential anywhere in the diff.
 - [ ] Nothing production-facing changed without saying so explicitly in the PR description.
+
+## The changelog
+
+**Entries are written as the work lands, not reconstructed at release time.** A release that has to
+remember what went into it gets it wrong, and the notes stop being trustworthy exactly when someone
+is deciding whether to upgrade. Every pull request that changes behaviour adds its line to
+`[Unreleased]`.
+
+`CHANGELOG.md` is read by somebody deciding whether to upgrade; `docs/releases/vX.Y.Z.md` by somebody
+deciding whether the release is sound. The changelog says what changed for them and what they must
+do about it; the reasons, the history and the evidence go in the release notes. From 0.40.0 every
+version is written in this short form (held by `tests/test_the_changelog_records_every_released_version.py`):
+
+- **`### Upgrading` comes first**, and only when there is something to do: each step a bullet naming
+  the command to run or the field to set, e.g. *Run `dbabrain upgrade-config`: it writes
+  `overwrite_existing: false` into every restore entry that states none.* Nothing to do - no section.
+- Then the sections that have entries, in this order: `Added` (a capability a user can invoke),
+  `Changed` (behaviour that differs from the previous release), `Deprecated` (still works; say in
+  which version it goes), `Removed` (say what replaces it), `Fixed` (a bug, described by its
+  symptom), `Security` (anything with a security consequence, with the advisory link).
+- **One change is one bullet of at most three lines**, in the present tense, naming the command,
+  field or page the user meets. A change that breaks an existing tool root starts with
+  `**Breaking:**` and has its step under `Upgrading`.
+- No item numbers, internal names, refactors or test names, and no account of how the bug was found.
+
+At release, `[Unreleased]` is renamed `[X.Y.Z] - YYYY-MM-DD` (the day of the tag), a fresh empty
+`[Unreleased]` goes above it, and the links at the end of the file gain `[X.Y.Z]` (a comparison from
+the previous tag) with `[Unreleased]` moved to start from the new tag. The version there, in
+`pyproject.toml` and in the git tag must agree - the release workflow fails if they do not.
 
 ## Committing and releasing
 

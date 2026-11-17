@@ -515,6 +515,13 @@ the catalog, and the configured restore entries read through `lib.data_sources.l
   copy in a `restore` run that ended `done` - 0.36.0), and what is missing - a full, log or WAL
   backups, a copy off the host, a drill. *Complete* when nothing is. A repository and a virus scan
   join the list when they exist (1.240, 1.242).
+- **What is history, and what has no log** (0.41.0, 1.395 / 1.396 - the operator, 2026-11-17): a drill
+  no longer configured and a database of a server no longer in `db_instances.json` are folded under
+  their table (*N ... - history, not counted above*), never among the live rows - drills made on scratch
+  copies of the data had filled them. The Tier and State columns are drawn once a drill states a tier;
+  until then the line above the table says none is held to a deadline. A database in SIMPLE recovery -
+  as collected by `DATABASE_CONFIG` (`MetricStore.latest_values`, the last 3 days) - is asked for no log
+  backup and its levels say so; a model not collected assumes nothing.
 - **Retention** (1.233), one row per backup entry: its retention per file type and its
   point-in-time reach (the shorter of the base and the log window), as the entry's newest run
   recorded them (`backup_runs.retention_json`, `pitr_reach_seconds`). Each server page prints
@@ -542,6 +549,12 @@ one row each:
   restore passed over and still reached its end, Msg 4326 / 4305), *failed* with the step's error, or
   *planned* (never reached) - when it was applied (`-` for a file that was not), and the STOPAT or
   the recovery the last one carried. A file the backup catalog does not know is marked.
+
+**Where the databases stopped, one line per outcome** (0.41.0, 1.394): the databases of a run that
+reached the same place are one line - how many, a STOPAT's moment or the span of their last backups'
+ends, the verdict - with their names folded under it (*which*); a verdict that is NOT what was asked
+keeps its names in sight; one database is its own line. A failed run's reason is cut at 160 characters
+in the row, whole on hover. A drill of 13 databases had stood half a screen high.
 
 What a run did not record reads *not recorded* - a restore from before 0.39.0, one that failed
 before its first file, an engine that lays down a whole instance, a file whose backup's end the run
@@ -596,7 +609,26 @@ the table past the screen (looked at in a browser, 2026-11-14).
   - the page draws it with the server page's own `templates/backup_files.js`, injected into both;
   - its stylesheet is the server page's own, read from that template at render time.
 - **A copy is one row.** It sits on the source file's row (its mark and last restore), so a
-  restore onto another server is not listed a second time as "restored here".
+  restore onto another server is not listed a second time as "restored here". A copy read from the
+  repository names the repository as its source; it is still its backup's (0.41.0, 1.395):
+  `server_restore_files` reads the backup's own server (`backup_server_id`) and such a copy is never a
+  row of its own under the repository - each restore from the repository had added one per file.
+- **The logs apart** (0.41.0, 1.392 / 1.393 - the operator, 2026-11-17: *the logs in a block of their own
+  on the page, hidden by default, shown when clicked*). The page embeds each server's newest 500 files
+  that are **not** of the log stream (`server_backup_files(..., logs=False)`: FULL, DIFF, base backups,
+  RMAN pieces, control files ...), so every full a restore needs is on it; it read the newest 500 of
+  all, which on a server with a log every 15 minutes were the last hours' logs only, and the page had
+  grown to 11.8 MB (1.7 MB after). Each server's newest 1,000 logs (`LOG_ROW_LIMIT`; `LOG` / `WAL` /
+  `ARCHIVELOG`, `is_log`) are a file of their own beside the page, `backup-restore-logs_<slug>.json`,
+  written under its day too: **Log backups**, a closed fold under the files table, lists the servers
+  that have logs and fetches the chosen one's file (with the page's `?date=`), drawn by the same
+  `backupFilesBlock` with ids of its own (`idp: "lg"`, `inner`: no Server column, its own filters). A
+  page opened from disk cannot fetch it and says so. `for_the_page` leaves out what the script never
+  reads (the repository members' paths, a last restore's paths and hashes before the copy) - a field the
+  script comes to read is taken off that list, held by a test.
+- **Narrow screens** (1.394): a server id breaks at its hyphens, never inside a word (`.brk`, two lines
+  at least wide) - in the Server column, the repository's host and a restore's target - so the table
+  fits 1366 px.
 - **Built first.** `inventory_report` writes it before the server pages and the inventory, so every
   banner built in that run finds it on disk. `page_banner.SIBLING_PAGES`, the console's
   `REPORT_PAGES` and `webhost_endpoints.STABLE_PAGES` offer it, each only once the file exists. A

@@ -471,12 +471,15 @@ def test_a_truncated_listing_is_not_a_check(catalog, repo, monkeypatch):
 
 @pytest.fixture
 def one_run(monkeypatch, catalog, repo):
-    """``_run_one`` with its run row, targets and secrets stood in - the check and the event are real."""
+    """The workflow's offload run with its run row, targets and secrets stood in - the check and the event
+    are real (the workflow says the steps since 0.40.0, 1.374)."""
+    from dbabrain.backup_restore import workflow
+
     events: list[dict] = []
     finished: list[dict] = []
     monkeypatch.setattr(O.schedule, "start_run", lambda **_k: (1, "2026-11-10T03:00:00Z"))
     monkeypatch.setattr(O.schedule, "finish_run", lambda **k: finished.append(k) or "2026-11-10T03:01:00Z")
-    monkeypatch.setattr(O, "emit_backup_restore_event", lambda **k: events.append(k))
+    monkeypatch.setattr(workflow, "emit_backup_restore_event", lambda **k: events.append(k))
     monkeypatch.setattr(O, "resolve_backup_target", lambda job, **_k: SimpleNamespace(platform="linux"))
     monkeypatch.setattr(O, "resolve_ssh_target", lambda *_a, **_k: SimpleNamespace(access="ssh", platform="linux"))
     monkeypatch.setattr(O, "_load_secrets", lambda **_k: {})
@@ -484,8 +487,10 @@ def one_run(monkeypatch, catalog, repo):
 
     def run(entry):
         summary = {"ran": 0, "succeeded": 0, "failed": 0}
-        return O._run_one(entry, rows=[], releasable=[], store=None, catalog=catalog, app_config=None, logger=None,
-                          data_dir=None, key=None, key_base64=None, sleep=lambda _s: None, summary=summary)
+        ctx = workflow._Pass(app_config=None, store=None, catalog=catalog, logger=None, data_dir=None, key=None,
+                             key_base64=None, sleep=lambda _s: None, locked=False)
+        return workflow._offload(entry, ctx=ctx, run=None, rows=[], releasable=[], expirable=[], last=True,
+                                 summary=summary)
     return SimpleNamespace(run=run, events=events, finished=finished)
 
 
@@ -498,7 +503,8 @@ def test_a_stray_file_fails_the_run_and_its_error_reaches_the_entrys_backup_rest
 
     assert answer["status"] == "error"
     [event] = one_run.events
-    assert event["phase"] == "ERROR" and event["level"] == "error" and event["notify"] == "BACKUP_GROUP"
+    # A pass that copied no backup says step 9 alone (1.374, the operator 2026-11-16).
+    assert event["phase"] == "UPKEEP_ERROR" and event["level"] == "error" and event["notify"] == "BACKUP_GROUP"
     assert "stray.trn" in event["message"] and "not in the catalog" in event["message"]
     assert one_run.finished[-1]["status"] == "error"
 
@@ -510,7 +516,8 @@ def test_a_clean_folder_leaves_the_run_done_and_says_it_was_checked(catalog, rep
     answer = one_run.run(entry)
 
     assert answer["status"] == "done" and answer["repository_check"]["clean"] is True
-    assert "repository folder checked (1 file(s))" in one_run.events[-1]["message"]
+    assert "repository folder checked (1 file(s))" in one_run.finished[-1]["message"]
+    assert "repository check: clean · 1 file(s)" in one_run.events[-1]["message"]
 
 
 def test_with_the_check_off_the_folder_is_never_listed(catalog, repo, one_run):
@@ -561,7 +568,7 @@ def test_a_pass_beside_another_offload_of_its_server_does_not_judge_the_folder_m
 
     assert answer["status"] == "done" and answer["repository_check"]["skipped"] is True
     assert not [c for c, _ in repo.calls if c == "list-files"], "not listed while another offload writes there"
-    assert "not checked this pass" in one_run.events[-1]["message"]
+    assert "repository check: next pass" in one_run.events[-1]["message"]
 
 
 def test_only_another_entry_of_the_same_server_running_now_holds_the_check_back():
@@ -570,3 +577,49 @@ def test_only_another_entry_of_the_same_server_running_now_holds_the_check_back(
                        _running("OTHER_FULL", "SRV-02"), _running("SRV01_DIFF", "SRV-01", status="DONE")])
     assert O.offloads_running_beside(store, entry) == ["SRV01_FULL"]
     assert O.offloads_running_beside(None, entry) == [], "a store that cannot say does not skip the check"
+
+
+# --------------------------------------------------------------------------- #
+# A sealed instance bundle the configuration puts there (0.40.0, 1.384)
+# --------------------------------------------------------------------------- #
+_BUNDLE = (f"{FOLDER}/_instance/instance_bundle.json", f"{FOLDER}/_instance/instance_bundle.tar.age")
+
+
+def test_a_bundle_at_its_configured_repository_path_is_neither_stray_nor_required():
+    # The 1.376 drill, 2026-11-16: a bundle inside the server's folder failed every offload of it.
+    expected = RC.expected_files(FOLDER, _PROOFS, [])
+    proven = ((f"{FOLDER}/APPDB/FULL/a.bak", "file", 100), (f"{FOLDER}/APPDB/LOG/a.trn", "file", 10))
+    assert RC.is_clean(RC.findings(expected, _listed(*proven, (_BUNDLE[0], "file", 398), (_BUNDLE[1], "file", 61715)),
+                                   allowed=_BUNDLE))
+    assert RC.is_clean(RC.findings(expected, _listed(*proven), allowed=_BUNDLE)), "no bundle yet is not missing"
+
+
+def test_anything_else_beside_the_bundle_is_still_stray():
+    expected = RC.expected_files(FOLDER, _PROOFS, [])
+    found = RC.findings(expected, _listed((f"{FOLDER}/APPDB/FULL/a.bak", "file", 100),
+                                          (f"{FOLDER}/APPDB/LOG/a.trn", "file", 10),
+                                          (f"{FOLDER}/_instance/notes.txt", "file", 3),
+                                          (_BUNDLE[0], "link", 0)), allowed=_BUNDLE)
+    assert [item["path"] for item in found[RC.STRAY]] == [f"{FOLDER}/_instance/notes.txt"]
+    assert [item["path"] for item in found[RC.NOT_A_FILE]] == [_BUNDLE[0]], "a link at the bundle's name is a finding"
+
+
+def test_the_allowed_files_are_the_bundles_of_the_servers_own_entries(monkeypatch):
+    from types import SimpleNamespace
+
+    from dbabrain.backup_restore import backup as B
+    from dbabrain.backup_restore import offload as O
+
+    def job(server_id, enabled, where):
+        return SimpleNamespace(server_id=server_id, server_metadata=SimpleNamespace(enabled=enabled, repository_path=where))
+
+    monkeypatch.setattr(B, "load_backup_jobs", lambda _p: [
+        job("SRV-01", True, "/mnt/nas/SRV-01/_instance/"), job("SRV-01", False, "/mnt/nas/SRV-01/off"),
+        job("SRV-01", True, ""), job("SRV-02", True, "/mnt/nas/SRV-02/_instance")])
+    assert O.instance_bundle_paths("SRV-01") == set(_BUNDLE)
+
+    def broken(_p):
+        raise ValueError("a record that does not load")
+
+    monkeypatch.setattr(B, "load_backup_jobs", broken)
+    assert O.instance_bundle_paths("SRV-01") == set(), "a configuration that does not load allows nothing"

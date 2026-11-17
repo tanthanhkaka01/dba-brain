@@ -32,7 +32,7 @@ COMMAND = "run-cmd-adhoc"
 OPERATION = "run-cmd-adhoc"
 
 #: What this command reads itself.
-OWN_FIELDS = ("server_id", "command", "script", "confirm", "assume_yes", "reason")
+OWN_FIELDS = ("server_id", "command", "script", "confirm", "confirm_target", "assume_yes", "reason")
 #: Passed to ``run-cmd`` as they are; ``run-cmd`` checks their values.
 RUN_CMD_OPTIONS = ("timeout_seconds", "format", "sudo", "runtime")
 ACCEPTED = OWN_FIELDS + RUN_CMD_OPTIONS
@@ -47,6 +47,7 @@ USAGE = (
     "  runtime          host | docker | k8s. Omitted, an instance with a container_name runs the\n"
     "                   command INSIDE that container; \"host\" runs it on the machine itself\n"
     '  confirm "yes", assume_yes, reason   the answer to the authorization question, asked every time\n'
+    "  confirm_target   the target's id typed back, where the command costs two answers\n"
     "  " + ", ".join(RUN_CMD_OPTIONS) + "   passed to run-cmd as they are\n"
 )
 
@@ -71,6 +72,10 @@ def checked(request: dict[str, Any]) -> dict[str, Any]:
     # `true` is intent and the terminal still asks; the word `yes` is an answer (common.confirm).
     if "confirm" in request and not (isinstance(request["confirm"], str) or request["confirm"] is True):
         raise errors.InvalidRequest(f'{COMMAND}: confirm must be "yes" or true.')
+    # The second answer, for an operation priced at two (1.403): the target typed back. Refused before,
+    # so a write priced at two could never be answered off a terminal - every one on the worker failed.
+    if "confirm_target" in request and not isinstance(request["confirm_target"], str):
+        raise errors.InvalidRequest(f"{COMMAND}: confirm_target must be a string - the target's id, typed back.")
     for name in ("assume_yes", "sudo"):
         if name in request and not isinstance(request[name], bool):
             raise errors.InvalidRequest(f"{COMMAND}: {name} must be true or false.")
@@ -176,6 +181,8 @@ def authorize_command(request: dict[str, Any], *, data_dir: Path | None = None, 
                    or True,
         "reason": str(request.get("reason") or "ad-hoc shell command"),
     }
+    if isinstance(request.get("confirm_target"), str):
+        gate["confirm_target"] = request["confirm_target"].strip()
     if request.get("assume_yes") is True:
         gate["assume_yes"] = True
     try:

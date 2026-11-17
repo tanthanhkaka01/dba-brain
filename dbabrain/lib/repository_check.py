@@ -61,13 +61,21 @@ def expected_files(folder: str, proofs: dict[str, dict[str, Any]],
     return expected
 
 
-def findings(expected: dict[str, int | None], listed: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """``{stray, missing, size_differs, not_a_file}`` - each a list of ``{path, ...}``, sorted."""
+def findings(expected: dict[str, int | None], listed: Iterable[dict[str, Any]],
+             allowed: Iterable[str] = ()) -> dict[str, list[dict[str, Any]]]:
+    """``{stray, missing, size_differs, not_a_file}`` - each a list of ``{path, ...}``, sorted.
+
+    ``allowed``: files the catalog does not prove and the configuration puts there - a backup entry's
+    sealed instance bundle at its ``server_metadata.repository_path`` (the operator, 2026-11-16, 1.384:
+    a bundle may live anywhere, and the check knows it). Neither stray nor missing when absent."""
     found: dict[str, list[dict[str, Any]]] = {kind: [] for kind in KINDS}
     seen: set[str] = set()
+    known = set(allowed)
     for entry in listed:
         path = str(entry.get("path") or "")
         seen.add(path)
+        if path in known and entry.get("type") == "file":
+            continue
         if entry.get("type") != "file":
             found[NOT_A_FILE].append({"path": path, "type": entry.get("type")})
         elif path not in expected:

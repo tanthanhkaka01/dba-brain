@@ -63,8 +63,10 @@ from dbabrain.db.store import utc_now_text
 #: ``expired``, ``offload_expired_at``, and offload_state's list CHECK by a name of ours. 8 (0.39.0):
 #: ``restore_chain_files`` - the files a restore applied, in order - and ``restore_runs.landed_json``,
 #: what the target itself recorded of where each database stopped. 9 (0.39.0): ``skipped`` joins a chain
-#: file's results, the list CHECK by a name of ours (:data:`WIDENED_CHECKS`). See :func:`_migrate`.
-CATALOG_SCHEMA_VERSION = 9
+#: file's results, the list CHECK by a name of ours (:data:`WIDENED_CHECKS`). 10 (0.40.0, 1.380):
+#: ``backup_runs.rman_chain_json`` - the RMAN chain an Oracle source named after the run, which a
+#: restore from the repository copies by. See :func:`_migrate`.
+CATALOG_SCHEMA_VERSION = 10
 
 TABLES = ("backup_runs", "backup_files", "backup_file_checks", "restore_runs", "restore_run_files",
           "copy_attempts", "restore_chain_files")
@@ -200,6 +202,8 @@ CREATE TABLE IF NOT EXISTS backup_runs
     -- seconds (NULL with a retention stated: kept, no limit by age) - so a page reads it here.
     retention_json TEXT NULL,
     pitr_reach_seconds INTEGER NULL,
+    -- An Oracle run's RMAN chain, asked of the source after it (1.380): its piece names, or why none.
+    rman_chain_json TEXT NULL,
     created_at TEXT NOT NULL DEFAULT {_NOW},
     CONSTRAINT uq_backup_runs UNIQUE (backup_id, started_at)
 );
@@ -562,7 +566,9 @@ RUN_COLUMNS = (("restore_runs", "tier", "TEXT NULL"),
                ("backup_runs", "retention_json", "TEXT NULL"),
                ("backup_runs", "pitr_reach_seconds", "INTEGER NULL"),
                # Version 8 (0.39.0): what the target recorded of where each restored database stopped.
-               ("restore_runs", "landed_json", "TEXT NULL"))
+               ("restore_runs", "landed_json", "TEXT NULL"),
+               # Version 10 (0.40.0, 1.380): the RMAN chain an Oracle source named after the run.
+               ("backup_runs", "rman_chain_json", "TEXT NULL"))
 
 
 def _migrate(conn: Any, backend: str) -> None:
@@ -733,7 +739,7 @@ _COLUMNS = {
     "backup_runs": ("backup_id", "job_run_id", "server_id", "engine", "level", "node_host",
                     "app_version", "started_at", "ended_at", "status", "files_count", "bytes_total",
                     "engine_verify", "engine_verify_text", "error_text", "retention_json",
-                    "pitr_reach_seconds"),
+                    "pitr_reach_seconds", "rman_chain_json"),
     "backup_files": ("backup_run_id", "backup_id", "job_run_id", "server_id", "database_name", "engine",
                      "file_name", "file_type", "file_path", "file_folder", "host_path", "container_name",
                      "backup_started_at",
@@ -797,6 +803,8 @@ def retention_rows(conn: Any, *, server_id: str = "") -> list[dict[str, Any]]:
 
 #: ``pruned_by`` of the newest base backup whose files a release deleted but its manifest - which the
 #: next incremental chains onto (offload_source_keeps_newest_chain false, 2026-11-11).
+#: A base backup's manifest recorded as its own row (1.386): ``<stamp>_<level>/backup_manifest``.
+BASE_MANIFEST_LIKE = "%/backup_manifest"
 MANIFEST_KEPT = "offload: released but its backup_manifest, which the next incremental reads"
 
 
@@ -1015,16 +1023,20 @@ class BackupCatalogStore:
                 "WHERE backup_run_id = ? ORDER BY file_id", (int(backup_run_id),)).fetchall()]
 
     def earlier_sizes(self, *, backup_id: str, database_name: str, file_type: str, before_run: int | None,
-                      limit: int = 20) -> list[int]:
+                      limit: int = 20, file_name: str = "") -> list[int]:
         """The sizes of the same entry's, database's and type's files before this run, newest first -
-        the history a new file's size is held to (1.219)."""
+        the history a new file's size is held to (1.219). A base backup's file (``<stamp>_<level>/<part>``,
+        1.386) is held to the same part of the earlier ones only: its base.tar.zst and its backup_manifest
+        are one type and nothing alike in size."""
         self.initialize()
+        part = file_name.split("/", 1)[1] if "/" in file_name else ""
+        clause, extra = ("AND file_name LIKE ? ", (f"%/{part}",)) if part else ("", ())
         with self.connect() as conn:
             return [int(row["size_bytes"]) for row in conn.execute(
                 "SELECT size_bytes FROM backup_files WHERE backup_id = ? AND database_name = ? AND file_type = ? "
-                "AND size_bytes IS NOT NULL AND (? IS NULL OR backup_run_id IS NULL OR backup_run_id < ?) "
+                f"AND size_bytes IS NOT NULL AND (? IS NULL OR backup_run_id IS NULL OR backup_run_id < ?) {clause}"
                 "ORDER BY file_id DESC LIMIT ?",
-                (backup_id, database_name, file_type, before_run, before_run, int(limit))).fetchall()]
+                (backup_id, database_name, file_type, before_run, before_run, *extra, int(limit))).fetchall()]
 
     def stored_files(self, *, server_id: str, file_names: list[str]) -> dict[str, dict[str, Any]]:
         """The catalog's row for each named file of a server, newest first - what a restore's copy
@@ -1084,7 +1096,7 @@ class BackupCatalogStore:
             _update(conn, "backup_files", "file_id", int(file_id), {**values, "updated_at": utc_now_text()})
 
     def files_to_offload(self, *, backup_id: str, limit: int = 200, retry_before: str = "",
-                         since: str = "") -> list[dict[str, Any]]:
+                         since: str = "", backup_run_id: int | None = None) -> list[dict[str, Any]]:
         """An entry's backup files still to be copied to its repository, oldest first (1.240).
 
         Every file the entry's backups wrote and that is still on its server, intact (``verdict``
@@ -1096,6 +1108,9 @@ class BackupCatalogStore:
         ``retry_before``: a ``failed`` copy is taken only when its last attempt is older - filtered
         here, before the LIMIT, so a hundred failures waiting out their pause never fill the batch
         and starve the files written since.
+
+        ``backup_run_id``: one run's files only - whether a run has anything left for the repository,
+        so its process ends in the offload's message or its own (0.40.0, 1.374).
         """
         self.initialize()
         full_types = tuple(t for t, level in I.LEVEL_OF_FILE_TYPE.items() if level == "full")
@@ -1110,9 +1125,56 @@ class BackupCatalogStore:
                 "AND (? = '' OR COALESCE(offload_attempted_at, '') < ?))) "
                 # offload_files_since: a file the entry wrote before it stays its server's own.
                 "AND (? = '' OR COALESCE(backup_ended_at, created_at) >= ?) "
-                f"ORDER BY COALESCE(backup_ended_at, created_at), CASE WHEN file_type IN ({marks}) THEN 0 ELSE 1 END, "
+                # A NULL parameter on both sides of an OR is one PostgreSQL cannot type: asked only when given.
+                + ("AND backup_run_id = ? " if backup_run_id is not None else "")
+                + f"ORDER BY COALESCE(backup_ended_at, created_at), CASE WHEN file_type IN ({marks}) THEN 0 ELSE 1 END, "
                 "file_id LIMIT ?", (backup_id, *I.NEVER_ON_REPOSITORY, retry_before, retry_before, since, since,
-                                    *full_types, int(limit)))]
+                                    *(() if backup_run_id is None else (int(backup_run_id),)), *full_types, int(limit)))]
+
+    def backup_run(self, backup_run_id: int) -> dict[str, Any] | None:
+        """One backup run's row - its level, its start, its status - or ``None``: the offload's messages
+        number a run's steps 4-9 from it and time its process from its start (0.40.0, 1.374)."""
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM backup_runs WHERE backup_run_id = ?", (int(backup_run_id),)).fetchone()
+        return dict(row) if row else None
+
+    def record_rman_chain(self, backup_run_id: int, *, pieces: list[str] | None = None, error: str = "",
+                          clock_offset_minutes: int | None = None) -> None:
+        """The RMAN chain the Oracle source named right after this run (0.40.0, 1.380) - the piece names a
+        restore from the repository copies by - or why it could not be asked (``error``)."""
+        recorded = {"pieces": sorted(set(pieces or ()))} if pieces is not None and not error else             {"error": " ".join(str(error or "no answer").split())[:1000]}
+        if clock_offset_minutes is not None:
+            # The source database's clock (1.385): what a point in time is read in, kept for a restore
+            # from the repository when the source no longer answers.
+            recorded["clock_offset_minutes"] = int(clock_offset_minutes)
+        self.initialize()
+        with self.connect() as conn:
+            _update(conn, "backup_runs", "backup_run_id", int(backup_run_id),
+                    _known("backup_runs", {"rman_chain_json": json.dumps({**recorded, "recorded_at": utc_now_text()})}))
+
+    def oracle_chain_rows(self, *, server_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Every finished Oracle backup run of ``server_id`` with its recorded chain, and every file those
+        runs wrote by name - what ``lib.restore.oracle_chain`` chooses a repository restore's pieces from."""
+        self.initialize()
+        with self.connect() as conn:
+            runs = [dict(row) for row in conn.execute(
+                "SELECT backup_run_id, backup_id, level, ended_at, status, rman_chain_json FROM backup_runs "
+                "WHERE server_id = ? AND engine = 'oracle' AND status = 'DONE' AND ended_at IS NOT NULL "
+                "ORDER BY ended_at, backup_run_id", (server_id,))]
+            files = [dict(row) for row in conn.execute(
+                "SELECT f.backup_run_id, f.file_name FROM backup_files f JOIN backup_runs r "
+                "ON r.backup_run_id = f.backup_run_id WHERE r.server_id = ? AND r.engine = 'oracle' "
+                "AND r.status = 'DONE' ORDER BY f.file_id", (server_id,))]
+        return runs, files
+
+    def backup_run_rows(self, backup_run_id: int) -> list[dict[str, Any]]:
+        """Every file one backup run recorded, whole rows (its offload and source state) - what its step 8
+        counts at the source and its step 9 on the repository (1.374)."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT * FROM backup_files WHERE backup_run_id = ? ORDER BY file_id", (int(backup_run_id),))]
 
     @staticmethod
     def _chain_floor_sql(full_types: tuple[str, ...], *, outer: str) -> str:
@@ -1247,6 +1309,13 @@ class BackupCatalogStore:
                      f"AND nb.file_type IN ({dir_marks}) AND nb.state = 'present' "
                      "AND COALESCE(nb.backup_ended_at, nb.created_at) > COALESCE(bf.backup_ended_at, bf.created_at))) ")
             args = (MANIFEST_KEPT, *directories)
+            # A base backup recorded file by file (1.386): its newest backup_manifest stays - the next
+            # incremental chains onto it - and is never listed, so it crowds out nothing under the LIMIT.
+            where += ("AND NOT (bf.file_name LIKE ? AND NOT EXISTS (SELECT 1 FROM backup_files nm "
+                      "WHERE nm.server_id = bf.server_id AND nm.database_name = bf.database_name "
+                      f"AND nm.file_name LIKE ? AND nm.file_type IN ({dir_marks}) "
+                      "AND COALESCE(nm.backup_ended_at, nm.created_at) > COALESCE(bf.backup_ended_at, bf.created_at))) ")
+            args = (*args, BASE_MANIFEST_LIKE, BASE_MANIFEST_LIKE, *directories)
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(
                 "SELECT bf.* FROM backup_files bf WHERE bf.backup_id = ? AND bf.state = 'present' "
@@ -1268,6 +1337,28 @@ class BackupCatalogStore:
                 "ORDER BY COALESCE(backup_ended_at, created_at) DESC, file_id DESC LIMIT 1",
                 (server_id, database_name, *directories)).fetchone()
         return int(row["file_id"]) if row is not None else None
+
+    def newest_base_manifest(self, *, server_id: str, database_name: str) -> int | None:
+        """The file_id of a database's newest base backup's ``backup_manifest`` recorded as its own row
+        (1.386), whatever its state - what the next incremental chains onto, so a release keeps it."""
+        self.initialize()
+        directories = tuple(I.HASHED_MEMBER)
+        marks = ", ".join("?" for _ in directories)
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT file_id FROM backup_files WHERE server_id = ? AND database_name = ? AND file_name LIKE ? "
+                f"AND file_type IN ({marks}) ORDER BY COALESCE(backup_ended_at, created_at) DESC, file_id DESC LIMIT 1",
+                (server_id, database_name, BASE_MANIFEST_LIKE, *directories)).fetchone()
+        return int(row["file_id"]) if row is not None else None
+
+    def base_files_present(self, *, server_id: str, directory: str) -> int:
+        """How many files of one base backup (``directory``, e.g. ``20261116T093216Z_FULL``) are still at
+        their source - its folder is removed once none is (1.386)."""
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM backup_files WHERE server_id = ? AND file_name LIKE ? "
+                               "AND state = 'present'", (server_id, f"{directory}/%")).fetchone()
+        return int(row["n"] or 0)
 
     def offload_members(self, file_id: int) -> list[dict[str, Any]]:
         """Each file of one catalog row as its newest proven offload copied it - the source's path, bytes
@@ -1728,7 +1819,8 @@ class BackupCatalogStore:
             row["last_restored"] = restored.get((row["server_id"], row["database_name"], row["file_type"]))
         return rows
 
-    def server_backup_files(self, server_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    def server_backup_files(self, server_id: str, *, limit: int = 500,
+                            logs: bool | None = None) -> list[dict[str, Any]]:
         """A server's backup files, newest first - the server page's *Backup & restore files* (1.217).
 
         Each row also carries its own restore mark (``last_restore_*``) and two counts: every restore
@@ -1744,8 +1836,16 @@ class BackupCatalogStore:
         operator, 2026-11-14, reading a log the page showed as ``error``: the run had stopped at its
         first file, a lockdown's refusal, and never reached this one - *show restore done, fail with
         its reason; how many done, how many failed*.
+
+        ``logs`` (0.41.0, 1.393): ``True`` only the log stream's files (``LOG`` / ``WAL`` / ``ARCHIVELOG``),
+        ``False`` every other, ``None`` all. The fleet page read the newest 500 of all, and on a server
+        with a log every 15 minutes those were the last hours' logs only - not the full every restore
+        of them needs.
         """
         self.initialize()
+        log_types = "(" + ", ".join(f"'{t}'" for t, level in sorted(I.LEVEL_OF_FILE_TYPE.items())
+                                    if level == "log") + ")"
+        of_kind = "" if logs is None else f"AND bf.file_type {'' if logs else 'NOT '}IN {log_types} "
         proven = "(" + ", ".join(f"'{v}'" for v in I.PROVEN_VERDICTS) + ")"
         of_file = ("(rf.file_id = bf.file_id OR (rf.file_id IS NULL AND rf.source_server_id = bf.server_id "
                    "AND rf.file_name = bf.file_name))")
@@ -1769,7 +1869,7 @@ class BackupCatalogStore:
                f"(SELECT c.error_text {chain_line}) AS last_chain_error, "
                "(SELECT COALESCE(lr.error_text, lr.refused_reason) FROM restore_runs lr "
                "WHERE lr.restore_run_id = bf.last_restore_run_id) AS last_run_error "
-               f"FROM backup_files bf WHERE bf.server_id = ? "
+               f"FROM backup_files bf WHERE bf.server_id = ? {of_kind}"
                f"ORDER BY COALESCE(bf.backup_ended_at, bf.created_at) DESC, bf.file_id DESC LIMIT ?")
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql, (server_id, int(limit)))]
@@ -1785,7 +1885,10 @@ class BackupCatalogStore:
                "(SELECT c.result FROM restore_chain_files c WHERE c.restore_run_id = rf.restore_run_id "
                "AND c.file_name = rf.file_name ORDER BY c.position LIMIT 1) AS chain_result, "
                "(SELECT c.error_text FROM restore_chain_files c WHERE c.restore_run_id = rf.restore_run_id "
-               "AND c.file_name = rf.file_name ORDER BY c.position LIMIT 1) AS chain_error "
+               "AND c.file_name = rf.file_name ORDER BY c.position LIMIT 1) AS chain_error, "
+               # The server whose backup the copied file is (0.41.0, 1.395): a copy read from the repository
+               # names the repository as its source, and was listed as a file of its own beside the backup's row.
+               "(SELECT bf.server_id FROM backup_files bf WHERE bf.file_id = rf.file_id) AS backup_server_id "
                "FROM restore_run_files rf JOIN restore_runs rr ON rr.restore_run_id = rf.restore_run_id "
                "WHERE rf.source_server_id = ? OR rf.target_server_id = ? "
                "ORDER BY rr.started_at DESC, rf.chain_position, rf.run_file_id DESC LIMIT ?")

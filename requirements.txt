@@ -54,3 +54,11 @@ tzdata>=2024.1
 # assistant's job says it is not installed. The worker reaches api.anthropic.com outward; nothing
 # reaches the worker.
 anthropic>=2.3.0
+
+# The MCP server (0.38.0; the image since 0.40.0): `dbabrain mcp serve` / `connect` - the official MCP
+# Python SDK and its WebSocket client. An extra of the package (`dbabrain[mcp]`, D-38.1: a base pip
+# install does not grow for users who never use Claude), and in the worker's image because the worker
+# is a node of dbabrain.dev: the image was built from this file alone, and a node that ran
+# `dbabrain mcp connect` found neither installed (2026-11-16).
+mcp>=2.3,<3
+websockets>=14,<17

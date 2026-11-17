@@ -134,7 +134,7 @@ def _nightly(tmp_path, monkeypatch, *, mappings, restore_all=False):
     monkeypatch.setattr(cli, "run_copy_backup", lambda step_config, logger=None, force=False, catalog=None: CopyBackupResult(
         returncode=0, source_backup_dir=tmp_path, local_import_dir=tmp_path, files_considered=2,
         copied=2, skipped=0, file_results=()))
-    monkeypatch.setattr(cli, "run_restore_all_latest", lambda **_: {
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server", lambda **_: {
         "status": "SUCCESS", "per_database_restore_status": {"SALES": "SUCCESS", "ORDERS": "SUCCESS"}})
     monkeypatch.setattr(cli, "run_delete_backup", lambda step_config, logger=None, dry_run=False: DeleteBackupResult(
         returncode=0, target_backup_dir=tmp_path, cleanup_retention=0, files_considered=0, deleted=0,

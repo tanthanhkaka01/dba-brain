@@ -92,7 +92,7 @@ def test_the_live_stores_column_check_is_replaced_by_the_named_one_listing_skipp
     """The live store (PostgreSQL) holds the table with version 8's column CHECK, named by PostgreSQL:
     the migration drops it and adds ours with today's list - the way ``offload`` joined the run actions."""
     assert ("restore_chain_files", "result", backup_catalog.CHAIN_RESULTS) in backup_catalog.WIDENED_CHECKS
-    assert backup_catalog.CATALOG_SCHEMA_VERSION == 9
+    assert backup_catalog.CATALOG_SCHEMA_VERSION >= 9, "version 9 brought the named check; a later one keeps it"
     assert "'skipped'" in backup_catalog._named_check("restore_chain_files", "result", backup_catalog.CHAIN_RESULTS)
 
 

@@ -13,6 +13,7 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
       MYSQL_DATABASE: {{ database }}
+{{ tz_line }}
     ports:
       - "{{ host_port }}:{{ container_port }}"
     volumes:

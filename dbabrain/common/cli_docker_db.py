@@ -127,6 +127,7 @@ def _create(request: dict[str, Any]) -> dict[str, Any]:
         network_subnet=str(request.get("network_subnet") or "").strip(),
         data_host_dir=str(request.get("data_host_dir") or "").strip(),
         run_as=str(request.get("run_as") or "").strip(),
+        timezone=str(request.get("timezone") or "").strip(),
     )
     spec.validate(replicas_explicit=replicas_explicit)
 

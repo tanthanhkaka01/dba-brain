@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import socket
 from dataclasses import dataclass, field
@@ -113,6 +114,9 @@ class BackupJob:
     scope: Any = None
     # Older files of the entry re-hashed after each run (1.218, lib.integrity.scrub_files_per_run).
     scrub_files_per_run: int = integrity.SCRUB_FILES_PER_RUN
+    # Oracle (0.40.0, 1.380): after each run the source's RMAN is asked for the restore chain and the
+    # answer kept on the run - what a restore from the repository copies by. Stated on the entry.
+    record_chain: bool = False
     # The windows per file type (1.227); ``cleanup_retention`` above is their longest, for the
     # readers that apply one number. ``None`` for a job built without the loader.
     retention: Any = None
@@ -218,6 +222,21 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
         if not isinstance(raw_jobs, list) or not raw_jobs:
             raise ValueError(f"backup_restore.backups[{index}] ({backup_id}) requires a non-empty jobs array.")
         entry_unstated = record_stated.unstated(entry, kind=record_stated.BACKUP_ENTRY)
+        record_chain = entry.get("record_chain")
+        if record_chain is not None and not isinstance(record_chain, bool):
+            raise ValueError(f"backup_restore.backups[{index}] ({backup_id}).record_chain must be true or false.")
+        if record_chain and db_type != "oracle":
+            raise ValueError(f"backup_restore.backups[{index}] ({backup_id}).record_chain is Oracle's: the RMAN "
+                             f"chain is what it records, and a {db_type or 'non-Oracle'} entry has none.")
+        oracle_sid = entry.get("oracle_sid")
+        if oracle_sid is not None:
+            # 1.387: the instance the entry backs up, handed to each job as ORACLE_SID.
+            if db_type != "oracle":
+                raise ValueError(f"backup_restore.backups[{index}] ({backup_id}).oracle_sid is Oracle's; a "
+                                 f"{db_type or 'non-Oracle'} entry names no SID.")
+            if not isinstance(oracle_sid, str) or not re.match(r"^[A-Za-z][A-Za-z0-9_]{0,29}$", oracle_sid):
+                raise ValueError(f"backup_restore.backups[{index}] ({backup_id}).oracle_sid must be an Oracle SID - "
+                                 f"letters, digits and underscores, starting with a letter; got {oracle_sid!r}.")
         for job_index, raw_job in enumerate(raw_jobs):
             if not isinstance(raw_job, dict):
                 raise ValueError(f"{backup_id}.jobs[{job_index}] must be an object.")
@@ -244,6 +263,12 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
             job_env = raw_job.get("env") or {}
             if not isinstance(job_env, dict):
                 raise ValueError(f"{backup_id}.{job_name}.env must be an object.")
+            if db_type == "oracle" and oracle_sid:
+                stated_sid = str(job_env.get("ORACLE_SID") or "").strip()
+                if stated_sid and stated_sid.upper() != oracle_sid.upper():
+                    raise ValueError(f"{backup_id}.{job_name}.env.ORACLE_SID {stated_sid!r} is not the entry's "
+                                     f"oracle_sid {oracle_sid!r}: one entry backs up one instance.")
+                job_env = {**job_env, "ORACLE_SID": oracle_sid}
             job_env_secrets = raw_job.get("env_secrets") or entry.get("env_secrets") or {}
             if not isinstance(job_env_secrets, dict):
                 raise ValueError(f"{backup_id}.{job_name}.env_secrets must be an object "
@@ -273,6 +298,7 @@ def load_backup_jobs(config_path: str | Path | None = None) -> list[BackupJob]:
                 offload=entry_offload,
                 scope=backup_scope.parse_backup_databases(raw_job, label=f"{backup_id}.{job_name}", db_type=db_type),
                 scrub_files_per_run=integrity.scrub_files_per_run(entry, label=backup_id),
+                record_chain=record_chain is True,
                 unstated=record_stated.unstated(raw_job, kind=record_stated.BACKUP_JOB),
                 entry_unstated=entry_unstated,
             )
@@ -544,16 +570,15 @@ def _open_catalog(app_config: Any) -> Any:
 
 
 #: What a backup folder holds that a restore uses, per engine catalog-backfill reads (1.215). SQL
-#: Server's layout `<DB>/FULL|DIFF|LOG/<file>` types every file; a PostgreSQL base backup is a directory
-#: catalogued, as its receipt does, by its `backup_manifest`, and a WAL segment is a 24-hex-digit name
-#: under `wal/` (0.35.0); an RMAN piece is typed by the names the Oracle scripts give it (0.35.0).
+#: Server's layout `<DB>/FULL|DIFF|LOG/<file>` types every file; a PostgreSQL base backup's every file under
+#: `base/<stamp>_<level>/` (since 0.40.0, 1.386 - its directory before), and under `wal/` a segment (24 hex
+#: digits) or a backup-history file; an RMAN piece is typed by the names the Oracle scripts give it (0.35.0).
 BACKFILL_PATTERNS = {"sqlserver": ["*.bak", "*.trn", "*.cer", "*.pvk"],
-                     "postgresql": ["backup_manifest", "?" * 24],
+                     "postgresql": ["*"],
                      "oracle": ["*.bkp", "autobackup_*", "c-*"]}
 _BACKFILL_NOTE = "catalog-backfill: hashed as found on the server, not verified by the engine"
 _BACKFILL_NOTES = {
-    "postgresql": "catalog-backfill: the base backup's backup_manifest hashed as found, as its receipt does; "
-                  "the directory's size is not taken",
+    "postgresql": "catalog-backfill: each file of the base backup hashed as found, as its receipt does",
     "oracle": "catalog-backfill: hashed as found, typed by its piece name (a level run's controlfile piece "
               "reads as that level)",
 }
@@ -561,15 +586,16 @@ _BACKFILL_NOTES = {
 
 def _backfill_item(engine: str, relative: str, name: str) -> tuple[str, str, str] | None:
     """``(file_type, catalogued name, catalogued relative path)`` of one file ``file-checksum`` listed, or
-    None for a file the engine's layout does not catalogue. A PostgreSQL base backup is catalogued as its
-    directory - the file listed is its manifest, and the row's name and path are the directory's."""
+    None for a file the engine's layout does not catalogue. A PostgreSQL base backup's files are each a row
+    (1.386), named from their backup's directory on (``integrity.catalog_name``)."""
     if engine == "postgresql":
-        if name == "backup_manifest":
-            directory = relative.rsplit("/", 1)[0] if "/" in relative else ""
-            if not directory or "/" in directory.replace("base/", "", 1):
-                return None             # a manifest that is not base/<stamp>_<level>/backup_manifest
-            return integrity.script_file_type(engine, directory), directory.rsplit("/", 1)[-1], directory
-        if integrity.WAL_SEGMENT_NAME.match(name.upper()) and (relative.startswith("wal/") or "/wal/" in relative):
+        parts = [part for part in relative.split("/") if part]
+        if len(parts) >= 3 and parts[0] == "base" and integrity.is_base_directory("FULL_BASE", parts[1]):
+            # Every file of a base backup is of its level - its backup_manifest too, as the receipt types it.
+            level = "INCR_BASE" if parts[1].upper().endswith("_INCR") else "FULL_BASE"
+            return level, integrity.catalog_name(relative), relative
+        if (relative.startswith("wal/") or "/wal/" in relative) and (
+                integrity.WAL_SEGMENT_NAME.match(name.upper()) or integrity.WAL_HISTORY_NAME.match(name.upper())):
             return "WAL", name, relative
         return None
     if engine == "oracle":
@@ -648,9 +674,12 @@ def catalog_backfill(
                 continue
             listed.append((item, normalized, *typed))
         names = sorted({entry[3] for entry in listed})
-        known = catalog.stored_files(server_id=job.server_id, file_names=names) if names else {}
+        # A base backup catalogued before 1.386 as one row for its directory is catalogued already: its
+        # files are not recorded beside it - one backup, one shape.
+        directories = sorted({name.split("/", 1)[0] for name in names if "/" in name})
+        known = catalog.stored_files(server_id=job.server_id, file_names=names + directories) if names else {}
         for item, normalized, file_type, name, relative in listed:
-            if name in known:
+            if name in known or ("/" in name and name.split("/", 1)[0] in known):
                 summary["catalogued_already"] += 1
                 continue
             mtime = item.get("mtime_utc")
@@ -660,9 +689,8 @@ def catalog_backfill(
             parts = [part for part in relative.split("/") if part]
             separator = "\\" if windows else "/"
             file_path = folder.rstrip("/\\") + separator + relative.replace("/", separator)
-            # The server's own path of what is catalogued: a base backup's directory, not its manifest.
-            host_path = str(item["path"]) if name == normalized.rsplit("/", 1)[-1] else \
-                root + "/" + relative
+            # The server's own path of the file catalogued - every row a file since 1.386.
+            host_path = str(item["path"])
             if engine == "sqlserver":
                 database = parts[0] if len(parts) > 1 and file_type != "CERT" else ""
             else:
@@ -673,13 +701,14 @@ def catalog_backfill(
                 "backup_id": backup_id, "server_id": job.server_id, "engine": engine,
                 "database_name": database,
                 "file_name": name, "file_type": file_type, "file_path": file_path,
-                "file_folder": file_path[: -len(name)].rstrip("/\\"), "host_path": host_path,
+                # The file's own folder: a base backup's file is named from its directory on (1.386), so the
+                # folder is cut at the path's last separator, never by the name's length.
+                "file_folder": file_path[: max(file_path.rfind("/"), file_path.rfind("\\"))],
+                "host_path": host_path,
                 "container_name": target.container_name or "",
-                # A base backup's size is its whole directory's, which a listing of its manifest does not
-                # give: recorded as not taken (`size_failed`, the catalog's word), never as the manifest's.
-                "size_bytes": None if file_type in integrity.HASHED_MEMBER else item.get("size_bytes"),
+                "size_bytes": item.get("size_bytes"),
                 "mtime_utc": mtime, "checksum_after_backup": item.get("sha256"),
-                "verdict": "size_failed" if file_type in integrity.HASHED_MEMBER else "ok",
+                "verdict": "ok",
                 "engine_verify": "not_run", "baseline": "backfill", "state": "present", "on_disk": 1,
                 "checksum_matches": 1,
                 "engine_verify_text": _BACKFILL_NOTES.get(engine, _BACKFILL_NOTE),
@@ -975,46 +1004,30 @@ def _retention_of(item: "BackupJob") -> dict[str, Any]:
             "pitr_reach_seconds": None if reach is None else int(reach)}
 
 
-#: The levels whose run is a long step - a start message and a done one (1.306): a full, an RMAN level 0.
-LONG_LEVELS = ("full", "0")
+def repository_takes_it(catalog: Any, item: Any, catalog_summary: dict[str, Any] | None) -> bool:
+    """Whether this run's files go on to the repository - its offload then says steps 4-9 (0.40.0, 1.374).
 
-
-def is_long_level(item: Any) -> bool:
-    level = str((getattr(item, "env", None) or {}).get("BACKUP_LEVEL") or getattr(item, "job", "") or "").lower()
-    return level in LONG_LEVELS or level.endswith("_full")
-
-
-def backup_flow_lines(item: Any, *, result: Any, started_at: str, finished_at: str | None,
-                      catalog_summary: dict[str, Any] | None, scrub: dict[str, Any] | None,
-                      anomalies: list[str], markers: list[str], server_metadata: Any) -> dict[str, Any]:
-    """Step 1 of a backup flow, as its message reads it (1.306): when, how many files, verified - and
-    each finding on a line of its own; what comes next when the entry offloads."""
-    done = result.status == "done"
-    title = f"{item.backup_id} · 1. Backup {item.job} {'done' if done else result.status.upper()}"
-    when = f"{format_display_text(started_at)} → {format_display_text(finished_at)[11:]}" if finished_at else ""
-    files = (catalog_summary or {}).get("files") or 0
-    summary = [when] + ([f"{files} file(s)", f"{(catalog_summary or {}).get('verified', 0)}/{files} hashed and verified"]
-                        if files else [])
-    lines = [" · ".join(part for part in summary if part)]
-    if not done:
-        lines.append(f"❌ {' '.join(str(result.error_text or 'failed').split())[:300]}")
-    if markers:
-        lines.append(f"❌ RANSOM MARKERS in {item.backup_dir}: {', '.join(markers[:5])}")
-    if anomalies:
-        lines.append("⚠ size far from its history: " + "; ".join(anomalies[:3]))
-    if scrub:
-        changed, gone = scrub.get("mismatch") or [], scrub.get("missing") or []
-        if changed or gone:
-            names = ", ".join(str(f.get("file")) for f in [*changed, *gone][:5])
-            lines.append(f"❌ stored backups changed: {len(changed)}, gone: {len(gone)} - {names}")
-        elif scrub.get("unreadable"):
-            lines.append(f"⚠ {len(scrub['unreadable'])} stored file(s) could not be re-read")
-    if isinstance(server_metadata, dict) and not server_metadata.get("ok", True):
-        lines.append(f"⚠ server metadata export failed: {' '.join(str(server_metadata.get('error') or '').split())[:160]}")
+    Asked of the catalog the offload reads, by the same rule (``files_to_offload``): an entry that
+    offloads nothing, a run that wrote no file, or wrote only what never goes there (a certificate), or
+    a catalog that cannot be read - the run's own process ends with it, so it still ends in a message."""
     offload = getattr(item, "offload", None)
-    if done and offload is not None and getattr(offload, "enabled", False):
-        lines.append(f"next: 2. copy to {offload.server_id}, 3. encrypt, 4. delete at the source, 5. check")
-    return {"flow_title": title, "flow_lines": lines}
+    run_id = (catalog_summary or {}).get("backup_run_id")
+    if offload is None or not getattr(offload, "enabled", False) or run_id is None:
+        return False
+    try:
+        return bool(catalog.files_to_offload(backup_id=item.backup_id, limit=1, since=offload.files_since,
+                                             backup_run_id=int(run_id)))
+    except Exception:  # noqa: BLE001 - a catalog that cannot say: the run says its own end
+        return False
+
+
+def where_without_a_repository(item: Any, catalog_summary: dict[str, Any] | None) -> str:
+    files = int((catalog_summary or {}).get("files") or 0)
+    offload = getattr(item, "offload", None)
+    if offload is None or not getattr(offload, "enabled", False):
+        return f"- {files} file(s) on {item.server_id} only - this entry has no repository"
+    return (f"- {files} file(s) on {item.server_id}; nothing of this run for the repository"
+            if files else f"- no file written on {item.server_id}")
 
 
 def _engage_lockdown(app_config: Any, metadata: dict[str, Any], *, reason: str, by: str) -> str:
@@ -1064,7 +1077,8 @@ def _size_anomalies(catalog: Any, item: "BackupJob", catalog_summary: dict[str, 
         for row in catalog.backup_run_files(int(catalog_summary["backup_run_id"])):
             history = catalog.earlier_sizes(backup_id=item.backup_id, database_name=row.get("database_name") or "",
                                             file_type=row.get("file_type") or "",
-                                            before_run=int(catalog_summary["backup_run_id"]))
+                                            before_run=int(catalog_summary["backup_run_id"]),
+                                            file_name=str(row.get("file_name") or ""))
             why = integrity.size_anomaly(row.get("size_bytes"), history)
             if why:
                 found.append(f"{row.get('file_name')}: {why}")
@@ -1227,26 +1241,33 @@ def stop_backup_run(
             "stopped": bool(stops) and all(item["stopped"] for item in stops)}
 
 
-def run_backup(
+@dataclass
+class BackupPass:
+    """One pass's due backup jobs, with the store, the catalog and the summary the workflow fills."""
+
+    jobs: list[Any]
+    due: list[Any]
+    store: Any
+    catalog: Any
+    listed_at: str
+    summary: dict[str, Any]
+
+
+def plan_backup_pass(
     *,
     app_config: DbaBrainConfig,
     config_path: str | Path,
     logger: Any = None,
     backup_id: str | None = None,
     job_name: str | None = None,
-    data_dir: str | Path | None = None,
-    key: str | None = None,
-    key_base64: str | None = None,
-    dry_run: bool = False,
     force: bool = False,
-    env_overrides: dict[str, str] | None = None,
-    backup_type: str | None = None,
-) -> dict[str, Any]:
-    """Scan configured backup jobs, run the due ones, and record each run.
+    dry_run: bool = False,
+) -> BackupPass:
+    """The due backup jobs of one pass - selection only, nothing said (0.40.0, 1.374).
 
-    ``backup_type`` (``full``/``diff``/``log``) forces the level for this run instead of
-    letting the script derive it. It is translated per engine, so one word works for all of
-    them; the scheduled config passes nothing and the script keeps deciding for itself.
+    The operator, 2026-11-16: *the messages are handled in the outermost code, not inside each
+    internal proc* - ``workflow.run_backup`` runs each job and says its steps; this and the functions
+    below only answer what happened.
     """
     jobs = load_backup_jobs(config_path)
     if backup_id:
@@ -1286,263 +1307,287 @@ def run_backup(
         "dry_run": bool(dry_run),
         "jobs": [],
     }
+    return BackupPass(jobs=jobs, due=due, store=store, catalog=catalog, listed_at=listed_at, summary=summary)
 
-    for item in due:
-        if dry_run:
-            try:
-                require_job_stated(item)
-                summary["jobs"].append({"job": item.label, "status": "dry-run"})
-            except record_stated.StatedError as exc:
-                # What the real run would do with it, said before it is due.
-                summary["jobs"].append({"job": item.label, "status": "refused", "error": str(exc)})
-            continue
-        # Due when this run listed it is not the same as still due: an overlapping async run may have
-        # taken it since, and finished it (schedule.taken_since). An explicit --force still runs.
-        if not force and schedule.taken_since(store, item.job_code, listed_at):
-            summary["skipped"] += 1
-            summary.setdefault("taken_by_another_run", []).append(
-                {"backup_id": item.backup_id, "job": item.job})
-            continue
-        started_at = utc_now_text()
-        try:
-            log_id = store.insert_job_run(
-                JobRun(
-                    job_code=item.job_code,
-                    # One backup job runs at a time on one host, whatever calls it. The store's
-                    # unique index is what says so, so two overlapping scans cannot both start it
-                    # and write to the same target directory.
-                    claim_key=item.job_code,
-                    level="logging",
-                    status="RUNNING",
-                    message=f"Backup {item.label} started.",
-                    started_at=started_at,
-                    host_name=socket.gethostname(),
-                    metadata={"backup_id": item.backup_id, "job": item.job,
-                              "server_id": item.server_id},
-                )
+
+def dry_run_line(item: Any) -> dict[str, Any]:
+    """What a dry run says of a due job: what the real run would do with it, said before it is due."""
+    try:
+        require_job_stated(item)
+        return {"job": item.label, "status": "dry-run"}
+    except record_stated.StatedError as exc:
+        return {"job": item.label, "status": "refused", "error": str(exc)}
+
+
+def claim_backup_job(item: Any, *, store: Any, listed_at: str, force: bool) -> tuple[int | None, str, dict[str, Any]]:
+    """``(log_id, started_at, {})`` once the job's run row is claimed, or ``(None, "", why)`` when it
+    is not this pass's to run."""
+    # Due when this run listed it is not the same as still due: an overlapping async run may have
+    # taken it since, and finished it (schedule.taken_since). An explicit --force still runs.
+    if not force and schedule.taken_since(store, item.job_code, listed_at):
+        return None, "", {"skipped": "taken_by_another_run", "backup_id": item.backup_id, "job": item.job}
+    started_at = utc_now_text()
+    try:
+        log_id = store.insert_job_run(
+            JobRun(
+                job_code=item.job_code,
+                # One backup job runs at a time on one host, whatever calls it. The store's
+                # unique index is what says so, so two overlapping scans cannot both start it
+                # and write to the same target directory.
+                claim_key=item.job_code,
+                level="logging",
+                status="RUNNING",
+                message=f"Backup {item.label} started.",
+                started_at=started_at,
+                host_name=socket.gethostname(),
+                metadata={"backup_id": item.backup_id, "job": item.job, "server_id": item.server_id},
             )
-        except RunAlreadyClaimed as exc:
-            # Already running. Skipped rather than failed: the scheduler is working, and an alert
-            # here would be an alert about nothing going wrong.
-            summary["skipped"] += 1
-            summary.setdefault("already_running", []).append(
-                {"backup_id": item.backup_id, "job": item.job, "detail": str(exc)})
-            continue
-        summary["ran"] += 1
-        emit_backup_restore_event(
-            app_config=app_config, command="backup", phase="START", level="logging",
-            message=f"{item.label} started.", logger=logger, started_at=started_at,
-            metadata={"backup_id": item.backup_id, "job": item.job, "server_id": item.server_id,
-                      "flow_title": f"{item.backup_id} · 1. Backup {item.job} started",
-                      "flow_lines": [f"started {format_display_text(started_at)}"]},
-            notify=item.notify,
-            # A long step a start and a done; a short one only its done (1.306).
-            telegram=is_long_level(item),
         )
-        try:
-            # Before anything reaches the host: a job whose run a default would decide is refused,
-            # recorded as this run's error like any other (0.39.0, 1.366).
-            require_job_stated(item)
-            target = resolve_backup_target(item, data_dir=data_dir)
-            job_env = dict(env_overrides or {})
-            # What a stop finds this run by on its host: the script's pid file and its sessions'
-            # host_name (0.34.0, 1.238).
-            job_env[RUN_TAG_ENV] = run_tag(item.backup_id, log_id)
-            if str(item.db_type).lower() == "postgresql" and not isinstance(catalog, _UnavailableCatalog):
-                # The WAL job lists the segments after the newest one the catalog holds: the
-                # archive is written by PostgreSQL, not by the job, so only the store knows where
-                # the last run left off (0.34.0). Ignored by the base backup script.
-                # Absent, not empty, before the catalog holds a segment: the spec refuses an empty
-                # env value (it is how a missing secret arrives), and the script reads absent as
-                # "from the first segment". Sent empty, the store's own WAL job failed its first run
-                # on the worker (2.87.51, 2026-10-29).
-                last_wal = catalog.last_file_name(backup_id=item.backup_id, file_type="WAL")
-                if last_wal:
-                    job_env.setdefault("CATALOG_AFTER", last_wal)
-            # A certificate the vault holds is not exported beside the backups again (0.37.0): it was
-            # taken off the server on purpose. Absent when the vault holds none or cannot be read -
-            # the script then exports as it always did.
-            from dbabrain.backup_restore.certificate_take import HELD_ENV, held_thumbprints
+    except RunAlreadyClaimed as exc:
+        # Already running. Skipped rather than failed: the scheduler is working, and an alert
+        # here would be an alert about nothing going wrong.
+        return None, "", {"skipped": "already_running", "backup_id": item.backup_id, "job": item.job,
+                          "detail": str(exc)}
+    return log_id, started_at, {}
 
-            held = held_thumbprints(app_config, item)
-            if held:
-                job_env.setdefault(HELD_ENV, held)
-            # backup_type travels as a word, not as a translated BACKUP_LEVEL: the same word maps
-            # to a different level per engine (and a --backup-id can select jobs of more than one),
-            # so the translation belongs where the engine is known — once, in the spec.
-            result = execute_backup_job(
-                item, target=target, data_dir=data_dir, key=key, key_base64=key_base64,
-                env_overrides=job_env, backup_type=backup_type,
-            )
-        except (ValueError, SshError, OSError) as exc:
-            result = BackupRunResult(
-                job=item, status="error", exit_code=None, duration_ms=0,
-                stdout="", stderr=str(exc), error_text=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001 - one job's failure must not stop the pass.
-            # A `common.cli` child that printed no JSON (crash, OOM, import error) raises
-            # CommonCliError - a RuntimeError - which used to leave this function: every job after
-            # it in the pass was skipped and its own row stayed RUNNING (review 0.25.0, F10.1).
-            text = f"{type(exc).__name__}: {exc}"
-            result = BackupRunResult(
-                job=item, status="error", exit_code=None, duration_ms=0,
-                stdout="", stderr=text, error_text=text,
-            )
 
-        # Only after the data backup succeeded, and never able to change its verdict: a metadata
-        # export that could not read sys.credentials must not turn a good backup into a failed
-        # one, which is why export_for_backup returns its failure instead of raising. Exporting
-        # after a FAILED backup would be worse than useless - it would pair a fresh bundle with
-        # no backup to restore it beside.
-        server_metadata_result = None
+@dataclass
+class BackupOutcome:
+    """What one backup job's run did - every fact its messages and its run row are written from."""
+
+    item: Any
+    log_id: int
+    started_at: str
+    finished_at: str
+    result: Any
+    level: str
+    message: str
+    metadata: dict[str, Any]
+    catalog_summary: dict[str, Any] | None
+    scrub: dict[str, Any] | None
+    anomalies: list[str]
+    markers: list[str]
+    stopped: bool
+
+
+def run_claimed_backup_job(
+    item: Any,
+    *,
+    log_id: int,
+    started_at: str,
+    app_config: DbaBrainConfig,
+    config_path: str | Path,
+    store: Any,
+    catalog: Any,
+    data_dir: str | Path | None = None,
+    key: str | None = None,
+    key_base64: str | None = None,
+    env_overrides: dict[str, str] | None = None,
+    backup_type: str | None = None,
+    dry_run: bool = False,
+) -> BackupOutcome:
+    """Run one claimed job: the backup on its server, the catalog, the scrub, the markers, the metadata
+    export - and answer what happened. Says nothing, and leaves the run row open: the workflow says
+    step 3 before it closes it (:func:`close_backup_job`)."""
+    try:
+        # Before anything reaches the host: a job whose run a default would decide is refused,
+        # recorded as this run's error like any other (0.39.0, 1.366).
+        require_job_stated(item)
+        target = resolve_backup_target(item, data_dir=data_dir)
+        job_env = dict(env_overrides or {})
+        # What a stop finds this run by on its host: the script's pid file and its sessions'
+        # host_name (0.34.0, 1.238).
+        job_env[RUN_TAG_ENV] = run_tag(item.backup_id, log_id)
+        if str(item.db_type).lower() == "postgresql" and not isinstance(catalog, _UnavailableCatalog):
+            # The WAL job lists the segments after the newest one the catalog holds: the
+            # archive is written by PostgreSQL, not by the job, so only the store knows where
+            # the last run left off (0.34.0). Ignored by the base backup script.
+            # Absent, not empty, before the catalog holds a segment: the spec refuses an empty
+            # env value (it is how a missing secret arrives), and the script reads absent as
+            # "from the first segment". Sent empty, the store's own WAL job failed its first run
+            # on the worker (2.87.51, 2026-10-29).
+            last_wal = catalog.last_file_name(backup_id=item.backup_id, file_type="WAL")
+            if last_wal:
+                job_env.setdefault("CATALOG_AFTER", last_wal)
+        # A certificate the vault holds is not exported beside the backups again (0.37.0): it was
+        # taken off the server on purpose. Absent when the vault holds none or cannot be read -
+        # the script then exports as it always did.
+        from dbabrain.backup_restore.certificate_take import HELD_ENV, held_thumbprints
+
+        held = held_thumbprints(app_config, item)
+        if held:
+            job_env.setdefault(HELD_ENV, held)
+        # backup_type travels as a word, not as a translated BACKUP_LEVEL: the same word maps
+        # to a different level per engine (and a --backup-id can select jobs of more than one),
+        # so the translation belongs where the engine is known — once, in the spec.
+        result = execute_backup_job(
+            item, target=target, data_dir=data_dir, key=key, key_base64=key_base64,
+            env_overrides=job_env, backup_type=backup_type,
+        )
+    except (ValueError, SshError, OSError) as exc:
+        result = BackupRunResult(
+            job=item, status="error", exit_code=None, duration_ms=0,
+            stdout="", stderr=str(exc), error_text=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001 - one job's failure must not stop the pass.
+        # A `common.cli` child that printed no JSON (crash, OOM, import error) raises
+        # CommonCliError - a RuntimeError - which used to leave this function: every job after
+        # it in the pass was skipped and its own row stayed RUNNING (review 0.25.0, F10.1).
+        text = f"{type(exc).__name__}: {exc}"
+        result = BackupRunResult(
+            job=item, status="error", exit_code=None, duration_ms=0,
+            stdout="", stderr=text, error_text=text,
+        )
+
+    # Only after the data backup succeeded, and never able to change its verdict: a metadata
+    # export that could not read sys.credentials must not turn a good backup into a failed
+    # one, which is why export_for_backup returns its failure instead of raising. Exporting
+    # after a FAILED backup would be worse than useless - it would pair a fresh bundle with
+    # no backup to restore it beside.
+    server_metadata_result = None
+    if result.status == "done":
+        server_metadata_result = export_for_backup(
+            item.server_metadata,
+            server_id=item.server_id,
+            bundle_dir=instance_bundle_dir(item.server_id),
+            data_dir=data_dir,
+        )
+
+    finished_at = utc_now_text()
+    # Every run into the backup catalog, a failed one too (0.34.0). A file left unverified, or
+    # a catalog that cannot be written, turns the run into an error: the operator's rule is
+    # that every run is verified and recorded, and a green run that is neither is the failure
+    # this exists to end.
+    catalog_summary: dict[str, Any] | None = None
+    try:
+        catalog_summary = record_in_catalog(catalog, item, result, job_run_id=log_id,
+                                            started_at=started_at, finished_at=finished_at)
+        if catalog_summary["unverified"] and result.status == "done":
+            result.status = "error"
+            result.error_text = ("written but not verified: "
+                                 + ", ".join(catalog_summary["unverified"][:10]))
+    except Exception as exc:  # noqa: BLE001 - recorded on the run, never lost in a traceback
         if result.status == "done":
-            server_metadata_result = export_for_backup(
-                item.server_metadata,
-                server_id=item.server_id,
-                bundle_dir=instance_bundle_dir(item.server_id),
-                data_dir=data_dir,
-            )
-
-        finished_at = utc_now_text()
-        # Every run into the backup catalog, a failed one too (0.34.0). A file left unverified, or
-        # a catalog that cannot be written, turns the run into an error: the operator's rule is
-        # that every run is verified and recorded, and a green run that is neither is the failure
-        # this exists to end.
-        catalog_summary: dict[str, Any] | None = None
+            result.status = "error"
+        result.error_text = " ".join(filter(None, [
+            result.error_text, f"the backup catalog could not be written: {type(exc).__name__}: {exc}"]))
+    # The rolling scrub (1.218): the entry's older files, the ones checked longest ago first,
+    # re-hashed where they lie. Not on a failed run - its host may be the reason it failed.
+    scrub: dict[str, Any] | None = None
+    if result.status == "done" and item.scrub_files_per_run and not dry_run:
         try:
-            catalog_summary = record_in_catalog(catalog, item, result, job_run_id=log_id,
-                                                started_at=started_at, finished_at=finished_at)
-            if catalog_summary["unverified"] and result.status == "done":
-                result.status = "error"
-                result.error_text = ("written but not verified: "
-                                     + ", ".join(catalog_summary["unverified"][:10]))
-        except Exception as exc:  # noqa: BLE001 - recorded on the run, never lost in a traceback
-            if result.status == "done":
-                result.status = "error"
-            result.error_text = " ".join(filter(None, [
-                result.error_text, f"the backup catalog could not be written: {type(exc).__name__}: {exc}"]))
-        # The rolling scrub (1.218): the entry's older files, the ones checked longest ago first,
-        # re-hashed where they lie. Not on a failed run - its host may be the reason it failed.
-        scrub: dict[str, Any] | None = None
-        if result.status == "done" and item.scrub_files_per_run and not dry_run:
-            try:
-                scrub = verify_backup_files(app_config=app_config, config_path=config_path,
-                                            backup_id=item.backup_id, limit=item.scrub_files_per_run,
-                                            data_dir=data_dir, key=key, key_base64=key_base64)
-            except Exception as exc:  # noqa: BLE001 - a scrub that could not run is said, the backup stands
-                scrub = {"error": f"{type(exc).__name__}: {exc}"[:300]}
-        # What ransomware leaves in a folder (1.219): looked for by name only, so it costs a listing.
-        markers: list[str] = []
-        if result.status == "done" and not dry_run:
-            markers = _ransom_markers(item, data_dir=data_dir, key=key, key_base64=key_base64)
-        level = "logging" if result.status == "done" else "error"
-        message = (
-            f"Backup {item.label} finished: {result.status}"
-            + (f" (exit {result.exit_code})" if result.exit_code is not None else "")
-        )
-        # The REASON goes in the message, not only in error_text. Both are written to the run row,
-        # but only the message reaches backup.log, the Telegram alert and the workflow summary - so
-        # a failure read anywhere but the store said "error (exit 1)" and nothing else. Measured
-        # 2026-09-15: a backup failing every cycle, whose cause - `pg_basebackup failed
-        # (level=INCR); partial target removed` - was sitting in job_runs.error_text and nowhere a
-        # person was looking. A script's own words are the diagnosis; the exit code is not.
-        _reason = " ".join(str(result.error_text or "").split())
-        if result.status != "done" and _reason:
-            message += f" - {_reason[:300]}"
-        metadata = {
-            "backup_id": item.backup_id,
-            "job": item.job,
-            "server_id": item.server_id,
-            "exit_code": result.exit_code,
-            "duration_ms": result.duration_ms,
-            "stdout_tail": stdout_excerpt(result.stdout),
-        }
-        if catalog_summary is not None:
-            metadata["catalog"] = catalog_summary
-            if catalog_summary["files"]:
-                message += (f" - {catalog_summary['verified']}/{catalog_summary['files']} file(s) "
-                            "hashed and verified")
-        if markers:
-            # Not a backup: an attack. CRITICAL, and the lockdown engaged like a canary hit (D6).
-            level = "critical"
-            metadata["ransom_markers"] = markers[:20]
-            message += f" - RANSOM MARKERS in {item.backup_dir}: {', '.join(markers[:5])}"
-            message += _engage_lockdown(app_config, metadata, reason=f"ransomware markers in the backup folder of "
-                                        f"{item.label}: {', '.join(markers[:3])}", by=f"markers:{item.label}")
-        anomalies = _size_anomalies(catalog, item, catalog_summary)
-        if anomalies:
-            metadata["size_anomalies"] = anomalies[:10]
+            scrub = verify_backup_files(app_config=app_config, config_path=config_path,
+                                        backup_id=item.backup_id, limit=item.scrub_files_per_run,
+                                        data_dir=data_dir, key=key, key_base64=key_base64)
+        except Exception as exc:  # noqa: BLE001 - a scrub that could not run is said, the backup stands
+            scrub = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    # What ransomware leaves in a folder (1.219): looked for by name only, so it costs a listing.
+    markers: list[str] = []
+    if result.status == "done" and not dry_run:
+        markers = _ransom_markers(item, data_dir=data_dir, key=key, key_base64=key_base64)
+    level = "logging" if result.status == "done" else "error"
+    message = (
+        f"Backup {item.label} finished: {result.status}"
+        + (f" (exit {result.exit_code})" if result.exit_code is not None else "")
+    )
+    # The REASON goes in the message, not only in error_text. Both are written to the run row,
+    # but only the message reaches backup.log, the Telegram alert and the workflow summary - so
+    # a failure read anywhere but the store said "error (exit 1)" and nothing else. Measured
+    # 2026-09-15: a backup failing every cycle, whose cause - `pg_basebackup failed
+    # (level=INCR); partial target removed` - was sitting in job_runs.error_text and nowhere a
+    # person was looking. A script's own words are the diagnosis; the exit code is not.
+    _reason = " ".join(str(result.error_text or "").split())
+    if result.status != "done" and _reason:
+        message += f" - {_reason[:300]}"
+    metadata = {
+        "backup_id": item.backup_id,
+        "job": item.job,
+        "server_id": item.server_id,
+        "exit_code": result.exit_code,
+        "duration_ms": result.duration_ms,
+        "stdout_tail": stdout_excerpt(result.stdout),
+    }
+    if catalog_summary is not None:
+        metadata["catalog"] = catalog_summary
+        if catalog_summary["files"]:
+            message += (f" - {catalog_summary['verified']}/{catalog_summary['files']} file(s) "
+                        "hashed and verified")
+    if markers:
+        # Not a backup: an attack. CRITICAL, and the lockdown engaged like a canary hit (D6).
+        level = "critical"
+        metadata["ransom_markers"] = markers[:20]
+        message += f" - RANSOM MARKERS in {item.backup_dir}: {', '.join(markers[:5])}"
+        message += _engage_lockdown(app_config, metadata, reason=f"ransomware markers in the backup folder of "
+                                    f"{item.label}: {', '.join(markers[:3])}", by=f"markers:{item.label}")
+    anomalies = _size_anomalies(catalog, item, catalog_summary)
+    if anomalies:
+        metadata["size_anomalies"] = anomalies[:10]
+        if level == "logging":
+            level = "warning"
+        message += " - SIZE far from its history: " + "; ".join(anomalies[:3])
+    if scrub is not None:
+        changed, gone = scrub.get("mismatch") or [], scrub.get("missing") or []
+        unreadable = scrub.get("unreadable") or []
+        metadata["scrub"] = {"checked": scrub.get("checked", 0), "match": scrub.get("match", 0),
+                              "mismatch": len(changed), "missing": len(gone),
+                              "pruned": len(scrub.get("pruned") or []), "unreadable": len(unreadable),
+                              "error": scrub.get("error")}
+        if unreadable and not (changed or gone):
+            # Not an attack, and not a clean scrub either: the files could not be read at all.
             if level == "logging":
                 level = "warning"
-            message += " - SIZE far from its history: " + "; ".join(anomalies[:3])
-        if scrub is not None:
-            changed, gone = scrub.get("mismatch") or [], scrub.get("missing") or []
-            unreadable = scrub.get("unreadable") or []
-            metadata["scrub"] = {"checked": scrub.get("checked", 0), "match": scrub.get("match", 0),
-                                  "mismatch": len(changed), "missing": len(gone),
-                                  "pruned": len(scrub.get("pruned") or []), "unreadable": len(unreadable),
-                                  "error": scrub.get("error")}
-            if unreadable and not (changed or gone):
-                # Not an attack, and not a clean scrub either: the files could not be read at all.
-                if level == "logging":
-                    level = "warning"
-                message += (f" - SCRUB could not read {len(unreadable)} stored file(s): "
-                            f"{str(unreadable[0].get('why') or '')[:200]}")
-            if changed or gone:
-                # A stored backup changed after it was written, or vanished: the ransomware signal.
-                # CRITICAL whatever tonight's backup did - the backup stands, this is another finding.
-                level = "critical"
-                if len(changed) + len(gone) >= lockdown_store.AUTO_ENGAGE_FILES:
-                    # An attack is not waited out (D6): no prune, no delete, no overwrite from now on.
-                    message += _engage_lockdown(
-                        app_config, metadata, by=f"scrub:{item.label}",
-                        reason=f"the scrub of {item.label} found {len(changed)} changed and {len(gone)} "
-                               "gone stored backup file(s)")
-                names = ", ".join(str(f.get("file")) for f in [*changed, *gone][:5])
-                message += (f" - SCRUB: {len(changed)} stored backup file(s) changed after they were written, "
-                            f"{len(gone)} gone: {names}")
-            elif scrub.get("checked"):
-                message += f" - {scrub['checked']} older file(s) re-hashed, all unchanged"
-        if server_metadata_result is not None:
-            metadata["server_metadata"] = summarize_server_metadata(server_metadata_result)
-            # Named in the message because the alternative is an operator having to open the run
-            # row to discover the bundle beside tonight's backup is yesterday's.
-            if not server_metadata_result.get("ok", False):
-                message += " (server metadata export FAILED - see metadata.server_metadata)"
-        if _stopped_by_operator(store, log_id):
-            # backup-stop closed this row and said so; what the killed script left behind (a WinRM
-            # error, a broken pipe) is not news, and must not replace "stopped by the operator".
-            result.status = "stopped"
-        else:
-            store.update_job_run(
-                log_id=log_id,
-                level=level,
-                status=result.status.upper(),
-                message=message,
-                finished_at=finished_at,
-                duration_ms=result.duration_ms,
-                error_text=result.error_text,
-                metadata=metadata,
-            )
-            metadata.update(backup_flow_lines(item, result=result, started_at=started_at,
-                                              finished_at=finished_at, catalog_summary=catalog_summary,
-                                              scrub=scrub, anomalies=anomalies, markers=markers,
-                                              server_metadata=metadata.get("server_metadata")))
-            emit_backup_restore_event(
-                app_config=app_config, command="backup",
-                phase="END" if result.status == "done" else "ERROR",
-                level=level, message=message, logger=logger,
-                started_at=started_at, finished_at=finished_at,
-                duration_ms=result.duration_ms, error_text=result.error_text, metadata=metadata,
-                notify=item.notify,
-            )
-        if result.status == "done":
-            summary["succeeded"] += 1
-        else:
-            summary["failed"] += 1
-        summary["jobs"].append({
-            "job": item.label, "status": result.status,
-            "exit_code": result.exit_code, "duration_ms": result.duration_ms,
-        })
+            message += (f" - SCRUB could not read {len(unreadable)} stored file(s): "
+                        f"{str(unreadable[0].get('why') or '')[:200]}")
+        if changed or gone:
+            # A stored backup changed after it was written, or vanished: the ransomware signal.
+            # CRITICAL whatever tonight's backup did - the backup stands, this is another finding.
+            level = "critical"
+            if len(changed) + len(gone) >= lockdown_store.AUTO_ENGAGE_FILES:
+                # An attack is not waited out (D6): no prune, no delete, no overwrite from now on.
+                message += _engage_lockdown(
+                    app_config, metadata, by=f"scrub:{item.label}",
+                    reason=f"the scrub of {item.label} found {len(changed)} changed and {len(gone)} "
+                           "gone stored backup file(s)")
+            names = ", ".join(str(f.get("file")) for f in [*changed, *gone][:5])
+            message += (f" - SCRUB: {len(changed)} stored backup file(s) changed after they were written, "
+                        f"{len(gone)} gone: {names}")
+        elif scrub.get("checked"):
+            message += f" - {scrub['checked']} older file(s) re-hashed, all unchanged"
+    if server_metadata_result is not None:
+        metadata["server_metadata"] = summarize_server_metadata(server_metadata_result)
+        # Named in the message because the alternative is an operator having to open the run
+        # row to discover the bundle beside tonight's backup is yesterday's.
+        if not server_metadata_result.get("ok", False):
+            message += " (server metadata export FAILED - see metadata.server_metadata)"
+    stopped = _stopped_by_operator(store, log_id)
+    if stopped:
+        # backup-stop closed this row and said so; what the killed script left behind (a WinRM
+        # error, a broken pipe) is not news, and must not replace "stopped by the operator".
+        result.status = "stopped"
+    return BackupOutcome(item=item, log_id=log_id, started_at=started_at, finished_at=finished_at, result=result,
+                         level=level, message=message, metadata=metadata, catalog_summary=catalog_summary,
+                         scrub=scrub, anomalies=anomalies, markers=markers, stopped=stopped)
 
-    return summary
+
+def close_backup_job(outcome: BackupOutcome, *, store: Any) -> None:
+    """Close the job's run row - after its step 3 is said, so the copy can never be told first."""
+    if outcome.stopped:
+        return
+    result = outcome.result
+    store.update_job_run(
+        log_id=outcome.log_id,
+        level=outcome.level,
+        status=result.status.upper(),
+        message=outcome.message,
+        finished_at=outcome.finished_at,
+        duration_ms=result.duration_ms,
+        error_text=result.error_text,
+        metadata=outcome.metadata,
+    )
+
+
+def count_backup(summary: dict[str, Any], outcome: BackupOutcome) -> None:
+    result = outcome.result
+    summary["succeeded" if result.status == "done" else "failed"] += 1
+    summary["jobs"].append({"job": outcome.item.label, "status": result.status,
+                            "exit_code": result.exit_code, "duration_ms": result.duration_ms})

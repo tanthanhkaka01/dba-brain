@@ -176,3 +176,57 @@ def test_the_page_carries_the_section_under_recoverability(section):
 
     assert "__RESTORES__" not in html
     assert html.index("<section>R</section>") < html.index("<h2>Restores</h2>") < html.index('<div id="body">')
+
+
+# --------------------------------------------------------------------------- #
+# One line per outcome (0.41.0, 1.394)
+# --------------------------------------------------------------------------- #
+# The operator, 2026-11-17, reading the page after the 1.248 drill: each run of 13 databases said 13
+# stop points of 4-5 wrapped lines - every run half a screen high, and the files applied cut at 1366 px.
+def _landed(database, *, verdict, stop=None, ended=None):
+    return {"database": database, "restoredAs": f"{database}_1248", "stopAt": stop, "byStopat": bool(stop),
+            "lastBackupFinished": ended, "verdict": verdict}
+
+
+def test_databases_that_stopped_at_one_moment_are_one_line_and_their_names_fold_under_it():
+    from dbabrain.reports import restores_table
+
+    drawn = restores_table._landed([_landed(f"DB{n}", verdict="stopped at the moment asked",
+                                            stop="2026-11-17 07:30:00") for n in range(12)])
+
+    assert drawn.count("class='rs-db'") == 1
+    assert "<b>12 databases</b>: stopped at 2026-11-17 07:30:00" in drawn
+    assert "<details class='rs-dbs'><summary>which</summary>DB0 as DB0_1248, DB1 as DB1_1248" in drawn
+
+
+def test_databases_restored_to_their_own_chains_end_say_the_span_of_those_ends():
+    from dbabrain.reports import restores_table
+
+    drawn = restores_table._landed([_landed("A", verdict="restored to the end of its chain", ended="2026-11-17 03:00:22"),
+                                    _landed("B", verdict="restored to the end of its chain", ended="2026-11-17 09:06:57")])
+
+    assert "<b>2 databases</b>: last backups applied ended 2026-11-17 03:00:22 - 2026-11-17 09:06:57" in drawn
+
+
+def test_a_database_not_where_it_was_asked_keeps_its_name_in_sight_and_one_alone_is_its_own_line():
+    from dbabrain.reports import restores_table
+
+    drawn = restores_table._landed([_landed("A", verdict="NOT at the moment asked", stop="2026-11-17 07:30:00"),
+                                    _landed("B", verdict="NOT at the moment asked", stop="2026-11-17 07:30:00"),
+                                    _landed("C", verdict="stopped at the moment asked", stop="2026-11-17 07:30:00")])
+
+    assert "<b>2 databases</b>" in drawn and "<div class='rs-why'>A as A_1248, B as B_1248</div>" in drawn
+    assert "rs-dbs" not in drawn, "nothing folded: the NOT line is the one to read, C is its own line"
+    assert "C as C_1248: stopped at 2026-11-17 07:30:00" in drawn
+    assert restores_table._landed([]) == restores_table.NOT_RECORDED
+
+
+def test_a_long_reason_is_cut_in_the_row_and_whole_on_hover(catalog):
+    _run(catalog, "2026-11-17T05:47:00Z", phase="error", error_text="restore-full failed: " + "x" * 600)
+    drawn = backup_restore_report.render_restores(catalog)
+    shown = drawn[drawn.index("<div class='rs-why'"):]
+    shown = shown[:shown.index("</div>")]
+
+    text = shown[shown.index(">") + 1:]
+    assert len(text) == 163 and text.endswith("...") and "title='restore-full failed: " in shown
+    assert shown.count("x") > 600, "the whole reason is in the title"

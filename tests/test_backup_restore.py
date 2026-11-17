@@ -1714,7 +1714,7 @@ def test_restore_workflow_orchestrates_existing_steps_in_order(tmp_path, monkeyp
         )
 
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server", fake_restore)
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_delete_backup", fake_delete)
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
@@ -1741,7 +1741,7 @@ def _copy_hours_seen(tmp_path, monkeypatch, *, entry_hours, **workflow_kwargs):
                                 files_considered=1, copied=1, skipped=0, file_results=())
 
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest",
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server",
                         lambda **kwargs: {"status": "SUCCESS", "overall_status": "SUCCESS",
                                           "databases_considered": 0, "per_database_restore_status": {}})
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_delete_backup",
@@ -2274,6 +2274,8 @@ def test_backup_restore_cli_restore_workflow_uses_restore_workflow_logs(tmp_path
     monkeypatch.setattr(cli_module, "load_config", lambda _path: app_config)
     monkeypatch.setattr(cli_module, "load_restore_configs", lambda _path: [make_config(tmp_path)])
     monkeypatch.setattr(cli_module, "emit_backup_restore_event", lambda **_kwargs: None)
+    # A restore-workflow run says its steps from the workflow (0.40.0, 1.375).
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.emit_backup_restore_event", lambda **_kwargs: None)
     monkeypatch.setattr(cli_module, "log_function_call", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli_module, "log_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
@@ -2345,6 +2347,8 @@ def test_restore_workflow_without_restore_id_runs_only_active_configs(tmp_path, 
     monkeypatch.setattr(cli_module, "load_config", lambda _path: app_config)
     monkeypatch.setattr(cli_module, "load_restore_configs", lambda _path: [active, inactive])
     monkeypatch.setattr(cli_module, "emit_backup_restore_event", lambda **_kwargs: None)
+    # A restore-workflow run says its steps from the workflow (0.40.0, 1.375).
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.emit_backup_restore_event", lambda **_kwargs: None)
     monkeypatch.setattr(cli_module, "log_function_call", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli_module, "log_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli_module, "patch_stdout", lambda *args, **kwargs: None)
@@ -2387,6 +2391,8 @@ def test_restore_workflow_with_restore_id_runs_requested_config_even_if_inactive
     monkeypatch.setattr(cli_module, "load_config", lambda _path: app_config)
     monkeypatch.setattr(cli_module, "load_restore_configs", lambda _path: [active, inactive])
     monkeypatch.setattr(cli_module, "emit_backup_restore_event", lambda **_kwargs: None)
+    # A restore-workflow run says its steps from the workflow (0.40.0, 1.375).
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.emit_backup_restore_event", lambda **_kwargs: None)
     monkeypatch.setattr(cli_module, "log_function_call", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli_module, "log_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli_module, "patch_stdout", lambda *args, **kwargs: None)
@@ -2657,7 +2663,7 @@ def test_restore_workflow_hands_dry_run_to_every_step(tmp_path, monkeypatch):
                                   file_results=())
 
     monkeypatch.setattr(cli_module, "run_copy_backup", fake_copy)
-    monkeypatch.setattr(cli_module, "run_restore_all_latest", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server", fake_restore)
     monkeypatch.setattr(cli_module, "run_delete_backup", fake_delete)
     monkeypatch.setattr(cli_module, "run_target_preflight", fake_preflight)
 
@@ -3254,7 +3260,7 @@ def test_restore_workflow_pitr_passes_point_in_time_to_restore(tmp_path, monkeyp
         return DeleteBackupResult(returncode=0, target_backup_dir=tmp_path, cleanup_retention=48, files_considered=0, deleted=0, file_results=())
 
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server", fake_restore)
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_delete_backup", fake_delete)
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
@@ -3320,8 +3326,7 @@ def test_restore_workflow_emits_phase_progress_logs(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        cli_module,
-        "run_restore_all_latest",
+        "dbabrain.backup_restore.workflow.restore_share_server",
         lambda **_kwargs: {"status": "SUCCESS", "overall_status": "SUCCESS", "per_database_restore_status": {"APP": "SUCCESS"}},
     )
     monkeypatch.setattr(
@@ -3547,6 +3552,8 @@ def _make_cli_restore_workflow_calls(tmp_path, monkeypatch, extra_argv=None):
     monkeypatch.setattr(cli_module, "load_config", lambda _: app_config)
     monkeypatch.setattr(cli_module, "load_restore_configs", lambda _: [cfg])
     monkeypatch.setattr(cli_module, "emit_backup_restore_event", fake_emit)
+    # A restore-workflow run says its steps from the workflow (0.40.0, 1.375).
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.emit_backup_restore_event", fake_emit)
     monkeypatch.setattr(cli_module, "log_function_call", lambda *a, **k: None)
     monkeypatch.setattr(cli_module, "log_event", lambda *a, **k: None)
     monkeypatch.setattr(cli_module, "patch_stdout", lambda *a, **k: None)
@@ -3615,6 +3622,8 @@ def test_cli_restore_workflow_start_event_pitr_has_pit_fields(tmp_path, monkeypa
     monkeypatch.setattr(cli_module, "load_config", lambda _: app_config)
     monkeypatch.setattr(cli_module, "load_restore_configs", lambda _: [cfg])
     monkeypatch.setattr(cli_module, "emit_backup_restore_event", fake_emit)
+    # A restore-workflow run says its steps from the workflow (0.40.0, 1.375).
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.emit_backup_restore_event", fake_emit)
     monkeypatch.setattr(cli_module, "log_function_call", lambda *a, **k: None)
     monkeypatch.setattr(cli_module, "log_event", lambda *a, **k: None)
     monkeypatch.setattr(cli_module, "patch_stdout", lambda *a, **k: None)
@@ -3680,7 +3689,7 @@ def _fake_workflow_ops(monkeypatch, called_targets):
         return DeleteBackupResult(returncode=0, target_backup_dir=step_config.vm_import_unc, cleanup_retention=48, files_considered=0, deleted=0, file_results=())
 
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_copy_backup", fake_copy)
-    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server", fake_restore)
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_delete_backup", fake_delete)
     monkeypatch.setattr("dbabrain.backup_restore.cli.run_target_preflight", lambda config, logger=None, **_: None)
 
@@ -3803,7 +3812,7 @@ def test_restore_workflow_windows_then_linux_keeps_per_restore_executor(tmp_path
             "per_database_restore_status": {config.restore_id: "SUCCESS"},
         }
 
-    monkeypatch.setattr("dbabrain.backup_restore.cli.run_restore_all_latest", fake_restore)
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.restore_share_server", fake_restore)
 
     result = run_restore_workflow(
         restore_configs=[windows, linux],
@@ -3880,6 +3889,8 @@ def test_cli_restore_workflow_end_event_has_per_restore_results_from_output(tmp_
     monkeypatch.setattr(cli_module, "load_config", lambda _: app_config)
     monkeypatch.setattr(cli_module, "load_restore_configs", lambda _: [cfg])
     monkeypatch.setattr(cli_module, "emit_backup_restore_event", lambda **kw: captured_events.append(kw))
+    # A restore-workflow run says its steps from the workflow (0.40.0, 1.375).
+    monkeypatch.setattr("dbabrain.backup_restore.workflow.emit_backup_restore_event", lambda **kw: captured_events.append(kw))
     monkeypatch.setattr(cli_module, "log_function_call", lambda *a, **k: None)
     monkeypatch.setattr(cli_module, "log_event", lambda *a, **k: None)
     monkeypatch.setattr(cli_module, "patch_stdout", lambda *a, **k: None)

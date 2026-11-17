@@ -74,6 +74,7 @@ def _connection_info(spec: DockerDbSpec, *, worker_host: str, compose_path: str)
         "connect": connect,
         **({"data_host_dir": spec.data_host_dir} if spec.data_host_dir else {}),
         **({"run_as": spec.run_as} if spec.run_as else {}),
+        **({"timezone": spec.timezone} if spec.timezone else {}),
     }
 
 

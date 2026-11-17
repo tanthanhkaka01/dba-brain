@@ -10,6 +10,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from dbabrain.backup_restore import backup as backup_module
+
+from dbabrain.backup_restore import workflow as workflow_module
 from dbabrain.transport.common_cli import CommonCliError
 from tests.test_an_async_run_never_repeats_a_job_another_run_finished import _backup_job, _Store
 
@@ -23,7 +25,9 @@ def test_a_backup_whose_common_cli_child_crashed_is_an_error_and_the_next_job_ru
     first, second = _backup_job("CRASHES"), _backup_job("NEXT")
     executed: list[str] = []
     monkeypatch.setattr(backup_module, "DbaBrainStore", _Store)
-    monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: None)
+    _emit = lambda **k: None
+    monkeypatch.setattr(backup_module, "emit_backup_restore_event", _emit)
+    monkeypatch.setattr(workflow_module, "emit_backup_restore_event", _emit)
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [first, second])
@@ -42,7 +46,7 @@ def test_a_backup_whose_common_cli_child_crashed_is_an_error_and_the_next_job_ru
                                              stdout="RESULT=ok", stderr="", error_text=None)
 
     monkeypatch.setattr(backup_module, "execute_backup_job", execute)
-    summary = backup_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"),
+    summary = workflow_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"),
                                        config_path="x", force=True)
 
     assert executed == ["CRASHES", "NEXT"]

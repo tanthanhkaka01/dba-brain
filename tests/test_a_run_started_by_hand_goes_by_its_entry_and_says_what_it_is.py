@@ -21,7 +21,8 @@ import pytest
 
 from dbabrain.backup_restore import cli
 from dbabrain.backup_restore import offload as offload_module
-from dbabrain.backup_restore import restore_by_id as restore_by_id_module
+from dbabrain.backup_restore import restore_by_id as restore_by_id_module  # noqa: F401
+from dbabrain.backup_restore import workflow as workflow_module
 from dbabrain.lib.config import DbaBrainConfig
 
 
@@ -48,7 +49,8 @@ def offload_calls(monkeypatch):
         calls.append(kwargs)
         return {"entries": 0, "ran": 0, "succeeded": 0, "failed": 0, "jobs": []}
 
-    monkeypatch.setattr(offload_module, "run_offloads", run_offloads)
+    # A hand run goes through the workflow's pass, which says the steps (0.40.0, 1.374).
+    monkeypatch.setattr(cli, "run_offloads", run_offloads)
     return calls
 
 
@@ -78,10 +80,10 @@ def test_a_limit_that_is_not_a_count_of_files_is_refused_before_anything_runs(no
 
 
 def test_the_pass_reads_the_entrys_value_when_no_limit_is_given():
-    """The half the command line relies on: `run_offloads` falls to the entry's own number."""
+    """The half the command line relies on: the pass falls to the entry's own number."""
     import inspect
 
-    source = inspect.getsource(offload_module.run_offloads)
+    source = inspect.getsource(offload_module.plan_entry)
 
     assert "int(limit or entry.offload.files_per_pass)" in source
 
@@ -99,7 +101,8 @@ def restore_calls(monkeypatch):
         return {"restore_id": request["restore_id"], "db_type": "postgresql", "dry_run": bool(request.get("dry_run")),
                 "warnings": []}
 
-    monkeypatch.setattr(restore_by_id_module, "restore_by_id", restore_by_id)
+    # A restore by hand is the workflow's run of the steps (0.40.0, 1.375).
+    monkeypatch.setattr(workflow_module, "run_restore_by_id", restore_by_id)
     monkeypatch.setattr(cli, "_open_catalog", lambda *a, **k: None)
     return calls
 
@@ -118,6 +121,19 @@ def test_a_dry_run_of_a_restore_is_announced_as_a_dry_run(node, restore_calls, c
     assert answer["message"] == "PG_DRILL dry run: the plan was read, nothing restored (postgresql)."
 
 
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_a_dry_run_is_handed_the_catalog_a_real_run_is(node, restore_calls, monkeypatch, capsys, dry_run):
+    # A lab drill, 2026-11-16: an entry restoring from the repository plans from the catalog, and
+    # a dry run by hand was handed none - it refused what the real run then restored.
+    catalog = object()
+    monkeypatch.setattr(cli, "_open_catalog", lambda *a, **k: catalog)
+
+    assert cli.main(["restore-by-id", "--config", "config.json", _restore_request(dry_run=dry_run)]) == 0
+
+    assert restore_calls[-1]["catalog"] is catalog
+    capsys.readouterr()
+
+
 def test_a_real_restore_keeps_its_words(node, restore_calls, capsys):
     assert cli.main(["restore-by-id", "--config", "config.json", _restore_request()]) == 0
 
@@ -132,7 +148,7 @@ def test_a_dry_run_that_fails_says_it_was_a_dry_run(node, monkeypatch, capsys):
     def refuses(request, **kwargs):
         raise RuntimeError("the chain has no full backup")
 
-    monkeypatch.setattr(restore_by_id_module, "restore_by_id", refuses)
+    monkeypatch.setattr(workflow_module, "run_restore_by_id", refuses)
 
     assert cli.main(["restore-by-id", "--config", "config.json", _restore_request(dry_run=True)]) != 0
 

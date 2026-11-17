@@ -59,7 +59,6 @@ def test_a_sql_server_restore_from_the_repository_says_each_hop():
 
 
 @pytest.mark.parametrize("change, words", [
-    ({"db_type": "oracle", "script": "assets/backup/oracle/rman_restore_drill.sh"}, "oracle is not built"),
     ({"target_server_id": "ACME-192-0-2-10"}, "needs a target_server_id other than the source"),
 ])
 def test_a_repository_entry_the_workflow_refuses_is_said_refused_before_its_lines(change, words):

@@ -707,6 +707,8 @@ def build_context(spec: DockerDbSpec) -> dict[str, Any]:
                              else f"- {spec.name}_data:/var/lib/postgresql"),
         "named_volumes_block": "" if spec.data_host_dir else f"volumes:\n  {spec.name}_data:",
         "user_line": f'    user: "{spec.run_as}"' if spec.run_as else "",
+        # 0.40.0 (1.385): the container's clock, a pre-rendered line (no {% if %}); empty is the image's UTC.
+        "tz_line": f"      TZ: {spec.timezone}" if spec.timezone else "",
     }
     ctx.update(_backup_ready(spec))
     if spec.is_ha:

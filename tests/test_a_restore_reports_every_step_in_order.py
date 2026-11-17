@@ -39,7 +39,7 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import landing_of
-from dbabrain.backup_restore import events, restore_by_id, restore_script
+from dbabrain.backup_restore import events, restore_by_id, restore_script, workflow
 from dbabrain.common import backup_copy
 from dbabrain.lib import restore_space
 from dbabrain.lib.integrity import RestoreIntegrity
@@ -48,8 +48,11 @@ from dbabrain.lib.integrity import RestoreIntegrity
 # environment nothing states is refused since 0.39.0 (D-39.6) - see tests/conftest.py.
 pytestmark = pytest.mark.usefixtures("restore_targets_are_lab")
 
-SUCCESS = ["COPY_START", "COPY_DONE", "METADATA_SKIP", "RESTORE_START", "RESTORE_STEP", "RESTORE_DONE",
-           "VERIFY_START", "VERIFY_DONE", "DELETE_START", "DELETE_DONE"]
+# The eleven steps since 0.40.0 (1.375), as the workflow calls and says them - 1 and 11 are its
+# caller's: 2 copy, 3 metadata before, 4 certificate, 5/6 each full and diff a start and a done, 7 each
+# log, 8 the check, 9 metadata after, 10 the plain files; a step that does not apply said, with why.
+SUCCESS = ["COPY_START", "COPY_DONE", "METADATA_DONE", "CERT_DONE", "DIFF_START", "DIFF_DONE", "STEP_SKIP",
+           "CHECK_START", "CHECK_DONE", "METADATA_DONE", "PLAIN_DONE"]
 
 
 def _job(db_type="postgresql", *, remote=True, metadata=False):
@@ -107,9 +110,7 @@ def drill(monkeypatch):
 
         def replay(job, *, phase, data_dir=None, on_phase=None):
             state["calls"].append(("metadata", phase))
-            events.announce(on_phase, "METADATA_START", f"replaying {phase}")
-            events.announce(on_phase, "METADATA_DONE", f"{phase} replayed")
-            return "", (metadata_report or {"ok": True})
+            return "", (metadata_report or {"ok": True, "target": "PG_LAB_B"})
 
         monkeypatch.setattr(restore_script, "transfer_backup_to_target", transfer)
         monkeypatch.setattr(restore_script, "prune_staged_backups",
@@ -119,8 +120,13 @@ def drill(monkeypatch):
         monkeypatch.setattr(restore_by_id, "_execute", execute)
         request = {"restore_id": job.restore_id,
                    **({"point_in_time": point_in_time} if point_in_time else {})}
-        return restore_by_id.restore_by_id(
-            request, on_phase=lambda p, m, e=None: state["events"].append((p, m)))
+        # The workflow calls each step and says it (0.40.0, 1.375): its messages are what is read here.
+        monkeypatch.setattr(workflow, "emit_backup_restore_event",
+                            lambda **k: state["events"].append((k["phase"], k["message"])))
+        say = workflow._RestoreSay(app_config=None, logger=None, notify=None, metadata={},
+                                   restore_id=job.restore_id, engine=job.db_type, target=job.target_server_id,
+                                   source=job.server_id)
+        return workflow.run_restore_by_id(request, say=say)
 
     run.state = state
     return run
@@ -155,8 +161,10 @@ def test_the_delete_runs_after_the_verify_and_not_inside_the_copy(drill):
 def test_an_in_place_restore_has_no_copy_and_no_delete(drill):
     drill(_job(remote=False))
 
-    assert _phases(drill) == ["METADATA_SKIP", "RESTORE_START", "RESTORE_STEP", "RESTORE_DONE",
-                              "VERIFY_START", "VERIFY_DONE"]
+    # Step 2 said as not applying: the target reads the source's own folder.
+    assert _phases(drill) == ["STEP_SKIP", "METADATA_DONE", "CERT_DONE", "DIFF_START", "DIFF_DONE", "STEP_SKIP",
+                              "CHECK_START", "CHECK_DONE", "METADATA_DONE"]
+    assert "2. Copy: none" in drill.state["events"][0][1]
 
 
 def test_a_failed_copy_stops_at_copy_start(drill):
@@ -171,7 +179,7 @@ def test_a_failed_restore_step_stops_before_the_verify_and_deletes_nothing(drill
     with pytest.raises(restore_by_id.RestoreByIdError, match="RMAN-06054"):
         drill(_job(), fail_op="restore-diff")
 
-    assert _phases(drill) == ["COPY_START", "COPY_DONE", "METADATA_SKIP", "RESTORE_START"]
+    assert _phases(drill) == ["COPY_START", "COPY_DONE", "METADATA_DONE", "CERT_DONE", "DIFF_START"]
     assert ("prune",) not in drill.state["calls"]
 
 
@@ -179,8 +187,8 @@ def test_a_failed_verify_is_announced_then_fails_the_run_and_deletes_nothing(dri
     with pytest.raises(restore_by_id.RestoreByIdError, match="1 of 2 database"):
         drill(_job(), verify_ok=False)
 
-    assert _phases(drill)[-2:] == ["VERIFY_START", "VERIFY_DONE"]
-    assert "2 database(s) checked, 1 unusable" in _said(drill, "VERIFY_DONE")
+    assert _phases(drill)[-2:] == ["CHECK_START", "CHECK_ERROR"]
+    assert "2 database(s) checked, 1 unusable" in _said(drill, "CHECK_ERROR")
     assert ("prune",) not in drill.state["calls"]
 
 
@@ -189,9 +197,9 @@ def test_instance_metadata_is_replayed_before_the_databases_and_after_them(drill
         {"op": "restore-full", "request": {"database_name": "APPDB", "backup_path": "/b/APPDB_FULL.bak"}},
         {"op": "verify-restore", "request": {}}])
 
-    assert _phases(drill) == ["COPY_START", "COPY_DONE", "METADATA_START", "METADATA_DONE",
-                              "RESTORE_START", "RESTORE_STEP", "RESTORE_DONE", "VERIFY_START", "VERIFY_DONE",
-                              "METADATA_START", "METADATA_DONE", "DELETE_START", "DELETE_DONE"]
+    assert _phases(drill) == ["COPY_START", "COPY_DONE", "METADATA_DONE", "CERT_DONE", "FULL_START", "FULL_DONE",
+                              "STEP_SKIP", "STEP_SKIP", "CHECK_START", "CHECK_DONE", "METADATA_DONE", "PLAIN_DONE"]
+    assert "3. Instance metadata before the restore done" in _said(drill, "METADATA_DONE")
     assert [c for c in drill.state["calls"] if c[0] == "metadata"] == [
         ("metadata", "pre-database"), ("metadata", "post-database")]
 
@@ -210,21 +218,24 @@ def test_no_post_database_metadata_after_a_restore_that_failed(drill):
 def test_an_entry_without_metadata_says_why_once(drill, engine, reason):
     drill(_job(engine))
 
-    assert _phases(drill).count("METADATA_SKIP") == 1
-    assert reason in _said(drill, "METADATA_SKIP")
+    # With no metadata there is still a message, before and after (the operator, 2026-11-15).
+    said = [message for phase, message in drill.state["events"] if phase == "METADATA_DONE"]
+    assert len(said) == 2 and all("not restored" in m and reason in m for m in said)
 
 
 # --------------------------------------------------------------------------- #
 # What the messages say
 # --------------------------------------------------------------------------- #
-def test_the_restore_start_names_what_goes_in_and_to_which_point(drill):
+def test_each_step_names_what_goes_in_and_the_first_to_which_point(drill, monkeypatch):
     drill(_job())
-    assert ("base backup 20260925T0047Z_FULL + 1 incremental(s), then WAL replay, "
-            "to the newest backup") in _said(drill, "RESTORE_START")
+    assert "base backup 20260925T0047Z_FULL + 1 incremental(s), then WAL replay" in _said(drill, "DIFF_START")
 
-    drill.state["events"].clear()
-    drill(_job(), point_in_time="2026-09-25 08:23:46 +08:00")
-    assert "to 2026-09-25 08:23:46 +08:00" in _said(drill, "RESTORE_START")
+    said = []
+    monkeypatch.setattr(workflow, "emit_backup_restore_event", lambda **k: said.append(k["message"]))
+    workflow._RestoreSay(app_config=None, logger=None, notify=None, metadata={}, restore_id="R", engine="postgresql",
+                         target="B").started(source="A", moment="2026-09-25 08:23:46 +08:00", copy_only=False,
+                                             from_repository=False, remote=True)
+    assert said[0].startswith("1. Restore process started") and "to 2026-09-25 08:23:46 +08:00" in said[0]
 
 
 def test_a_sql_server_plan_is_named_per_database_and_oracle_by_its_duplicate():
@@ -378,9 +389,12 @@ class _Store:
         pass
 
 
-@pytest.mark.parametrize("status, expected", [("done", ["START", "END"]), ("error", ["START", "ERROR"])])
+# Steps 1, 2, 3 and - with nothing for a repository - 10, its own (0.40.0, 1.374).
+@pytest.mark.parametrize("status, expected", [("done", ["START", "BACKUP_START", "END", "PROCESS_DONE"]),
+                                              ("error", ["START", "BACKUP_START", "ERROR", "PROCESS_ERROR"])])
 def test_a_backup_reports_start_then_its_end_or_its_error_with_the_reason(monkeypatch, tmp_path, status, expected):
     from dbabrain.backup_restore import backup as backup_module
+    from dbabrain.backup_restore import workflow as workflow_module
     from dbabrain.backup_restore.server_metadata import ServerMetadataPlan
     from dbabrain.db.backup_catalog import BackupCatalogStore
     from dbabrain.lib.time_window import TimeWindow
@@ -396,7 +410,9 @@ def test_a_backup_reports_start_then_its_end_or_its_error_with_the_reason(monkey
         backup_dir="/b/PG_LAB_A", cleanup_retention=259200, time_window=TimeWindow(),
         server_metadata=ServerMetadataPlan())
     monkeypatch.setattr(backup_module, "DbaBrainStore", _Store)
-    monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: emitted.append(k))
+    _emit = lambda **k: emitted.append(k)
+    monkeypatch.setattr(backup_module, "emit_backup_restore_event", _emit)
+    monkeypatch.setattr(workflow_module, "emit_backup_restore_event", _emit)
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [job])
@@ -405,7 +421,7 @@ def test_a_backup_reports_start_then_its_end_or_its_error_with_the_reason(monkey
         stdout="RESULT=ok" if status == "done" else "", stderr="",
         error_text=None if status == "done" else "container 'PG_LAB_A' is not running"))
 
-    backup_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x", force=True)
+    workflow_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x", force=True)
 
     assert [e["phase"] for e in emitted] == expected
     assert all(e["metadata"]["backup_id"] == "PG_LAB_A_DB" for e in emitted)
@@ -416,6 +432,7 @@ def test_a_backup_reports_start_then_its_end_or_its_error_with_the_reason(monkey
 @pytest.fixture
 def empty_root(tmp_path, monkeypatch):
     from dbabrain.backup_restore import backup as backup_module
+    from dbabrain.backup_restore import workflow as workflow_module
     from dbabrain.backup_restore import config as config_module
 
     data = tmp_path / "data"

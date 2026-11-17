@@ -172,11 +172,12 @@ def test_the_cleanup_phase_announces_itself_to_the_store():
     """
     import inspect
 
-    from dbabrain.backup_restore import cli
+    from dbabrain.backup_restore import workflow
 
-    source = inspect.getsource(cli)
-    assert '_say("DELETE_START"' in source
-    assert '_say("DELETE_DONE"' in source
-    # The counts, not just the verdict: SUCCESS alone could not tell thirteen deletions from none.
+    # Since 0.40.0 (1.375) the share-driven run's steps are the workflow's: the cleanup is step 10, said
+    # with its counts - SUCCESS alone could not tell thirteen deletions from none.
+    source = inspect.getsource(workflow.run_share_restore)
+    assert "say.plain(" in source
     assert '"files_considered": _considered' in source
     assert '"deleted": _deleted' in source
+    assert '{"pruned": _deleted, "skipped": f"{_considered} considered, "' in source

@@ -38,7 +38,7 @@ RUN_SQL_OPTIONS = ("format", "output_path", "max_rows", "capture", "timeout_seco
                    "connect_timeout_seconds", "max_result_sets")
 #: What this command reads itself.
 OWN_FIELDS = ("server_id", "database", "credential_name", "sql_text", "sql_file",
-              "commit", "autocommit", "confirm", "assume_yes", "reason")
+              "commit", "autocommit", "confirm", "confirm_target", "assume_yes", "reason")
 ACCEPTED = OWN_FIELDS + RUN_SQL_OPTIONS
 _FLAGS = ("commit", "autocommit", "assume_yes")
 
@@ -53,6 +53,7 @@ USAGE = (
     "  commit / autocommit   true to keep what the SQL changed - asks for one typed yes first.\n"
     "                   Omitted, everything is rolled back.\n"
     "  confirm \"yes\", assume_yes, reason   the answer to that question, when not at a terminal\n"
+    "  confirm_target   the target's id typed back, where the write costs two answers\n"
     "  " + ", ".join(RUN_SQL_OPTIONS) + "   passed to run-sql as they are\n"
 )
 
@@ -78,6 +79,10 @@ def checked(request: dict[str, Any], *, cwd: Path | None = None) -> dict[str, An
     # `true` is intent and the terminal still asks; the word `yes` is an answer (common.confirm).
     if "confirm" in request and not (isinstance(request["confirm"], str) or request["confirm"] is True):
         raise AdhocRequestError(f'{COMMAND}: confirm must be "yes" or true.')
+    # The second answer, for an operation priced at two (1.403): the target typed back. Refused before,
+    # so a write priced at two could never be answered off a terminal - every one on the worker failed.
+    if "confirm_target" in request and not isinstance(request["confirm_target"], str):
+        raise AdhocRequestError(f"{COMMAND}: confirm_target must be a string - the target's id, typed back.")
     for name in _FLAGS:
         if name in request and not isinstance(request[name], bool):
             raise AdhocRequestError(f"{COMMAND}: {name} must be true or false.")
@@ -163,6 +168,8 @@ def authorize_write(request: dict[str, Any], *, data_dir: Path | None = None,
                    or True,
         "reason": str(request.get("reason") or "ad-hoc SQL that writes"),
     }
+    if isinstance(request.get("confirm_target"), str):
+        gate["confirm_target"] = request["confirm_target"].strip()
     if request.get("assume_yes") is True:
         gate["assume_yes"] = True
     try:

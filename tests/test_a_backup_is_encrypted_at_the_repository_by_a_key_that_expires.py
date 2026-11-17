@@ -577,7 +577,8 @@ def test_a_wholly_encrypted_and_proven_copy_releases_its_source_after_its_age_fi
     answer, sent, hashed, catalog = _release(monkeypatch, sealed={7: [age]},
                                              found={age["encrypted_path"]: (AGE_SHA, 4321)})
 
-    assert answer == {"deleted": 1, "kept": 0, "refused": []}
+    assert {k: v for k, v in answer.items() if k != "deleted_ids"} == {"deleted": 1, "kept": 0, "refused": []}
+    assert len(answer["deleted_ids"]) == 1, "which file went - a backup's step 8 tells its own from earlier ones"
     assert hashed == [age["encrypted_path"]], "the .age file is proven again - the plain copy is gone"
     assert sent == [{"path": "/b/a.bak"}], "one file per command, its own facts"
     assert catalog.set and catalog.set[0][1]["state"] == "pruned" and catalog.set[0][1]["source_deleted_at"]
@@ -723,12 +724,11 @@ def test_no_partial_costs_one_listing_and_no_wait(world):
 
 
 def test_a_waiting_step_reads_as_waiting_in_the_flow_message_not_as_an_error():
-    from dbabrain.backup_restore import offload as O
+    """Step 7 of a backup's ten (1.374): an earlier pass's age still writing the file is not a failure -
+    the process ends and a later pass says 7 and 8 again (the operator, 2026-11-16)."""
+    from dbabrain.backup_restore import backup_messages as BM
 
-    entry = SimpleNamespace(backup_id="B1", server_id="SRV", offload=SimpleNamespace(
-        server_id="REPO", encrypt=True, delete_source=False, repository_check=False))
-    flow = O.offload_flow_lines(entry, {"copy": {"files": 1, "verified": 1, "failed": []},
-                                        "encrypt": {"rows": 1, "encrypted": 0, "failed": [],
-                                                    "waiting": ["A.bak: still being encrypted"]}},
-                                error="", status="done")
-    assert flow["flow_lines"][1].startswith("⏳ 3. Encrypt: waiting - A.bak")
+    flow = BM.encrypt_done("B1", {"rows": 1, "encrypted": 0, "failed": []}, waiting=1, repository="REPO")
+    assert flow["flow_title"] == "B1 · 7. Encrypt waiting"
+    assert flow["flow_lines"][0].startswith("⏳ 1 file(s) still being encrypted on REPO")
+    assert not any(line.startswith("❌") for line in flow["flow_lines"])

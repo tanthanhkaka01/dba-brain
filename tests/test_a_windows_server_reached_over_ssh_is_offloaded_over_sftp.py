@@ -49,6 +49,6 @@ def test_the_offload_reads_a_windows_server_over_ssh_and_only_over_sftp():
 
     from dbabrain.backup_restore import offload
 
-    source = inspect.getsource(offload._run_one)
+    source = inspect.getsource(offload.open_hosts)
     assert 'source.access != "ssh"' in source, "a Windows server over SSH needs no share"
     assert 'entry.offload.transfer == "cat"' in source and "offload_transfer: sftp" in source

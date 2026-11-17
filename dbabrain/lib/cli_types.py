@@ -788,6 +788,103 @@ SecretSetAnswer = TypedDict('SecretSetAnswer', {
 }, total=False)
 
 
+#: One secret removed from the encrypted store (and the plaintext source). (secret-remove)
+SecretRemoveAnswer = TypedDict('SecretRemoveAnswer', {
+    'ref': str | None,
+    'store': str | None,
+    'removed': bool | None,
+    'plaintext_removed': bool | None,
+}, total=False)
+
+
+#: One record of a data/*.json list to remove, found by its fields; a plan unless apply. (entry-remove)
+EntryRemoveRequest = TypedDict('EntryRemoveRequest', {
+    'data_dir': str | None,
+    'file': Required[str | None],
+    'match': Required[dict[str, Any] | None],
+    'apply': bool | None,
+}, total=False)
+
+
+#: One record removed - or the plan to - and nothing names it. (entry-remove)
+EntryRemoveAnswer = TypedDict('EntryRemoveAnswer', {
+    'command': str | None,
+    'file': str | None,
+    'record': str | None,
+    'pointers': list[Any] | None,
+    'applied': bool | None,
+    'removed': bool | None,
+    'list': str | None,
+}, total=False)
+
+
+#: One login of users.json to remove, by its credential_name; a plan unless apply. (credential-remove)
+CredentialRemoveRequest = TypedDict('CredentialRemoveRequest', {
+    'data_dir': str | None,
+    'credential_name': Required[str | None],
+    'server_id': str | None,
+    'apply': bool | None,
+}, total=False)
+
+
+#: One login removed - or the plan to - and its group with its last login. (credential-remove)
+CredentialRemoveAnswer = TypedDict('CredentialRemoveAnswer', {
+    'command': str | None,
+    'file': str | None,
+    'record': str | None,
+    'pointers': list[Any] | None,
+    'applied': bool | None,
+    'removed': bool | None,
+    'section': str | None,
+    'server_id': str | None,
+    'group_goes': bool | None,
+    'group_removed': bool | None,
+    'password_ref': str | None,
+}, total=False)
+
+
+#: One server's record of db_instances.json to remove; a plan unless apply. (instance-remove)
+InstanceRemoveRequest = TypedDict('InstanceRemoveRequest', {
+    'data_dir': str | None,
+    'server_id': Required[str | None],
+    'apply': bool | None,
+}, total=False)
+
+
+#: One server's record removed - or the plan to - and nothing names it. (instance-remove)
+InstanceRemoveAnswer = TypedDict('InstanceRemoveAnswer', {
+    'command': str | None,
+    'file': str | None,
+    'record': str | None,
+    'pointers': list[Any] | None,
+    'applied': bool | None,
+    'removed': bool | None,
+    'next': str | None,
+}, total=False)
+
+
+#: One server to take off the report's canonical inventory; a plan unless apply. (report-server-remove)
+ReportServerRemoveRequest = TypedDict('ReportServerRemoveRequest', {
+    'data_dir': str | None,
+    'server_id': Required[str | None],
+    'inventory': str | None,
+    'apply': bool | None,
+}, total=False)
+
+
+#: One server taken off the report's inventory - or the plan to. (report-server-remove)
+ReportServerRemoveAnswer = TypedDict('ReportServerRemoveAnswer', {
+    'command': str | None,
+    'file': str | None,
+    'record': str | None,
+    'pointers': list[Any] | None,
+    'applied': bool | None,
+    'removed': bool | None,
+    'list': str | None,
+    'servers_left': int | None,
+}, total=False)
+
+
 #: The AI assistant's key stored, and the assistant switched on. (ai-key)
 AiKeyAnswer = TypedDict('AiKeyAnswer', {
     'ref': str | None,
@@ -998,6 +1095,7 @@ AuthorizeRequest = TypedDict('AuthorizeRequest', {
     'target_label': str | None,
     'effects': list[Any] | None,
     'confirm': bool | None,
+    'confirm_target': str | None,
     'assume_yes': bool | None,
     'authorized_by': dict[str, Any] | None,
     'reason': str | None,
@@ -1511,6 +1609,7 @@ CreateDbDockerRequest = TypedDict('CreateDbDockerRequest', {
     'network_subnet': str | None,
     'data_host_dir': str | None,
     'run_as': str | None,
+    'timezone': str | None,
     'containers_dir': Required[str | None],
     'worker_host': str | None,
     'remote': dict[str, Any] | None,
@@ -1808,6 +1907,13 @@ SecretSetRequest = TypedDict('SecretSetRequest', {
     'value': Required[str | None],
     'overwrite': bool | None,
     'also_plaintext': bool | None,
+}, total=False)
+
+
+#: One secret to remove, named by its ref and proven by its value. Stdin only. (secret-remove)
+SecretRemoveRequest = TypedDict('SecretRemoveRequest', {
+    'ref': Required[str | None],
+    'value': Required[str | None],
 }, total=False)
 
 
@@ -2180,6 +2286,15 @@ __all__ = [
     'RegistrationAnswer',
     'ConfigEditAnswer',
     'SecretSetAnswer',
+    'SecretRemoveAnswer',
+    'EntryRemoveRequest',
+    'EntryRemoveAnswer',
+    'CredentialRemoveRequest',
+    'CredentialRemoveAnswer',
+    'InstanceRemoveRequest',
+    'InstanceRemoveAnswer',
+    'ReportServerRemoveRequest',
+    'ReportServerRemoveAnswer',
     'AiKeyAnswer',
     'RunSqlAnswer',
     'RunCmdAnswer',
@@ -2247,6 +2362,7 @@ __all__ = [
     'MetricEnvRequest',
     'AppCommandSetRequest',
     'SecretSetRequest',
+    'SecretRemoveRequest',
     'AiKeyRequest',
     'RunSqlRequest',
     'RunCmdRequest',

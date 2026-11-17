@@ -108,8 +108,9 @@ if [ -n "${RETENTION_RMAN_L0_SECONDS:-}" ]; then
 fi
 # <<< retention per type
 
-# Empty means "whatever the container profile exports". Anything else is exported into a shell
-# inside the container, so it has to be an identifier and nothing else.
+# Required (1.387): the backup entry's oracle_sid. It is exported into a shell inside the container,
+# so it has to be an identifier and nothing else.
+[ -n "$oracle_sid" ] || die "ORACLE_SID is not set - the backup entry states its oracle_sid."
 case "$oracle_sid" in
     *[!A-Za-z0-9_]*) die "ORACLE_SID must be letters, digits and underscores: '${oracle_sid}'." ;;
 esac
@@ -254,7 +255,10 @@ HOSTPATHS
 # every piece, the RMAN analogue of SQL Server's RESTORE VERIFYONLY), and each piece is hashed
 # where it lies. A validation that fails fails the run: the pieces are on disk and unusable.
 emit_pieces() {
-    pieces="$(printf '%s\n' "$1" | sed -n 's/.*piece handle=\([^ ]*\).*/\1/p' | sort -u)"
+    # Only what THIS run wrote (a lab drill, 2026-11-16): a DELETE prints `backup piece
+    # handle=<file> RECID=...` for every piece it removes - read as written, a removed piece was
+    # catalogued as this run's.
+    pieces="$(printf '%s\n' "$1" | grep -v 'RECID=' | sed -n 's/.*piece handle=\([^ ]*\).*/\1/p' | sort -u)"
     [ -n "$pieces" ] || return 0
     elapsed=$(( $(date +%s) - run_started + 60 ))
     keys="$(printf 'LIST BACKUP SUMMARY COMPLETED AFTER %s;\nEXIT;\n' "'SYSDATE-${elapsed}/86400'" \
@@ -322,6 +326,15 @@ RMANEOF
 sid_export=""
 [ -n "$oracle_sid" ] && sid_export="export ORACLE_SID='${oracle_sid}'; "
 printf 'oracle_sid=%s rman_configure=%s\n' "${oracle_sid:-<profile default>}" "$rman_configure"
+
+# The SID is the entry's own (0.40.0, 1.387; the operator, 2026-11-16: *Oracle must have its SID, missing
+# is wrong*): stated, and held to the instance that answers - v$instance asked through the login RMAN uses.
+# A run without one used to back up whatever the profile exported and name the database "database".
+answered="$(printf 'set heading off feedback off pagesize 0\nselect instance_name from v$instance;\nexit;\n' \
+    | run_rman "${sid_export}sqlplus -s / as sysdba" 2>&1 | tr -d '[:space:]')"
+if [ "$(printf '%s' "$answered" | tr '[:lower:]' '[:upper:]')" != "$(printf '%s' "$oracle_sid" | tr '[:lower:]' '[:upper:]')" ]; then
+    die "ORACLE_SID ${oracle_sid} is not the instance that answers here: v\$instance says '${answered}'."
+fi
 
 rman_out="$(printf '%s\n' "$RMAN_IN" | run_rman "${sid_export}rman target / log /dev/stdout 2>&1")"
 rman_rc=$?

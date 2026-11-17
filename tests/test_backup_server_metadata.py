@@ -382,6 +382,16 @@ def test_a_failed_gate_keeps_its_reason_and_its_blockers(monkeypatch):
         "blockers": ["edition_supported"]}
 
 
+def test_each_gate_that_warned_is_kept_with_what_it_said():
+    from dbabrain.backup_restore import server_metadata
+
+    summary = server_metadata.summarize({"ok": True, "status": "WARN", "gates": [
+        {"name": "replay.logins", "status": "WARN", "detail": "5 ok,  0 failed,\n2 unsupported"},
+        {"name": "replay.jobs", "status": "OK", "detail": "3 ok"}]})
+    assert summary["warnings"] == ["replay.logins: 5 ok, 0 failed, 2 unsupported"]
+    assert "warnings" not in server_metadata.summarize({"ok": True, "status": "OK", "gates": []})
+
+
 def test_a_command_that_could_not_run_at_all_is_passed_through(monkeypatch):
     """A process that never answered raises out of the reader. This module's contract is that a
     metadata step never fails the restore beside it, so the raise is caught and shaped like a

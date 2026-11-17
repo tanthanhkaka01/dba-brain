@@ -175,7 +175,7 @@ def plain_files(entry: Any, row: dict[str, Any], hosts: Any) -> list[tuple[str, 
     them now (``.age`` ones left out), its ``backup_manifest`` held to the catalog's checksum - the
     manifest is what pg_verifybackup holds the rest to."""
     path = str(row["offload_path"])
-    member = I.HASHED_MEMBER.get(str(row["file_type"]).upper())
+    member = I.directory_member(row["file_type"], row.get("file_name"))
     if not member:
         return [(path, int(row["size_bytes"]), str(row["checksum_after_backup"]).lower())]
     timeout = int(entry.offload.hash_timeout_seconds)
@@ -200,7 +200,9 @@ def encrypt_rows(entry: Any, *, app_config: Any, store: RepositoryEncryptionStor
     moment = now or datetime.now(timezone.utc)
     done = store.done_rows(backup_id=entry.backup_id)
     todo = [r for r in rows if int(r["file_id"]) not in done and r.get("offload_state") == "verified"]
-    answer: dict[str, Any] = {"rows": len(todo), "encrypted": 0, "files": 0, "failed": [], "waiting": []}
+    # Which rows, not only how many: a backup's step 7 is its own rows, step 9 the earlier ones (1.374).
+    answer: dict[str, Any] = {"rows": len(todo), "encrypted": 0, "files": 0, "failed": [], "waiting": [],
+                              "file_ids": [], "waiting_ids": [], "failed_ids": []}
     if not todo:
         return answer
     key, identity = key_for(entry, app_config=app_config, store=store, secrets=secrets, passphrase=passphrase,
@@ -212,15 +214,18 @@ def encrypt_rows(entry: Any, *, app_config: Any, store: RepositoryEncryptionStor
                                  passphrase=passphrase)
         except StillEncrypting as exc:
             answer["waiting"].append(f"{row['file_name']}: {exc}"[:600])
+            answer["waiting_ids"].append(int(row["file_id"]))
             continue
         except Exception as exc:  # noqa: BLE001 - this row's, said by name
             answer["failed"].append(f"{row['file_name']}: {type(exc).__name__}: {exc}"[:600])
+            answer["failed_ids"].append(int(row["file_id"]))
             continue
         store.mark_row_done(file_id=int(row["file_id"]), backup_id=entry.backup_id,
                             repository_server_id=entry.offload.server_id, encrypted_files=count,
                             key_id=int(key["key_id"]))
         answer["encrypted"] += 1
         answer["files"] += count
+        answer["file_ids"].append(int(row["file_id"]))
     return answer
 
 
@@ -238,7 +243,7 @@ _sleep = __import__("time").sleep
 def _partials(row: dict[str, Any], hosts: Any, timeout: int) -> dict[str, int]:
     """``{partial path: bytes}`` of the ``<file>.age.<pid>.partial`` files under the row's copy."""
     path = str(row["offload_path"])
-    folder = path if I.HASHED_MEMBER.get(str(row["file_type"]).upper()) else posixpath.dirname(path)
+    folder = path if I.is_base_directory(row["file_type"], row.get("file_name")) else posixpath.dirname(path)
     listing = common_cli.run("list-files", {"host": hosts.repository_host, "folder": folder,
                                             "timeout_seconds": timeout}, timeout_seconds=timeout + _MARGIN)
     return {str(f["path"]): int(f.get("size_bytes") or 0) for f in listing.get("files") or []

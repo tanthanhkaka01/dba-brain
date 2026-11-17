@@ -51,6 +51,7 @@ def ran(monkeypatch):
     ("restore-full", {"encryption_password": "p"}, ["encryption_password"]),
     ("rotate-password", {"passwords": [{"ref": "R", "value": "v"}]}, ["passwords"]),
     ("secret-set", {"ref": "TELEGRAM_BOT_TOKEN", "value": "t"}, ["value"]),
+    ("secret-remove", {"ref": "TELEGRAM_BOT_TOKEN", "value": "t"}, ["value"]),
     ("ai-key", {"value": "sk-ant-x"}, ["value"]),
     ("smb-list", {"items": [{"share": "x", "password": "p"}]}, ["items[0].password"]),
 ])
@@ -102,7 +103,7 @@ def test_a_login_the_node_completes_is_not_one_the_model_sent(tmp_path, ran, mon
 def test_a_command_that_could_only_be_refused_is_not_a_tool(tmp_path):
     names = {tool["name"] for tool in S.tool_list(_node(tmp_path))}
 
-    assert not {"secret-set", "ai-key", "decrypt-on-host", "fetch-decrypted-file", "verify-encrypted-file"} & names
+    assert not {"secret-set", "secret-remove", "ai-key", "decrypt-on-host", "fetch-decrypted-file", "verify-encrypted-file"} & names
     assert {"instance-add", "remote-credential-add", "run-sql", "list-targets"} <= names, "a reference is enough"
 
 

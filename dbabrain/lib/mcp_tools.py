@@ -76,7 +76,7 @@ SECRET_KEYS = frozenset({"password", "sudo_password", "encryption_password", "pa
                          "passphrase", "api_key", "token"})
 
 #: Commands whose purpose is a secret the caller gives - ``value`` is it.
-SECRET_VALUE_COMMANDS = frozenset({"secret-set", "ai-key"})
+SECRET_VALUE_COMMANDS = frozenset({"secret-set", "secret-remove", "ai-key"})
 
 #: Commands that only read, whose names say otherwise.
 READ_ONLY_COMMANDS = frozenset({"due-check", "read-file", "self-status", "smb-list", "metric-batch",

@@ -238,7 +238,7 @@ def _fold(section: dict) -> str:
     block = re.search(r"\nfunction restoresBlock\(r\)\{.*?\n\}\n", script, flags=re.S).group(0)
     program = ('const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'
                '\'"\':"&quot;"}[c]));\n' + block + f"\nprocess.stdout.write(restoresBlock({json.dumps(section)}));\n")
-    done = subprocess.run([NODE, "-e", program], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    done = subprocess.run([NODE, "-"], input=program, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert done.returncode == 0, done.stderr
     return done.stdout
 

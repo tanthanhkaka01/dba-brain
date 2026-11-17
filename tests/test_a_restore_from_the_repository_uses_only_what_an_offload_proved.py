@@ -224,20 +224,19 @@ def _script_entry(**overrides):
     return ScriptRestore(**values)
 
 
-def test_a_script_restore_onto_another_server_may_read_the_repository():
-    action, error = workflow._entry_action(_script_entry(), copy_only=False)
+@pytest.mark.parametrize("engine", ["postgresql", "oracle"])
+def test_a_script_restore_onto_another_server_may_read_the_repository(engine):
+    # Oracle since 0.40.0 (1.380): by the RMAN chain recorded at backup time.
+    action, error = workflow._entry_action(_script_entry(db_type=engine), copy_only=False)
     assert error is None and action == "restore"
 
 
 @pytest.mark.parametrize("entry, words", [
     (SimpleNamespace(restore_id="S", restore_from="repository", action="restore", db_type=None), "share-driven SQL Server"),
-    ("oracle", "this entry is oracle"),
     ("in place", "an in-place entry copies nothing"),
 ])
 def test_what_the_repository_cannot_serve_is_refused_by_name(entry, words):
-    if entry == "oracle":
-        entry = _script_entry(db_type="oracle")
-    elif entry == "in place":
+    if entry == "in place":
         entry = _script_entry(target_server_id="")
     action, error = workflow._entry_action(entry, copy_only=False)
     assert action is None and isinstance(error, OffloadConfigError) and words in str(error)

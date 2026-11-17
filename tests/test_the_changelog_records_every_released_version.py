@@ -104,3 +104,107 @@ def test_an_abandoned_number_has_no_section() -> None:
         f"CHANGELOG.md has a section for a version with no release notes: {orphans}. "
         "Either the notes are missing, or this number was abandoned and should not be recorded."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Each version links to its own diff
+# --------------------------------------------------------------------------- #
+#: A section with no tag behind it, and why. Its comparison link would lead nowhere.
+NEVER_TAGGED = {"0.3.4": "bumped and recorded on 2026-08-24, never tagged - its fix shipped in 0.4.0"}
+
+_LINK_RE = re.compile(r"^\[([^\]]+)\]: (https://\S+)\s*$", re.M)
+
+
+def test_every_version_links_to_what_changed_since_the_one_before() -> None:
+    """Keep a Changelog ends with a link per heading: without it `## [0.39.0]` renders as bare
+    brackets, and the one thing a heading can point a reader at - the diff - is not there. A link
+    added by hand at release time is the step that gets forgotten, so its absence fails here."""
+    text = CHANGELOG.read_text(encoding="utf-8")
+    links = dict(_LINK_RE.findall(text))
+    versions = [version for version, _ in _SECTION_RE.findall(text)]
+
+    missing = [v for v in versions if v not in links and v not in NEVER_TAGGED]
+    assert not missing, f"CHANGELOG.md sections with no link at the end of the file: {missing}"
+    assert links.get("Unreleased", "").endswith(f"/compare/v{versions[0]}...HEAD"), (
+        f"[Unreleased] must compare the newest released version, v{versions[0]}, with HEAD")
+
+
+# --------------------------------------------------------------------------- #
+# From 0.40.0 a version is written short (the operator, 2026-11-16)
+# --------------------------------------------------------------------------- #
+#: Keep a Changelog's sections in their order, with what to do on upgrade first.
+SHORT_FORM_SECTIONS = ("Upgrading", "Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
+SHORT_FORM_FROM = (0, 40, 0)
+MAX_ENTRY_LINES = 3
+
+_HEADING_RE = re.compile(r"^## \[([^\]]+)\]", re.M)
+
+
+def short_form_problems(body: str) -> list[str]:
+    """What keeps one version's section from the short form; empty when it is short.
+
+    0.39.0 ran to 263 lines, longer than its own release notes: each change a paragraph of why and
+    how it was found, so the steps an upgrade needs were lost in the middle of them. The reasons
+    belong in the release notes; here a change is a bullet of a line or two."""
+    problems: list[str] = []
+    order: list[str] = []
+    entry_lines = 0
+    for number, line in enumerate(body.splitlines(), start=1):
+        if line.startswith("### "):
+            name = line[4:].strip()
+            if name not in SHORT_FORM_SECTIONS:
+                problems.append(f"line {number}: '### {name}' is not one of {SHORT_FORM_SECTIONS}")
+            order.append(name)
+            entry_lines = 0
+        elif line.startswith("- "):
+            entry_lines = 1
+        elif line.startswith(" ") and line.strip() and entry_lines:
+            entry_lines += 1
+            if entry_lines == MAX_ENTRY_LINES + 1:
+                problems.append(f"line {number}: an entry runs past {MAX_ENTRY_LINES} lines")
+        elif not line.strip():
+            entry_lines = 0
+        else:
+            problems.append(f"line {number}: prose outside a bullet - {line[:60]!r}")
+    known = [name for name in order if name in SHORT_FORM_SECTIONS]
+    if known != sorted(known, key=SHORT_FORM_SECTIONS.index) or len(set(known)) != len(known):
+        problems.append(f"sections out of order or repeated: {order}")
+    return problems
+
+
+def _sections_held_to_the_short_form() -> dict[str, str]:
+    text = CHANGELOG.read_text(encoding="utf-8")
+    text = text[:_LINK_RE.search(text).start()] if _LINK_RE.search(text) else text
+    heads = list(_HEADING_RE.finditer(text))
+    held = {}
+    for index, head in enumerate(heads):
+        name = head.group(1)
+        if name != "Unreleased" and _version(name) < SHORT_FORM_FROM:
+            continue
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(text)
+        held[name] = text[head.end():end].split("\n", 1)[1] if "\n" in text[head.end():end] else ""
+    return held
+
+
+def test_unreleased_and_every_version_from_0_40_0_are_written_short() -> None:
+    held = _sections_held_to_the_short_form()
+    assert "Unreleased" in held, "entries land under [Unreleased]: it is held to the form as they land"
+
+    found = {name: problems for name, body in held.items() if (problems := short_form_problems(body))}
+    assert not found, (
+        f"CHANGELOG.md is not in the short form (CONTRIBUTING.md, 'The changelog'): {found}. "
+        "The reasons and the evidence go in docs/releases/vX.Y.Z.md.")
+
+
+def test_the_short_form_check_passes_a_short_version_and_catches_a_long_one() -> None:
+    short = ("\n### Upgrading\n\n- Run `dbabrain upgrade-config`: it writes `overwrite_existing: false`\n"
+             "  into every restore entry that states none.\n\n### Fixed\n\n- A restore page shows its chain.\n")
+    long = ("\n### Fixed\n\n- **A restore page lost its chain.** Found reading a report on one host:\n"
+            "  the page read the newest row,\n  which was the wrong one,\n  so the chain was empty.\n\n"
+            "  It reads the row by time now.\n\n### Upgrading\n\n- Nothing.\n")
+
+    assert short_form_problems(short) == []
+    problems = short_form_problems(long)
+    assert any("past 3 lines" in problem for problem in problems)
+    assert any("prose outside a bullet" in problem for problem in problems)
+    assert any("out of order" in problem for problem in problems)

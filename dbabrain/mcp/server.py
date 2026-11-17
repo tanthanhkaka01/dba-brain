@@ -59,7 +59,8 @@ class McpToolError(errors.RequestError):
 
 @dataclass
 class Node:
-    """Where the server runs: the tool root's data, its config, its settings, the secrets read once."""
+    """Where the server runs: the tool root's data, its config, its settings, and its secrets - read
+    again whenever the store's file changes."""
 
     data_dir: Path
     config_path: Path | None
@@ -70,20 +71,40 @@ class Node:
     secrets_error: str = ""
     _redactor: Redactor | None = None
     _config: Any = field(default=None, repr=False)
+    #: The store's file as it was when ``_secrets`` was read: (mtime_ns, size), None when absent.
+    _secrets_stamp: tuple[int, int] | None = field(default=None, repr=False)
+
+    def _store_stamp(self) -> tuple[int, int] | None:
+        from dbabrain.lib.secret_text import ENCRYPTED_SECRET_TEXT_FILENAME
+
+        try:
+            stat = (Path(self.data_dir) / ENCRYPTED_SECRET_TEXT_FILENAME).stat()
+        except OSError:
+            return None
+        return stat.st_mtime_ns, stat.st_size
 
     def secrets(self) -> dict[str, str]:
-        if self._secrets is None:
+        # Read again when the file changed (2026-11-17): the node runs for days as a service, and
+        # the secrets a config push brought were refused as "not found" until it was restarted -
+        # while the inventory beside them, read per request, already named the servers. One stat
+        # per call; the decryption only when the file is another one.
+        stamp = self._store_stamp()
+        if self._secrets is None or stamp != self._secrets_stamp:
             from dbabrain.lib.secret_text import load_secret_text
 
             try:
-                self._secrets = load_secret_text(self.data_dir)
+                self._secrets, self.secrets_error = load_secret_text(self.data_dir), ""
             except Exception as exc:  # noqa: BLE001 - a node with no key still answers what needs none
                 self._secrets, self.secrets_error = {}, f"{type(exc).__name__}: {exc}"
+            self._secrets_stamp = stamp
+            # Every answer is redacted against the store as it is now: a new secret is hidden too.
+            self._redactor = None
         return self._secrets
 
     def redact(self, text: str) -> str:
+        secrets = self.secrets()
         if self._redactor is None:
-            self._redactor = Redactor(self.secrets())
+            self._redactor = Redactor(secrets)
         return self._redactor(text)
 
     def config(self) -> Any:

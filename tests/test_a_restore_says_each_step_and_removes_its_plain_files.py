@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import landing_of
+from conftest import landing_of, run_restore_said
 
 from dbabrain.backup_restore import backup as backup_module
 from dbabrain.backup_restore import restore_by_id, restore_script, verified_cleanup
@@ -137,8 +137,8 @@ def run(monkeypatch):
         monkeypatch.setattr(restore_by_id, "_execute", execute)
 
         def go():
-            return restore_by_id.restore_by_id(
-                {"restore_id": "R"}, on_phase=lambda phase, message, extra: said.append((phase, message, extra)))
+            # The workflow calls each step and says it (0.40.0, 1.375).
+            return run_restore_said(monkeypatch, {"restore_id": "R"}, said)
 
         return go, said, deleted
 
@@ -146,38 +146,38 @@ def run(monkeypatch):
 
 
 def test_each_step_of_the_chain_is_a_message_of_its_own_in_order(run):
+    """Since 0.40.0 (1.375) the workflow says them as it calls them: each full and diff a start and a
+    done numbered under its step (5.1, 6.1), each log under 7, the check 8 - and a step that does not
+    apply still said (2: in place, nothing copied; 4: no certificate)."""
     go, said, _deleted = run()
     go()
 
-    phases = [phase for phase, _message, _extra in said]
-    assert phases == ["METADATA_SKIP", "RESTORE_START", "RESTORE_STEP", "RESTORE_STEP", "RESTORE_STEP",
-                      "RESTORE_DONE", "VERIFY_START", "VERIFY_DONE", "METADATA_SKIP"][:len(phases)]
-    steps = [(message, extra) for phase, message, extra in said if phase == "RESTORE_STEP"]
-    assert [extra["step"] for _message, extra in steps] == ["restore-full", "restore-diff", "restore-log"]
-    assert [(extra["step_number"], extra["steps"], extra["files"]) for _message, extra in steps] == [
-        (1, 3, 1), (2, 3, 1), (3, 3, 3)]
-    assert steps[0][0].startswith("Restore R: step 1 of 3 done in ")
-    assert "APP as APP_COPY: full APP_FULL.bak" in steps[0][0]
-    assert "3 log(s)" in steps[2][0] and steps[2][0].endswith("recovered, the database is open.")
+    assert [phase for phase, _message, _extra in said] == [
+        "STEP_SKIP", "METADATA_DONE", "CERT_DONE", "FULL_START", "FULL_DONE", "DIFF_START", "DIFF_DONE", "LOG_DONE",
+        "CHECK_START", "CHECK_DONE", "METADATA_DONE"]
+    titles = [extra["flow_title"].split(" · ", 1)[-1] for _phase, _message, extra in said]
+    assert titles[3:8] == ["5.1 Restore full APP_COPY started", "5.1 Restore full APP_COPY done",
+                           "6.1 Restore diff APP_COPY started", "6.1 Restore diff APP_COPY done",
+                           "7.1 Restore log 3 files done"]
+    full_done = next(message for phase, message, _e in said if phase == "FULL_DONE")
+    assert ("APP as APP_COPY: APP_FULL.bak (backup finished 2026-11-12 04:35:48) - left restoring for the next step"
+            in full_done)
+    assert "recovered, the database is open" in next(message for phase, message, _e in said if phase == "LOG_DONE")
 
 
 def test_each_log_file_is_a_message_of_its_own_naming_the_file(run):
-    """The operator, 2026-11-14: *one message for each log file*. 46 logs were one message with a
-    count; each is its own now, as it goes in, naming the file and where it stands among the logs."""
+    """The operator, 2026-11-14: *one message for each log file*; 2026-11-15: numbered under the log
+    step - 7.1, 7.2 ..."""
     go, said, _deleted = run(steps=_steps_one_log_each())
     go()
 
-    steps = [(message, extra) for phase, message, extra in said if phase == "RESTORE_STEP"]
-    assert [extra["step"] for _message, extra in steps] == [
-        "restore-full", "restore-diff", "restore-log", "restore-log", "restore-log"]
-    assert [(extra["step_number"], extra["steps"], extra["files"]) for _message, extra in steps] == [
-        (1, 5, 1), (2, 5, 1), (3, 5, 1), (4, 5, 1), (5, 5, 1)]
-    logs = [message for message, extra in steps if extra["step"] == "restore-log"]
-    assert "APP as APP_COPY: log APP_LOG_07.trn (1 of 3 logs) (backup finished 2026-11-12 07:00:05)" in logs[0]
-    assert logs[0].endswith("left restoring for the next step.")
-    assert "log APP_LOG_09.trn (3 of 3 logs)" in logs[2] and logs[2].endswith("recovered, the database is open.")
-    title = [extra["flow_title"].split(" · ", 1)[-1] for _message, extra in steps]
-    assert title[2:] == ["2. Restore log done (3 of 5)", "2. Restore log done (4 of 5)", "2. Restore log done (5 of 5)"]
+    logs = [(message, extra) for phase, message, extra in said if phase == "LOG_DONE"]
+    assert [extra["flow_title"].split(" · ", 1)[-1] for _m, extra in logs] == [
+        "7.1 Restore log APP_LOG_07.trn done", "7.2 Restore log APP_LOG_08.trn done",
+        "7.3 Restore log APP_LOG_09.trn done"]
+    assert "APP as APP_COPY: APP_LOG_07.trn (backup finished 2026-11-12 07:00:05)" in logs[0][0]
+    assert "left restoring for the next step (1 of 3 logs)" in logs[0][0]
+    assert "(3 of 3 logs)" in logs[2][0] and "recovered, the database is open" in logs[2][0]
 
 
 def test_a_log_that_fails_is_named_by_its_file_and_the_ones_before_it_were_said(run):
@@ -187,8 +187,8 @@ def test_a_log_that_fails_is_named_by_its_file_and_the_ones_before_it_were_said(
         go()
 
     assert str(failed.value).startswith("R: step 4 of 5 failed - APP as APP_COPY: log APP_LOG_08.trn (2 of 3 logs)")
-    assert [extra["step"] for phase, _m, extra in said if phase == "RESTORE_STEP"] == [
-        "restore-full", "restore-diff", "restore-log"], "the first log went in and was said; the second is the error's"
+    assert [phase for phase, _m, _e in said if phase == "LOG_DONE"] == ["LOG_DONE"], \
+        "the first log went in and was said; the second is the error's"
 
 
 def test_the_plan_counts_a_databases_logs_and_names_a_single_one():
@@ -198,13 +198,13 @@ def test_the_plan_counts_a_databases_logs_and_names_a_single_one():
     assert restore_by_id._plan_summary(one) == "APP as APP_COPY: full APP_FULL.bak + diff APP_DIFF.bak + log APP_LOG_07.trn"
 
 
-def test_the_check_and_the_certificate_are_not_numbered_among_the_chains_steps(run):
+def test_the_check_and_the_certificate_are_steps_of_their_own_never_among_the_chains(run):
     go, said, _deleted = run()
     go()
 
-    assert len([phase for phase, *_ in said if phase == "RESTORE_STEP"]) == 3
-    done = next(extra for phase, _message, extra in said if phase == "RESTORE_DONE")
-    assert done["steps"] == 3
+    titles = {phase: extra["flow_title"].split(" · ", 1)[-1] for phase, _m, extra in said}
+    assert titles["CERT_DONE"] == "4. Certificate: none" and titles["CHECK_DONE"] == "8. Check done"
+    assert titles["CHECK_START"] == "8. Check started"
 
 
 def test_a_step_that_fails_is_named_with_its_number_and_its_backup(run):
@@ -216,8 +216,8 @@ def test_a_step_that_fails_is_named_with_its_number_and_its_backup(run):
     text = str(failed.value)
     assert text.startswith("R: step 2 of 3 failed - APP as APP_COPY: diff APP_DIFF.bak")
     assert text.endswith("Msg 3201: cannot open backup device")
-    assert [extra["step"] for phase, _m, extra in said if phase == "RESTORE_STEP"] == ["restore-full"], \
-        "the step that went in was said; the one that failed is the error's to say"
+    assert [phase for phase, _m, _e in said][-3:] == ["FULL_START", "FULL_DONE", "DIFF_START"], \
+        "the full went in and was said; the diff started, and its failure is the error's to say"
 
 
 def test_a_failure_of_another_kind_is_raised_as_it_is(run, monkeypatch):
@@ -243,13 +243,11 @@ def test_a_restore_that_worked_deletes_the_files_it_decrypted_and_says_so(run):
     outcome = go()
 
     assert [call["files"] for call in deleted] == [PLAIN], "the files this restore decrypted, by the facts it proved"
-    assert outcome["plain_deleted"] == {"plain_files": 2, "deleted": 2, "already_gone": 0, "bytes_deleted": 130}
+    assert outcome["plain_deleted"] == {"plain_files": 2, "deleted": 2, "already_gone": 0, "bytes_deleted": 130,
+                                        "earlier_runs": 0}
     assert not [warning for warning in outcome["warnings"] if "decrypted" in warning]
-    start = next(message for phase, message, _e in said if phase == "DELETE_START")
-    done, extra = next((message, e) for phase, message, e in said if phase == "DELETE_DONE")
-    assert "the 2 file(s) this restore staged - the databases are restored and checked" in start
-    assert done.startswith("Restore R: 2 of 2 staged copy(ies) deleted (130 bytes); ")
-    assert extra["plain_deleted"] == 2 and extra["plain_files"] == 2
+    done = next(message for phase, message, _e in said if phase == "PLAIN_DONE")
+    assert done.startswith("10. Plain files cleared - ✅ 2 of 2 plain file(s) deleted on TGT (130 bytes)")
     copied = next(message for phase, message, _e in said if phase == "COPY_DONE")
     assert "decrypted from the repository's encrypted copies" in copied
 
@@ -259,7 +257,7 @@ def test_it_deletes_only_after_the_databases_are_checked(run):
     go()
 
     phases = [phase for phase, *_ in said]
-    assert phases.index("VERIFY_DONE") < phases.index("DELETE_START")
+    assert phases.index("CHECK_DONE") < phases.index("PLAIN_DONE")
     assert len(deleted) == 1
 
 
@@ -270,7 +268,7 @@ def test_a_restore_that_failed_keeps_what_it_staged(run):
     with pytest.raises(restore_by_id.RestoreByIdError):
         go()
 
-    assert deleted == [] and "DELETE_START" not in [phase for phase, *_ in said]
+    assert deleted == [] and "PLAIN_DONE" not in [phase for phase, *_ in said]
 
 
 def test_a_failed_check_keeps_them_too(run):
@@ -289,8 +287,8 @@ def test_a_copy_that_was_never_encrypted_is_left_to_the_retention(run):
     outcome = go()
 
     assert deleted == [] and outcome["plain_deleted"] is None
-    done = next(message for phase, message, _e in said if phase == "DELETE_DONE")
-    assert done.startswith("Restore R: 0 staged file(s) removed")
+    done = next(message for phase, message, _e in said if phase == "PLAIN_DONE")
+    assert "nothing was decrypted or staged plain for this restore" in done and "0 removed" in done
 
 
 @pytest.mark.parametrize("delete, said", [

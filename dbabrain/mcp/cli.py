@@ -51,6 +51,9 @@ def _parser() -> argparse.ArgumentParser:
         if name == "connect":
             command.add_argument("--server", default="https://mcp.dbabrain.dev", help="the connector")
             command.add_argument("--relink", action="store_true", help="link again (a new token)")
+            command.add_argument("--wait-for-link", action="store_true",
+                                 help="as a service: never start a link; wait until a token is stored "
+                                      "(by a `connect` run by hand) and set a refused one aside")
         if name == "call":
             command.add_argument("tool")
             command.add_argument("arguments", help="the tool's arguments: JSON, @file or -")
@@ -100,13 +103,25 @@ def main(argv: list[str] | None = None) -> int:
                   + ("" if node.settings.enabled else " - the server is OFF (enabled false)"))
         return 0
     if args.command == "connect":
+        if args.relink and args.wait_for_link:
+            print("dbabrain mcp connect: --relink starts a link and --wait-for-link never does - one of them.",
+                  file=sys.stderr)
+            return 2
         try:
-            from dbabrain.mcp.relay import connect_node
-
-            connect_node(node, server=args.server.rstrip("/"), relink=args.relink)
+            from dbabrain.mcp.relay import RelayError, connect_node
         except ImportError as exc:
             print(f"dbabrain mcp connect needs the MCP extra: {install_hint('mcp')} ({exc})", file=sys.stderr)
             return 2
+        try:
+            connect_node(node, server=args.server.rstrip("/"), relink=args.relink, wait_for_link=args.wait_for_link)
+        except ImportError as exc:
+            print(f"dbabrain mcp connect needs the MCP extra: {install_hint('mcp')} ({exc})", file=sys.stderr)
+            return 2
+        except RelayError as exc:
+            # A link that expired or a token refused is a sentence, not a traceback (2026-11-16: an
+            # unapproved code ended the worker's link in eleven lines of stack).
+            print(f"dbabrain mcp connect: {exc}", file=sys.stderr)
+            return 1
         except KeyboardInterrupt:
             return 0
         return 0

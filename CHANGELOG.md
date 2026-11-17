@@ -1,21 +1,85 @@
 # Changelog
 
-All notable changes to DBA Brain are documented here.
+What changed in each released version of DBA Brain, for someone deciding whether to upgrade: what
+is different for them, and what they must do about it. The evidence behind a release - what was run,
+and what is known not to work - is in its notes, [`docs/releases/vX.Y.Z.md`](./docs/releases/).
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
-follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-**Entries are written as the work lands, not reconstructed at release time.** A release that has to
-remember what went into it gets it wrong, and the notes stop being trustworthy exactly when someone
-is deciding whether to upgrade. Every pull request that changes behaviour adds its line to
-`Unreleased`.
-
-Write entries for the person deciding whether to upgrade: what changed for them, and what they must
-do about it. Not the internal refactor that made it possible.
+follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). From 0.40.0 a version is written
+short: what to do on upgrade first, then a line or two per change. Versions up to 0.39.0 keep the
+longer form they were released with.
 
 ## [Unreleased]
 
-## [0.39.0] - 2026-11-15
+## [0.41.0] - 2026-11-18
+
+### Upgrading
+
+- Run `dbabrain upgrade-config`: it writes `server_metadata.enabled: false` into every restore entry that
+  states none, `source: "node"` where one replays metadata, and `repository_path: ""` on backup entries.
+  It also writes `record_chain` on Oracle backup entries: `true` where they offload, `false` elsewhere.
+- The backup catalog moves to schema 10 (a column on `backup_runs`) on its first open.
+- State `oracle_sid` on every Oracle backup entry: `upgrade-config` cannot know it, and an entry without one is refused.
+
+### Added
+
+- A restore reads its instance metadata from the node, a server's folder, or the repository
+  (`server_metadata.source`, `server_id`, `path`).
+- A backup carries its instance metadata to the repository, sealed with age
+  (`server_metadata.repository_path`).
+- An Oracle restore reads from the repository, newest or to a point in time, by the RMAN chain recorded
+  after each backup (`record_chain`).
+- `entry-remove`, `credential-remove`, `instance-remove`, `report-server-remove` retire a server one record at a
+  time, the deepest first: each removes one record and is refused while anything in `data/` still names it.
+
+### Changed
+
+- A backup says ten steps, one message each: the process started, the backup on the server started
+  and done, the copy, the encryption, its plain files cleared, the repository's upkeep, the process done.
+- FULL, DIFF and LOG send the same messages; which reach a chat is each job's `notify`
+  (`logging_on_run.enabled: false` keeps a job to its errors).
+- A backup's files are copied right after it, in the same workflow pass; the `offload` pass takes only
+  what a backup left (a retry, files past `offload_files_per_pass`, an encryption still running).
+- A restore says eleven steps: started, copy, metadata before, certificate, each full and diff a start and
+  a done per database, each log its own message, check, metadata after, plain files cleared, done.
+- A step that does not apply to a restore (no certificate, no diff, in place, PostgreSQL / Oracle) is
+  still said, with why; a failed restore names the step it stopped at.
+
+### Fixed
+
+- `restore-by-id` with `dry_run` plans an entry that restores from the repository; it refused it for want of
+  the backup catalog, which the real run had.
+- A restore's last message says the plain files' size as step 10 does, not in raw bytes.
+- An Oracle restore's dry run names its steps.
+- An Oracle backup catalogues only the pieces it wrote: a second level 0 in a folder no longer fails on the
+  pieces RMAN's crosscheck listed, and a deleted piece is no longer catalogued.
+- A restore's metadata steps say each warning of the replay, not only `WARN`.
+- An offload is claimed across every node: a run by hand and the worker's pass no longer offload one backup twice.
+- A sealed instance bundle at a backup entry's `repository_path` no longer fails its server's repository check.
+- An Oracle backup states its SID (`oracle_sid`) and is held to the instance that answers before RMAN runs.
+- The Docker image carries the MCP SDK (`mcp`, `websockets`), so a container node can run `dbabrain mcp connect`.
+- `common secret-remove` removes one secret from the encrypted store (and the plaintext source), only when the
+  request states the value it holds; stdin only, as `secret-set`.
+- An MCP node reads its secret store again when the file changes: a secret pushed to a running node is usable at once.
+- `dbabrain mcp connect --wait-for-link` runs a node as a service: it waits for a token linked by hand and never asks
+  for a code; a link that expires ends in a sentence instead of a traceback.
+- A PostgreSQL base backup is catalogued file by file, each its own row; the WAL job records the backup-history
+  file too, so a restore from the server finds every file it copies.
+- An Oracle or PostgreSQL point in time is read in the source database's clock, asked of it; a moment that
+  needs an unknown clock is refused instead of taken as UTC.
+- An Oracle restore from the repository reads the folder that holds the chain it chose: an entry offloaded
+  before its SID was stated has copies under `database/` and under the SID, and every restore was refused.
+- `secret-remove` is refused while a login or an entry still names the ref.
+- `run-sql-adhoc` and `run-cmd-adhoc` take `confirm_target`, the second answer where a node's ladder prices
+  the operation at two; without it such a write or command could never be answered off a terminal.
+- The backup & restore page keeps every full: its logs are a closed block of their own, read per server from
+  a file beside the page; the page went from 11.8 MB to 1.7 MB and fits a 1366 px screen.
+- A copy restored from the repository is shown on its backup's row, not as a file of the repository's own.
+- The Restores table says one line per outcome (*12 databases: stopped at ...*), the names folded under it.
+- Recoverability folds drills no longer configured and servers no longer registered away as history, draws Tier
+  and State only once a drill states a tier, and asks a database in SIMPLE recovery for no log backup.
+
+## [0.39.0] - 2026-11-16
 
 ### Changed
 
@@ -4194,17 +4258,49 @@ the documentation names one, it says so.
   metric definitions, the Telegram support commands, the runtime log, the schema export directory
   and the working directory of two subprocess calls. All of them now share the one resolution.
 
-<!--
-Section order, and what belongs in each:
-
-### Added        new capability a user can invoke
-### Changed      behaviour that differs from the previous release
-### Deprecated   still works, will be removed; say in which version
-### Removed      gone; say what replaces it
-### Fixed        a bug, described by its symptom
-### Security     anything with a security consequence, with the advisory link
-
-At release: rename [Unreleased] to [X.Y.Z] - YYYY-MM-DD, add a fresh empty [Unreleased],
-and make sure the version here, the version in pyproject.toml, and the git tag agree —
-the release workflow fails if they do not.
--->
+[Unreleased]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.41.0...HEAD
+[0.41.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.39.0...v0.41.0
+[0.39.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.38.0...v0.39.0
+[0.38.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.36.0...v0.38.0
+[0.36.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.35.0...v0.36.0
+[0.35.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.34.0...v0.35.0
+[0.34.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.30.0...v0.34.0
+[0.30.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.29.0...v0.30.0
+[0.29.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.28.0...v0.29.0
+[0.28.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.27.0...v0.28.0
+[0.27.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.26.0...v0.27.0
+[0.26.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.25.0...v0.26.0
+[0.25.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.24.0...v0.25.0
+[0.24.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.23.0...v0.24.0
+[0.23.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.21.0...v0.23.0
+[0.21.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.17.0...v0.19.0
+[0.17.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.14.0...v0.16.0
+[0.14.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.12.0...v0.14.0
+[0.12.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.10.1...v0.11.0
+[0.10.1]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.9.1...v0.10.0
+[0.9.1]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.7.2...v0.8.0
+[0.7.2]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.3.3...v0.4.0
+[0.3.3]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/tanthanhkaka01/dba-brain/releases/tag/v0.1.0

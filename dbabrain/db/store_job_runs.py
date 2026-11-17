@@ -36,6 +36,8 @@ class JobRunsMixin:
         running = str(item.status or "").strip().lower() == "running" and claim_key is not None
         metadata = dict(item.metadata or {})
         host_name = item.host_name or socket.gethostname()
+        # A claim of every node (1.383): the index reads the column, so it holds "" for all of them.
+        column_host = "" if running and item.claim_global else host_name
         if running:
             metadata.update(run_claim.claim_fields(pid=_claim_pid(metadata), host=host_name,
                                                    node=node_identity.current(),
@@ -72,7 +74,7 @@ class JobRunsMixin:
                         item.message,
                         item.duration_ms,
                         item.error_text,
-                        host_name,
+                        column_host,
                         claim_key,
                         metadata_json,
                     ),
@@ -81,7 +83,8 @@ class JobRunsMixin:
         except Exception as exc:  # noqa: BLE001 - re-raised unless the claim index refused it.
             if running and backend_mod.is_unique_violation(exc):
                 raise RunAlreadyClaimed(
-                    f"{item.job_code} is already running on {host_name}") from None
+                    f"{item.job_code} is already running "
+                    + ("on another node" if item.claim_global else f"on {host_name}")) from None
             raise
 
     def fetch_recent_job_runs(self, limit: int = 20) -> list[sqlite3.Row]:

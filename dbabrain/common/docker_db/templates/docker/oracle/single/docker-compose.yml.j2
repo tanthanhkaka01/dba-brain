@@ -15,6 +15,7 @@ services:
     init: true
     environment:
       ORACLE_PASSWORD: ${DB_PASSWORD}
+{{ tz_line }}
     ports:
       - "{{ host_port }}:{{ container_port }}"
     volumes:

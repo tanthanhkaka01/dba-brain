@@ -144,9 +144,9 @@ dbabrain metrics summary-latest                 # reads the result back
 
 | File in `data/` | What it holds | Registrar |
 | --- | --- | --- |
-| `db_instances.json` | the inventory: one record per database or host, and per-server metric switches | `instance-add`, `instance-active`, `metric-toggle`, `metric-severity`, `metric-env` |
-| `users.json` | logins per server (references only, no passwords) | `instance-add`, `remote-credential-add` |
-| `encrypted_secret_text.json` | every secret, encrypted | `secret-set`, `instance-add` |
+| `db_instances.json` | the inventory: one record per database or host, and per-server metric switches | `instance-add`, `instance-active`, `metric-toggle`, `metric-severity`, `metric-env`; `instance-remove` (refused while named) |
+| `users.json` | logins per server (references only, no passwords) | `instance-add`, `remote-credential-add`; `credential-remove` (refused while named) |
+| `encrypted_secret_text.json` | every secret, encrypted | `secret-set`, `instance-add`, `secret-remove` (one ref, with its value) |
 | `app_commands.json` | which apps the daemon runs, and when | `app-command-set` |
 | `metric_definitions.json` | the metrics, their SQL/commands and schedules (shipped; edit with care) | - |
 | `sql_commands.json` / `sql_targets.json` | scheduled SQL: WHAT runs / WHERE and WHEN | `sql-command-add` / `sql-target-add` |

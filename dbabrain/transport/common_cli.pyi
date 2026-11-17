@@ -85,6 +85,9 @@ def run(command: Literal['create-db-docker'], request: t.CreateDbDockerRequest |
 def run(command: Literal['create-table-from-xlsx'], request: t.TableLoadRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.TableLoadAnswer: ...
 
 @overload
+def run(command: Literal['credential-remove'], request: t.CredentialRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.CredentialRemoveAnswer: ...
+
+@overload
 def run(command: Literal['db-status'], request: t.DbStatusRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.DbStatusAnswer: ...
 
 @overload
@@ -124,6 +127,9 @@ def run(command: Literal['encrypt-file'], request: t.FileEncryptRequest | dict[s
 def run(command: Literal['encrypt-secret'], request: t.EncryptSecretRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.EncryptSecretAnswer: ...
 
 @overload
+def run(command: Literal['entry-remove'], request: t.EntryRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.EntryRemoveAnswer: ...
+
+@overload
 def run(command: Literal['export-data'], request: t.ExportDataRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.ExportDataAnswer: ...
 
 @overload
@@ -161,6 +167,9 @@ def run(command: Literal['instance-active'], request: t.InstanceActiveRequest | 
 
 @overload
 def run(command: Literal['instance-add'], request: t.InstanceAddRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.RegistrationAnswer: ...
+
+@overload
+def run(command: Literal['instance-remove'], request: t.InstanceRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.InstanceRemoveAnswer: ...
 
 @overload
 def run(command: Literal['inventory-summary'], request: t.InventorySummaryRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.InventorySummaryAnswer: ...
@@ -238,6 +247,9 @@ def run(command: Literal['relay-file'], request: t.FileTransferRequest | dict[st
 def run(command: Literal['remote-credential-add'], request: t.RemoteCredentialAddRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.RegistrationAnswer: ...
 
 @overload
+def run(command: Literal['report-server-remove'], request: t.ReportServerRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.ReportServerRemoveAnswer: ...
+
+@overload
 def run(command: Literal['restore-diff'], request: t.RestoreStepRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.RestoreStepAnswer: ...
 
 @overload
@@ -263,6 +275,9 @@ def run(command: Literal['run-sql'], request: t.RunSqlRequest | dict[str, Any], 
 
 @overload
 def run(command: Literal['run-sqlcmd'], request: t.RunSqlcmdRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.RunSqlcmdAnswer: ...
+
+@overload
+def run(command: Literal['secret-remove'], request: t.SecretRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.SecretRemoveAnswer: ...
 
 @overload
 def run(command: Literal['secret-set'], request: t.SecretSetRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.SecretSetAnswer: ...
@@ -394,6 +409,9 @@ def run_allowing_failure(command: Literal['create-db-docker'], request: t.Create
 def run_allowing_failure(command: Literal['create-table-from-xlsx'], request: t.TableLoadRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.TableLoadAnswer, str]: ...
 
 @overload
+def run_allowing_failure(command: Literal['credential-remove'], request: t.CredentialRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.CredentialRemoveAnswer, str]: ...
+
+@overload
 def run_allowing_failure(command: Literal['db-status'], request: t.DbStatusRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.DbStatusAnswer, str]: ...
 
 @overload
@@ -433,6 +451,9 @@ def run_allowing_failure(command: Literal['encrypt-file'], request: t.FileEncryp
 def run_allowing_failure(command: Literal['encrypt-secret'], request: t.EncryptSecretRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.EncryptSecretAnswer, str]: ...
 
 @overload
+def run_allowing_failure(command: Literal['entry-remove'], request: t.EntryRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.EntryRemoveAnswer, str]: ...
+
+@overload
 def run_allowing_failure(command: Literal['export-data'], request: t.ExportDataRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.ExportDataAnswer, str]: ...
 
 @overload
@@ -470,6 +491,9 @@ def run_allowing_failure(command: Literal['instance-active'], request: t.Instanc
 
 @overload
 def run_allowing_failure(command: Literal['instance-add'], request: t.InstanceAddRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.RegistrationAnswer, str]: ...
+
+@overload
+def run_allowing_failure(command: Literal['instance-remove'], request: t.InstanceRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.InstanceRemoveAnswer, str]: ...
 
 @overload
 def run_allowing_failure(command: Literal['inventory-summary'], request: t.InventorySummaryRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.InventorySummaryAnswer, str]: ...
@@ -547,6 +571,9 @@ def run_allowing_failure(command: Literal['relay-file'], request: t.FileTransfer
 def run_allowing_failure(command: Literal['remote-credential-add'], request: t.RemoteCredentialAddRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.RegistrationAnswer, str]: ...
 
 @overload
+def run_allowing_failure(command: Literal['report-server-remove'], request: t.ReportServerRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.ReportServerRemoveAnswer, str]: ...
+
+@overload
 def run_allowing_failure(command: Literal['restore-diff'], request: t.RestoreStepRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.RestoreStepAnswer, str]: ...
 
 @overload
@@ -572,6 +599,9 @@ def run_allowing_failure(command: Literal['run-sql'], request: t.RunSqlRequest |
 
 @overload
 def run_allowing_failure(command: Literal['run-sqlcmd'], request: t.RunSqlcmdRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.RunSqlcmdAnswer, str]: ...
+
+@overload
+def run_allowing_failure(command: Literal['secret-remove'], request: t.SecretRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.SecretRemoveAnswer, str]: ...
 
 @overload
 def run_allowing_failure(command: Literal['secret-set'], request: t.SecretSetRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.SecretSetAnswer, str]: ...

@@ -32,6 +32,7 @@ import binascii
 import json
 import os
 import re
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -312,6 +313,56 @@ def set_secret_everywhere(data_dir: str | Path, ref: str, value: str, *,
                                                           indent=2, ensure_ascii=False) + "\n")
                 written = True
     return written
+
+
+def remove_secret_text(data_dir: str | Path, ref: str, value: str, *, key: str | None = None,
+                       plaintext_store: str | Path | None = None) -> dict[str, bool]:
+    """Take ONE secret out of the encrypted store - and out of the plaintext source, where it is there.
+
+    The operator, 2026-11-17: *one secret at a time, and the value must match*. The caller states the
+    value it removes; a store holding anything else under ``ref`` is refused and nothing is written - so
+    a ref named by mistake, or one rotated since, is never taken away on a name alone. Every place is
+    checked before any is written: a mismatch in the plaintext source leaves the encrypted store as it
+    was too.
+
+    The plaintext source is held to the same value because ``control.cli deploy`` regenerates the
+    encrypted store from it: a secret removed only from the encrypted copy comes back at the next
+    deploy. A ref in neither place is refused (nothing to remove is not a removal).
+
+    Returns ``{"removed": <from the encrypted store>, "plaintext_removed": <from the source>}``.
+    """
+    ref = str(ref or "").strip()
+    if not ref:
+        raise errors.InvalidRequest("Secret ref must not be empty.")
+    if not str(value or ""):
+        raise errors.Refused(f"Refusing to remove {ref} without its value: the value is what proves the ref.")
+    resolved_key = resolve_key(key)
+    path = Path(data_dir) / ENCRYPTED_SECRET_TEXT_FILENAME
+    plain_path = Path(plaintext_store) if plaintext_store else None
+    # Both held for the whole check-then-write: the value checked is the value removed.
+    with FileLock(path), (FileLock(plain_path) if plain_path is not None else nullcontext()):
+        secrets = load_secret_text_file(path, key=resolved_key)
+        plain: dict[str, Any] | None = None
+        if plain_path is not None and plain_path.exists():
+            plain = json.loads(plain_path.read_text(encoding="utf-8-sig"))
+        in_store = ref in secrets
+        in_plain = plain is not None and ref in plain
+        if not in_store and not in_plain:
+            raise errors.Refused(f"{ref} is in neither the encrypted store nor the plaintext source; nothing removed.")
+        if in_store and secrets[ref] != value:
+            raise errors.Refused(f"{ref} in the encrypted store holds a different value; nothing removed.")
+        if in_plain and str(plain[ref]) != value:
+            raise errors.Refused(f"{ref} in the plaintext source ({plain_path}) holds a different value; "
+                                 "nothing removed.")
+        if in_store:
+            del secrets[ref]
+            blob = encrypt_secret_text(secrets, resolved_key)
+            write_secret_file(path, json.dumps(blob, indent=2, ensure_ascii=False) + "\n")
+        if in_plain:
+            del plain[ref]
+            write_secret_file(plain_path, json.dumps({name: plain[name] for name in sorted(plain)},
+                                                      indent=2, ensure_ascii=False) + "\n")
+    return {"removed": in_store, "plaintext_removed": in_plain}
 
 
 def encrypt_secret_text_file(source: str | Path, dest: str | Path, key: str) -> int:

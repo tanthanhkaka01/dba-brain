@@ -37,6 +37,8 @@ from types import SimpleNamespace
 import pytest
 
 from dbabrain.backup_restore import backup as backup_module
+
+from dbabrain.backup_restore import workflow as workflow_module
 from dbabrain.backup_restore import config as restore_config
 from dbabrain.backup_restore import restore_by_id, schedule, workflow
 from dbabrain.backup_restore.restore_script import load_script_restores
@@ -62,7 +64,9 @@ def test_each_kind_of_record_states_its_switch_its_window_and_its_notify_rules()
         names = {field.name for field in S.FIELDS[kind]}
         assert {"active", *window, *rules} <= names, kind
     assert {field.name for field in S.BACKUP_ENTRY_FIELDS} == {
-        "active", "env_secrets", "scrub_files_per_run", "server_metadata.enabled"}
+        "active", "env_secrets", "scrub_files_per_run", "server_metadata.enabled",
+        # Where the offload carries the metadata bundle (0.40.0, 1.376).
+        "server_metadata.repository_path", "record_chain", "oracle_sid"}
 
 
 def test_every_field_says_what_it_decides_and_one_name_means_one_thing():
@@ -123,7 +127,9 @@ def test_a_field_applies_only_where_its_loader_reads_it():
     in_place = {"script": "s", "db_type": "postgresql", "server_id": "A", "target_server_id": "A"}
     remote = {"script": "s", "db_type": "sqlserver", "server_id": "A", "target_server_id": "B",
               "target_backup_dir": "/opt/db_ops/staging/x"}
-    assert not {"copy_mode", "staging_marker", "server_metadata.enabled", "copy_recent_hours"} & set(S.unstated(in_place))
+    assert not {"copy_mode", "staging_marker", "copy_recent_hours"} & set(S.unstated(in_place))
+    # Every engine states whether its metadata is restored since 0.40.0 (1.376) - PostgreSQL and Oracle only false.
+    assert "server_metadata.enabled" in set(S.unstated(in_place))
     assert {"copy_mode", "staging_marker", "target_visible_dir", "server_metadata.enabled"} <= set(S.unstated(remote))
     assert "copy_recent_hours" in S.unstated({**remote, "copy_selection": "window"}), "a window copy reads its hours"
     assert "server_metadata.enabled" not in S.unstated({"backup_id": "PG", "db_type": "postgresql"}, kind=S.BACKUP_ENTRY)
@@ -303,7 +309,9 @@ def test_the_backup_run_refuses_that_job_before_anything_reaches_the_host_and_ru
     said: list[str] = []
     _Store.rows = []
     monkeypatch.setattr(backup_module, "DbaBrainStore", _Store)
-    monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: said.append(str(k.get("message"))))
+    _emit = lambda **k: said.append(str(k.get("message")))
+    monkeypatch.setattr(backup_module, "emit_backup_restore_event", _emit)
+    monkeypatch.setattr(workflow_module, "emit_backup_restore_event", _emit)
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [silent, whole_entry, fine])
     monkeypatch.setattr(backup_module, "export_for_backup", lambda *a, **k: None)
@@ -320,7 +328,7 @@ def test_the_backup_run_refuses_that_job_before_anything_reaches_the_host_and_ru
 
     monkeypatch.setattr(backup_module, "resolve_backup_target", resolve)
     monkeypatch.setattr(backup_module, "execute_backup_job", execute)
-    summary = backup_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x",
+    summary = workflow_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x",
                                        force=True)
 
     assert executed[:2] == ["FINE", "FINE ran"], "neither refused job reached its host"
@@ -356,7 +364,7 @@ def test_a_dry_run_says_which_job_its_run_would_refuse(monkeypatch):
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [silent, _backup_job("FINE")])
     monkeypatch.setattr(backup_module, "_open_catalog", lambda _config: None)
 
-    summary = backup_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x",
+    summary = workflow_module.run_backup(app_config=SimpleNamespace(sqlite_path=":memory:"), config_path="x",
                                        dry_run=True)
 
     assert [(job["job"], job["status"]) for job in summary["jobs"]] == [("SILENT/full", "refused"),

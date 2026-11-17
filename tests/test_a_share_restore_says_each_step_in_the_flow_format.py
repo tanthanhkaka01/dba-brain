@@ -32,20 +32,26 @@ TOO_EARLY = ("Msg 4326, Level 16, State 1. The log in this backup set terminates
 
 
 def test_a_file_is_said_with_its_number_its_result_and_why_it_was_passed_over():
-    done = restore_messages.share_step("NIGHTLY", op="restore-log", result="applied", number=3, total=4,
-                                       said="APP: log l1.trn (1 of 2 logs) - left restoring for the next step", seconds=2)
-    passed = restore_messages.share_step("NIGHTLY", op="restore-log", result="skipped", number=4, total=4,
-                                         said="APP: log l0.trn (2 of 2 logs)", reason="Msg 4326: ends early")
+    """Step 7 of the eleven (1.375): each log its own message, numbered under the step, and a file passed
+    over said so with why."""
+    facts = {"database": "APP", "landing": "APP", "files": ["l1.trn"], "log_number": 1, "log_total": 2}
+    done = restore_messages.log_step("NIGHTLY", number="7.1", facts=facts, seconds=2)
+    passed = restore_messages.log_step("NIGHTLY", number="7.2", facts={**facts, "files": ["l0.trn"], "log_number": 2},
+                                       result="skipped", reason="Msg 4326: ends early")
 
-    assert done == {"flow_title": "NIGHTLY · 2. Restore log done (3 of 4)",
-                    "flow_lines": ["✅ APP: log l1.trn (1 of 2 logs) - left restoring for the next step · 2 s"]}
-    assert passed["flow_title"] == "NIGHTLY · 2. Restore log skipped (4 of 4)"
-    assert passed["flow_lines"] == ["↷ APP: log l0.trn (2 of 2 logs)", "- Msg 4326: ends early"]
+    assert done == {"flow_title": "NIGHTLY · 7.1 Restore log l1.trn done",
+                    "flow_lines": ["✅ APP: l1.trn - left restoring for the next step (1 of 2 logs) · 2 s"]}
+    assert passed["flow_title"] == "NIGHTLY · 7.2 Restore log l0.trn skipped"
+    assert passed["flow_lines"] == ["↷ APP: l0.trn - left restoring for the next step (2 of 2 logs)",
+                                    "- Msg 4326: ends early"]
 
 
 def test_the_cleanup_says_what_it_looked_at_and_removed():
-    assert restore_messages.share_cleanup_done("NIGHTLY", considered=9, deleted=3, kept=6)["flow_lines"] == [
-        "- staged backups past retention: 3 removed of 9 considered, 6 kept"]
+    said = restore_messages.plain_step("NIGHTLY", target="TGT", cleaned={
+        "plain": None, "pruned": {"pruned": 3, "skipped": "9 considered, 6 kept"}, "kept": 0})
+    assert said["flow_title"] == "NIGHTLY · 10. Plain files cleared"
+    assert said["flow_lines"] == ["- nothing was decrypted or staged plain for this restore",
+                                  "- staged backups past retention: 3 removed (9 considered, 6 kept)"]
 
 
 @pytest.fixture
@@ -86,11 +92,17 @@ def restore(tmp_path, monkeypatch):
 
         patch_restore(monkeypatch, "_run_restore_step", log_step)
         said: list[tuple[str, str, dict]] = []
+        # The workflow calls each step of the database and says it (0.40.0, 1.375).
+        from dbabrain.backup_restore import workflow
+
+        monkeypatch.setattr(workflow, "emit_backup_restore_event",
+                            lambda **k: said.append((k["phase"], k["message"], k["metadata"])))
+        say = workflow._RestoreSay(app_config=None, logger=None, notify=None, metadata={}, restore_id="NIGHTLY",
+                                   engine="sqlserver", target="TGT", source="SRC")
+        say.remote = True  # a share-driven restore always copies onto its target
         try:
-            restore_module.run_restore_database(
-                config=config, dbabrain_config=app_config, backup_file=backup, ensure_certificate=False,
-                ensure_credential=False, logger=object(),
-                on_phase=lambda phase, message, extra=None: said.append((phase, message, extra or {})))
+            workflow.restore_share_database(config=config, app_config=app_config, backup_file=backup,
+                                            logger=object(), say=say)
         except Exception as exc:  # noqa: BLE001 - what was said up to the failure is the point
             said.append(("RAISED", f"{type(exc).__name__}: {exc}", {}))
         return said
@@ -101,29 +113,31 @@ def restore(tmp_path, monkeypatch):
 def test_each_file_of_a_database_is_a_message_of_its_own_as_it_goes_in(restore):
     said = restore(log_answers=["ok", "ok"])
 
-    steps = [extra for phase, _message, extra in said if phase == "RESTORE_STEP"]
-    assert [(extra["step"], extra["result"], extra["step_number"], extra["steps"]) for extra in steps] == [
-        ("restore-full", "applied", 1, 3), ("restore-log", "applied", 2, 3), ("restore-log", "applied", 3, 3)]
-    assert steps[0]["flow_title"] == "NIGHTLY · 2. Restore full done (1 of 3)"
-    assert steps[0]["flow_lines"][0].startswith("✅ APPDB_Prod as APPDB_Prod_DR: full latest.bak - left restoring for the next step")
-    assert steps[2]["flow_lines"][0].startswith("✅ APPDB_Prod as APPDB_Prod_DR: log l2.trn (2 of 2 logs)")
+    # The eleven steps of 1.375: the full a start and a done (5.1), no diff said with why (6), each log its
+    # own message under 7.
+    assert [phase for phase, _m, _e in said] == ["FULL_START", "FULL_DONE", "STEP_SKIP", "LOG_DONE", "LOG_DONE"]
+    titles = [extra["flow_title"].split(" · ", 1)[-1] for _p, _m, extra in said]
+    assert titles == ["5.1 Restore full APPDB_Prod_DR started", "5.1 Restore full APPDB_Prod_DR done",
+                      "6. Restore diff: none", "7.1 Restore log l1.trn done", "7.2 Restore log l2.trn done"]
+    assert said[1][2]["flow_lines"][0].startswith(
+        "✅ APPDB_Prod as APPDB_Prod_DR: latest.bak - left restoring for the next step")
+    assert "(2 of 2 logs)" in said[4][2]["flow_lines"][0]
 
 
 def test_a_log_passed_over_is_said_with_why(restore):
     said = restore(log_answers=[TOO_EARLY, "ok"])
 
-    skipped = [extra for phase, _m, extra in said if phase == "RESTORE_STEP" and extra["result"] == "skipped"]
-    assert len(skipped) == 1 and skipped[0]["flow_title"] == "NIGHTLY · 2. Restore log skipped (2 of 3)"
+    skipped = [extra for phase, _m, extra in said if phase == "LOG_DONE" and "skipped" in extra["flow_title"]]
+    assert len(skipped) == 1 and skipped[0]["flow_title"] == "NIGHTLY · 7.1 Restore log l1.trn skipped"
     assert skipped[0]["flow_lines"][1].startswith("- Msg 4326: the log ends before the database's restore point")
 
 
 def test_a_file_that_fails_is_said_failed_with_the_engines_error(restore):
     said = restore(log_answers=["ok"], full_fails=True)
 
-    steps = [extra for phase, _m, extra in said if phase == "RESTORE_STEP"]
-    assert [(extra["step"], extra["result"]) for extra in steps] == [("restore-full", "failed")]
-    assert steps[0]["flow_title"] == "NIGHTLY · 2. Restore full failed (1 of 2)"
-    assert "Msg 3201" in steps[0]["flow_lines"][1]
+    # The full started and was said; its failure is the error's - step 11 says it, at step 5.
+    assert [phase for phase, _m, _e in said] == ["FULL_START", "RAISED"]
+    assert "Msg 3201" in said[-1][1]
 
 
 def test_a_restore_with_no_one_listening_restores_all_the_same(tmp_path, monkeypatch, restore):

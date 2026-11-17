@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import run_restore_said
 from dbabrain.backup_restore import restore_by_id, restore_script, verified_cleanup
 from dbabrain.db import repository_encryption_store
 from dbabrain.db.backup_catalog import BackupCatalogStore
@@ -248,8 +249,8 @@ def run(monkeypatch):
         monkeypatch.setattr(restore_by_id, "_execute", execute)
         outcome = None
         try:
-            outcome = restore_by_id.restore_by_id({"restore_id": "R"},
-                                                  on_phase=lambda phase, message, extra: said.append((phase, message, extra)))
+            # The workflow calls each step and says it (0.40.0, 1.375).
+            outcome = run_restore_said(monkeypatch, {"restore_id": "R"}, said)
         except restore_by_id.RestoreByIdError:
             pass
         return outcome, said, deleted, asked, restore_messages
@@ -261,10 +262,9 @@ def test_a_restore_that_worked_deletes_an_earlier_runs_plain_files_with_its_own_
     outcome, said, deleted, _asked, _messages = run(earlier=EARLIER)
 
     assert deleted == [[OWN, *EARLIER]]
-    start = next(message for phase, message, _e in said if phase == "DELETE_START")
-    assert "the 1 file(s) this restore staged and 1 an earlier run of this entry left" in start
-    lines = next(extra["flow_lines"] for phase, _m, extra in said if phase == "DELETE_DONE")
-    assert any("plain files 2/2 deleted on TGT" in line and "1 of them left by an earlier run" in line for line in lines)
+    lines = next(extra["flow_lines"] for phase, _m, extra in said if phase == "PLAIN_DONE")
+    assert any("2 of 2 plain file(s) deleted on TGT" in line and "1 of them left by an earlier run" in line
+               for line in lines)
     assert outcome["plain_deleted"]["earlier_runs"] == 1
 
 
@@ -272,7 +272,7 @@ def test_a_restore_that_failed_looks_for_nothing_and_deletes_nothing(run):
     outcome, said, deleted, asked, _messages = run(fail=True, earlier=EARLIER)
 
     assert outcome is None and deleted == [] and asked == []
-    assert not [phase for phase, *_ in said if phase.startswith("DELETE")]
+    assert not [phase for phase, *_ in said if phase.startswith("PLAIN")]
 
 
 def test_a_catalog_that_cannot_be_read_leaves_the_restore_done_and_its_own_files_deleted(run):
@@ -294,5 +294,5 @@ def test_a_plain_copy_from_a_source_never_encrypted_is_deleted_too(run):
 
     assert deleted == [this_run]
     assert asked == [{"exclude_paths": set()}]
-    start = next(message for phase, message, _e in said if phase == "DELETE_START")
-    assert "the 1 file(s) this restore staged - the databases are restored and checked" in start
+    done = next(message for phase, message, _e in said if phase == "PLAIN_DONE")
+    assert "1 of 1 plain file(s) deleted on TGT" in done

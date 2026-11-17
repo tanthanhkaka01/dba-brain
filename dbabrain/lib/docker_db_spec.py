@@ -296,6 +296,10 @@ class DockerDbSpec:
     #: one uid - an NFS share that maps every user to 1024 - needs the database to run as that uid,
     #: or PostgreSQL refuses a data directory it does not own. Empty: the image's own user.
     run_as: str = ""
+    #: The container's time zone (0.40.0, 1.385), an IANA name - the clock the database reads its own
+    #: time in (Oracle's SYSTIMESTAMP, PostgreSQL's timezone at initdb, SQL Server's GETDATE). Empty: the
+    #: image's own, UTC. A lab on +07 is how a point in time from a source off UTC is drilled.
+    timezone: str = ""
 
     @property
     def meta(self) -> EngineMeta:
@@ -363,6 +367,12 @@ class DockerDbSpec:
             if not folder.startswith("/") or any(part in (".", "..") for part in folder.split("/")) \
                     or folder.rstrip("/") in ("", "/"):
                 raise ValueError(f"--data-host-dir must be an absolute folder on the host, not /; got {folder!r}.")
+        if self.timezone:
+            if not re.match(r"^(UTC|[A-Za-z]+(/[A-Za-z0-9_+-]+){1,2})$", str(self.timezone)):
+                raise ValueError(f"--timezone must be an IANA zone name such as Asia/Ho_Chi_Minh or UTC; "
+                                 f"got {self.timezone!r}.")
+            if self.mode != "single":
+                raise ValueError("--timezone is built for a single instance; an ha-lab keeps the image's clock.")
         if self.run_as and not re.match(r"^[0-9]+:[0-9]+$", str(self.run_as)):
             raise ValueError(f"--run-as must be uid:gid in numbers (e.g. 1024:100); got {self.run_as!r}.")
         # Rule 4: --replicas is only meaningful for ha-lab.

@@ -226,6 +226,29 @@ def _sqlserver(record: dict[str, Any], _above: Any = None) -> bool:
     return _text(record, "db_type").lower() == "sqlserver"
 
 
+def _oracle(record: dict[str, Any], _above: Any = None) -> bool:
+    return _text(record, "db_type").lower() == "oracle"
+
+
+def _offloaded(record: dict[str, Any], _above: Any = None, _parent: Any = None) -> bool:
+    # What upgrade-config writes for record_chain (the operator, 2026-11-16): on where the entry's
+    # backups go to a repository - the only restore that needs the recorded chain - off elsewhere.
+    return record.get("offload_enabled") is True
+
+
+def _metadata_on(record: dict[str, Any], _above: Any = None) -> bool:
+    # A block that replays or carries a bundle states where (0.40.0, 1.376); one that is off states nothing more.
+    block = record.get("server_metadata")
+    return isinstance(block, dict) and block.get("enabled") is True
+
+
+def _metadata_source(*sources: str) -> Callable[[dict[str, Any], Any], bool]:
+    def applies(record: dict[str, Any], _above: Any = None) -> bool:
+        block = record.get("server_metadata")
+        return _metadata_on(record) and str((block or {}).get("source") or "").strip().lower() in sources
+    return applies
+
+
 def _remote(record: dict[str, Any], _above: Any = None) -> bool:
     target = _text(record, "target_server_id")
     return bool(target) and target != _text(record, "server_id")
@@ -388,13 +411,33 @@ _RESTORE_COMMON: tuple[Stated, ...] = (
 )
 
 _SERVER_METADATA = "whether the instance's server-level state (logins, jobs, ...) goes with it"
+_METADATA_SOURCE = "where the restore reads the instance's metadata bundle - node, server or repository"
+_METADATA_SERVER = "the server the restore reads the metadata bundle from"
+_METADATA_PATH = "the folder the metadata bundle is read from (it may differ from the backup files' folder)"
+_METADATA_CARRIED = "where the offload carries the metadata bundle on the repository, sealed (\"\": not carried)"
+_ORACLE_SID = ("the Oracle instance the entry backs up - its SID, held to the instance that answers; no default: "
+               "a backup without it backed up whatever the container's profile exported")
+_RECORD_CHAIN = ("whether the source's RMAN is asked for the restore chain after each backup, and its answer kept "
+                 "- what a restore from the repository copies by")
+
+
+def _metadata_rows() -> tuple[Stated, ...]:
+    """A restore's metadata bundle, stated when it is replayed (0.40.0, 1.376; the operator, 2026-11-15:
+    *a field of its own, required ... from the repository or a server_id, and from which path*). An
+    entry that replayed one before read the node's own export: ``node`` is what it ran on."""
+    return (
+        Stated("server_metadata.source", "node", _METADATA_SOURCE, applies=_metadata_on),
+        Stated("server_metadata.server_id", _UNKNOWN, _METADATA_SERVER, applies=_metadata_source("server")),
+        Stated("server_metadata.path", _UNKNOWN, _METADATA_PATH, applies=_metadata_source("server", "repository")),
+    )
 _HOURS = "how many hours back the copy reaches - a window's every file, a share's staged FULL"
 _ENV = "what its script is told beyond what the tool hands it"
 _ENV_SECRETS = "which secrets reach its script, by ref"
 
 #: A script-driven restore entry (Oracle, PostgreSQL, a container-to-container SQL Server drill).
 SCRIPT_RESTORE_FIELDS: tuple[Stated, ...] = _RESTORE_COMMON + (
-    Stated("server_metadata.enabled", False, _SERVER_METADATA, applies=_sqlserver),
+    Stated("server_metadata.enabled", False, _SERVER_METADATA),
+    *_metadata_rows(),
     Stated("env", {}, _ENV),
     Stated("env_secrets", {}, _ENV_SECRETS),
     Stated("target_container", "", "the container the restore goes into (\"\": the engine on the target host itself)",
@@ -411,6 +454,7 @@ SCRIPT_RESTORE_FIELDS: tuple[Stated, ...] = _RESTORE_COMMON + (
 #: ``backup_restore`` block above it instead, as the loader reads it.
 SHARE_RESTORE_FIELDS: tuple[Stated, ...] = _RESTORE_COMMON + (
     Stated("server_metadata.enabled", False, _SERVER_METADATA),
+    *_metadata_rows(),
     Stated("copy_file_patterns", RESTORE_PARSER_DEFAULTS["copy_file_patterns"], "which files of the share are copied"),
     Stated("copy_recent_hours", RESTORE_PARSER_DEFAULTS["copy_recent_hours"], _HOURS),
     Stated("full_backup_subdir", RESTORE_PARSER_DEFAULTS["full_backup_subdir"],
@@ -444,6 +488,12 @@ BACKUP_ENTRY_FIELDS: tuple[Stated, ...] = (
     Stated("env_secrets", {}, _ENV_SECRETS),
     Stated("scrub_files_per_run", SCRUB_FILES_PER_RUN, "how many older files each run re-hashes where they lie"),
     Stated("server_metadata.enabled", False, _SERVER_METADATA, applies=_sqlserver),
+    Stated("server_metadata.repository_path", "", _METADATA_CARRIED, applies=_metadata_on, blank_states=True),
+    # 0.40.0 (1.380): an Oracle entry states whether its RMAN chain is recorded after each backup.
+    Stated("record_chain", _offloaded, _RECORD_CHAIN, applies=_oracle),
+    # 0.40.0 (1.387; the operator: *Oracle must have its SID, missing is wrong*): stated, never guessed -
+    # upgrade-config writes nothing for it, and an entry without one is refused inside its run.
+    Stated("oracle_sid", _UNKNOWN, _ORACLE_SID, applies=_oracle),
 )
 
 #: Each job of a backup entry: when it runs, what its script is told, and who is told.

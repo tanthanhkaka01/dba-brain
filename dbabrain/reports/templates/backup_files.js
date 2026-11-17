@@ -82,7 +82,7 @@ function bfRepoCell(f){
   if (f.kind !== "backup") return "";
   const r = f.repo;
   if (!r) return `<span class="sev">not copied</span>`;
-  const where = r.server ? `<div class="detail">→ ${esc(r.server)}</div>` : "";
+  const where = r.server ? `<div class="detail brk">→ ${esc(r.server)}</div>` : "";
   if (r.state === "verified") {
     const enc = !r.total ? ""
       : r.encrypted === r.total
@@ -114,7 +114,11 @@ function bfOnServerCell(f){
 function bfRestoreUseShort(f){
   if (!f.mark) return `<span class="sev">never used</span>`;
   const m = f.mark;
-  return `${outcomeLabel(m)}${outcomeReason(m, 90)}<div class="detail">${when(m.at)} → ${esc(m.target || "")}</div>
+  // The target on a line of its own, broken only at its hyphens (0.41.0, 1.394): beside the time it
+  // wrapped a character at a time and each row stood ~150 px high; unbroken, it pushed the table off
+  // a 1366 px screen.
+  return `${outcomeLabel(m)}${outcomeReason(m, 90)}<div class="detail brk">${when(m.at)}</div>
+    <div class="detail brk">→ ${esc(m.target || "")}</div>
     <div class="detail">${restoreTally(f)}</div>`;
 }
 
@@ -231,7 +235,7 @@ function bfChain(f){
       <th>Level</th><th>File</th><th>Taken</th><th>Repository</th><th>On the server</th></tr></thead><tbody>
       ${bfChainLink(c.full)}${c.diffs.map(bfChainLink).join("")}${logs}</tbody></table></div></div>`;
 }
-function bfDetailRow(f, i, cols){
+function bfDetailRow(f, i, cols, idp = "bf"){
   const r = f.repo;
   // What is on the repository under its own name: an encrypted copy is `<file>.age`, not the plain path.
   const kept = r && r.files.length === 1 && r.files[0].age && r.files[0].age.path ? r.files[0].age.path : r ? r.path : "";
@@ -252,7 +256,7 @@ function bfDetailRow(f, i, cols){
     <div class="card"><div class="table-responsive"><table class="table table-sm table-vcenter card-table"><thead><tr><th>File</th><th>On the server: bytes · SHA-256 · now</th>
       <th>Repository: bytes · SHA-256</th><th>Encrypted .age: bytes · SHA-256</th><th>Key</th>
       <th>Proven</th><th>Plain copy on the repository</th></tr></thead><tbody>${bfMemberRows(r, f)}</tbody></table></div></div>` : "";
-  return `<tr class="more" id="bf-more-${i}" hidden><td colspan="${cols}">
+  return `<tr class="more" id="${idp}-more-${i}" hidden><td colspan="${cols}">
     <div class="datagrid">${facts}</div>${bfTimeline(f)}${files}${bfChain(f)}
     <div class="subheader mt-3 mb-2">Restores</div><div>${restoreUseCell(f)}</div></td></tr>`;
 }
@@ -278,6 +282,10 @@ function retentionLine(rows){
 function backupFilesBlock(b, opts = {}){
   if (!b || !b.files || !b.files.length) return "";
   const fleet = !!opts.fleet;
+  /* `opts.idp`: the ids' prefix, so a page can hold two tables - the fleet page's log backups are the
+     second, read from their own file when opened (0.41.0, 1.393). `opts.inner`: no heading of its own. */
+  const idp = opts.idp || "bf";
+  const showServer = fleet && !opts.inner;   // the log block is one server's
   const body = b.files.map((f, i)=>{
     // Deleted once its repository copy was verified, or pruned by its retention: meant, not missing.
     const gone = f.onServer ? f.onServer.state === "missing" : f.onDisk === false;
@@ -295,7 +303,7 @@ function backupFilesBlock(b, opts = {}){
     return `<tr class="bf-main ${bad ? "crit" : ""}" data-i="${i}" data-repo="${repo}" data-type="${esc(f.type)}" data-use="${use}" data-server="${esc(f.host || "")}" data-db="${esc(f.database)}" data-bad="${bad ? "yes" : "no"}">
       <td class="caret" aria-label="details">&#9656;</td>
       <td class="nowrap">${when(f.at)}<div class="detail">${esc(KIND_LABEL[f.kind])}</div></td>
-      ${fleet ? `<td class="nowrap mono">${esc(f.host || "")}</td>` : ""}
+      ${showServer ? `<td class="mono brk">${esc(f.host || "")}</td>` : ""}
       <td>${esc(f.database)}</td>
       <td class="nowrap mono">${esc(f.type)}</td>
       <td class="filecell" title="${esc(f.path)}"><b>${esc(f.name)}</b>${count}</td>
@@ -305,7 +313,7 @@ function backupFilesBlock(b, opts = {}){
       <td>${bfRepoCell(f)}</td>
       <td>${bfOnServerCell(f)}</td>
       <td>${use_}</td>
-    </tr>${bfDetailRow(f, i, fleet ? 11 : 10)}`;
+    </tr>${bfDetailRow(f, i, showServer ? 11 : 10, idp)}`;
   }).join("");
   const problems = b.notOk + b.changed + b.missing + b.notProven + b.infected;
   const summary = [`${b.shown} file(s)`, b.notOk ? `${b.notOk} not ok` : "",
@@ -316,16 +324,18 @@ function backupFilesBlock(b, opts = {}){
   const typeOpts = (b.types || []).map(t=>`<option>${esc(t)}</option>`).join("");
   const serverOpts = (b.servers || []).map(s=>`<option>${esc(s)}</option>`).join("");
   const note = fleet
-    ? `Every file a backup of every server wrote, and every copy of a file no backup recorded,`
+    ? `Every file a backup of every server wrote - its log backups (LOG, WAL, ARCHIVELOG) apart, under Log backups below - and every copy of a file no backup recorded,`
     : `Every file a backup of this server wrote,`;
-  const head = fleet
+  const head = opts.inner
+    ? `<div><p class="sec-note">${esc(summary)}</p><div data-bf="${idp}">`
+    : fleet
     ? `<section class="files" id="backupFiles"><h2 class="sec">Backup &amp; restore files</h2>
-       <p class="sec-note">${esc(summary)}</p><div>`
+       <p class="sec-note">${esc(summary)}</p><div data-bf="${idp}">`
     : `<details class="fold" id="backupFiles"${problems ? " open" : ""}>
     <summary>Backup &amp; restore files — ${esc(summary)}</summary>
-    <div class="in">`;
+    <div class="in" data-bf="${idp}">`;
   return `${head}
-    <p class="sec-note">${note} and every file a restore or a copy
+    ${opts.inner ? "" : `<p class="sec-note">${note} and every file a restore or a copy
       ${fleet ? "and every restore that used them," : "and every file a restore or a copy\n      carried to or from it,"} newest first, from the backup catalog. Size is in bytes as read when the
       file was written. SHA-256 is the checksum recorded then and never changed since; "= catalog"
       means the file's last check hashed to that same value. Repository: the copy off the server,
@@ -335,12 +345,12 @@ function backupFilesBlock(b, opts = {}){
       happened to this file in the last one: "restore done" (copied intact, restored, the databases
       verified), "restore fail" with its reason (the file failed, went in before the restore failed, or
       was never reached), "skipped" with the engine's reason; then how many restores were done and how
-      many failed. Open a row for its files, sizes and checksums before and after encryption.</p>
+      many failed. Open a row for its files, sizes and checksums before and after encryption.</p>`}
     ${retentionLine(b.retention)}
     <div class="ffilters">
-      ${fleet ? `<label class="ffilter">Server <select class="ffsel" data-key="server">
+      ${fleet && !opts.inner ? `<label class="ffilter">Server <select class="ffsel" data-key="server">
         <option value="">All</option>${serverOpts}</select></label>` : ""}
-      <label class="ffilter">Database <select class="ffsel" data-key="db" id="bf-db">
+      <label class="ffilter">Database <select class="ffsel" data-key="db" id="${idp}-db">
         <option value="">All</option>${dbOptions(b.files, "")}</select></label>
       <label class="ffilter">File type <select class="ffsel" data-key="type">
         <option value="">All</option>${typeOpts}</select></label>
@@ -353,20 +363,21 @@ function backupFilesBlock(b, opts = {}){
         <option value="other">Copy pending or failed</option><option value="none">Not copied</option></select></label>
       ${fleet ? `<label class="ffilter">Problems <select class="ffsel" data-key="bad">
         <option value="">All</option><option value="yes">Only problems</option></select></label>` : ""}
-      <span class="sec-note">showing <b id="bf-count">${b.shown}</b> of ${b.shown}</span>
+      <span class="sec-note">showing <b id="${idp}-count">${b.shown}</b> of ${b.shown}</span>
     </div>
     <div class="tbl-wrap"><table class="rpt">
-      <thead><tr><th></th><th>When</th>${fleet ? "<th>Server</th>" : ""}<th>Database</th><th>Type</th><th>File / path on the server</th>
+      <thead><tr><th></th><th>When</th>${showServer ? "<th>Server</th>" : ""}<th>Database</th><th>Type</th><th>File / path on the server</th>
         <th>Size</th><th>Verdict</th><th>Repository</th><th>On the server</th><th>Restore</th></tr></thead>
-      <tbody id="bf-rows">${body}</tbody></table></div></div>${fleet ? "</section>" : "</details>"}`;
+      <tbody id="${idp}-rows">${body}</tbody></table></div></div>${opts.inner ? "</div>" : fleet ? "</section>" : "</details>"}`;
 }
 
 /* The selects filter together, over the rows already rendered - an open section stays open. Picking
    a server narrows the Database choices to its own; a database it does not have is let go. */
-function bindFileFilters(files){
-  const sels = [...document.querySelectorAll("select.ffsel")];
+function bindFileFilters(files, idp = "bf"){
+  const root = document.querySelector(`[data-bf="${idp}"]`) || document;
+  const sels = [...root.querySelectorAll("select.ffsel")];
   const server = sels.find(s => s.dataset.key === "server");
-  const db = document.getElementById("bf-db");
+  const db = document.getElementById(idp + "-db");
   if (server && db && files) server.addEventListener("change", () => {
     const keep = db.value;
     db.innerHTML = `<option value="">All</option>` + dbOptions(files, server.value);
@@ -375,24 +386,24 @@ function bindFileFilters(files){
   const apply = () => {
     const want = Object.fromEntries(sels.map(s=>[s.dataset.key, s.value]));
     let shown = 0;
-    document.querySelectorAll("#bf-rows tr[data-type]").forEach(tr=>{
+    document.querySelectorAll(`#${idp}-rows tr[data-type]`).forEach(tr=>{
       // Every select at once; "use" has its one non-exact choice ("any" = used at all).
       const on = Object.entries(want).every(([key, value]) => !value
         || (key === "use" && value === "any" ? tr.dataset.use !== "never" : tr.dataset[key] === value));
       tr.style.display = on ? "" : "none";
-      const more = document.getElementById("bf-more-" + tr.dataset.i);
+      const more = document.getElementById(`${idp}-more-` + tr.dataset.i);
       if (more && !on) { more.hidden = true; tr.classList.remove("open"); tr.querySelector("td.caret").innerHTML = "&#9656;"; }
       if (on) shown++;
     });
-    const count = document.getElementById("bf-count");
+    const count = document.getElementById(idp + "-count");
     if (count) count.textContent = shown;
   };
   sels.forEach(s=>s.addEventListener("change", apply));
-  const rows = document.getElementById("bf-rows");
+  const rows = document.getElementById(idp + "-rows");
   if (rows) rows.addEventListener("click", e => {
     if (e.target.closest("a, select, button, tr.more")) return;
     const tr = e.target.closest("tr.bf-main");
-    const more = tr && document.getElementById("bf-more-" + tr.dataset.i);
+    const more = tr && document.getElementById(`${idp}-more-` + tr.dataset.i);
     if (!more) return;
     more.hidden = !more.hidden;
     tr.classList.toggle("open", !more.hidden);

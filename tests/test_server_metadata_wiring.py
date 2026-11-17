@@ -20,6 +20,8 @@ from pathlib import Path
 import pytest
 
 from dbabrain.backup_restore import backup as backup_module
+
+from dbabrain.backup_restore import workflow as workflow_module
 from dbabrain.backup_restore import restore_script
 from dbabrain.backup_restore import server_metadata as sm
 from dbabrain.backup_restore.server_metadata import ServerMetadataPlan, instance_bundle_dir
@@ -266,7 +268,9 @@ def test_metadata_is_exported_only_after_a_backup_that_worked(
             or {"ok": True, "status": "OK"},
     )
     monkeypatch.setattr(backup_module, "DbaBrainStore", _FakeStore)
-    monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: None)
+    _emit = lambda **k: None
+    monkeypatch.setattr(backup_module, "emit_backup_restore_event", _emit)
+    monkeypatch.setattr(workflow_module, "emit_backup_restore_event", _emit)
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [_backup_job()])
@@ -278,7 +282,7 @@ def test_metadata_is_exported_only_after_a_backup_that_worked(
         ),
     )
 
-    backup_module.run_backup(app_config=_FakeConfig(), config_path="ignored", force=True)
+    workflow_module.run_backup(app_config=_FakeConfig(), config_path="ignored", force=True)
 
     assert bool(exported) is expect_export
     if expect_export:
@@ -437,30 +441,34 @@ def test_the_cli_restore_workflow_replays_metadata_too():
 
     from dbabrain.backup_restore import workflow as wf
 
+    import inspect
+
     source = (_p.Path(wf.__file__).parent / "cli.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    called = {
-        getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-        for node in ast.walk(tree) if isinstance(node, ast.Call)
-    }
-    assert "replay_engine_phase" in called, (
+    body = source[source.index('elif args.command == "restore-workflow":'):]
+    body = body[:body.index('raise ValueError(f"Unknown command: {args.command}")')]
+    # Since 0.40.0 (1.375) the workflow's run of the share-driven restore replays it, by hand and on schedule.
+    assert "replay_metadata=not _copy_only" in body, (
         "cli.py's restore-workflow must replay instance metadata, like the scheduled path does")
+    tree = ast.parse(inspect.getsource(wf._share_metadata))
+    called = {getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+              for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    assert "replay_engine_phase" in called
 
 
 def test_both_phases_run_and_the_post_phase_comes_after_the_restore():
     """Order is the rule, not a detail: 'pre-database' has to land before the databases so their
     users are not orphaned, and 'post-database' after, because Agent job steps name databases that
     must already exist."""
-    import pathlib as _p
+    import inspect
 
     from dbabrain.backup_restore import workflow as wf
 
-    source = (_p.Path(wf.__file__).parent / "cli.py").read_text(encoding="utf-8")
-    body = source[source.index('elif args.command == "restore-workflow":'):]
-    body = body[:body.index('raise ValueError(f"Unknown command: {args.command}")')]
-
+    # The share-driven run's steps, in the workflow since 0.40.0 (1.375): metadata before the first
+    # database, after the check.
+    body = inspect.getsource(wf.run_share_restore)
     pre = body.index("PRE_DATABASE")
-    run = body.index("output = run_restore_workflow(")
+    run = body.index("restore_share_server(")
+    check = body.index('say.check("done"')
     post = body.index("POST_DATABASE")
-    assert pre < run < post, "pre-database must precede the restore and post-database follow it"
+    assert pre < run < check < post, "pre-database must precede the restore and post-database follow it"
 

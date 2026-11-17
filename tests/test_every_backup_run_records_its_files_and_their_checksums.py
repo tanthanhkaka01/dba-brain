@@ -22,6 +22,8 @@ from types import SimpleNamespace
 import pytest
 
 from dbabrain.backup_restore import backup as backup_module
+
+from dbabrain.backup_restore import workflow as workflow_module
 from dbabrain.backup_restore.server_metadata import ServerMetadataPlan
 from dbabrain.common import backup as common_backup
 from dbabrain.db.backup_catalog import BackupCatalogStore
@@ -194,7 +196,9 @@ def _scheduled(monkeypatch, catalog, job, lines, *, seen_env=None):
     monkeypatch.setattr(backup_module, "DbaBrainStore", _Store)
     monkeypatch.setattr(backup_module, "BackupCatalogStore",
                         SimpleNamespace(from_config=lambda config: catalog))
-    monkeypatch.setattr(backup_module, "emit_backup_restore_event", lambda **k: None)
+    _emit = lambda **k: None
+    monkeypatch.setattr(backup_module, "emit_backup_restore_event", _emit)
+    monkeypatch.setattr(workflow_module, "emit_backup_restore_event", _emit)
     monkeypatch.setattr(backup_module.schedule, "reap_stale_runs", lambda **k: [])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: None)
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [job])
@@ -206,7 +210,7 @@ def _scheduled(monkeypatch, catalog, job, lines, *, seen_env=None):
         return _result(item, lines + ["RESULT=ok"])
 
     monkeypatch.setattr(backup_module, "execute_backup_job", execute)
-    backup_module.run_backup(app_config=SimpleNamespace(), config_path="x", force=True)
+    workflow_module.run_backup(app_config=SimpleNamespace(), config_path="x", force=True)
     return _Store.rows[0]
 
 
@@ -363,6 +367,33 @@ def test_rman_pieces_are_typed_by_their_tag_hashed_and_validated(tmp_path):
     assert "VALIDATE BACKUPSET 12,13" in files["ORCL_L0_a.bkp"]["engine_verify_text"]
 
 
+@pytest.mark.skipif(BASH is None, reason="needs bash")
+@pytest.mark.parametrize("script", ["oracle/oracle_rman_database.sh", "oracle/oracle_rman_archivelog.sh"])
+def test_a_piece_rman_only_crosschecked_or_deleted_is_not_this_runs(tmp_path, script):
+    # A lab drill, 2026-11-16: CROSSCHECK BACKUP printed the first level 0's pieces as
+    # `backup piece handle=... RECID=...`, the second level 0 catalogued them as its own, and the
+    # catalog refused the whole run on a duplicate path.
+    for name, body in (("ORCL_L0_new.bkp", b"new"), ("arch_ORCL_old.bkp", b"old")):
+        (tmp_path / name).write_bytes(body)
+    block = _bash_block(script, "# The file's path on this server, not inside the container (0.34.0)", "RMAN_IN=")
+    rman_out = (f"piece handle={tmp_path.as_posix()}/ORCL_L0_new.bkp tag=DBOPS_L0 comment=NONE\n"
+                "crosschecked backup piece: found to be 'AVAILABLE'\n"
+                f"backup piece handle={tmp_path.as_posix()}/arch_ORCL_old.bkp RECID=5 STAMP=1217000000\n"
+                "deleted backup piece\n"
+                f"backup piece handle={tmp_path.as_posix()}/arch_ORCL_gone.bkp RECID=2 STAMP=1216000000")
+    harness = "\n".join([
+        'die() { echo "DIE $1"; exit 1; }',
+        'run_db() { bash -c "$1" </dev/null; }',
+        "run_rman() { input=$(cat); case \"$input\" in "
+        "LIST*) printf '14      B  0  A DISK  16-NOV-26  1  1  NO  DBOPS_L0\\n';; "
+        "VALIDATE*) printf 'Finished validate\\n';; esac; }",
+        "run_started=$(date +%s); sid_export=''; oracle_sid=ORCL; container=''; enc_line=''", block,
+        f"emit_pieces '{rman_out}'"])
+    out = subprocess.run([BASH, "-c", harness], capture_output=True, text=True, timeout=60).stdout
+
+    assert [f["file_name"] for f in I.parse_file_lines(out)] == ["ORCL_L0_new.bkp"]
+
+
 # --------------------------------------------------------------------------- #
 # Where the file is on the server, and whether it still is (the operator, 2026-10-29)
 # --------------------------------------------------------------------------- #
@@ -484,7 +515,7 @@ def test_verify_backup_files_rehashes_on_the_server_and_names_what_changed(monke
     lines = [_receipt("A", "FULL", SHA_A, "/srv/a.bak", "/c/a.bak"),
              _receipt("B", "FULL", SHA_B, "/srv/b.bak", "/c/b.bak"),
              _receipt("C", "FULL", SHA_A, "/srv/c.bak", "/c/c.bak"),
-             _receipt("cluster", "FULL_BASE", SHA_B, "/srv/base/X_FULL", "/c/base/X_FULL"),
+             _receipt("cluster", "FULL_BASE", SHA_B, "/srv/base/20261101T010000Z_FULL", "/c/base/20261101T010000Z_FULL"),
              _receipt("D", "FULL", SHA_A, "", "/c/d.bak")]
     backup_module.record_in_catalog(catalog, job, _result(job, lines), job_run_id=1,
                                     started_at="2026-10-29T01:00:00Z", finished_at="2026-10-29T01:10:00Z")
@@ -495,7 +526,7 @@ def test_verify_backup_files_rehashes_on_the_server_and_names_what_changed(monke
         # a.bak intact; b.bak changed; c.bak gone; the base backup's manifest intact.
         return {"files": [{"path": "/srv/a.bak", "sha256": SHA_A, "size_bytes": 1},
                           {"path": "/srv/b.bak", "sha256": "c" * 64, "size_bytes": 1},
-                          {"path": "/srv/base/X_FULL/backup_manifest", "sha256": SHA_B, "size_bytes": 1}],
+                          {"path": "/srv/base/20261101T010000Z_FULL/backup_manifest", "sha256": SHA_B, "size_bytes": 1}],
                 "missing": ["/srv/c.bak"]}
 
     target = SimpleNamespace(host="192.0.2.10", port=22, username="u", key_file="", password_ref="",
@@ -509,7 +540,7 @@ def test_verify_backup_files_rehashes_on_the_server_and_names_what_changed(monke
 
     summary = backup_module.verify_backup_files(app_config=SimpleNamespace(), config_path="x")
 
-    assert "/srv/base/X_FULL/backup_manifest" in asked["paths"], "a base backup is held by its manifest"
+    assert "/srv/base/20261101T010000Z_FULL/backup_manifest" in asked["paths"], "a base backup is held by its manifest"
     assert asked["host"]["host"] == "192.0.2.10" and asked["host"]["runtime"] == "linux"
     assert summary["checked"] == 4 and summary["match"] == 2
     assert [m["file"] for m in summary["mismatch"]] == ["b.bak"]
@@ -708,7 +739,7 @@ def test_a_wal_segment_before_the_oldest_kept_base_was_the_cleanups(monkeypatch,
         _receipt("cluster", "WAL", SHA_B, "/srv/wal/new", "/c/wal/new")]),
         job_run_id=1, started_at="2026-10-29T01:00:00Z", finished_at="2026-10-29T01:00:05Z")
     backup_module.record_in_catalog(catalog, base, _result(base, [
-        _receipt("cluster", "FULL_BASE", SHA_A, "/srv/base/F", "/c/base/F")]),
+        _receipt("cluster", "FULL_BASE", SHA_A, "/srv/base/20261101T010000Z_FULL", "/c/base/20261101T010000Z_FULL")]),
         job_run_id=2, started_at="2026-10-31T18:00:00Z", finished_at="2026-10-31T19:00:00Z")
     # The second WAL segment ended after the base began: it must still be there.
     with catalog.connect() as conn:
@@ -719,7 +750,7 @@ def test_a_wal_segment_before_the_oldest_kept_base_was_the_cleanups(monkeypatch,
     monkeypatch.setattr(backup_module, "load_backup_jobs", lambda _p: [base, wal])
     monkeypatch.setattr(backup_module, "resolve_backup_target", lambda *a, **k: target)
     monkeypatch.setattr(backup_module.common_cli, "run", lambda *a, **k: {
-        "files": [{"path": "/srv/base/F/backup_manifest", "sha256": SHA_A, "size_bytes": 1}], "missing": []})
+        "files": [{"path": "/srv/base/20261101T010000Z_FULL/backup_manifest", "sha256": SHA_A, "size_bytes": 1}], "missing": []})
     monkeypatch.setattr(backup_module, "utc_now_text", lambda: "2026-11-03T00:00:00Z")
 
     summary = backup_module.verify_backup_files(app_config=SimpleNamespace(), config_path="x", backup_id="ACME_PG_WAL")

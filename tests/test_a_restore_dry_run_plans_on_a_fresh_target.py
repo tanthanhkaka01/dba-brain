@@ -24,7 +24,7 @@ import pytest
 from tests.test_a_removed_backup_set_leaves_no_husk import _Session, _Sftp
 
 from dbabrain.backup_restore import cli as backup_cli
-from dbabrain.backup_restore import workflow
+from dbabrain.backup_restore import restore_by_id, workflow
 from dbabrain.common import backup_copy, cli_backup_copy
 from dbabrain.lib import restore_space
 from dbabrain.telegram.command_cli import build_cli_argv
@@ -216,3 +216,12 @@ def test_the_dry_run_command_is_never_the_one_a_restore_is_held_to():
     records = document["telegram_support_commands"]
     records.sort(key=lambda r: r["command_text"] != "spbot_restore_plan")  # first, whatever the file says
     assert R.bot_twins(document)[R.GATE_RESTORE]["command"] == "/spbot_restore"
+
+
+@pytest.mark.parametrize("engine", sorted(restore_by_id._PLANNERS))
+def test_every_engine_a_restore_plans_has_the_steps_its_dry_run_names(engine):
+    # A lab drill, 2026-11-16: an Oracle dry run answered `steps: []`, as if it would run nothing.
+    steps = restore_by_id.DRY_RUN_STEPS.get(engine) or []
+    assert steps, f"{engine}: a dry run that names no step"
+    assert any(step.startswith("restore-full") for step in steps)
+    assert any(step.startswith("verify-restore") for step in steps)

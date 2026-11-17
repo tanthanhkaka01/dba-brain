@@ -50,6 +50,11 @@ from dbabrain.common.cli_catalog import STATED_CONNECTION
 from dbabrain.lib.json_io import looks_like_json_request
 from dbabrain.common.cli_usage import (  # noqa: F401 - re-exported: every name kept its address
     ASK_USAGE,
+    CREDENTIAL_REMOVE_USAGE,
+    ENTRY_REMOVE_USAGE,
+    INSTANCE_REMOVE_USAGE,
+    REPORT_SERVER_REMOVE_USAGE,
+    RETIRE_USAGE,
     AUTHORIZE_USAGE,
     CHECK_IDENTIFIERS_USAGE,
     CHECK_SECRET_LITERALS_USAGE,
@@ -71,6 +76,7 @@ from dbabrain.common.cli_usage import (  # noqa: F401 - re-exported: every name 
     RUN_CMD_USAGE,
     RUN_SQL_USAGE,
     SECRET_SET_USAGE,
+    SECRET_REMOVE_USAGE,
     AI_KEY_USAGE,
     SELF_STATUS_USAGE,
     SQLSERVER_INSTANCE_USAGE,
@@ -170,6 +176,94 @@ def _secret_set_command(argv: list[str]) -> int:
         data={"ref": ref, "written": bool(written),
               "store": str(Path(DEFAULT_DATA_DIR) / "encrypted_secret_text.json"),
               "plaintext_source": plaintext}))
+
+
+def _secret_remove_command(argv: list[str]) -> int:
+    """``secret-remove`` - one secret out of the encrypted store, the twin of ``secret-set`` (0.40.0).
+
+    Missing until 2026-11-17: taking the master's dead MCP node token out meant comparing decrypted
+    stores by hand. The operator: *one secret at a time, and the value must match* - the request names
+    the ref AND its value, a different value is refused, and nothing is written.
+    """
+    import os
+    from pathlib import Path
+
+    from dbabrain.lib import response
+    from dbabrain.lib import secret_text as _secret_text
+    from dbabrain.lib.paths import DEFAULT_DATA_DIR, TOOL_ROOT
+
+    if argv and argv[0] in {"-h", "--help"}:
+        print(SECRET_REMOVE_USAGE)
+        return 0
+    if not argv or argv[0] != "-":
+        print(SECRET_REMOVE_USAGE, file=sys.stderr)
+        return response.emit(response.fail(
+            "secret-remove", "the request must arrive on stdin (-): it carries the secret's value, which "
+                             "inline is visible on the command line and in a file is the plaintext this avoids"))
+    request, code = _read_json_request("-", SECRET_REMOVE_USAGE)
+    if request is None:
+        return code
+    ref = str(request.get("ref") or "").strip()
+    value = str(request.get("value") or "")
+    if not ref or not value:
+        return response.emit(response.fail("secret-remove", "both 'ref' and 'value' are required: one secret, "
+                                                            "named and proven by its value"))
+    source = Path(TOOL_ROOT) / "secrets" / "secret_text.json"
+    # Step 3 of retiring a server (0.41.0, 1.391): a ref a login, an entry or a setting still names is
+    # not removed - each said, so the step before is named. A ref nothing names goes as before.
+    from dbabrain.common import config_retire
+
+    named = config_retire.pointers(DEFAULT_DATA_DIR, ref)
+    if named:
+        return response.emit(response.fail("secret-remove", f"{ref} is still named in {len(named)} place(s) - "
+                                           f"remove those first: {config_retire.said(named)}. Nothing was removed."))
+    try:
+        done = _secret_text.remove_secret_text(DEFAULT_DATA_DIR, ref, value,
+                                               key=os.environ.get("DBABRAIN_SECRET_KEY") or None,
+                                               plaintext_store=source)
+    except Exception as exc:  # noqa: BLE001 - reported as a response like every other command.
+        return response.emit(response.fail("secret-remove", str(exc).replace(value, "<value>")))
+    places = [name for name, flag in (("the encrypted store", done["removed"]),
+                                      (f"the plaintext source {source}", done["plaintext_removed"])) if flag]
+    return response.emit(response.ok(
+        "secret-remove",
+        message=f"removed {ref} from {' and '.join(places)}",
+        data={"ref": ref, "removed": done["removed"], "plaintext_removed": done["plaintext_removed"],
+              "store": str(Path(DEFAULT_DATA_DIR) / "encrypted_secret_text.json")}))
+
+
+
+def _retire_command(command: str, argv: list[str]) -> int:
+    """``entry-remove`` / ``credential-remove`` / ``instance-remove`` / ``report-server-remove`` -
+    the CLI face of :mod:`dbabrain.common.config_retire`. A plan unless the request says ``apply``."""
+    from dbabrain.common import config_retire
+    from dbabrain.lib import response
+
+    usage = RETIRE_USAGE[command]
+    if argv and argv[0] in {"-h", "--help"}:
+        print(usage)
+        return 0
+    if not argv:
+        print(usage, file=sys.stderr)
+        return response.emit(response.fail(command, "no request given; see --help"))
+    request, code = _read_json_request(argv[0], usage)
+    if request is None:
+        return code
+    if not isinstance(request, dict):
+        return response.emit(response.fail(command, "the request must be a JSON object"))
+    run = {"entry-remove": config_retire.remove_entry, "credential-remove": config_retire.remove_credential,
+           "instance-remove": config_retire.remove_instance,
+           "report-server-remove": config_retire.remove_report_server}[command]
+    try:
+        outcome = run(request)
+    except config_retire.RetireError as exc:
+        return response.emit(response.fail(command, str(exc)))
+    except (OSError, ValueError) as exc:
+        return response.emit(response.fail(command, f"{type(exc).__name__}: {exc}"))
+    message = (f"removed {outcome['record']}" if outcome["removed"]
+               else f"would remove {outcome['record']} - nothing names it; a plan, nothing written: "
+                    '"apply": true removes it')
+    return response.emit(response.ok(command, message=message, data=outcome))
 
 
 #: The secret's name when neither the request nor data/ai_assist.json names one (``ai-key``).
@@ -1295,6 +1389,12 @@ def _dispatch(argv: list[str]) -> int:
         return _remote_credential_add_command(argv[1:])
     if argv[0] == "secret-set":
         return _secret_set_command(argv[1:])
+    if argv[0] == "secret-remove":
+        return _secret_remove_command(argv[1:])
+    # Retiring a server, one record per call, the leaf first (1.391). Spelled out: the listing's
+    # guard reads the dispatch's names from this source.
+    if argv[0] in {"entry-remove", "credential-remove", "instance-remove", "report-server-remove"}:
+        return _retire_command(argv[0], argv[1:])
     if argv[0] == "ai-key":
         return _ai_key_command(argv[1:])
     if argv[0] == "probe-host":

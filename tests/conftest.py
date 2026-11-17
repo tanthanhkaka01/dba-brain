@@ -1171,3 +1171,30 @@ def _no_lockdown_unless_the_test_is_about_it(request, monkeypatch):
 
     monkeypatch.setattr(lockdown_store, "lockdown_on", lambda app_config=None: False)
     monkeypatch.setattr(lockdown_store, "refuse_if_locked", lambda app_config, action: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_source_database_is_asked_its_clock(request, monkeypatch):
+    """An Oracle / PostgreSQL point in time asks the source database its clock (1.385), through the
+    node's own inventory and secret store - a test naming a server_id the estate has would connect to
+    it. Unasked here: the clock is unknown, as for a source that does not answer. A test about the
+    question itself is marked ``real_source_clock``."""
+    if request.node.get_closest_marker("real_source_clock"):
+        return
+    from dbabrain.backup_restore import source_clock
+
+    monkeypatch.setattr(source_clock, "ask", lambda server_id, **_k: (None, "not asked in a test"))
+
+
+def run_restore_said(monkeypatch, request: dict[str, Any], said: list, *, engine: str = "sqlserver",
+                     target: str = "TGT", source: str = "SRC", **kwargs: Any) -> dict[str, Any]:
+    """A restore run the way the workflow runs it - each step called and said there (0.40.0, 1.375) - with
+    every message it says appended to ``said`` as ``(phase, message, metadata)``."""
+    from dbabrain.backup_restore import workflow
+
+    monkeypatch.setattr(workflow, "emit_backup_restore_event",
+                        lambda **k: said.append((k["phase"], k["message"], k["metadata"])))
+    say = workflow._RestoreSay(app_config=None, logger=None, notify=None, metadata={},
+                               restore_id=str(request.get("restore_id") or ""), engine=engine, target=target,
+                               source=source)
+    return workflow.run_restore_by_id(request, say=say, **kwargs)

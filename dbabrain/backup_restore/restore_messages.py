@@ -1,52 +1,33 @@
-"""A restore's messages follow its flow, as a backup's do (0.39.0, 1.370).
+"""A restore's messages: eleven steps, said by the workflow that calls them (0.40.0, 1.375).
 
-The operator, 2026-11-11: *backup and restore are many steps now and the messages do not follow
-them* - the backup got its format that day (1.306: the id and the step on the first line, one line
-per step, no JSON). And on 2026-11-13: *restore is like backup - it must message every step of its
-flow the same way; restore has restore full -> diff -> log as well, a message for each.*
+The operator, 2026-11-15: *a restore's messages step by step, concrete, like the backup's - each log one
+message, 10.1, 10.2 ...; full and diff two messages each, a start and a done; the metadata and the
+certificate always a message, also when there is none*. The steps he confirmed on 2026-11-16, the same
+numbers for every engine and a step that does not apply still said with why::
 
-A restore's Telegram messages were still the older shape - a fixed header and ``key=value`` lines,
-the same for every step - with one line for the whole of full, differential and logs. These are
-its flow messages, in the backup's format::
-
-    APP_TO_DRILL · Restore started
+    APP_TO_DRILL · 1. Restore process started
     SRC-01 -> DRILL-01 · to the newest backup
-    next: 1. copy, 2. restore full -> diff -> log, 3. check, 4. clean up
+    steps: 2 copy -> DRILL-01, 3 metadata before, 4 certificate, 5 full, 6 diff, 7 log, 8 check, ...
 
-    APP_TO_DRILL · 1. Copy done
-    ✅ 1. Copy 48 file(s) · 104.5 MB -> DRILL-01 · decrypted from the repository's encrypted copies
+    APP_TO_DRILL · 2. Copy to DRILL-01 started / done
+    APP_TO_DRILL · 3. Instance metadata before the restore: not restored
+    APP_TO_DRILL · 4. Certificate: none
+    APP_TO_DRILL · 5.1 Restore full APPDB_COPY started / done
+    APP_TO_DRILL · 6.1 Restore diff APPDB_COPY started / done
+    APP_TO_DRILL · 7.1 Restore log APPDB_LOG_0001.trn done        (one per file)
+    APP_TO_DRILL · 8. Check started / done
+    APP_TO_DRILL · 9. Instance metadata after the restore: not restored
+    APP_TO_DRILL · 10. Plain files cleared
+    APP_TO_DRILL · 11. Restore process done
 
-    APP_TO_DRILL · 2. Restore full done (1 of 3)
-    ✅ APPDB as APPDB_COPY: full APPDB_FULL.bak (backup finished ...) - left restoring for the next step · 41 s
-
-    APP_TO_DRILL · 3. Check done
-    ✅ 3. Check 1 database(s) open, 0 unusable
-
-    APP_TO_DRILL · 4. Clean up done
-    ✅ 4. Plain files 48/48 deleted on DRILL-01 (104.5 MB)
-
-    APP_TO_DRILL · Restore done
-    ...
-
-Each function answers the two metadata keys ``events._format_flow_message`` renders -
-``flow_title`` and ``flow_lines`` - and ``telegram: False`` for a step whose start is not a message
-of its own (*a short step one line, a long step a start and a done*): the run row and the log file
-still record it. Words only: what happened is decided where it happens (``restore_by_id``,
-``workflow``); nothing here can fail a restore.
+Each function answers the two metadata keys ``events._format_flow_message`` renders - ``flow_title``
+and ``flow_lines``. Words only, read by ``workflow._RestoreSay`` alone: what happened is decided where it
+happens (the steps of ``restore_by_id`` and ``restore_database``); nothing here can fail a restore.
 """
 
 from __future__ import annotations
 
 from typing import Any
-
-#: The steps of a restore, as its messages number them.
-COPY, RESTORE, CHECK, CLEANUP = "1. Copy", "2. Restore", "3. Check", "4. Clean up"
-NEXT = "next: 1. copy, 2. restore full -> diff -> log, 3. check, 4. clean up"
-NEXT_COPY_ONLY = "next: 1. copy - nothing is restored"
-
-#: What each restore command is called in a title.
-STEP_NAMES = {"restore-full": "full", "restore-diff": "diff", "restore-log": "log"}
-
 
 def size_said(size_bytes: Any) -> str:
     """A number of bytes as a person reads it: ``104.5 MB``; ``""`` for none."""
@@ -70,106 +51,6 @@ def flow(restore_id: str, title: str, lines: list[str], *, telegram: bool = True
     return fields
 
 
-def started(restore_id: str, *, source: str, target: str, moment: str, copy_only: bool = False,
-            from_repository: bool = False) -> dict[str, Any]:
-    where = f"{source} -> {target or source}" + (" · from the repository" if from_repository else "")
-    return flow(restore_id, "Copy only started" if copy_only else "Restore started",
-                [f"{where} · {'to ' + moment if moment else 'to the newest backup'}",
-                 NEXT_COPY_ONLY if copy_only else NEXT])
-
-
-def copy_started(restore_id: str, *, source: str, target: str, from_repository: bool) -> dict[str, Any]:
-    return flow(restore_id, f"{COPY} started",
-                [("the repository's copies of " if from_repository else "") + f"{source} -> {target}"])
-
-
-def copy_done(restore_id: str, transferred: dict[str, Any], *, target: str) -> dict[str, Any]:
-    parts = [f"✅ {COPY} {transferred.get('copied', 0)} file(s)", size_said(transferred.get("bytes_copied")) + f" -> {target}"]
-    if transferred.get("encrypted"):
-        parts.append("decrypted from the repository's encrypted copies")
-    parts.append("bytes + SHA-256 proven")
-    if transferred.get("skipped"):
-        parts.append(f"{transferred['skipped']} already there and proven")
-    if transferred.get("removed_absent_at_source"):
-        parts.append(f"{transferred['removed_absent_at_source']} removed (gone at the source)")
-    lines = [" · ".join(part for part in parts if part.strip())]
-    if transferred.get("written_after_the_plan"):
-        lines.append(f"⚠ {len(transferred['written_after_the_plan'])} file(s) written at the source after the "
-                     "plan were left there")
-    return flow(restore_id, f"{COPY} done", lines)
-
-
-def restore_started(restore_id: str, *, plan: str, moment: str, continued: str = "") -> dict[str, Any]:
-    return flow(restore_id, f"{RESTORE} started",
-                [f"{plan or 'nothing more to apply'} · {moment}", f"↪ {continued}" if continued else ""])
-
-
-def step_done(restore_id: str, *, op: str, number: int, total: int, said: str, seconds: int) -> dict[str, Any]:
-    """One step of the chain - the full, the differential, the logs - as it finishes."""
-    return flow(restore_id, f"{RESTORE} {STEP_NAMES.get(op, op)} done ({number} of {total})",
-                [f"✅ {said} · {seconds} s"])
-
-
-def restore_done(restore_id: str, *, steps: int, seconds: int) -> dict[str, Any]:
-    # The last step's own message already said it: the run row keeps this one, Telegram does not.
-    return flow(restore_id, f"{RESTORE} done", [f"✅ {steps} step(s) · {seconds} s"], telegram=False)
-
-
-def check_started(restore_id: str) -> dict[str, Any]:
-    return flow(restore_id, f"{CHECK} started", ["the restored database(s): can each be opened, and is it consistent"])
-
-
-def check_done(restore_id: str, *, checked: Any, failed: Any) -> dict[str, Any]:
-    bad = int(failed or 0)
-    return flow(restore_id, f"{CHECK} {'done' if not bad else 'FAILED'}",
-                [f"{'❌' if bad else '✅'} {CHECK} {checked} database(s) checked, {bad} unusable"])
-
-
-def cleanup_started(restore_id: str) -> dict[str, Any]:
-    return flow(restore_id, f"{CLEANUP} started", ["the staging folder"], telegram=False)
-
-
-def cleanup_done(restore_id: str, *, target: str, plain: dict[str, Any] | None, pruned: dict[str, Any],
-                 kept: int = 0) -> dict[str, Any]:
-    lines = []
-    if plain is not None:
-        whole = not plain.get("error") and int(plain.get("deleted", 0)) + int(plain.get("already_gone", 0)) \
-            >= int(plain.get("plain_files", 0))
-        lines.append(f"{'✅' if whole else '❌'} {CLEANUP}: plain files {plain.get('deleted', 0)}/"
-                     f"{plain.get('plain_files', 0)} deleted on {target} ({size_said(plain.get('bytes_deleted'))})"
-                     + (f", {plain['earlier_runs']} of them left by an earlier run" if plain.get("earlier_runs") else "")
-                     + (f" - {plain['error']}"[:300] if plain.get("error") else ""))
-    else:
-        lines.append(f"- {CLEANUP}: nothing was decrypted for this restore")
-    lines.append(f"{'❌' if pruned.get('error') else '-'} staged backups past retention: {pruned.get('pruned', 0)} removed"
-                 + (f" ({pruned['skipped']})" if pruned.get("skipped") else "")
-                 + (f", {kept} kept - not in the catalog" if kept else "")
-                 + (f" - {pruned['error']}"[:300] if pruned.get("error") else ""))
-    return flow(restore_id, f"{CLEANUP} done", lines)
-
-
-def share_step(restore_id: str, *, op: str, result: str, number: int, total: int, said: str,
-               seconds: int | None = None, reason: str = "") -> dict[str, Any]:
-    """One file of a share-driven restore as it went in - or was passed over (0.39.0, 1.370 / 1.367):
-    the full, the differential, each log, numbered within its database."""
-    word = {"applied": "done", "skipped": "skipped"}.get(result, result)
-    mark = {"applied": "✅", "skipped": "↷"}.get(result, "❌")
-    tail = f" · {seconds} s" if seconds is not None and result == "applied" else ""
-    return flow(restore_id, f"{RESTORE} {STEP_NAMES.get(op, op)} {word} ({number} of {total})",
-                [f"{mark} {said}{tail}", f"- {reason}"[:300] if reason else ""])
-
-
-def share_cleanup_done(restore_id: str, *, considered: int, deleted: int, kept: int) -> dict[str, Any]:
-    """The share-driven restore's retention cleanup: what it looked at and what it removed."""
-    return flow(restore_id, f"{CLEANUP} done",
-                [f"- staged backups past retention: {deleted} removed of {considered} considered, {kept} kept"])
-
-
-def note(restore_id: str, title: str, line: str) -> dict[str, Any]:
-    """A step the entry has off, or has nothing for - said once, as a line of its own."""
-    return flow(restore_id, title, [f"- {line}"])
-
-
 def finished(restore_id: str, *, status: str, copy_only: bool = False, restored: dict[str, Any] | None = None,
              warnings: list[str] | None = None, error: str = "", seconds: int | None = None) -> dict[str, Any]:
     """The END or ERROR message: what went in, whether it opened, where it stopped - or why it failed."""
@@ -189,3 +70,172 @@ def finished(restore_id: str, *, status: str, copy_only: bool = False, restored:
     if seconds is not None:
         lines.append(f"{seconds} s")
     return flow(restore_id, f"{noun} done" + (" with a warning" if warnings else ""), lines)
+
+
+# --------------------------------------------------------------------------- #
+# The eleven steps (0.40.0, 1.375) - confirmed by the operator 2026-11-16
+# --------------------------------------------------------------------------- #
+#: Each step's name, as its message says it; the same numbers for every engine.
+STEP_TITLES = {2: "Copy", 3: "Instance metadata before the restore", 4: "Certificate", 5: "Restore full",
+               6: "Restore diff", 7: "Restore log", 8: "Check", 9: "Instance metadata after the restore",
+               10: "Plain files cleared", 11: "Restore process done"}
+
+
+def plan_line(*, target: str, remote: bool, from_repository: bool, copy_only: bool) -> str:
+    """The steps this restore runs, each as its entry has it."""
+    copy = (f"2 copy -> {target}" + (" (decrypted from the repository)" if from_repository else "")
+            if remote else "2 copy: none (the target reads the source's own folder)")
+    if copy_only:
+        return f"steps: {copy}, 3-10 off (copy only - nothing restored), 11 done"
+    return (f"steps: {copy}, 3 metadata before, 4 certificate, 5 full, 6 diff, 7 log, 8 check, "
+            f"9 metadata after, 10 plain files cleared, 11 done")
+
+
+def process_started(restore_id: str, *, source: str, target: str, moment: str, plan: str,
+                    copy_only: bool = False, from_repository: bool = False) -> dict[str, Any]:
+    where = f"{source} -> {target or source}" + (" · from the repository" if from_repository else "")
+    return flow(restore_id, "1. Copy only process started" if copy_only else "1. Restore process started",
+                [f"{where} · {'to ' + moment if moment else 'to the newest backup'}", plan])
+
+
+def none(restore_id: str, number: int, reason: str) -> dict[str, Any]:
+    """A step that does not apply to this restore - still said, with why (the operator, 2026-11-15)."""
+    return flow(restore_id, f"{number}. {STEP_TITLES[number]}: none", [f"- {reason}"])
+
+
+def copy_step(restore_id: str, *, target: str, event: str, transferred: dict[str, Any] | None = None,
+              from_repository: bool = False, source: str = "") -> dict[str, Any]:
+    if event == "start":
+        return flow(restore_id, f"2. Copy to {target} started",
+                    [f"from the repository: the encrypted copies of {source}, decrypted on the way" if from_repository
+                     else f"from {source}: the backup files, each proven on arrival"])
+    done = transferred or {}
+    parts = [f"✅ {done.get('copied', 0)} file(s)", (size_said(done.get("bytes_copied")) or "0 bytes")]
+    if done.get("encrypted"):
+        parts.append("decrypted from the repository's encrypted copies")
+    parts.append("bytes + SHA-256 proven")
+    if done.get("skipped"):
+        parts.append(f"{done['skipped']} already there and proven")
+    if done.get("removed_absent_at_source"):
+        parts.append(f"{done['removed_absent_at_source']} removed (gone at the source)")
+    lines = [" · ".join(parts)]
+    if done.get("written_after_the_plan"):
+        lines.append(f"⚠ {len(done['written_after_the_plan'])} file(s) written at the source after the plan "
+                     "were left there")
+    return flow(restore_id, f"2. Copy to {target} done", lines)
+
+
+def metadata_step(restore_id: str, *, number: int, report: dict[str, Any]) -> dict[str, Any]:
+    """Steps 3 and 9: replayed, not restored and why, or FAILED (a warning: the databases stand)."""
+    title = STEP_TITLES[number]
+    status = str(report.get("status") or "")
+    if status == "OFF":
+        return flow(restore_id, f"{number}. {title}: not restored", [f"- {report.get('reason')}"])
+    if report.get("ok", True) and status != "SKIPPED":
+        warnings = [str(w) for w in report.get("warnings") or []]
+        return flow(restore_id, f"{number}. {title} done",
+                    [f"✅ replayed onto {report.get('target') or 'the target'}"
+                     + (f" · {report['status']}" if report.get("status") else "")]
+                    # Each WARN said, not only its word: what was skipped and why.
+                    + [f"⚠ {warning}" for warning in warnings])
+    return flow(restore_id, f"{number}. {title} FAILED",
+                [f"❌ {' '.join(str(report.get('error') or status or 'not replayed').split())[:300]}",
+                 "- the restore itself is unaffected"])
+
+
+def certificate_step(restore_id: str, *, result: dict[str, Any]) -> dict[str, Any]:
+    status = result.get("status")
+    if status == "imported":
+        return flow(restore_id, "4. Certificate restored",
+                    [f"✅ {result.get('name')} from the vault of dbabrain, imported on the target; its files removed"])
+    if status == "none":
+        return none(restore_id, 4, "none needed - the backup is not encrypted")
+    return none(restore_id, 4, f"{result.get('engine') or 'this engine'} has no certificate step")
+
+
+def _chain_said(facts: dict[str, Any]) -> str:
+    database, landing = str(facts.get("database") or ""), str(facts.get("landing") or "")
+    if not database and not landing:
+        said = str(facts.get("summary") or facts.get("op") or "a step")
+    else:
+        said = database if not landing or landing.lower() == database.lower() else f"{database} as {landing}"
+        files = facts.get("files") or []
+        if files:
+            said += f": {', '.join(files[:3])}" + (f" (+{len(files) - 3})" if len(files) > 3 else "")
+    ends = facts.get("finished") or []
+    if len(ends) == 1:
+        said += f" (backup finished {ends[0]})"
+    elif ends:
+        said += f" (backups finished {ends[0]} .. {ends[-1]})"
+    if facts.get("stopat"):
+        said += f", stopped at {facts['stopat']}"
+    if landing:
+        said += " - recovered, the database is open" if facts.get("recovered") else " - left restoring for the next step"
+    return said
+
+
+def chain_step(restore_id: str, *, number: str, kind: str, event: str, facts: dict[str, Any],
+               seconds: int | None = None) -> dict[str, Any]:
+    """``5.1 Restore full APPDB started`` / ``... done`` - each database its own pair (the operator, 2026-11-15)."""
+    step = 5 if kind == "full" else 6
+    who = str(facts.get("landing") or facts.get("database") or "").strip()
+    title = f"{number} {STEP_TITLES[step]}" + (f" {who}" if who else "") + (" started" if event == "start" else " done")
+    if event == "start":
+        return flow(restore_id, title, [_chain_said(facts)])
+    return flow(restore_id, title, [f"✅ {_chain_said(facts)}" + (f" · {seconds} s" if seconds is not None else "")])
+
+
+def log_step(restore_id: str, *, number: str, facts: dict[str, Any], seconds: int | None = None,
+             result: str = "applied", reason: str = "") -> dict[str, Any]:
+    """``7.3 Restore log APPDB_LOG_0003.trn done`` - one message per file, numbered under the log step."""
+    files = facts.get("files") or []
+    name = files[0] if len(files) == 1 else f"{len(files)} files" if files else "WAL replay"
+    word = {"applied": "done", "skipped": "skipped"}.get(result, "FAILED")
+    mark = {"applied": "✅", "skipped": "↷"}.get(result, "❌")
+    position = f" ({facts['log_number']} of {facts['log_total']} logs)" if facts.get("log_total") else ""
+    return flow(restore_id, f"{number} {STEP_TITLES[7]} {name} {word}",
+                [f"{mark} {_chain_said(facts)}{position}" + (f" · {seconds} s" if seconds is not None else ""),
+                 f"- {reason}"[:300] if reason else ""])
+
+
+def check_step(restore_id: str, *, event: str, checked: Any = None, failed: Any = None) -> dict[str, Any]:
+    if event == "start":
+        return flow(restore_id, "8. Check started", ["each restored database: can it be opened, is it consistent"])
+    bad = int(failed or 0)
+    return flow(restore_id, f"8. Check {'done' if not bad else 'FAILED'}",
+                [f"{'❌' if bad else '✅'} {checked} database(s) checked, {bad} unusable"])
+
+
+def plain_step(restore_id: str, *, target: str, cleaned: dict[str, Any]) -> dict[str, Any]:
+    """Step 10: the copies this entry staged on the target - deleted now the databases are checked - and
+    the staged backups past retention."""
+    plain, pruned, kept = cleaned.get("plain"), cleaned.get("pruned") or {}, int(cleaned.get("kept") or 0)
+    lines = []
+    if plain is not None:
+        whole = not plain.get("error") and int(plain.get("deleted", 0)) + int(plain.get("already_gone", 0))             >= int(plain.get("plain_files", 0))
+        lines.append(f"{'✅' if whole else '❌'} {plain.get('deleted', 0)} of {plain.get('plain_files', 0)} plain file(s) "
+                     f"deleted on {target} ({size_said(plain.get('bytes_deleted')) or '0 bytes'})"
+                     + (f", {plain['earlier_runs']} of them left by an earlier run" if plain.get("earlier_runs") else "")
+                     + (f" - {plain['error']}"[:300] if plain.get("error") else ""))
+    else:
+        lines.append("- nothing was decrypted or staged plain for this restore")
+    lines.append(f"{'❌' if pruned.get('error') else '-'} staged backups past retention: {pruned.get('pruned', 0)} removed"
+                 + (f" ({pruned['skipped']})" if pruned.get("skipped") else "")
+                 + (f", {kept} kept - not in the catalog" if kept else "")
+                 + (f" - {pruned['error']}"[:300] if pruned.get("error") else ""))
+    failed = any(line.startswith("❌") for line in lines)
+    return flow(restore_id, f"10. {STEP_TITLES[10]}" + (" - NOT all" if failed else ""), lines)
+
+
+def process_done(restore_id: str, *, status: str, failed_step: str = "", copy_only: bool = False,
+                 restored: dict[str, Any] | None = None, warnings: list[str] | None = None, error: str = "",
+                 seconds: int | None = None) -> dict[str, Any]:
+    """Step 11: what went in, whether it opened, where it stopped - or the step it failed at, and why."""
+    said = finished(restore_id, status=status, copy_only=copy_only, restored=restored, warnings=warnings,
+                    error=error, seconds=seconds)
+    noun = "Copy only process" if copy_only else "Restore process"
+    if status != "done":
+        title = f"11. {noun} FAILED" + (f" at step {failed_step}" if failed_step else "")
+    else:
+        title = f"11. {noun} done" + (" with a warning" if warnings else "")
+    return {**said, "flow_title": f"{restore_id} · {title}"}

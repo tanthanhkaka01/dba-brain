@@ -153,6 +153,9 @@
         overflow:hidden; vertical-align:middle; margin-right:7px}
   .vbar i{display:block; height:100%; border-radius:99px}
   table.rpt .detail{font-family:var(--mono); font-size:11px; color:var(--muted); word-break:break-word}
+  /* A server id breaks at its hyphens, never inside a word (0.41.0, 1.394). */
+  table.rpt .detail.brk, table.rpt td.brk{word-break:normal; overflow-wrap:normal}
+  table.rpt td.brk{min-width:16ch}   /* a server id in two lines, not one per hyphen */
   table.rpt details summary{cursor:pointer; color:var(--muted); font-size:11.5px; outline:none}
   table.rpt details ul{margin:5px 0 0 0; padding-left:16px}
   table.rpt details li{font-size:11.5px; margin-bottom:2px}
@@ -227,6 +230,10 @@
   section.recover .st-OVERDUE,section.recover .st-NEVER{color:var(--crit); font-weight:600}
   section.recover .st-incomplete{color:var(--warn); font-weight:600}
   section.recover .st-REMOVED{color:var(--muted)}
+  /* History folded under its table, and a note in a cell (0.41.0, 1.395 / 1.396). */
+  section.recover details.rc-gone{margin:4px 0 12px}
+  section.recover details.rc-gone summary{cursor:pointer; color:var(--muted); font-size:12px}
+  section.recover .rc-note{color:var(--muted); font-size:12px}
   section.restores .st-done,section.restores .st-applied{color:var(--ok); font-weight:600}
   section.restores .st-failed,section.restores .st-refused{color:var(--crit); font-weight:600}
   /* A skipped log is passed over by the engine and the restore still reached its end: neither
@@ -234,6 +241,7 @@
   section.restores .st-planned,section.restores .st-skipped{color:var(--muted)}
   section.restores .rs-run,section.restores .rs-note,section.restores .rs-none{color:var(--muted); font-size:12px; font-weight:400}
   section.restores .rs-db+.rs-db{margin-top:4px}
+  section.restores details.rs-dbs{font-size:12px; color:var(--muted)}   /* the names of one outcome's databases (1.394) */
   section.restores .rs-why{color:var(--crit); font-size:12px; font-weight:400; max-width:44ch; overflow-wrap:anywhere}
   section.restores .rs-when,section.restores td.rs-route div{white-space:nowrap}
   section.restores tr.has-chain>td{border-bottom:0}

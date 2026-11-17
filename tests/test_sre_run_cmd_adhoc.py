@@ -428,3 +428,21 @@ def test_every_shipped_ladder_prices_run_cmd_adhoc_at_50(relative):
         "one shell command runs on the host as its configured OS login",
         "nothing classifies the command: what it does is what it says",
     ]
+
+
+# --------------------------------------------------------------------------- #
+# The second answer (1.403)
+# --------------------------------------------------------------------------- #
+# Priced at two answers (a ladder that does not name run-cmd-adhoc prices it so), a command could never
+# be answered off a terminal: the request refused `confirm_target` (the worker, 2026-11-17).
+def test_the_targets_id_typed_back_reaches_the_gate_with_the_yes(calls, capsys, tmp_path):
+    code, _out, _err = _run(capsys, {"server_id": SERVER, "command": "uptime", "confirm": "yes",
+                                     "confirm_target": SERVER}, tmp_path=tmp_path)
+    assert code == 0
+    [gate] = calls["authorize"]
+    assert (gate["confirm"], gate["confirm_target"]) == ("yes", SERVER)
+
+
+def test_a_second_answer_that_is_not_text_is_refused():
+    with pytest.raises(errors.InvalidRequest, match="confirm_target must be a string"):
+        adhoc_cmd.checked({"server_id": SERVER, "command": "uptime", "confirm": "yes", "confirm_target": 1})

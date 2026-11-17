@@ -45,16 +45,19 @@ def test_an_in_place_repository_entry_is_refused_before_anything_runs(drill, rep
 
 def test_an_engine_the_repository_does_not_hold_is_refused(drill, repository_job):  # noqa: F811
     with pytest.raises(restore_by_id.RestoreByIdError, match="restore_from repository is built for"):
-        drill(repository_job(db_type="oracle"))
+        # Oracle reads the repository since 0.40.0 (1.380); MySQL still does not.
+        drill(repository_job(db_type="mysql"))
     assert drill.state["calls"] == []
 
 
 def test_the_copy_says_it_comes_from_the_repository(drill, repository_job):  # noqa: F811
     drill(repository_job())
-    assert _said(drill, "COPY_START") == ("Restore LAB_A_TO_B: copy started from the repository "
-                                         "(LAB-192-0-2-49's copies) -> LAB-192-0-2-50.")
+    # Step 2 of the eleven (1.375): where it copies to, and that it is the repository's copies of the source.
+    assert _said(drill, "COPY_START") == ("2. Copy to LAB-192-0-2-50 started - from the repository: the encrypted "
+                                         "copies of LAB-192-0-2-49, decrypted on the way")
 
 
 def test_a_copy_from_the_server_still_names_the_server(drill):  # noqa: F811
     drill(_job())
-    assert _said(drill, "COPY_START") == "Restore LAB_A_TO_B: copy started LAB-192-0-2-49 -> LAB-192-0-2-50."
+    assert _said(drill, "COPY_START") == ("2. Copy to LAB-192-0-2-50 started - from LAB-192-0-2-49: the backup "
+                                         "files, each proven on arrival")

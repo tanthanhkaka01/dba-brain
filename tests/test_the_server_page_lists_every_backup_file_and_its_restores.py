@@ -204,7 +204,7 @@ def _render(section: dict, *, fleet: bool = False) -> str:
         'const when = v => v ? String(v) : "";\n'
         + SHARED_JS.read_text(encoding="utf-8")
         + f"\nprocess.stdout.write(backupFilesBlock({json.dumps(section)}, {{fleet: {str(fleet).lower()}}}));\n")
-    done = subprocess.run([NODE, "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    done = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert done.returncode == 0, done.stderr
     return done.stdout
 

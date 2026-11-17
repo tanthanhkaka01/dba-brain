@@ -17459,6 +17459,894 @@
             ]
         },
         {
+            "object": "output_secret_remove",
+            "kind": "output",
+            "required": false,
+            "one_line": "One secret removed from the encrypted store (and the plaintext source).",
+            "parsed_in": "dbabrain/common/cli.py",
+            "produced_in": [
+                "dbabrain/common/cli.py"
+            ],
+            "commands": [
+                "secret-remove"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The ref removed."
+                },
+                {
+                    "field": "store",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The store file."
+                },
+                {
+                    "field": "removed",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "It was removed from the encrypted store."
+                },
+                {
+                    "field": "plaintext_removed",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "It was removed from the plaintext source (secrets/secret_text.json)."
+                }
+            ]
+        },
+        {
+            "object": "input_entry_remove",
+            "kind": "input",
+            "required": false,
+            "one_line": "One record of a data/*.json list to remove, found by its fields; a plan unless apply.",
+            "parsed_in": "dbabrain/common/config_retire.py",
+            "parsers": [
+                "dbabrain/common/config_retire.py"
+            ],
+            "commands": [
+                "entry-remove"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 2,
+            "fields": [
+                {
+                    "field": "data_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "this node's data/ folder",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The data/ folder the record is removed from."
+                },
+                {
+                    "field": "file",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The data/*.json file name."
+                },
+                {
+                    "field": "match",
+                    "type": "object",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "field -> value",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The record's fields; exactly one record must match. Its own key (backup_id, restore_id, id, name, ...) is its name; a record told only by a field pointing elsewhere names nothing."
+                },
+                {
+                    "field": "apply",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "true removes the record; absent or false answers the plan and writes nothing."
+                }
+            ]
+        },
+        {
+            "object": "output_entry_remove",
+            "kind": "output",
+            "required": false,
+            "one_line": "One record removed - or the plan to - and nothing names it.",
+            "parsed_in": "dbabrain/common/config_retire.py",
+            "produced_in": [
+                "dbabrain/common/config_retire.py"
+            ],
+            "commands": [
+                "entry-remove"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 7,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "command",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The command that answered."
+                },
+                {
+                    "field": "file",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The file the record is (or would be) removed from."
+                },
+                {
+                    "field": "record",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The record, as the file names it."
+                },
+                {
+                    "field": "pointers",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list of {file, at, record}",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What still names it - empty on an answer: a record something names is refused."
+                },
+                {
+                    "field": "applied",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The request said apply."
+                },
+                {
+                    "field": "removed",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The record was removed (written)."
+                },
+                {
+                    "field": "list",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The list it is in, e.g. backup_restore.restores."
+                }
+            ]
+        },
+        {
+            "object": "input_credential_remove",
+            "kind": "input",
+            "required": false,
+            "one_line": "One login of users.json to remove, by its credential_name; a plan unless apply.",
+            "parsed_in": "dbabrain/common/config_retire.py",
+            "parsers": [
+                "dbabrain/common/config_retire.py"
+            ],
+            "commands": [
+                "credential-remove"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 1,
+            "fields": [
+                {
+                    "field": "data_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "this node's data/ folder",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The data/ folder the record is removed from."
+                },
+                {
+                    "field": "credential_name",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The login to remove."
+                },
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - the name alone, when one group holds it",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The server whose login it is, where several servers' groups share the name."
+                },
+                {
+                    "field": "apply",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "true removes the record; absent or false answers the plan and writes nothing."
+                }
+            ]
+        },
+        {
+            "object": "output_credential_remove",
+            "kind": "output",
+            "required": false,
+            "one_line": "One login removed - or the plan to - and its group with its last login.",
+            "parsed_in": "dbabrain/common/config_retire.py",
+            "produced_in": [
+                "dbabrain/common/config_retire.py"
+            ],
+            "commands": [
+                "credential-remove"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 11,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "command",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The command that answered."
+                },
+                {
+                    "field": "file",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The file the record is (or would be) removed from."
+                },
+                {
+                    "field": "record",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The record, as the file names it."
+                },
+                {
+                    "field": "pointers",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list of {file, at, record}",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What still names it - empty on an answer: a record something names is refused."
+                },
+                {
+                    "field": "applied",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The request said apply."
+                },
+                {
+                    "field": "removed",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The record was removed (written)."
+                },
+                {
+                    "field": "section",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "database_credentials or remote_credentials."
+                },
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The server whose group it is in."
+                },
+                {
+                    "field": "group_goes",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "It is its group's last login: the group goes with it."
+                },
+                {
+                    "field": "group_removed",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The group was removed."
+                },
+                {
+                    "field": "password_ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its secret's ref - left in the store; secret-remove is the next step."
+                }
+            ]
+        },
+        {
+            "object": "input_instance_remove",
+            "kind": "input",
+            "required": false,
+            "one_line": "One server's record of db_instances.json to remove; a plan unless apply.",
+            "parsed_in": "dbabrain/common/config_retire.py",
+            "parsers": [
+                "dbabrain/common/config_retire.py"
+            ],
+            "commands": [
+                "instance-remove"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 1,
+            "fields": [
+                {
+                    "field": "data_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "this node's data/ folder",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The data/ folder the record is removed from."
+                },
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The server to remove."
+                },
+                {
+                    "field": "apply",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "true removes the record; absent or false answers the plan and writes nothing."
+                }
+            ]
+        },
+        {
+            "object": "output_instance_remove",
+            "kind": "output",
+            "required": false,
+            "one_line": "One server's record removed - or the plan to - and nothing names it.",
+            "parsed_in": "dbabrain/common/config_retire.py",
+            "produced_in": [
+                "dbabrain/common/config_retire.py"
+            ],
+            "commands": [
+                "instance-remove"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 7,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "command",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The command that answered."
+                },
+                {
+                    "field": "file",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The file the record is (or would be) removed from."
+                },
+                {
+                    "field": "record",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The record, as the file names it."
+                },
+                {
+                    "field": "pointers",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list of {file, at, record}",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What still names it - empty on an answer: a record something names is refused."
+                },
+                {
+                    "field": "applied",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The request said apply."
+                },
+                {
+                    "field": "removed",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The record was removed (written)."
+                },
+                {
+                    "field": "next",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The step after it: its row on the report's inventory."
+                }
+            ]
+        },
+        {
+            "object": "input_report_server_remove",
+            "kind": "input",
+            "required": false,
+            "one_line": "One server to take off the report's canonical inventory; a plan unless apply.",
+            "parsed_in": "dbabrain/common/config_retire.py",
+            "parsers": [
+                "dbabrain/common/config_retire.py"
+            ],
+            "commands": [
+                "report-server-remove"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 1,
+            "fields": [
+                {
+                    "field": "data_dir",
+                    "type": "string",
+                    "required": false,
+                    "default": "this node's data/ folder",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The data/ folder the record is removed from."
+                },
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The server to take off."
+                },
+                {
+                    "field": "inventory",
+                    "type": "string",
+                    "required": false,
+                    "default": "data_dir's database-inventory.json",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The canonical inventory's path."
+                },
+                {
+                    "field": "apply",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "true removes the record; absent or false answers the plan and writes nothing."
+                }
+            ]
+        },
+        {
+            "object": "output_report_server_remove",
+            "kind": "output",
+            "required": false,
+            "one_line": "One server taken off the report's inventory - or the plan to.",
+            "parsed_in": "dbabrain/common/config_retire.py",
+            "produced_in": [
+                "dbabrain/common/config_retire.py"
+            ],
+            "commands": [
+                "report-server-remove"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 8,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "command",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The command that answered."
+                },
+                {
+                    "field": "file",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The file the record is (or would be) removed from."
+                },
+                {
+                    "field": "record",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The record, as the file names it."
+                },
+                {
+                    "field": "pointers",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list of {file, at, record}",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "What still names it - empty on an answer: a record something names is refused."
+                },
+                {
+                    "field": "applied",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The request said apply."
+                },
+                {
+                    "field": "removed",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The record was removed (written)."
+                },
+                {
+                    "field": "list",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The list it is in (servers)."
+                },
+                {
+                    "field": "servers_left",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 or more",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Servers the report's inventory lists once this row is gone (or would, in a plan)."
+                }
+            ]
+        },
+        {
             "object": "output_ai_key",
             "kind": "output",
             "required": false,
@@ -19589,7 +20477,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 9,
+            "field_count": 10,
             "required_field_count": 1,
             "fields": [
                 {
@@ -19659,6 +20547,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The payload declares the operator agreed."
+                },
+                {
+                    "field": "confirm_target",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The second answer, when the operation costs two: the target's own id, typed back."
                 },
                 {
                     "field": "assume_yes",
@@ -24986,7 +25888,7 @@
             "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 20,
+            "field_count": 21,
             "required_field_count": 4,
             "fields": [
                 {
@@ -25157,6 +26059,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "The uid:gid the container runs as (0.37.0) - for a host folder whose files only one uid can own, such as an NFS share that maps every user to one uid. Absent: the image's own user."
+                },
+                {
+                    "field": "timezone",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an IANA zone name, such as Asia/Ho_Chi_Minh or UTC",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": false
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "A single instance (0.40.0): the container's TZ - the clock its database reads its own time in. Absent: the image's own, UTC."
                 },
                 {
                     "field": "containers_dir",
@@ -28399,6 +29315,54 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Also write the plaintext source file."
+                }
+            ]
+        },
+        {
+            "object": "input_secret_remove",
+            "kind": "input",
+            "required": false,
+            "one_line": "One secret to remove, named by its ref and proven by its value. Stdin only.",
+            "parsed_in": "dbabrain/common/cli.py",
+            "parsers": [
+                "dbabrain/common/cli.py"
+            ],
+            "commands": [
+                "secret-remove"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 2,
+            "required_field_count": 2,
+            "fields": [
+                {
+                    "field": "ref",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The ref to remove."
+                },
+                {
+                    "field": "value",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The value it holds now; a different one is refused."
                 }
             ]
         },

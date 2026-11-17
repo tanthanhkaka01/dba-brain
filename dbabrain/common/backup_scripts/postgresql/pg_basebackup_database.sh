@@ -394,14 +394,27 @@ else
         printf 'ERROR pg_verifybackup failed for %s: %s\n' "$target" "$vb_out" >&2
     fi
 fi
-manifest_sha="$(run_db "sha256sum '${target}/backup_manifest'" 2>/dev/null | cut -d' ' -f1 | tr -d '[:space:]')"
-[ "${#manifest_sha}" -eq 64 ] || { printf 'warning: could not hash %s/backup_manifest\n' "$target" >&2; manifest_sha=""; }
-target_bytes="$(run_db "du -sb '${target}' 2>/dev/null | cut -f1" | tr -d '[:space:]')"
-# pg_basebackup has no encryption of its own: the backup is written unencrypted - the repository
-# encrypts it (offload_encrypt).
-printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=no\tstart=%s\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
-    "cluster" "$file_type" "${target_bytes:-}" "$manifest_sha" "$verify" "${started:-}" "$verify_note" \
-    "$(host_path_of "$target")" "$container" "$target"
+# One FILE line per file of the backup (0.40.0, 1.386; the operator, 2026-11-16: *the catalog records
+# every file*, *3NF*): base.tar.zst, pg_wal.tar, each tablespace's <oid>.tar.zst - or, in the plain
+# format, every file of the data directory - and backup_manifest, each with its own size and sha256,
+# each typed by the backup's level (FULL_BASE / INCR_BASE).
+# The directory was one row before, its manifest's sha256 standing for every file in it; a restore read
+# from the server then found base.tar.zst in no row and refused it. Listed, sized and hashed in ONE call
+# where the files are: a plain backup is thousands of files. pg_basebackup has no encryption of its own:
+# the backup is written unencrypted - the repository encrypts it (offload_encrypt).
+members="$(run_db "cd '${target}' && find . -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r f; do printf '%s\t%s\t%s\n' \"\$f\" \"\$(stat -c %s \"\$f\" 2>/dev/null)\" \"\$(sha256sum \"\$f\" 2>/dev/null | cut -d' ' -f1)\"; done")"
+[ -n "$members" ] || die "no file in '${target}' to record."
+host_dir="$(host_path_of "$target")"
+printf '%s\n' "$members" | while IFS="$(printf '\t')" read -r rel m_size m_sha; do
+    [ -n "$rel" ] || continue
+    # backup_manifest is a file of this backup, of its level, as every other file of it: retention and
+    # the chain of incrementals hold it with them. Known as the manifest by its name.
+    m_type="$file_type"
+    [ "${#m_sha}" -eq 64 ] || { printf 'warning: could not hash %s/%s\n' "$target" "$rel" >&2; m_sha=""; }
+    printf 'FILE\tdb=%s\ttype=%s\tsize=%s\tsha256=%s\tverify=%s\tencrypted=no\tstart=%s\tnote=%s\thost_path=%s\tcontainer=%s\tpath=%s\n' \
+        "cluster" "$m_type" "${m_size:-}" "$m_sha" "$verify" "${started:-}" "$verify_note" \
+        "${host_dir:+${host_dir}/${rel}}" "$container" "${target}/${rel}"
+done
 [ "$verify" = "failed" ] && die "pg_verifybackup found the backup in '${target}' does not match its manifest."
 
 # --- Retention: drop whole chains, newest-member-first ---------------------------------------

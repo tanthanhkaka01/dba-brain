@@ -7,8 +7,8 @@ import subprocess
 import threading
 import time
 import re
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from dbabrain.backup_restore.config import (
     BackupRestoreConfig,
@@ -314,20 +314,46 @@ def _restore_step(level: str, candidate: RestoreCandidate, config: BackupRestore
     return fields
 
 
-def run_restore_database(
+@dataclass
+class DatabasePlan:
+    """One database of a share-driven restore: the chain it applies and where it stops - read before
+    anything is restored, and what each of its steps reads (0.40.0, 1.375)."""
+
+    restore_config: Any
+    app_config: Any
+    candidate: Any
+    selected_diff_backup: Any
+    selected_log_backups: list[Any]
+    skipped_backups: list[Any]
+    restore_mode: str
+    point_in_time_utc: Any
+    stopat_source: Any
+    expect: Any
+    logger: Any = None
+    certificate_result: Any = None
+    # Filled by begin_database():
+    history: Any = None
+    restore_id: Any = None
+    start_monotonic: float = 0.0
+    chain: Any = None
+    at_full: list[int] = field(default_factory=list)
+    at_diff: list[int] = field(default_factory=list)
+    at_logs: list[int] = field(default_factory=list)
+    restore_room: Any = None
+    steps: list[dict[str, object]] = field(default_factory=list)
+
+
+def plan_database(
     *,
     config: BackupRestoreConfig | None = None,
     dbabrain_config: DbaBrainConfig | None = None,
     database: DatabaseRestoreMapping | str | None = None,
     backup_file: str | Path | None = None,
-    dry_run: bool = False,
-    ensure_certificate: bool = True,
-    ensure_credential: bool = True,
     logger: object | None = None,
     point_in_time_utc: datetime.datetime | None = None,
-    chain: ChainRecord | None = None,
-    on_phase: "Callable[..., None] | None" = None,
-) -> dict[str, object]:
+) -> DatabasePlan:
+    """The chain one database applies - full, diff, logs - held to its LSNs and to where it is to stop,
+    before anything is restored. Answers; says nothing."""
     restore_config = config or load_restore_config()
     app_config = dbabrain_config or load_config()
     validate_restore_target_is_not_source(restore_config)
@@ -336,16 +362,6 @@ def run_restore_database(
                              target_server_id=getattr(restore_config, "target_id", ""),
                              allowed=bool(getattr(restore_config, "allow_production_target", False)))
     start_monotonic = time.monotonic()
-    if ensure_credential:
-        ensure_vm_share_credential(restore_config)
-    certificate_result = None
-    if ensure_certificate:
-        certificate_result = ensure_source_certificate_with_events(
-            config=restore_config,
-            app_config=app_config,
-            dry_run=dry_run,
-            logger=logger,
-        )
     database_mapping = _coerce_database_mapping(database)
     database_label = _restore_database_label(None, database_mapping)
     _emit_restore_log(
@@ -504,180 +520,170 @@ def run_restore_database(
         flush=True,
     )
 
-    if dry_run:
-        full_sql = composed_restore_sql("full", _restore_step(
-            "full", candidate, restore_config, path=candidate.backup_file_on_vm))
-        _emit_restore_log(
-            logger,
-            "restore-db completed "
-            + _format_metadata(restore_id=restore_config.restore_id or None, database=candidate.source_database_name, status="DRY_RUN", target_database=candidate.restore_database_name),
-        )
-        return {
-            "status": "DRY_RUN",
-            "overall_status": "DRY_RUN",
-            "restore_mode": restore_mode,
-            "point_in_time_utc": point_in_time_utc.isoformat() if point_in_time_utc else None,
-            "source_id": restore_config.source_id,
-            "target_id": restore_config.target_id,
-            "source_key": candidate.source_key,
-            "source_database": candidate.source_database_name,
-            "database_name": candidate.restore_database_name,
-            "selected_full_backup": str(candidate.backup_file_unc),
-            "selected_diff_backup": str(selected_diff_backup) if selected_diff_backup else None,
-            "selected_log_backups": [str(path) for path in selected_log_backups],
-            "skipped_backups": skipped_backups,
-            "per_database_restore_status": {candidate.restore_database_name: "DRY_RUN"},
-            "final_recovery_status": "DRY_RUN",
-            "final_recovery_model_status": "DRY_RUN",
-            "backup_file_unc": str(candidate.backup_file_unc),
-            "backup_file_on_vm": str(candidate.backup_file_on_vm),
-            "sql": full_sql,
-            "command": build_sqlcmd_query_command(sql=full_sql, config=restore_config),
-            "steps": [
-                {"step": "restore-full", "status": "DRY_RUN", "sql": full_sql},
-                {"step": "restore-diff", "status": "DRY_RUN" if selected_diff_backup else "SKIPPED", "selected_backup": str(selected_diff_backup) if selected_diff_backup else None},
-                {"step": "restore-log", "status": "DRY_RUN" if selected_log_backups else "SKIPPED", "selected_backups": [str(path) for path in selected_log_backups]},
-                {"step": "recovery", "status": "DRY_RUN", "sql": build_recovery_if_restoring_sql(candidate) if point_in_time_utc is not None else build_recovery_sql(candidate)},
-                {"step": "set-recovery-model", "status": "DRY_RUN", "sql": build_set_recovery_model_full_sql(candidate)},
-                ({"step": "dbcc-checkdb", "status": "DRY_RUN", "sql": build_checkdb_sql(candidate)}
-                 if restore_config.checkdb else
-                 {"step": "dbcc-checkdb", "status": "SKIPPED", "reason": CHECKDB_OFF_REASON}),
-            ],
-            "certificate": certificate_result,
-        }
+    return DatabasePlan(restore_config=restore_config, app_config=app_config, candidate=candidate,
+                        selected_diff_backup=selected_diff_backup, selected_log_backups=selected_log_backups,
+                        skipped_backups=skipped_backups, restore_mode=restore_mode,
+                        point_in_time_utc=point_in_time_utc, stopat_source=stopat_source, expect=expect,
+                        logger=logger)
 
-    history = BackupRestoreHistory.from_config(app_config)
-    started_at = utc_now_text()
-    start_monotonic = time.monotonic()
-    restore_id = history.start_restore(
-        database_name=candidate.restore_database_name,
-        backup_file=str(candidate.backup_file_on_vm),
-        restore_start=started_at,
+
+def dry_run_answer(plan: DatabasePlan) -> dict[str, object]:
+    """What a dry run says of one database: its chain and the statements it would run - nothing touched."""
+    restore_config, candidate, logger = plan.restore_config, plan.candidate, plan.logger
+    selected_diff_backup, selected_log_backups = plan.selected_diff_backup, plan.selected_log_backups
+    restore_mode, point_in_time_utc = plan.restore_mode, plan.point_in_time_utc
+    skipped_backups, certificate_result = plan.skipped_backups, plan.certificate_result
+    full_sql = composed_restore_sql("full", _restore_step(
+        "full", candidate, restore_config, path=candidate.backup_file_on_vm))
+    _emit_restore_log(
+        logger,
+        "restore-db completed "
+        + _format_metadata(restore_id=restore_config.restore_id or None, database=candidate.source_database_name, status="DRY_RUN", target_database=candidate.restore_database_name),
     )
-    # The chain this database is about to apply, written before its first RESTORE (1.367): full,
-    # diff, logs - in that order, so the positions of the logs follow the full's and the diff's.
-    positions = (chain.plan(_chain_rows(chain, candidate, restore_config, selected_diff_backup,
-                                        selected_log_backups, point_in_time_utc), logger=logger)
+    return {
+        "status": "DRY_RUN",
+        "overall_status": "DRY_RUN",
+        "restore_mode": restore_mode,
+        "point_in_time_utc": point_in_time_utc.isoformat() if point_in_time_utc else None,
+        "source_id": restore_config.source_id,
+        "target_id": restore_config.target_id,
+        "source_key": candidate.source_key,
+        "source_database": candidate.source_database_name,
+        "database_name": candidate.restore_database_name,
+        "selected_full_backup": str(candidate.backup_file_unc),
+        "selected_diff_backup": str(selected_diff_backup) if selected_diff_backup else None,
+        "selected_log_backups": [str(path) for path in selected_log_backups],
+        "skipped_backups": skipped_backups,
+        "per_database_restore_status": {candidate.restore_database_name: "DRY_RUN"},
+        "final_recovery_status": "DRY_RUN",
+        "final_recovery_model_status": "DRY_RUN",
+        "backup_file_unc": str(candidate.backup_file_unc),
+        "backup_file_on_vm": str(candidate.backup_file_on_vm),
+        "sql": full_sql,
+        "command": build_sqlcmd_query_command(sql=full_sql, config=restore_config),
+        "steps": [
+            {"step": "restore-full", "status": "DRY_RUN", "sql": full_sql},
+            {"step": "restore-diff", "status": "DRY_RUN" if selected_diff_backup else "SKIPPED", "selected_backup": str(selected_diff_backup) if selected_diff_backup else None},
+            {"step": "restore-log", "status": "DRY_RUN" if selected_log_backups else "SKIPPED", "selected_backups": [str(path) for path in selected_log_backups]},
+            {"step": "recovery", "status": "DRY_RUN", "sql": build_recovery_if_restoring_sql(candidate) if point_in_time_utc is not None else build_recovery_sql(candidate)},
+            {"step": "set-recovery-model", "status": "DRY_RUN", "sql": build_set_recovery_model_full_sql(candidate)},
+            ({"step": "dbcc-checkdb", "status": "DRY_RUN", "sql": build_checkdb_sql(candidate)}
+             if restore_config.checkdb else
+             {"step": "dbcc-checkdb", "status": "SKIPPED", "reason": CHECKDB_OFF_REASON}),
+        ],
+        "certificate": certificate_result,
+    }
+
+
+
+def begin_database(plan: DatabasePlan, *, chain: ChainRecord | None = None) -> None:
+    """The database's history row, its chain written before its first RESTORE (1.367), and the room its
+    files need on the target (§1.76)."""
+    plan.history = BackupRestoreHistory.from_config(plan.app_config)
+    plan.start_monotonic = time.monotonic()
+    plan.restore_id = plan.history.start_restore(
+        database_name=plan.candidate.restore_database_name,
+        backup_file=str(plan.candidate.backup_file_on_vm),
+        restore_start=utc_now_text(),
+    )
+    plan.chain = chain
+    positions = (chain.plan(_chain_rows(chain, plan.candidate, plan.restore_config, plan.selected_diff_backup,
+                                        plan.selected_log_backups, plan.point_in_time_utc), logger=plan.logger)
                  if chain is not None else [])
-    at_full = positions[:1]
-    at_diff = positions[1:2] if selected_diff_backup else []
-    at_logs = positions[(2 if selected_diff_backup else 1):]
-    # Each file is said as it goes in (0.39.0, 1.370; the operator: *restore is like backup - a
-    # message for each of full, diff, log*; 2026-11-14: *one message for each log file*), numbered
-    # within this database: the full, the diff, each log.
-    total_files = 1 + (1 if selected_diff_backup else 0) + len(selected_log_backups)
-    label = (candidate.source_database_name if candidate.source_database_name.lower()
-             == candidate.restore_database_name.lower()
-             else f"{candidate.source_database_name} as {candidate.restore_database_name}")
-    last_mark = [time.monotonic()]
+    plan.at_full = positions[:1]
+    plan.at_diff = positions[1:2] if plan.selected_diff_backup else []
+    plan.at_logs = positions[(2 if plan.selected_diff_backup else 1):]
+    plan.restore_room = _check_restore_room(plan.restore_config, plan.candidate, plan.selected_diff_backup,
+                                            logger=plan.logger)
 
-    def _say_file(op: str, number: int, path: object, result: str, reason: str = "", *,
-                  log_number: int = 0, last_log: bool = False) -> None:
-        seconds = int(time.monotonic() - last_mark[0])
-        last_mark[0] = time.monotonic()
-        if on_phase is None:
-            return
-        from dbabrain.backup_restore import restore_messages
-        from dbabrain.backup_restore.events import announce
-        from dbabrain.lib.timezone import format_display
 
-        name = PureWindowsPath(str(path)).name
-        said = f"{label}: {restore_messages.STEP_NAMES.get(op, op)} {name}"
-        if log_number:
-            said += f" ({log_number} of {len(selected_log_backups)} logs)"
-        if result == "applied":
-            said += (f", stopped at {stopat_source or format_display(point_in_time_utc)}"
-                     " - recovered, the database is open"
-                     if last_log and point_in_time_utc is not None else " - left restoring for the next step")
-        announce(on_phase, "RESTORE_STEP",
-                 f"Restore {restore_config.restore_id or restore_config.source_id}: {said} - {result}"
-                 + (f" ({reason})" if reason else "") + ".",
-                 {"step": op, "step_number": number, "steps": total_files, "result": result,
-                  **restore_messages.share_step(restore_config.restore_id or restore_config.source_id, op=op,
-                                                result=result, number=number, total=total_files, said=said,
-                                                seconds=seconds, reason=reason)})
-
-    def _kept(step, at: list[int], op: str, number: int, path: object):
-        try:
-            outcome = step()
-        except Exception as exc:
-            if chain is not None:
-                chain.mark(at, "failed", f"{type(exc).__name__}: {exc}"[:2000])
-            _say_file(op, number, path, "failed", f"{type(exc).__name__}: {exc}"[:300])
-            raise
-        if chain is not None:
-            chain.mark(at, "applied")
-        if outcome.get("status") != "SKIPPED":
-            _say_file(op, number, path, "applied")
-        return outcome
-
-    first_log = 2 if selected_diff_backup else 1
-
-    def _log_kept(index: int, result: str, error_text: str = "") -> None:
-        if chain is not None and 0 < index <= len(at_logs):
-            chain.mark([at_logs[index - 1]], result, error_text)
-        if 0 < index <= len(selected_log_backups):
-            _say_file("restore-log", first_log + index, selected_log_backups[index - 1], result, error_text,
-                      log_number=index, last_log=index == len(selected_log_backups))
-
+def _kept(plan: DatabasePlan, step: Any, at: list[int]) -> dict[str, object]:
     try:
-        # Before the first RESTORE: do the files this backup holds fit where they go (§1.76).
-        restore_room = _check_restore_room(restore_config, candidate, selected_diff_backup, logger=logger)
-        steps = [
-            _kept(lambda: run_restore_full(config=restore_config, candidate=candidate, logger=logger), at_full,
-                  "restore-full", 1, candidate.backup_file_on_vm),
-            _kept(lambda: run_restore_diff(config=restore_config, candidate=candidate,
-                                           selected_backup=selected_diff_backup, logger=logger), at_diff,
-                  "restore-diff", 2, selected_diff_backup or ""),
-            run_restore_log(config=restore_config, candidate=candidate, selected_backups=selected_log_backups,
-                            logger=logger, stopat_utc=point_in_time_utc, on_file=_log_kept,
-                            stopat_source=stopat_source),
-        ]
-        if point_in_time_utc is not None:
-            # The final LOG restore normally recovers the DB (WITH RECOVERY + STOPAT). If that log
-            # was skipped (Msg 4305 stray/non-contiguous log) or the chain ended exactly at the
-            # target, the DB is still RESTORING -- finalize it so SET RECOVERY FULL does not fail
-            # with Msg 5052 ("ALTER DATABASE is not permitted while ... Restoring"). No-op if online.
-            recovery_result = run_restore_recovery_if_restoring(config=restore_config, candidate=candidate, logger=logger)
-            steps.append(recovery_result)
-        else:
-            recovery_result = run_restore_recovery(config=restore_config, candidate=candidate, logger=logger)
-            steps.append(recovery_result)
-        recovery_model_result = run_set_recovery_model_full(config=restore_config, candidate=candidate, logger=logger)
-        steps.append(recovery_model_result)
-        if restore_config.checkdb:
-            try:
-                checkdb_result = run_restore_checkdb(config=restore_config, candidate=candidate, logger=logger)
-            except Exception as exc:
-                # Its own type, so the caller can say "restored and recovered, check failed" rather
-                # than "restore failed": the data IS there. The restore still counts as failed.
-                raise IntegrityCheckFailed(str(exc)) from exc
-        else:
-            checkdb_result = {"step": "dbcc-checkdb", "status": "SKIPPED", "reason": CHECKDB_OFF_REASON}
-            _emit_restore_log(
-                logger,
-                "restore-db dbcc-checkdb skipped "
-                + _format_metadata(restore_id=restore_config.restore_id or None,
-                                   database=candidate.source_database_name,
-                                   target_database=candidate.restore_database_name,
-                                   reason="checkdb_false_on_the_entry"),
-            )
-        steps.append(checkdb_result)
+        outcome = step()
     except Exception as exc:
-        history.finish_restore(
-            restore_id=restore_id,
-            status="FAILED",
-            duration_seconds=round(time.monotonic() - start_monotonic, 3),
-            error_message=sanitize_text(str(exc)),
-        )
+        if plan.chain is not None:
+            plan.chain.mark(at, "failed", f"{type(exc).__name__}: {exc}"[:2000])
+        raise
+    if plan.chain is not None:
+        plan.chain.mark(at, "applied")
+    plan.steps.append(outcome)
+    return outcome
+
+
+def apply_full(plan: DatabasePlan) -> dict[str, object]:
+    return _kept(plan, lambda: run_restore_full(config=plan.restore_config, candidate=plan.candidate,
+                                                logger=plan.logger), plan.at_full)
+
+
+def apply_diff(plan: DatabasePlan) -> dict[str, object]:
+    return _kept(plan, lambda: run_restore_diff(config=plan.restore_config, candidate=plan.candidate,
+                                                selected_backup=plan.selected_diff_backup, logger=plan.logger),
+                 plan.at_diff)
+
+
+class LogChain:
+    """A database's logs, each applied as the caller asks for the next: ``each()`` yields what became of
+    every file - ``(index, file, result, reason)``, ``applied``, ``skipped`` or ``failed`` - as it is
+    known. A Msg 4305 refusal is decided only by what follows it (skipped when a later log goes in, failed
+    when none does), so it is yielded when that is known; a failure raises after its file is yielded."""
+
+    def __init__(self, plan: DatabasePlan) -> None:
+        self.plan = plan
+        self.outcome: dict[str, object] | None = None
+
+    def each(self):
+        plan = self.plan
+        steps = restore_log_steps(config=plan.restore_config, candidate=plan.candidate,
+                                  selected_backups=plan.selected_log_backups, logger=plan.logger,
+                                  stopat_utc=plan.point_in_time_utc, stopat_source=plan.stopat_source)
+        while True:
+            try:
+                index, result, reason = next(steps)
+            except StopIteration as done:
+                self.outcome = done.value
+                plan.steps.append(done.value)
+                return
+            if plan.chain is not None and 0 < index <= len(plan.at_logs):
+                plan.chain.mark([plan.at_logs[index - 1]], result, reason)
+            yield index, plan.selected_log_backups[index - 1], result, reason
+
+
+def finish_database(plan: DatabasePlan) -> dict[str, object]:
+    """Recovery, the recovery model, the check - then the database's history row closed and its answer."""
+    restore_config, candidate, logger = plan.restore_config, plan.candidate, plan.logger
+    point_in_time_utc, steps = plan.point_in_time_utc, plan.steps
+    if point_in_time_utc is not None:
+        # The final LOG restore normally recovers the DB (WITH RECOVERY + STOPAT). If that log was
+        # skipped (Msg 4305 stray/non-contiguous log) or the chain ended exactly at the target, the DB
+        # is still RESTORING -- finalize it so SET RECOVERY FULL does not fail with Msg 5052. No-op if online.
+        recovery_result = run_restore_recovery_if_restoring(config=restore_config, candidate=candidate, logger=logger)
+    else:
+        recovery_result = run_restore_recovery(config=restore_config, candidate=candidate, logger=logger)
+    steps.append(recovery_result)
+    recovery_model_result = run_set_recovery_model_full(config=restore_config, candidate=candidate, logger=logger)
+    steps.append(recovery_model_result)
+    if restore_config.checkdb:
+        try:
+            checkdb_result = run_restore_checkdb(config=restore_config, candidate=candidate, logger=logger)
+        except Exception as exc:
+            # Its own type, so the caller can say "restored and recovered, check failed" rather
+            # than "restore failed": the data IS there. The restore still counts as failed.
+            raise IntegrityCheckFailed(str(exc)) from exc
+    else:
+        checkdb_result = {"step": "dbcc-checkdb", "status": "SKIPPED", "reason": CHECKDB_OFF_REASON}
         _emit_restore_log(
             logger,
-            "restore-db failed "
-            + _format_metadata(restore_id=restore_config.restore_id or None, database=candidate.source_database_name, target_database=candidate.restore_database_name, error=str(exc)),
-            level="critical",
+            "restore-db dbcc-checkdb skipped "
+            + _format_metadata(restore_id=restore_config.restore_id or None,
+                               database=candidate.source_database_name,
+                               target_database=candidate.restore_database_name,
+                               reason="checkdb_false_on_the_entry"),
         )
-        raise
-
+    steps.append(checkdb_result)
+    history, restore_id, start_monotonic = plan.history, plan.restore_id, plan.start_monotonic
+    selected_diff_backup, selected_log_backups = plan.selected_diff_backup, plan.selected_log_backups
+    restore_mode, skipped_backups, expect = plan.restore_mode, plan.skipped_backups, plan.expect
+    restore_room, certificate_result = plan.restore_room, plan.certificate_result
     duration_seconds = round(time.monotonic() - start_monotonic, 3)
     history.finish_restore(
         restore_id=restore_id,
@@ -725,6 +731,57 @@ def run_restore_database(
         "certificate": certificate_result,
     }
 
+
+
+def fail_database(plan: DatabasePlan, exc: BaseException) -> None:
+    """A database that failed: its history row closed FAILED, said in the restore log."""
+    if plan.history is not None and plan.restore_id is not None:
+        plan.history.finish_restore(
+            restore_id=plan.restore_id,
+            status="FAILED",
+            duration_seconds=round(time.monotonic() - plan.start_monotonic, 3),
+            error_message=sanitize_text(str(exc)),
+        )
+    _emit_restore_log(
+        plan.logger,
+        "restore-db failed "
+        + _format_metadata(restore_id=plan.restore_config.restore_id or None,
+                           database=plan.candidate.source_database_name,
+                           target_database=plan.candidate.restore_database_name, error=str(exc)),
+        level="critical",
+    )
+
+
+def run_restore_database(
+    *,
+    config: BackupRestoreConfig | None = None,
+    dbabrain_config: DbaBrainConfig | None = None,
+    database: DatabaseRestoreMapping | str | None = None,
+    backup_file: str | Path | None = None,
+    dry_run: bool = False,
+    ensure_certificate: bool = True,
+    ensure_credential: bool = True,
+    logger: object | None = None,
+    point_in_time_utc: datetime.datetime | None = None,
+    chain: ChainRecord | None = None,
+    on_phase: "Callable[..., None] | None" = None,
+) -> dict[str, object]:
+    """One database restored through its steps - the workflow's run of them with no one told
+    (``workflow.restore_share_database``). ``on_phase`` is accepted and not called: nothing under the
+    workflow says a step (0.40.0, 1.375)."""
+    from dbabrain.backup_restore.workflow import restore_share_database
+
+    restore_config = config or load_restore_config()
+    app_config = dbabrain_config or load_config()
+    if ensure_credential:
+        ensure_vm_share_credential(restore_config)
+    certificate_result = None
+    if ensure_certificate:
+        certificate_result = ensure_source_certificate_quietly(config=restore_config, dry_run=dry_run, logger=logger)
+    return restore_share_database(config=restore_config, app_config=app_config, database=database,
+                                  backup_file=backup_file, dry_run=dry_run, logger=logger,
+                                  point_in_time_utc=point_in_time_utc, chain=chain,
+                                  certificate_result=certificate_result, say=None)
 
 def _read_chain_headers(config: BackupRestoreConfig, candidate: RestoreCandidate, paths: list[str],
                         *, logger: object | None) -> str:
@@ -852,18 +909,19 @@ def run_restore_diff(
     return result
 
 
-def run_restore_log(
+def restore_log_steps(
     *,
     config: BackupRestoreConfig,
     candidate: RestoreCandidate,
     selected_backups: list[Path] | None = None,
     logger: object | None = None,
     stopat_utc: datetime.datetime | None = None,
-    on_file: "Callable[[int, str, str], None] | None" = None,
     stopat_source: str | None = None,
-) -> dict[str, object]:
-    """Each selected log, in order; ``on_file(index, result, reason)`` is told what became of each -
-    ``applied``, ``skipped`` or ``failed`` (the chain record of 1.367).
+):
+    """Each selected log, in order - a generator: each ``next()`` applies as far as the next file whose
+    fate is known and yields ``(index, result, reason)`` - ``applied``, ``skipped`` or ``failed`` (the
+    chain record of 1.367). Its return value is the step's answer. A generator so the workflow calls each
+    log and says it as it goes in (0.40.0, 1.375); :func:`run_restore_log` runs it to its end.
 
     Two refusals are passed over. **Msg 4326** - the log ends before the database's restore point, a
     log taken the same minute as, just before, the full: it holds nothing the database needs, and is
@@ -877,13 +935,6 @@ def run_restore_log(
     not reach what it was asked to.
     """
     selected_backups = selected_backups or []
-
-    def _said(index: int, result: str, reason: str = "") -> None:
-        if on_file is not None:
-            try:
-                on_file(index, result, reason)
-            except Exception:  # noqa: BLE001 - the record is not the restore
-                pass
 
     if selected_backups:
         results = []
@@ -933,7 +984,7 @@ def run_restore_log(
                         "stderr": "",
                     }
                 else:
-                    _said(index, "failed", f"restore timed out and the target could not confirm the log went in: {exc}"[:2000])
+                    yield (index, "failed", f"restore timed out and the target could not confirm the log went in: {exc}"[:2000])
                     raise errors.Refused(
                         f"reason=restore_timeout_resume_unsafe database={candidate.restore_database_name} "
                         f"backup={backup_on_vm} last_confirmed_log={resume_result['last_confirmed_log']}: {exc}"
@@ -962,7 +1013,7 @@ def run_restore_log(
                 # redundant for the chain, so skip it and continue rather than failing the DB.
                 # (A real gap raises Msg 4305 "too recent to apply", which is NOT skipped.)
                 if "too early to apply" in str(exc).lower():
-                    _said(index, "skipped", "Msg 4326: the log ends before the database's restore point - "
+                    yield (index, "skipped", "Msg 4326: the log ends before the database's restore point - "
                                             "it holds nothing the database needs")
                     _emit_restore_log(
                         logger,
@@ -978,20 +1029,20 @@ def run_restore_log(
                         ),
                     )
                     continue
-                _said(index, "failed", f"{type(exc).__name__}: {exc}"[:2000])
+                yield (index, "failed", f"{type(exc).__name__}: {exc}"[:2000])
                 raise
             results.append(result)
-            _said(index, "applied")
+            yield (index, "applied", "")
             # A later log went in: the 4305 refusals before it were files out of the chain, not a gap.
             for refused_index, _refused in pending_4305:
-                _said(refused_index, "skipped", "Msg 4305: the log begins after the database's restore point, "
+                yield (refused_index, "skipped", "Msg 4305: the log begins after the database's restore point, "
                                                 "and a later log of the chain went in - a file out of the chain")
             pending_4305.clear()
         if pending_4305:
             # Refused as too recent, and nothing went in after: a log is missing before the first of them.
             first_index, first = pending_4305[0]
             for refused_index, _refused in pending_4305:
-                _said(refused_index, "failed",
+                yield (refused_index, "failed",
                       "Msg 4305: the log begins after the database's restore point and no later log went in - "
                       f"a log is missing before {PureWindowsPath(first).name if chr(92) in first else PurePosixPath(first).name}")
             applied_text = f"{len(results)} log(s) applied before it" if results else "no log applied"
@@ -1017,6 +1068,31 @@ def run_restore_log(
     )
     return {"step": "restore-log", "status": "SKIPPED", "selected_backups": [], "stdout": "", "stderr": ""}
 
+
+
+def run_restore_log(
+    *,
+    config: BackupRestoreConfig,
+    candidate: RestoreCandidate,
+    selected_backups: list[Path] | None = None,
+    logger: object | None = None,
+    stopat_utc: datetime.datetime | None = None,
+    on_file: "Callable[[int, str, str], None] | None" = None,
+    stopat_source: str | None = None,
+) -> dict[str, object]:
+    """Every selected log, run to its end; ``on_file(index, result, reason)`` is told what became of each."""
+    steps = restore_log_steps(config=config, candidate=candidate, selected_backups=selected_backups, logger=logger,
+                              stopat_utc=stopat_utc, stopat_source=stopat_source)
+    while True:
+        try:
+            index, result, reason = next(steps)
+        except StopIteration as done:
+            return done.value
+        if on_file is not None:
+            try:
+                on_file(index, result, reason)
+            except Exception:  # noqa: BLE001 - the record is not the restore
+                pass
 
 def run_restore_recovery(*, config: BackupRestoreConfig, candidate: RestoreCandidate, logger: object | None = None) -> dict[str, object]:
     return _run_restore_step(
@@ -1239,85 +1315,41 @@ def run_restore_server(
     chain: ChainRecord | None = None,
     on_phase: "Callable[..., None] | None" = None,
 ) -> dict[str, object]:
-    restore_config = config or load_restore_config()
-    app_config = dbabrain_config or load_config()
-    validate_restore_target_is_not_source(restore_config)
-    # Never into a production instance the entry does not allow (1.223).
-    assert_target_is_allowed(restore_id=getattr(restore_config, "restore_id", ""),
-                             target_server_id=getattr(restore_config, "target_id", ""),
-                             allowed=bool(getattr(restore_config, "allow_production_target", False)))
-    start_monotonic = time.monotonic()
-    _emit_restore_log(
-        logger,
-        "restore-instance start " + _format_metadata(restore_id=restore_config.restore_id or None, source_id=restore_config.source_id, target_id=restore_config.target_id),
-    )
-    ensure_vm_share_credential(restore_config)
-    certificate_result = ensure_source_certificate_with_events(
-        config=restore_config,
-        app_config=app_config,
-        dry_run=dry_run,
-        logger=logger,
-    )
-    results: list[dict[str, object]] = []
+    """Every database of one entry restored through its steps - the workflow's run of them with no one
+    told (``workflow.restore_share_server``). ``on_phase`` is accepted and not called (0.40.0, 1.375)."""
+    from dbabrain.backup_restore.workflow import restore_share_server
+
+    return restore_share_server(config=config or load_restore_config(), dbabrain_config=dbabrain_config or load_config(),
+                                dry_run=dry_run, logger=logger, point_in_time_utc=point_in_time_utc, chain=chain,
+                                say=None)
+
+
+def server_databases(restore_config: BackupRestoreConfig,
+                     point_in_time_utc: datetime.datetime | None) -> list[tuple[Any, Any, str]]:
+    """The databases one entry restores - ``(mapping, None, label)`` for each it names, or ``(None, full
+    backup, label)`` for each FULL its share holds when it names none."""
     if restore_config.databases:
-        for database in restore_config.databases:
-            db_label = getattr(database, "target_database", None) or getattr(database, "source_database", None) or str(database)
-            try:
-                results.append(
-                    run_restore_database(
-                        config=restore_config,
-                        dbabrain_config=app_config,
-                        database=database,
-                        dry_run=dry_run,
-                        ensure_certificate=False,
-                        ensure_credential=False,
-                        logger=logger,
-                        point_in_time_utc=point_in_time_utc,
-                        chain=chain,
-                        on_phase=on_phase,
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 - one DB's failure must not abort the remaining databases.
-                _emit_restore_log(logger, f"restore-database FAILED database={db_label} error={str(exc).replace(chr(10), ' ')[:300]}", level="error")
-                if point_in_time_utc is not None:
-                    raise
-                results.append({"database_name": db_label, "status": _failed_status(exc),
-                                "error": str(exc)[:500]})
-    else:
-        backups = (
-            find_full_backups_for_pitr(restore_config, point_in_time_utc)
-            if point_in_time_utc is not None
-            else find_latest_full_backups(restore_config)
-        )
-        if not backups:
-            if point_in_time_utc is not None:
-                raise FileNotFoundError(
-                    f"No FULL .bak files found under {restore_config.vm_import_unc} at_or_before={point_in_time_utc.isoformat()}."
-                )
-            raise FileNotFoundError(f"No latest FULL .bak files found under {restore_config.vm_import_unc}.")
-        for backup in backups:
-            db_label = backup.parent.parent.name
-            try:
-                results.append(
-                    run_restore_database(
-                        config=restore_config,
-                        dbabrain_config=app_config,
-                        backup_file=backup,
-                        dry_run=dry_run,
-                        ensure_certificate=False,
-                        ensure_credential=False,
-                        logger=logger,
-                        point_in_time_utc=point_in_time_utc,
-                        chain=chain,
-                        on_phase=on_phase,
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 - restore-all must continue past one DB's failure (e.g. broken log chain).
-                _emit_restore_log(logger, f"restore-database FAILED database={db_label} error={str(exc).replace(chr(10), ' ')[:300]}", level="error")
-                if point_in_time_utc is not None:
-                    raise
-                results.append({"database_name": db_label, "status": _failed_status(exc),
-                                "error": str(exc)[:500]})
+        return [(database, None, str(getattr(database, "target_database", None)
+                                     or getattr(database, "source_database", None) or database))
+                for database in restore_config.databases]
+    backups = (
+        find_full_backups_for_pitr(restore_config, point_in_time_utc)
+        if point_in_time_utc is not None
+        else find_latest_full_backups(restore_config)
+    )
+    if not backups:
+        if point_in_time_utc is not None:
+            raise FileNotFoundError(
+                f"No FULL .bak files found under {restore_config.vm_import_unc} at_or_before={point_in_time_utc.isoformat()}."
+            )
+        raise FileNotFoundError(f"No latest FULL .bak files found under {restore_config.vm_import_unc}.")
+    return [(None, backup, backup.parent.parent.name) for backup in backups]
+
+
+def server_result(restore_config: BackupRestoreConfig, results: list[dict[str, object]], *,
+                  certificate_result: Any, dry_run: bool, start_monotonic: float,
+                  logger: object | None = None) -> dict[str, object]:
+    """One entry's answer from its databases' - its verdict never greener than they are."""
     if not results:
         raise FileNotFoundError(f"No latest FULL .bak files found under {restore_config.vm_import_unc}.")
     per_database_status = {
@@ -1406,6 +1438,8 @@ def run_restore_server(
     }
 
 
+
+
 def run_restore_all_latest(
     *,
     config: BackupRestoreConfig | None = None,
@@ -1418,6 +1452,36 @@ def run_restore_all_latest(
 ) -> dict[str, object]:
     return run_restore_server(config=config, dbabrain_config=dbabrain_config, dry_run=dry_run, logger=logger,
                               point_in_time_utc=point_in_time_utc, chain=chain, on_phase=on_phase)
+
+
+def ensure_source_certificate_quietly(*, config: BackupRestoreConfig, dry_run: bool = False,
+                                     logger: object | None = None) -> dict[str, object]:
+    """The source's certificate made ready on the target - its log lines written, no message sent: the
+    workflow says the certificate step (0.40.0, 1.375). ``{"status": "none"}`` when the entry names no
+    certificate source - the backup is not encrypted."""
+    from dbabrain.backup_restore.certificate import ensure_source_certificate, has_certificate_source
+
+    if not has_certificate_source(config):
+        result = ensure_source_certificate(config=config, dry_run=dry_run, logger=logger)
+        _emit_restore_log(logger, "restore-instance certificate skipped " + _format_metadata(
+            restore_id=config.restore_id or None, source_id=config.source_id, target_id=config.target_id,
+            reason="no_certificate_api"))
+        return {**(result or {}), "none": True}
+    _emit_restore_log(logger, "restore-instance certificate start " + _format_metadata(
+        restore_id=config.restore_id or None, source_id=config.source_id, target_id=config.target_id,
+        certificate_name="unknown"))
+    try:
+        result = ensure_source_certificate(config=config, dry_run=dry_run, logger=logger)
+    except Exception as exc:
+        _emit_restore_log(logger, "restore-instance certificate failed " + _format_metadata(
+            restore_id=config.restore_id or None, source_id=config.source_id, target_id=config.target_id,
+            certificate_name="unknown", error=str(exc)), level="critical")
+        raise
+    _emit_restore_log(logger, "restore-instance certificate success " + _format_metadata(
+        restore_id=config.restore_id or None, source_id=config.source_id, target_id=config.target_id,
+        certificate_name=result.get("certificate_name") or "unknown", thumbprint=result.get("thumbprint"),
+        status=result.get("status")))
+    return result
 
 
 def ensure_source_certificate_with_events(
