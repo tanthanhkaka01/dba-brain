@@ -377,7 +377,9 @@ _ON_AN_EMPTY_ROOT = {
     "remote-credential-add": {"server_id": "LAB-192-0-2-10", "username": "tuser",
                               "password_ref": "LAB_OS_PASSWORD", "host": "192.0.2.10"},
     "secret-set": {"ref": "LAB_PASSWORD", "value": "not-a-real-password"},
-    "secret-remove": {"ref": "LAB_PASSWORD", "value": "not-a-real-password"},
+    # secret-remove is not here: it needs the secret secret-set stores, and the runs on this root
+    # are parallel - it passed only when secret-set happened to finish first (CI, Python 3.13,
+    # 2026-11-18). It runs after secret-set on a root of its own, in _on_a_root_init_wrote.
     "ai-key": {"value": "sk-ant-not-a-real-key"},
     "list-targets": {}, "check-objects": {}, "check-references": {}, "describe-object": {},
     "standardize-field-names": {}, "upgrade-config": {}, "check-secret": {},
@@ -426,6 +428,9 @@ def _on_a_root_init_wrote(work: Path, root: Path) -> dict[str, list[tuple[str, d
                          ("entry-remove", {"file": "sql_targets.json", "match": {"sql_id": 1}, "apply": True})],
         "report-server-remove": [("report-server-remove", {"server_id": "LAB-RETIRED",
                                                    "inventory": str(work / "retired_inventory.json")})],
+        # 0.41.0: a secret is removed after it was stored - in order, on its own root.
+        "secret-remove": [("secret-set", {"ref": "LAB_PASSWORD", "value": "not-a-real-password"}),
+                          ("secret-remove", {"ref": "LAB_PASSWORD", "value": "not-a-real-password"})],
         "instance-remove": [("instance-add", _INSTANCE),
                             ("instance-remove", {"server_id": _INSTANCE["server_id"], "apply": True})],
         "credential-remove": [("remote-credential-add", {"server_id": "LAB-192-0-2-11", "username": "tuser",
