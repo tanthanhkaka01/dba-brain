@@ -288,6 +288,8 @@ class RemoteAccess:
     auth_type: str = "key"
     key_file: str | None = None
     password: str = field(default="", repr=False)
+    #: What opens a sealed key file (1.410) - resolved by the caller, never a ref looked up here.
+    key_passphrase: str = field(default="", repr=False)
     # Opening the session. Short by design: a reachable host answers in seconds.
     timeout_seconds: int = DEFAULT_SESSION_TIMEOUT_SECONDS
     # Running a command over that session. None = unbounded, like `ssh host cmd`, because a
@@ -392,6 +394,8 @@ class RemoteAccess:
             auth_type=auth_type,
             key_file=key_file,
             password=password,
+            key_passphrase=(str(values.get("key_passphrase") or "")
+                            if method == METHOD_SSH and key_file and auth_type != "password" else ""),
             timeout_seconds=timeout_seconds,
             command_timeout_seconds=(
                 int(values["command_timeout_seconds"])
@@ -428,6 +432,7 @@ class RemoteAccess:
             "auth_type": self.auth_type,
             "key_file": self.key_file,
             "password": "***" if self.password else "",
+            "key_passphrase": "***" if self.key_passphrase else "",
             "timeout_seconds": self.timeout_seconds,
             "ssl": self.ssl,
             "winrm_auth": self.winrm_auth,
@@ -799,6 +804,7 @@ class SshSession(RemoteSession):
                 port=access.port or DEFAULT_SSH_PORT,
                 password=access.password or None,
                 key_filename=key_filename,
+                passphrase=(access.key_passphrase or None) if key_filename else None,
                 timeout=access.timeout_seconds,
                 # Key auth with no key file configured means the host is set up against the
                 # agent / the user's default keys; let paramiko find them.

@@ -55,7 +55,7 @@ class RemoteUbuntuHost:
     echoing, and the detached post-start runner below."""
 
     def __init__(self, host: str, user: str, password: str | None = None, port: int = 22, *,
-                 key_filename: str | None = None, timeout: int = 30):
+                 key_filename: str | None = None, timeout: int = 30, key_passphrase: str = ""):
         self.host = host
         self.user = user
         self.port = int(port)
@@ -70,6 +70,7 @@ class RemoteUbuntuHost:
             "auth_type": "password" if (password and not key_filename) else "key",
             "key_file": key_filename or None,
             "password": password or "",
+            "key_passphrase": key_passphrase or "",
             "timeout_seconds": int(timeout),
         })  # the caller states the key's path; remote_exec looks nothing up (rules R09)
 
@@ -83,7 +84,8 @@ class RemoteUbuntuHost:
             raise RemoteHostError(f"the SSH login for {login.get('host')} names no username.")
         return cls(str(login["host"]).strip(), str(login["username"]).strip(),
                    str(login.get("password") or "") or None, port=int(login.get("port") or 22),
-                   key_filename=str(login.get("key_file") or "") or None, timeout=timeout)
+                   key_filename=str(login.get("key_file") or "") or None, timeout=timeout,
+                   key_passphrase=str(login.get("key_passphrase") or ""))
 
     @property
     def session(self) -> SshSession:

@@ -70,6 +70,10 @@ ALIASES: dict[str, str] = {
     "import-data": "",
     # 0.24.0: the last command the root answered itself (rules R41). Bare, it checks this node.
     "check-credentials": "",
+    # 1.0.0: this node's dbabrain key from dbabrain.dev (reports, backup / restore ... need one).
+    "key-request": "",
+    "key-renew": "",
+    "key-status": "",
 }
 
 

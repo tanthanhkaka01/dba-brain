@@ -33,6 +33,8 @@ from dbabrain.lib.data_files import local_only_names, required_in_bundle
 from dbabrain.lib.timezone import file_stamp
 from dbabrain.lib.secret_text import resolve_cli_key
 from dbabrain.control.worker_data import merge_worker_config, merge_worker_secrets, pull_sql_tree
+from dbabrain.control.worker_prune import prune_worker
+from dbabrain.control.worker_unlock import unlock_worker
 
 def required_in_bundle_paths() -> tuple[str, ...]:
     """What a built bundle is checked for before it is allowed to leave the master.
@@ -347,22 +349,21 @@ def _daemon_secret_key(key_base64: str | None, key: str | None) -> str:
     return getpass.getpass("Secret passphrase for the worker daemon: ")
 
 
-def daemon_start_script(*, remote_dir: str, node_role: str, container: str, secret_key: str) -> str:
-    """The shell that starts the worker's daemon, with the passphrase in its environment only.
+def daemon_start_script(*, remote_dir: str, node_role: str, container: str) -> str:
+    """The shell that starts the worker's daemon - with no passphrase at all.
 
     It used to be `... dbabrain daemon --key_base64 <base64>`: the value sat in the container's
     command for its whole life - `docker inspect`, `ps` on the host - and the daemon then copied it
-    onto every child's command line (review 0.25.0, F6.1 / B2.4). Base64 is not protection. This
-    script travels on stdin, the value never reaches an argv, and `-e DBABRAIN_SECRET_KEY` (a name,
-    no value) hands the container the variable the script exported.
+    onto every child's command line (review 0.25.0, F6.1 / B2.4). Then `-e DBABRAIN_SECRET_KEY`: off
+    the argv, but Docker keeps a container's environment in its configuration, so the value was
+    still in `docker inspect` and in clear in `config.v2.json` on the host's disk (0.42.0, 1.409).
+    Now the compose file names an unlock file, the daemon starts locked, and `start_daemon` hands
+    the passphrase over afterwards (`control.worker_unlock`).
     """
-    encoded = base64.b64encode(secret_key.encode()).decode()
     return "\n".join([
         "set -e",
-        f"DBABRAIN_SECRET_KEY=\"$(printf %s {shlex.quote(encoded)} | base64 -d)\"",
-        "export DBABRAIN_SECRET_KEY",
         f"cd {shlex.quote(remote_dir)}",
-        f"docker compose run -e DBABRAIN_NODE_ROLE={shlex.quote(node_role)} -e DBABRAIN_SECRET_KEY "
+        f"docker compose run -e DBABRAIN_NODE_ROLE={shlex.quote(node_role)} "
         f"-d --service-ports --name {shlex.quote(container)} dbabrain daemon",
     ]) + "\n"
 
@@ -433,66 +434,26 @@ def start_daemon(*, host: str, user: str, password: str, port: int = 22,
         name = shlex.quote(container)
         ssh_run(client, f"docker stop -t {GRACEFUL_STOP_SECONDS} {name} 2>/dev/null || true")
         ssh_run(client, f"docker rm -f {name} 2>/dev/null || true")
-        print(f"\n[3/4] Starting daemon (node_role={node_role}, passphrase hidden) ...")
+        print(f"\n[3/4] Starting daemon (node_role={node_role}, locked until it is handed the passphrase) ...")
         # --service-ports publishes the compose `ports:` mapping (8080) so the webhost
         # app_command the daemon launches inside this container is reachable from outside.
         started = client.run_script(daemon_start_script(
-            remote_dir=remote_dir, node_role=node_role, container=container, secret_key=secret_key))
+            remote_dir=remote_dir, node_role=node_role, container=container))
         if not started.ok:
             raise SystemExit(f"Starting the daemon failed (exit {started.exit_code}): "
                              f"{(started.stderr or started.stdout).strip()[:400]}")
         ssh_run(client, f"docker update --restart unless-stopped {name}", quiet=True)
+        # The predecessor's state may still be on the tmpfs, hence force.
+        if unlock_worker(client, container=container, secret_key=secret_key, force=True) != 0:
+            raise SystemExit("The daemon started but is still locked - run `control unlock-worker`.")
         print("\n[4/5] Verifying ...")
         ssh_run(client, f"docker ps --filter {shlex.quote('name=' + container)} "
                         f"--format '{{{{.Names}}}} | {{{{.Status}}}}'")
         ssh_run(client, f"docker exec {name} python -c \"import dbabrain; print('version=', dbabrain.__version__)\"")
-        print("\n[5/5] Pruning superseded images ...")
-        _prune_old_images(client, keep=KEEP_IMAGE_VERSIONS)
+        print("\n[5/5] Removing every other dbabrain image and what the deploy left behind ...")
+        prune_worker(client, remote_dir=remote_dir, container=container, apply=True)
     finally:
         client.close()
-
-
-#: How many superseded ``dbabrain:<version>`` tags survive a deploy, beyond ``latest``. Enough that
-#: a bad release can be rolled back to the one before it without a rebuild, and few enough that the
-#: pile has a ceiling.
-KEEP_IMAGE_VERSIONS = 5
-
-
-def _prune_old_images(client, *, keep: int = KEEP_IMAGE_VERSIONS) -> None:
-    """Remove the image tags this deploy just superseded, and the layers nothing points at.
-
-    Every deploy ends in ``docker load``, which adds ``dbabrain:<version>`` and repoints ``latest``.
-    Nothing removed the version it replaced, so the tags accumulated once per deploy — measured on
-    the worker on 2026-08-18: **383 `dbabrain` tags and 526 dangling images**, on a host whose root
-    volume had already been extended once from 293 GB to 589 GB. Deploy frequency is what made this
-    a daily cost rather than a one-off; each build changes the layer holding the project source, so
-    every version carries its own delta even though the base layers are shared.
-
-    Removing a *tag* is not removing an image: the running container's ``dbabrain:latest`` points at
-    the newest one, and the newest ``keep`` versions stay tagged so a rollback is a `docker run`
-    away. ``image prune -f`` then collects only what no tag references at all.
-
-    Best-effort by design. A deploy that worked must not be reported as failed because a cleanup
-    afterwards did not — the daemon is already up and verified by the time this runs.
-    """
-    # Handed to the remote shell as-is. Wrapping it in `sh -c '...'` looked tidier and was a trap:
-    # the script's own single quotes (`--format '{{.Tag}}'`, `grep -v '^latest$'`) close the
-    # wrapper's quote and reopen it, so those arguments arrive unquoted. It happened to survive —
-    # `{{.Tag}}` has no comma for brace expansion and `^latest$` no variable to expand — but the
-    # first quoted argument that did would break the prune silently, and a best-effort step that
-    # fails silently is one nobody notices has stopped working.
-    #
-    # sort -V orders 2.85.9 before 2.85.10; a plain sort does not, and the versions that survived a
-    # lexical sort would be an arbitrary set rather than the newest.
-    ssh_run(client, (
-        "keep=$(docker images dbabrain --format '{{.Tag}}' | grep -v '^latest$' | sort -V | "
-        f"tail -{int(keep)}); "
-        "for t in $(docker images dbabrain --format '{{.Tag}}' | grep -v '^latest$'); do "
-        "echo \"$keep\" | grep -qx \"$t\" || docker rmi \"dbabrain:$t\" >/dev/null 2>&1 || true; "
-        "done; "
-        "docker image prune -f | tail -1; "
-        "echo \"dbabrain tags kept: $(docker images dbabrain --format '{{.Tag}}' | wc -l)\""
-    ), check=False)
 
 
 def deploy(*, host: str, user: str, password: str, port: int = 22,

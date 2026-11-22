@@ -17533,6 +17533,123 @@
             ]
         },
         {
+            "object": "output_seal_ssh_key",
+            "kind": "output",
+            "required": false,
+            "one_line": "One SSH private key sealed: its public half and where its passphrase is (never the value).",
+            "parsed_in": "dbabrain/common/ssh_key_seal.py",
+            "produced_in": [
+                "dbabrain/common/ssh_key_seal.py"
+            ],
+            "commands": [
+                "seal-ssh-key"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 7,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "key_file",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The sealed key's path."
+                },
+                {
+                    "field": "passphrase_ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The ref holding its passphrase (the value is never returned)."
+                },
+                {
+                    "field": "generated",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether the pair was made by this run."
+                },
+                {
+                    "field": "public_key",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The public key, OpenSSH line - what goes into authorized_keys."
+                },
+                {
+                    "field": "fingerprint",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SHA256 fingerprint of the public key."
+                },
+                {
+                    "field": "registry",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "passphrases.json beside the key, which names the ref."
+                },
+                {
+                    "field": "store",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The encrypted store written."
+                }
+            ]
+        },
+        {
             "object": "input_entry_remove",
             "kind": "input",
             "required": false,
@@ -18472,6 +18589,172 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "What the key or the settings file leave to do."
+                }
+            ]
+        },
+        {
+            "object": "output_key_request",
+            "kind": "output",
+            "required": false,
+            "one_line": "The dbabrain key stored: where, whether it replaced one, and what it holds (never the key itself).",
+            "parsed_in": "dbabrain/common/dbabrain_key_admin.py",
+            "produced_in": [
+                "dbabrain/common/dbabrain_key_admin.py"
+            ],
+            "commands": [
+                "key-request",
+                "key-renew"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 5,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "ref",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The secret ref the key is stored under (DBABRAIN_KEY)."
+                },
+                {
+                    "field": "store",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The encrypted store it went into."
+                },
+                {
+                    "field": "replaced",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Whether the node held a key before - that key is replaced on dbabrain.dev too."
+                },
+                {
+                    "field": "key",
+                    "type": "object",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a JSON object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "kid, email, plan, features, issued_at, expires_at, grace_ends_at, node."
+                },
+                {
+                    "field": "state",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The new key's standing: active."
+                }
+            ]
+        },
+        {
+            "object": "output_key_status",
+            "kind": "output",
+            "required": false,
+            "one_line": "Where this node's dbabrain key stands, and what each gated feature may do now.",
+            "parsed_in": "dbabrain/common/dbabrain_key_admin.py",
+            "produced_in": [
+                "dbabrain/common/dbabrain_key_admin.py"
+            ],
+            "commands": [
+                "key-status"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 4,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "standing",
+                    "type": "object",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a JSON object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "state (none, invalid, active, grace, ended, revoked), reason, days_left, key."
+                },
+                {
+                    "field": "online",
+                    "type": "object",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a JSON object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "asked, error (a failed check - not a revocation), last (the last answer kept), file."
+                },
+                {
+                    "field": "features",
+                    "type": "object",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a JSON object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Each gated feature (reports, backup_restore, sre, mcp, assistant, ai_relay): true when it may start new work now."
+                },
+                {
+                    "field": "how_to_get",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How to get a key, when the node has none that is valid."
                 }
             ]
         },
@@ -29367,6 +29650,95 @@
             ]
         },
         {
+            "object": "input_seal_ssh_key",
+            "kind": "input",
+            "required": false,
+            "one_line": "One SSH private key to seal (or generate and seal) by its full path, and the ref for its passphrase.",
+            "parsed_in": "dbabrain/common/ssh_key_seal.py",
+            "parsers": [
+                "dbabrain/common/cli.py",
+                "dbabrain/common/ssh_key_seal.py"
+            ],
+            "commands": [
+                "seal-ssh-key"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 5,
+            "required_field_count": 2,
+            "fields": [
+                {
+                    "field": "key_file",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The key's FULL path - this command reads no configuration (rules R09)."
+                },
+                {
+                    "field": "passphrase_ref",
+                    "type": "string",
+                    "required": true,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The secret ref its random passphrase is stored under; one already holding another value is refused."
+                },
+                {
+                    "field": "generate",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Make a new ed25519 pair at key_file (and its .pub) instead of sealing one; never over a file."
+                },
+                {
+                    "field": "comment",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The .pub's comment when generating (default: the file's name)."
+                },
+                {
+                    "field": "also_plaintext",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Also write the ref into secrets/secret_text.json, which deploy regenerates the store from (a master)."
+                }
+            ]
+        },
+        {
             "object": "input_ai_key",
             "kind": "input",
             "required": false,
@@ -29424,6 +29796,115 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Replace a different value under a ref the request names. The ref ai_assist.json already names is the assistant's own and is replaced."
+                }
+            ]
+        },
+        {
+            "object": "input_key_request",
+            "kind": "input",
+            "required": false,
+            "one_line": "Get this node a dbabrain key from dbabrain.dev: an email sign-in, the key into the encrypted store.",
+            "parsed_in": "dbabrain/common/cli_dbabrain_key.py",
+            "parsers": [
+                "dbabrain/common/cli_dbabrain_key.py"
+            ],
+            "commands": [
+                "key-request",
+                "key-renew"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 3,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "node",
+                    "type": "string",
+                    "required": false,
+                    "default": "this machine's host name",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How the key names this machine - shown on dbabrain.dev and in key-status, never trusted."
+                },
+                {
+                    "field": "server",
+                    "type": "string",
+                    "required": false,
+                    "default": "https://mcp.dbabrain.dev",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The service that issues keys."
+                },
+                {
+                    "field": "wait",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "false",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Wait for the approval with no terminal - when a person reads this command's output (worker-run). Without it and without a terminal the command is refused."
+                }
+            ]
+        },
+        {
+            "object": "input_key_status",
+            "kind": "input",
+            "required": false,
+            "one_line": "This node's dbabrain key read offline, and dbabrain.dev's answer about it.",
+            "parsed_in": "dbabrain/common/cli_dbabrain_key.py",
+            "parsers": [
+                "dbabrain/common/cli_dbabrain_key.py"
+            ],
+            "commands": [
+                "key-status"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 2,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "online",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "true",
+                    "range_text": "true or false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Ask dbabrain.dev about the key too (GET /key/status); false reads it offline only."
+                },
+                {
+                    "field": "server",
+                    "type": "string",
+                    "required": false,
+                    "default": "https://mcp.dbabrain.dev",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The service that issued the key."
                 }
             ]
         },
@@ -33044,14 +33525,14 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 62,
-            "required_field_count": 62,
+            "field_count": 63,
+            "required_field_count": 63,
             "fields": [
                 {
                     "field": "enabled",
                     "type": "boolean",
                     "required": true,
-                    "default": "false",
+                    "default": "true",
                     "range_text": "true | false",
                     "constraint": {
                         "kind": "boolean",
@@ -33089,6 +33570,24 @@
                     "purpose": "The name of the Anthropic API key in the encrypted secret store; empty = not configured."
                 },
                 {
+                    "field": "provider",
+                    "type": "string",
+                    "required": true,
+                    "default": "\"dbabrain\"",
+                    "range_text": "anthropic | dbabrain",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": false,
+                        "allow_empty": false,
+                        "enum": [
+                            "anthropic",
+                            "dbabrain"
+                        ]
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Who answers: anthropic - this node's own Anthropic key (api_key_ref); dbabrain - the AI through dbabrain.dev, paid by the node's dbabrain key (free: $1 a month, claude-haiku-5-5 at effort medium, max_output_tokens_turn 8000 at most)."
+                },
+                {
                     "field": "telegram_chat",
                     "type": "string or array of strings",
                     "required": true,
@@ -33122,7 +33621,7 @@
                     "field": "model",
                     "type": "string",
                     "required": true,
-                    "default": "\"claude-sonnet-5-5\"",
+                    "default": "\"claude-haiku-5-5\"",
                     "range_text": "text",
                     "constraint": {
                         "kind": "string",
@@ -33383,7 +33882,7 @@
                     "field": "max_output_tokens_turn",
                     "type": "integer",
                     "required": true,
-                    "default": "16000",
+                    "default": "8000",
                     "range_text": ">= 1024, <= 128000",
                     "constraint": {
                         "kind": "integer",

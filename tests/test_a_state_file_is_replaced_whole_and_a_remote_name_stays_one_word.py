@@ -68,6 +68,13 @@ def test_a_registry_write_that_fails_leaves_the_registry_it_had(tmp_path):
 
 
 class _Client:
+    #: Every command given to `run` (worker-status reads the daemon's lock state with it, 1.409).
+    runs: list[str] = []
+
+    def run(self, command):
+        self.runs.append(command)
+        return type("R", (), {"ok": False, "exit_code": 3, "stdout": "", "stderr": ""})()
+
     def close(self):
         pass
 
@@ -107,6 +114,6 @@ def test_a_container_name_reaches_docker_as_one_word(monkeypatch):
 
     worker_status.run_worker_status(host="192.0.2.10", user="ops", password="pw", container=CONTAINER)
 
-    naming = [command for command in commands if "dbabrain daemon" in command]
-    assert len(naming) >= 3, commands
+    naming = [command for command in commands + _Client.runs if "dbabrain daemon" in command]
+    assert len(naming) >= 4, commands + _Client.runs
     assert all(_one_word(command, CONTAINER) for command in naming), naming

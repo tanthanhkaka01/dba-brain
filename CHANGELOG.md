@@ -11,6 +11,55 @@ longer form they were released with.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-22
+
+### Upgrading
+
+- **Reports, backup / restore, SRE, the MCP server and the assistant now need a dbabrain key** - free,
+  from dbabrain.dev after an email sign-in: run `dbabrain key-request` before upgrading a node that
+  makes backups. Without one, metrics, instant alerts, SLA and SQL tasks keep running.
+- `ai_assist.json` gains `provider`: `upgrade-config` writes `anthropic` (your own key, as before); a new
+  install ships `dbabrain` - the assistant on, answering through dbabrain.dev once the node has a key.
+- The runtime store's `repository_keys` and `backup_certificates` move to schema 2 (three retire columns;
+  one active row per key) on their first open.
+- The worker's daemon now starts locked and runs nothing until the master hands it the passphrase:
+  run `control unlock-worker` after every restart or reboot of the worker. The first `deploy-code`
+  rewrites the compose file's `DBABRAIN_SECRET_KEY` entry into `DBABRAIN_UNLOCK_FILE`.
+
+### Added
+
+- `dbabrain key-request` / `key-renew` / `key-status`: a signed key from dbabrain.dev for 14 days, read
+  offline; warnings 7, 3 and 1 day(s) before its end (14 too for a longer key), then 3 days of grace; a restore you ask for
+  always runs.
+- The assistant can answer with no Anthropic key of yours: `"provider": "dbabrain"` in `ai_assist.json`
+  uses the AI through dbabrain.dev - free, $1 a month, Claude Haiku 5.5 at effort medium.
+- `seal-ssh-key` encrypts an SSH private key in OpenSSH's format, its random passphrase in the secret
+  store and named in `data/ssh_keys/passphrases.json`; every SSH login finds it by the key.
+- `control rotate-passphrase` changes the secret store's passphrase on the master and the worker in one
+  run: the runtime store's age keys and backup certificates are re-sealed as new rows, the old ones kept
+  as retired.
+- `worker-status` ends with the worker's secret hygiene; a worker node's `key_file` in `config.json`
+  makes the control commands log in with that key.
+
+### Changed
+
+- `control worker-status` reads the worker through `db.cli node-status`; `python -m dbabrain.jobs.status`
+  still answers, the same report.
+- The pages and docs say what dbabrain sends: no telemetry; with a key, a daily check of it with
+  dbabrain.dev; the AI through dbabrain.dev only when used.
+- The passphrase is no longer in the worker container's environment, where `docker inspect` showed it
+  and the container's configuration kept it in clear on the host's disk. `worker-status` and `worker-run`
+  pass it on stdin, not on the host's command line.
+- A deploy leaves one dbabrain on the worker: every other image, the image tar and the pre-deploy copy
+  of `data/` are removed once the new container runs (`control worker-prune` does it by hand). A
+  rollback is a rebuild of the previous version.
+
+### Fixed
+
+- An offload pass reads which copies are sealed in one query, not one per file ever encrypted: on a
+  15-minute LOG entry with ~10,000 encrypted files a pass took 13 minutes and the source files waited
+  about two hours to be deleted, longer each day.
+
 ## [0.41.0] - 2026-11-18
 
 ### Upgrading
@@ -4258,7 +4307,8 @@ the documentation names one, it says so.
   metric definitions, the Telegram support commands, the runtime log, the schema export directory
   and the working directory of two subprocess calls. All of them now share the one resolution.
 
-[Unreleased]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.41.0...HEAD
+[Unreleased]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.41.0...v1.0.0
 [0.41.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.39.0...v0.41.0
 [0.39.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.36.0...v0.38.0

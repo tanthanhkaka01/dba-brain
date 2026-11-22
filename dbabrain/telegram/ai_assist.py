@@ -38,6 +38,7 @@ from dbabrain.db.backend import StoreTarget
 from dbabrain.db.store import DbaBrainStore
 from dbabrain.db.telegram_queue import queue_telegram_message
 from dbabrain.lib import ai_assist as A
+from dbabrain.lib import errors
 from dbabrain.lib import node_environment
 from dbabrain.lib import timezone as timezone_lib
 from dbabrain.lib.version import __version__
@@ -73,7 +74,7 @@ def load_settings(data_dir: Path, *, need_chat: bool = True) -> tuple[A.AiAssist
     settings = A.parse_ai_assist(raw)
     if not settings.enabled:
         return None, f"{A.FILE_NAME}: enabled is false."
-    if not settings.api_key_ref:
+    if settings.provider == "anthropic" and not settings.api_key_ref:
         return None, f"{A.FILE_NAME}: api_key_ref is empty."
     if need_chat and not settings.chat_levels and not settings.private_chat_enabled:
         return None, (f"{A.FILE_NAME}: telegram_chat names no level and private_chat_enabled is false - "
@@ -95,23 +96,71 @@ THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 THINKING = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
 
 
+class FromDbabrainDev(errors.Refused):
+    """dbabrain.dev's relay refused a turn - its sentence, as the asker reads it (provider dbabrain)."""
+
+
 def sdk_call(settings: A.AiAssistSettings, api_key: str) -> ai_agent.ModelCall:
-    """One call through the ``anthropic`` SDK, its answer as a plain dict for the loop and the store."""
+    """One call through the ``anthropic`` SDK, its answer as a plain dict for the loop and the store.
+
+    With ``provider: dbabrain`` the same client talks to dbabrain.dev's relay (``RELAY_BASE_URL``) and
+    ``api_key`` is the node's dbabrain key: the relay holds the Anthropic key (D-36.1). Its refusals
+    - a month's dollar spent, a key ended - are said in its own words, not as an HTTP error's repr.
+    """
     import anthropic
 
+    relay = settings.provider == "dbabrain"
     options: dict[str, Any] = {"api_key": api_key, "timeout": float(settings.api_timeout_seconds),
                                "max_retries": int(settings.api_max_retries)}
+    if relay:
+        options["base_url"] = A.RELAY_BASE_URL
     if settings.http_proxy:
         options["http_client"] = anthropic.DefaultHttpxClient(proxy=settings.http_proxy)
     client = anthropic.Anthropic(**options)
 
     def call(params: dict[str, Any]) -> dict[str, Any]:
-        message = client.beta.messages.create(**{"thinking": THINKING, **params}, betas=[THINKING_BINDING_BETA])
+        try:
+            message = client.beta.messages.create(**{"thinking": THINKING, **params}, betas=[THINKING_BINDING_BETA])
+        except anthropic.APIStatusError as exc:
+            said = ((exc.body or {}).get("error") or {}).get("message") if isinstance(exc.body, dict) else None
+            if relay and said:
+                raise FromDbabrainDev(str(said)) from exc
+            raise
         answer = message.to_dict()
         answer["request_id"] = str(getattr(message, "_request_id", "") or "")
         return answer
 
     return call
+
+
+def refusing_call(sentence: str) -> ai_agent.ModelCall:
+    """A call that says why the assistant cannot answer here - each question is answered with it,
+    one at a time, instead of the queue being left unread (1.0.0: no valid dbabrain key)."""
+    def call(_params: dict[str, Any]) -> dict[str, Any]:
+        raise FromDbabrainDev(sentence)
+
+    return call
+
+
+def _key_and_call(settings: A.AiAssistSettings, secrets: dict[str, str],
+                  call: ai_agent.ModelCall | None) -> tuple[str, ai_agent.ModelCall | None, str]:
+    """The key the client takes, the call to use (None: the SDK's), and what is missing (a skip).
+
+    The assistant needs a dbabrain key with either provider (D3): its own Anthropic key with the
+    ``assistant`` feature, the relay with ``ai_relay``. Without one, every question is answered with
+    how to get a key - never a queue left unread.
+    """
+    from dbabrain.lib import dbabrain_key
+
+    feature = "ai_relay" if settings.provider == "dbabrain" else "assistant"
+    decision = dbabrain_key.gate_here(feature)
+    if not decision.allowed:
+        return "", call or refusing_call(decision.sentence), ""
+    if settings.provider == "dbabrain":
+        key = secrets.get(dbabrain_key.KEY_REF, "")
+        return key, call, ("" if key else f"no {dbabrain_key.KEY_REF} in this node's store - {dbabrain_key.HOW_TO_GET}")
+    key = secrets.get(settings.api_key_ref, "")
+    return key, call, ("" if key else f"secret {settings.api_key_ref} is not in this node's encrypted store.")
 
 
 def sdk_installed() -> bool:
@@ -825,10 +874,9 @@ def ask_from_cli(*, config: Any, config_path: str | Path, question: str, asker: 
         return {"ok": True, "skipped": True,
                 "reason": f"the anthropic package is not installed on this node ({install_hint('ai')})."}
     secrets = load_secret_text(data_dir)
-    api_key = secrets.get(settings.api_key_ref, "")
-    if not api_key:
-        return {"ok": True, "skipped": True,
-                "reason": f"secret {settings.api_key_ref} is not in this node's encrypted store."}
+    api_key, call, missing = _key_and_call(settings, secrets, call)
+    if missing:
+        return {"ok": True, "skipped": True, "reason": missing}
     try:
         who = asker or getpass.getuser()
     except Exception:  # noqa: BLE001 - a container may have no name for its user
@@ -853,10 +901,9 @@ def run_ai_assist(*, config: Any, config_path: str | Path, call: ai_agent.ModelC
         return {"ok": True, "skipped": True,
                 "reason": f"the anthropic package is not installed on this node ({install_hint('ai')})."}
     secrets = load_secret_text(data_dir)
-    api_key = secrets.get(settings.api_key_ref, "")
-    if not api_key:
-        return {"ok": True, "skipped": True,
-                "reason": f"secret {settings.api_key_ref} is not in this node's encrypted store."}
+    api_key, call, missing = _key_and_call(settings, secrets, call)
+    if missing:
+        return {"ok": True, "skipped": True, "reason": missing}
     runner = Runner(config=config, config_path=config_path, settings=settings, api_key=api_key, secrets=secrets,
                     call=call, download=download, now=now)
     return runner.run()

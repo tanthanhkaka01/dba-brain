@@ -8,6 +8,10 @@ Two append-only tables - nothing here deletes a row or rewrites a key:
   :mod:`dbabrain.lib.repository_keys`). An expired key stays for ever - every file encrypted with it
   needs it. The private half is also sealed as a file for dbabrain and the offline recovery key
   (:mod:`dbabrain.backup_restore.repository_encryption`), so a lost passphrase is not a lost key.
+  When the passphrase changes (0.42.0, 1.411) a key's row is never rewritten: it is copied into a new
+  row sealed with the new passphrase and the old one is retired (``retired_at``, ``replaced_by``) -
+  :mod:`dbabrain.db.envelope_generations`. One ACTIVE row per recipient; a file's ``key_id`` that names
+  a retired row is followed to the active row of the same recipient.
 * ``repository_encrypted_rows`` - one row per CATALOG row whose every file is encrypted, proven and
   its plain file deleted on the repository (a base backup directory is several files);
 * ``repository_encrypted_files`` - one row per file encrypted on the repository: the catalog row it
@@ -23,13 +27,15 @@ import json
 from typing import Any
 
 from dbabrain.db import backend as backend_mod
+from dbabrain.db import envelope_generations as G
 from dbabrain.db.backend import StoreTarget
 from dbabrain.db.store import utc_now_text
 from dbabrain.lib import errors
 from dbabrain.lib import repository_keys as K
 from dbabrain.lib import secret_text
 
-REPOSITORY_ENCRYPTION_SCHEMA_VERSION = 1
+#: 2 (0.42.0, 1.411): the retire columns; UNIQUE (recipient) over the active rows only.
+REPOSITORY_ENCRYPTION_SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS repository_keys
@@ -45,7 +51,9 @@ CREATE TABLE IF NOT EXISTS repository_keys
     created_by TEXT NOT NULL,
     sealed_file TEXT NULL,
     proven_at TEXT NULL,
-    CONSTRAINT uq_repository_keys_recipient UNIQUE (recipient)
+    retired_at TEXT NULL,
+    replaced_by INTEGER NULL,
+    retired_reason TEXT NULL
 );
 
 CREATE INDEX IF NOT EXISTS ix_repository_keys_server ON repository_keys (server_id, encrypt_until);
@@ -112,6 +120,9 @@ class RepositoryEncryptionStore:
         with self.connect() as conn:
             backend_mod.acquire_schema_lock(conn)
             conn.executescript(SCHEMA_SQL)
+            G.migrate(conn, self.target.store.backend, table="repository_keys",
+                      old_constraint="uq_repository_keys_recipient", index="uq_repository_keys_recipient_active",
+                      unique_columns=("recipient",), schema_sql=SCHEMA_SQL)
             backend_mod.record_schema_version(conn, "RepositoryEncryptionStore", REPOSITORY_ENCRYPTION_SCHEMA_VERSION)
         backend_mod.mark_schema_ready("RepositoryEncryptionStore", self.target)
 
@@ -143,14 +154,16 @@ class RepositoryEncryptionStore:
             conn.execute("UPDATE repository_keys SET sealed_file = ?, proven_at = ? WHERE key_id = ? "
                          "AND proven_at IS NULL", (sealed_file, utc_now_text(), int(key_id)))
 
-    def keys(self, *, server_id: str | None = None) -> list[dict[str, Any]]:
-        """Every key (no private half), oldest first."""
+    def keys(self, *, server_id: str | None = None, include_retired: bool = False) -> list[dict[str, Any]]:
+        """Every active key (no private half), oldest first; with ``include_retired`` the retired
+        generations too - what a page that names a file's ``key_id`` needs."""
         self.initialize()
+        active = "" if include_retired else " AND retired_at IS NULL"
         with self.connect() as conn:
             if server_id is None:
-                rows = conn.execute("SELECT * FROM repository_keys ORDER BY key_id").fetchall()
+                rows = conn.execute(f"SELECT * FROM repository_keys WHERE 1 = 1{active} ORDER BY key_id").fetchall()
             else:
-                rows = conn.execute("SELECT * FROM repository_keys WHERE server_id = ? ORDER BY key_id",
+                rows = conn.execute(f"SELECT * FROM repository_keys WHERE server_id = ?{active} ORDER BY key_id",
                                     (server_id,)).fetchall()
         return [{k: v for k, v in dict(r).items() if k != "identity_envelope"} for r in rows]
 
@@ -163,15 +176,20 @@ class RepositoryEncryptionStore:
     def key_by_recipient(self, recipient: str) -> dict[str, Any] | None:
         self.initialize()
         with self.connect() as conn:
-            row = conn.execute("SELECT * FROM repository_keys WHERE recipient = ?", (recipient,)).fetchone()
+            row = conn.execute("SELECT * FROM repository_keys WHERE recipient = ? AND retired_at IS NULL",
+                               (recipient,)).fetchone()
         return {k: v for k, v in dict(row).items() if k != "identity_envelope"} if row is not None else None
 
     def identity(self, key_id: int, *, passphrase: str) -> str:
         """The key's private half - for decrypting, which an expired key still does."""
         self.initialize()
         with self.connect() as conn:
-            row = conn.execute("SELECT identity_envelope, recipient FROM repository_keys WHERE key_id = ?",
-                               (int(key_id),)).fetchone()
+            row = conn.execute("SELECT identity_envelope, recipient, retired_at FROM repository_keys "
+                               "WHERE key_id = ?", (int(key_id),)).fetchone()
+            if row is not None and row["retired_at"]:
+                # A retired generation: the same key, sealed with an earlier passphrase (1.411).
+                row = conn.execute("SELECT identity_envelope, recipient, retired_at FROM repository_keys "
+                                   "WHERE recipient = ? AND retired_at IS NULL", (row["recipient"],)).fetchone()
         if row is None:
             raise RepositoryEncryptionError(f"no repository key {key_id}.")
         try:
@@ -180,6 +198,13 @@ class RepositoryEncryptionStore:
             raise RepositoryEncryptionError(f"repository key {key_id} cannot be decrypted: "
                                             f"{type(exc).__name__}: {exc}") from exc
         return str(identity)
+
+    def reseal(self, conn: Any, *, old_passphrase: str, new_passphrase: str, reason: str) -> list[dict[str, Any]]:
+        """Every active key re-sealed with *new_passphrase* as a new row, the old row retired - on the
+        caller's connection (:func:`dbabrain.db.envelope_generations.reseal`)."""
+        return G.reseal(conn, table="repository_keys", id_column="key_id", envelope_column="identity_envelope",
+                        unique_columns=("recipient",), old_passphrase=old_passphrase,
+                        new_passphrase=new_passphrase, reason=reason)
 
     # ------------------------------------------------------------------ #
     # Encrypted files
@@ -285,6 +310,21 @@ class RepositoryEncryptionStore:
                 for row in conn.execute(f"SELECT * FROM repository_encrypted_files WHERE file_id IN ({marks}) "
                                         "ORDER BY encrypted_file_id", tuple(chunk)).fetchall():
                     found.setdefault(int(row["file_id"]), []).append(dict(row))
+        return found
+
+    def files_of_backup(self, *, backup_id: str) -> dict[int, list[dict[str, Any]]]:
+        """:meth:`files_of` for every catalog row of one entry, in ONE read, by file_id.
+
+        Every offload pass asks which of the entry's rows are sealed. Asked row by row it was one
+        connection per row ever encrypted: a LOG entry of ~10,000 rows took 13 minutes a pass on
+        2026-11-20, its 15-minute cadence was nearly outrun, and its sources waited ~2 hours to be
+        released - growing by ~90 s a day as the entry's history grew."""
+        self.initialize()
+        found: dict[int, list[dict[str, Any]]] = {}
+        with self.connect() as conn:
+            for row in conn.execute("SELECT * FROM repository_encrypted_files WHERE backup_id = ? "
+                                    "ORDER BY encrypted_file_id", (backup_id,)).fetchall():
+                found.setdefault(int(row["file_id"]), []).append(dict(row))
         return found
 
     def files_of(self, file_id: int) -> list[dict[str, Any]]:

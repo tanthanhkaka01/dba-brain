@@ -21,30 +21,14 @@ from dbabrain.control.deploy import daemon_start_script
 SECRET = "pass phrase with 'quotes' and $dollars"
 
 
-@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None or shutil.which("base64") is None,
-                    reason="runs the generated POSIX shell")
-def test_the_deploy_script_exports_the_key_and_never_passes_it_as_an_argument(tmp_path):
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    seen = tmp_path / "seen"
-    (fake_bin / "docker").write_text(
-        "#!/usr/bin/env bash\n"
-        f'printf "%s\\n" "$*" > {seen}.argv\n'
-        f'printf "%s" "$DBABRAIN_SECRET_KEY" > {seen}.env\n', encoding="utf-8")
-    (fake_bin / "docker").chmod(0o755)
-    remote = tmp_path / "remote"
-    remote.mkdir()
+def test_the_deploy_script_starts_the_daemon_with_no_passphrase_at_all():
+    """0.42.0, 1.409: `-e DBABRAIN_SECRET_KEY` kept it off the argv but put it in the container's
+    configuration - `docker inspect`, and `config.v2.json` in clear on the host's disk. The daemon
+    now starts locked and is handed the passphrase afterwards (test_a_locked_daemon_*)."""
+    script = daemon_start_script(remote_dir="/opt/dbabrain", node_role="worker", container="dbabrain_daemon")
 
-    script = daemon_start_script(remote_dir=str(remote), node_role="worker", container="dbabrain_daemon",
-                                 secret_key=SECRET)
-    subprocess.run(["bash", "-s"], input=script, text=True, check=True,
-                   env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"})
-
-    argv = (tmp_path / "seen.argv").read_text(encoding="utf-8")
-    assert (tmp_path / "seen.env").read_text(encoding="utf-8") == SECRET
-    assert "-e DBABRAIN_SECRET_KEY " in argv and "daemon" in argv
-    assert "--key" not in argv and "pass phrase" not in argv
-    assert "pass phrase" not in script, "only an encoded form travels, and only on stdin"
+    assert "SECRET_KEY" not in script and "--key" not in script and "base64" not in script
+    assert "docker compose run -e DBABRAIN_NODE_ROLE=worker -d --service-ports" in script
 
 
 # --------------------------------------------------------------------------- #

@@ -51,6 +51,7 @@ def open_ssh_client(
     timeout: int = 30,
     allow_agent_fallback: bool = False,
     announce: bool = True,
+    passphrase: str | None = None,
 ):
     """Open a paramiko SSH client to ``user@host`` using a key file or a password.
 
@@ -58,6 +59,10 @@ def open_ssh_client(
     fall back to the SSH agent and the user's default keys — for hosts configured with
     key auth outside dbabrain. For explicit key auth, agent/interactive fallbacks stay
     disabled so a wrong key fails loudly instead of silently trying something else.
+
+    ``passphrase`` opens a sealed key (0.42.0, 1.410: private keys are kept encrypted in OpenSSH's
+    format, each with its own passphrase in the secret store). Without it paramiko falls back to
+    ``password`` for that - the older spelling, where a key login's password was its passphrase.
 
     Connect failures are raised as the specific subclass (:class:`SshAuthError`,
     :class:`SshTimeoutError`, :class:`SshConnectError`) so callers can tell "wrong
@@ -90,6 +95,8 @@ def open_ssh_client(
         connect_kwargs["allow_agent"] = False
         if password:  # a passphrase-protected key may still want the passphrase
             connect_kwargs["password"] = password
+        if passphrase:
+            connect_kwargs["passphrase"] = passphrase
     elif password:
         connect_kwargs["password"] = password
         connect_kwargs["look_for_keys"] = False
@@ -97,11 +104,34 @@ def open_ssh_client(
     try:
         client.connect(**connect_kwargs)
     except Exception as exc:  # noqa: BLE001 - auth/network; classify, then surface cleanly.
+        sealed = getattr(paramiko, "PasswordRequiredException", None)
+        if sealed is not None and isinstance(exc, sealed):
+            raise SshAuthError(
+                f"SSH key {key_filename} is sealed (encrypted) and no passphrase opened it: name its "
+                "passphrase's ref for this key in data/ssh_keys/passphrases.json (seal-ssh-key writes "
+                "it), or pass key_passphrase.") from exc
         raise _connect_error(
             paramiko, exc, user=user, host=host, port=port, timeout=timeout,
             offered_password=bool(password), offered_key=bool(key_filename),
         ) from exc
     return client
+
+
+def open_key_file(path: str, passphrase: str | None):
+    """The private key at *path*, opened the way ``SSHClient.connect(key_filename=, passphrase=)`` opens
+    it - each key class's ``from_private_key_file`` in turn (``seal-ssh-key`` proves a sealed key with
+    it, 1.410). Raises ``PasswordRequiredException`` for a sealed key given no passphrase."""
+    import paramiko  # type: ignore[import]
+
+    error: Exception | None = None
+    for klass in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+        try:
+            return klass.from_private_key_file(path, passphrase)
+        except paramiko.PasswordRequiredException:
+            raise
+        except paramiko.SSHException as exc:
+            error = exc
+    raise error or SshError(f"{path}: no key class opened it")
 
 
 def _connect_error(

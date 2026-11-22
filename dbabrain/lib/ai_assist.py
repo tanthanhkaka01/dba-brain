@@ -36,6 +36,18 @@ RETIRED_CHAT_IDS = "chat_ids"
 
 #: ``output_config.effort`` of the Messages API.
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+#: Who answers (1.0.0, plan A2): ``anthropic`` - the node's own Anthropic key (``api_key_ref``);
+#: ``dbabrain`` - the AI through dbabrain.dev, paid by the node's dbabrain key: no Anthropic key on the
+#: node at all (D-36.1). The relay enforces its free plan; these are its terms, stated so the file
+#: says what is sent and the relay never has to refuse what the node was told to send.
+PROVIDERS = ("anthropic", "dbabrain")
+#: What a settings file from before 1.0.0 ran on - its own Anthropic key (``upgrade-config`` writes it).
+EARLIER_PROVIDER = "anthropic"
+RELAY_BASE_URL = "https://mcp.dbabrain.dev/ai"
+RELAY_MODEL = "claude-haiku-5-5"
+RELAY_EFFORT = "medium"
+RELAY_MAX_OUTPUT_TOKENS = 8000
 #: What the assistant may do with dbabrain's tools. ``read_only`` is all 0.34.0 builds: the
 #: operator, 2026-10-31 - *can be switched; read only for now; the AI proposes a Telegram command and
 #: the user runs it (later: the user confirms and it runs)*. A mode that runs a command after a
@@ -70,7 +82,10 @@ def _f(name: str, kind: str, shipped: Any, purpose: str, *, minimum: float | Non
 
 
 SETTINGS_FIELDS: tuple[FieldSpec, ...] = (
-    _f("enabled", "bool", False, "Whether the assistant answers at all; off, the job says not configured and skips."),
+    # 1.0.0, the operator, 2026-11-21: *anyone who wants it signs in and uses it through dbabrain.dev* -
+    # a new install answers through the relay, so it ships on: with no dbabrain key each question is
+    # answered with how to get one (`dbabrain key-request`).
+    _f("enabled", "bool", True, "Whether the assistant answers at all; off, the job says not configured and skips."),
     # 0.38.0 (1.326), the operator, 2026-11-11: *dbabrain's AI has no name yet; name it, set in the
     # config json.* The value below is what `upgrade-config` writes into a node's file that states
     # none - the one place the shipped name is written in code; nothing reads it as a fallback.
@@ -80,7 +95,12 @@ SETTINGS_FIELDS: tuple[FieldSpec, ...] = (
        "the console titles its page, and the word a message may address it by - at the start of the "
        "message, or as @<name> anywhere - beside the bot's own @mention. One line, 1 to 40 characters, "
        "not starting with / or @."),
-    _f("api_key_ref", "str", "", "The name of the Anthropic API key in the encrypted secret store; empty = not configured."),
+    _f("api_key_ref", "str", "", "The name of the Anthropic API key in the encrypted secret store; empty = not configured. "
+       "Not read with provider dbabrain."),
+    _f("provider", "enum", "dbabrain",
+       "Who answers: anthropic - this node's own Anthropic key (api_key_ref); dbabrain - the AI through dbabrain.dev, "
+       "paid by the node's dbabrain key (free: $1 a month, model claude-haiku-5-5 at effort medium, "
+       "max_output_tokens_turn 8000 at most - stated here, or the file is refused).", choices=PROVIDERS),
     _f("telegram_chat", "level_or_levels", AI_ASSIST_LEVEL,
        "The notify level - or a list of them - whose chats the assistant answers in: each the active group "
        "in telegram_groups.json with that notify_level (or level_chat_map's entry), as every app's "
@@ -88,7 +108,7 @@ SETTINGS_FIELDS: tuple[FieldSpec, ...] = (
     _f("private_chat_enabled", "bool", False,
        "Also answer the active users of users[] in their own private chat with the bot. There every message "
        "is addressed to the assistant (no @mention); anyone else's private chat is never read."),
-    _f("model", "str", "claude-sonnet-5-5", "The model asked. It must have a row in prices, or no limit could be held."),
+    _f("model", "str", "claude-haiku-5-5", "The model asked. It must have a row in prices, or no limit could be held."),
     _f("effort", "enum", "medium", "output_config.effort, set so a model change does not change the spend.",
        choices=EFFORTS),
     _f("require_mention", "bool", True,
@@ -118,7 +138,7 @@ SETTINGS_FIELDS: tuple[FieldSpec, ...] = (
     _f("max_tool_calls_question", "int", 20, "Tool calls of one question; then the model answers with what it has.",
        minimum=0),
     _f("max_turns_question", "int", 25, "Calls to the model for one question.", minimum=1),
-    _f("max_output_tokens_turn", "int", 16000, "max_tokens of each call.", minimum=1024, maximum=128000),
+    _f("max_output_tokens_turn", "int", 8000, "max_tokens of each call.", minimum=1024, maximum=128000),
     _f("min_tokens_turn", "int", 1500, "A turn with fewer tokens left than this is not started.", minimum=256),
     _f("conversation_idle_seconds", "int", 3600, "A message after this long starts a new conversation.", minimum=60),
     _f("max_history_questions", "int", 30, "A conversation with this many questions starts over (the cost of resending it).",
@@ -274,7 +294,10 @@ def state_ai_assist(document: Any) -> list[str]:
     written: list[str] = []
     for spec in SETTINGS_FIELDS:
         if spec.name not in document:
-            document[spec.name] = _copy(spec.shipped)
+            # A file from before 1.0.0 has answered with its own Anthropic key all along: it is told
+            # so, never moved to the relay by an upgrade (the shipped `dbabrain` is a new install's).
+            value = EARLIER_PROVIDER if spec.name == "provider" else _copy(spec.shipped)
+            document[spec.name] = value
             written.append(spec.name)
     if "prices" not in document:
         document["prices"] = [dict(row) for row in SHIPPED_PRICES]
@@ -454,6 +477,15 @@ def parse_ai_assist(raw: Any) -> AiAssistSettings:
     if values["model"] not in prices:
         raise AiAssistConfigError(
             f"model {values['model']!r} has no row in prices - its cost could not be counted against any limit.")
+    if values["provider"] == "dbabrain":
+        # The relay's terms, stated in the file - never changed quietly here (dbabrain.dev refuses the rest).
+        wrong = [f"{name} {values[name]!r} (it answers {want!r})" for name, want in
+                 (("model", RELAY_MODEL), ("effort", RELAY_EFFORT)) if values[name] != want]
+        if values["max_output_tokens_turn"] > RELAY_MAX_OUTPUT_TOKENS:
+            wrong.append(f"max_output_tokens_turn {values['max_output_tokens_turn']} (at most {RELAY_MAX_OUTPUT_TOKENS})")
+        if wrong:
+            raise AiAssistConfigError("provider dbabrain - the AI through dbabrain.dev's free plan - does not take "
+                                      + "; ".join(wrong) + ".")
     return AiAssistSettings(values=values, prices=prices, users=tuple(users))
 
 

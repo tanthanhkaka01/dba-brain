@@ -769,9 +769,20 @@ def _export_instance_bundle(config_path: str, backup_id: str) -> int:
     return _response.exit_code(result)
 
 
+#: Commands that start NEW work - a backup, a schedule, a sweep. Past a key's grace they stop; every
+#: other command reads or restores what exists, which a key's end never breaks (1.0.0, D1).
+NEW_WORK_COMMANDS = frozenset({"workflow", "backup", "offload", "prune-backups", "backup-add", "restore-add",
+                               "copy-backup", "delete-backup", "catalog-backfill"})
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     set_key_env(getattr(args, "key", None), getattr(args, "key_base64", None))
+    from dbabrain.lib import dbabrain_key
+    refused = dbabrain_key.said_at_the_door(
+        dbabrain_key.gate_here("backup_restore", new_work=args.command in NEW_WORK_COMMANDS), app="backup_restore")
+    if refused is not None:
+        return refused
     logger = None
     app_config = None
     start_monotonic = time.monotonic()

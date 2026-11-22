@@ -137,6 +137,8 @@ def ssh_access(host: dict[str, Any]) -> dict[str, Any]:
         "auth_type": "key" if key_file else "password", "platform": "linux", "shell": "bash"}
     if key_file:
         access["key_file"] = key_file
+        if host.get("key_passphrase"):
+            access["key_passphrase"] = str(host["key_passphrase"])
     if host.get("open_timeout_seconds"):
         access["timeout_seconds"] = int(host["open_timeout_seconds"])
     return access

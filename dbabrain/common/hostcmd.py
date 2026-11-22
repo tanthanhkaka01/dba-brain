@@ -63,6 +63,8 @@ class Host:
     username: str = ""
     password: str = ""
     key_file: str = ""
+    #: Opens a sealed key file (1.410), resolved by the caller.
+    key_passphrase: str = ""
     #: runtime=docker
     container: str = ""
     #: runtime=k8s
@@ -122,6 +124,7 @@ def parse_host(raw: Any, *, where: str = "host") -> Host:
         username=str(raw.get("username") or "").strip(),
         password=str(raw.get("password") or ""),
         key_file=str(raw.get("key_file") or "").strip(),
+        key_passphrase=str(raw.get("key_passphrase") or ""),
         container=str(raw.get("container") or "").strip(),
         pod=str(raw.get("pod") or "").strip(),
         namespace=str(raw.get("namespace") or "default").strip(),
@@ -194,6 +197,8 @@ def access_for(host: Host) -> dict[str, Any]:
         access["auth_type"] = "key" if host.key_file else "password"
         if host.key_file:
             access["key_file"] = host.key_file
+            if host.key_passphrase:
+                access["key_passphrase"] = host.key_passphrase
     return access
 
 

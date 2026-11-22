@@ -238,10 +238,14 @@ def test_not_configured_is_a_state_not_an_error(tmp_path):
     config = SimpleNamespace(store=str(tmp_path / "s.sqlite"))
     (tmp_path / "data").mkdir()
     assert job.run_ai_assist(config=config, config_path=tmp_path / "config.json")["skipped"] is True
-    document = A.shipped_document()
+    document = {**A.shipped_document(), "enabled": False}
     (tmp_path / "data" / "ai_assist.json").write_text(json.dumps(document), encoding="utf-8")
     answer = job.run_ai_assist(config=config, config_path=tmp_path / "config.json")
     assert answer["skipped"] is True and "enabled is false" in answer["reason"]
+    # 1.0.0: the shipped file is on and answers through dbabrain.dev - with no dbabrain key yet, a state too.
+    (tmp_path / "data" / "ai_assist.json").write_text(json.dumps(A.shipped_document()), encoding="utf-8")
+    answer = job.run_ai_assist(config=config, config_path=tmp_path / "config.json")
+    assert answer["skipped"] is True and "dbabrain key-request" in answer["reason"]
 
 
 def test_an_answer_longer_than_one_message_is_cut_at_a_line():

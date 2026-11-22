@@ -60,7 +60,8 @@ def _answer(result) -> dict:
 
 # --------------------------------------------------------------------------- a fresh install
 def test_on_a_fresh_install_the_key_is_stored_and_the_assistant_switched_on(node):
-    assert _settings(node)["enabled"] is False and _settings(node)["api_key_ref"] == "", "init ships it off"
+    # 1.0.0: init ships the assistant on, through dbabrain.dev, with no Anthropic key.
+    assert _settings(node)["provider"] == "dbabrain" and _settings(node)["api_key_ref"] == ""
 
     result = _ai_key(node, {"value": AI_KEY})
 
@@ -69,6 +70,7 @@ def test_on_a_fresh_install_the_key_is_stored_and_the_assistant_switched_on(node
     assert _store(node) == {"AI_ASSIST_API_KEY": AI_KEY}
     settings = _settings(node)
     assert settings["enabled"] is True and settings["api_key_ref"] == "AI_ASSIST_API_KEY"
+    assert settings["provider"] == "anthropic", "the node's own key: no longer through dbabrain.dev"
     ai_rules.parse_ai_assist(settings)  # every other field as init wrote it
     assert answer["data"]["next"] == 'dbabrain telegram ai-ask "What do I set up next?"'
     assert AI_KEY not in result.stdout and AI_KEY not in result.stderr, "never echoed"
@@ -81,7 +83,7 @@ def test_a_root_with_no_settings_file_gets_one_at_the_shipped_values(node):
 
     settings = _settings(node)
     shipped = ai_rules.shipped_document()
-    assert settings == {**shipped, "enabled": True, "api_key_ref": "AI_ASSIST_API_KEY"}
+    assert settings == {**shipped, "enabled": True, "api_key_ref": "AI_ASSIST_API_KEY", "provider": "anthropic"}
 
 
 def test_the_settings_file_keeps_everything_else_and_its_indent(node):
@@ -92,7 +94,7 @@ def test_the_settings_file_keeps_everything_else_and_its_indent(node):
 
     _ai_key(node, {"value": AI_KEY})
 
-    assert _settings(node) == {**before, "enabled": True, "api_key_ref": "AI_ASSIST_API_KEY"}
+    assert _settings(node) == {**before, "enabled": True, "api_key_ref": "AI_ASSIST_API_KEY", "provider": "anthropic"}
     assert path.read_text(encoding="utf-8").startswith('{\n  "'), "the file's own indent"
 
 

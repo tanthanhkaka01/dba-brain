@@ -1,9 +1,11 @@
 # Security
 
-**The toolkit sends nothing anywhere by itself.** There is no telemetry, no usage reporting, no
+**The toolkit sends nothing you did not switch on.** There is no telemetry, no usage reporting, no
 update check, no crash upload. It connects to the databases and hosts *you* list in
-`data/db_instances.json`, and — only if you enable it and give it a bot token — to the Telegram
-API. Nothing else.
+`data/db_instances.json`; with a dbabrain key (1.0.0), once a day to `mcp.dbabrain.dev` to check that
+key - the key alone, nothing about the estate - and when it is asked for or renewed; only if you
+enable it and give it a bot token, to the Telegram API; and only if the assistant is used, to the AI
+through dbabrain.dev (or a model's API on your own key). Nothing else.
 
 **What makes that true is the absence of a bot token, not a setting.** With no token in the
 encrypted secret store there is nothing to authenticate with and no message can leave; the sender
@@ -199,8 +201,11 @@ they leave.
 - **Not in logs.** Connection strings are built in two forms: a password-free one that is what
   gets logged and reported, and a resolved one that exists only at the moment of connecting.
   Store declarations travel with a `redact()` form for error messages.
-- **Not in the runtime store.** The store holds run history, measurements and findings. It holds
-  no credential.
+- **Not in the runtime store - except sealed.** The store holds run history, measurements and
+  findings, and two kinds of key material **encrypted with the passphrase**: the repository's age
+  keys (`repository_keys`, the private half of each) and the SQL Server backup certificates
+  (`backup_certificates`, `.cer` + `.pvk`). No password, no token. Changing the passphrase therefore
+  has to re-seal those rows too - see *Changing the passphrase* below.
 - **Not in metric output.** The collectors deliberately do not emit SQL text, `archive_command`,
   passwords or connection strings.
 - **Not in the image.** The container carries the code. Configuration, `data/` and the passphrase
@@ -209,9 +214,52 @@ they leave.
 
 ### Losing the passphrase
 
-The encrypted store cannot be recovered without it. Treat it as the root password it effectively
-is: hold it where you hold root passwords, and re-encrypt from the plaintext source if you rotate
-it.
+The encrypted store cannot be recovered without it - nor the repository's age keys and backup
+certificates sealed with it in the runtime store, so neither the encrypted backups (without the
+offline recovery key, docs/08) nor the certificate-protected SQL Server backups restore. Treat it as
+the root password it effectively is: hold it where you hold root passwords.
+
+### Changing the passphrase (0.42.0)
+
+**Everything the passphrase opens moves together, or nothing does**: the secret store(s) and every
+active row of `repository_keys` and `backup_certificates`. `control rotate-passphrase` does it for a
+master and its worker (plan first, then `--apply` - docs/11): each active row is copied into a new row
+sealed with the new passphrase, and the old row is **kept, retired** (`retired_at`, `replaced_by`) - never
+rewritten, so the trace stays; a file encrypted under a retired key id is opened through the active row.
+Afterwards the old passphrase opens only the retired rows and copies taken before (git history, VM
+snapshots) - rotate the secrets themselves too if those copies are a concern.
+
+**Do not re-encrypt the secret store alone** (`encrypt-secret` with a new passphrase): the age keys and
+certificates in the runtime store stay sealed with the old one, and the next offload, restore or proof
+cannot open them. **On a single node there is no command for this yet** - keep its passphrase, or move
+the node under a master (`control rotate-passphrase`).
+
+### The worker's passphrase (0.42.0)
+
+A login on the worker's machine must not yield the passphrase:
+
+- **Not in Docker's configuration.** The container's environment is kept in clear on the host's disk
+  (`docker inspect`); the worker's compose names only `DBABRAIN_UNLOCK_FILE` (a tmpfs path). The daemon
+  starts **locked** after every start, restart and reboot and runs nothing until the master writes the
+  passphrase there (`control unlock-worker`); it reads the file, deletes it, and keeps the passphrase
+  only if it opens the store (docs/03). A restart therefore needs the master: run `unlock-worker`.
+- **Not on a command line.** `worker-status` and `worker-run` hand it to the one command that needs it
+  on stdin, never on the host's argv.
+- **SSH keys sealed.** Every private key in `data/ssh_keys/` is encrypted in OpenSSH's format with a
+  random passphrase of its own, held in the secret store (`seal-ssh-key`, docs/13); a copied key file
+  opens nothing. The master logs into the worker with such a key, and the worker's sshd refuses
+  passwords.
+- `control worker-status` ends with the **secret hygiene** checks (docs/11) - names and modes, never
+  a value.
+- **dbabrain.dev collects none of your data** (1.0.0). A dbabrain key has two jobs only: to
+  authenticate the node, and to relay its assistant's AI turns. dbabrain.dev keeps what those need -
+  the email, the key's SHA-256, its term and state, and per AI turn the model, tokens and cost - and
+  **never a question, an answer, or anything from the databases**; a question and what the assistant
+  read to answer it pass through to Anthropic and are not stored. The databases, their logins and
+  their data never leave the node except inside such a question, when the assistant is used.
+- **dbabrain.dev's secrets are never on a node** (1.0.0): the AI relay's Anthropic key and the key
+  that signs dbabrain keys live only on dbabrain.dev. A node holds its own dbabrain key, in its
+  encrypted store.
 
 ---
 

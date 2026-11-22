@@ -2,6 +2,8 @@
 
 ## Overview
 
+> **Needs a dbabrain key (1.0.0).** The SRE commands (`run-cmd-adhoc` included) start only on a node holding a valid key from dbabrain.dev (`dbabrain key-request`, free, an email sign-in - [13](./13_common.md#a-dbabrain-key-key-request-key-renew-key-status-100)). Without one the scheduler does not start them and a run by hand says how to get one and exits 0; after a key's end and its 3 days of grace, new work stops - they refuse with exit 3. [03](./03_app_command_daemon.md#the-dbabrain-key-what-starts-without-one-and-the-warnings-100) has the gate.
+
 `dbabrain.sre` orchestrates the full lifecycle of a VMware Workstation lab: clone and provision VMs, deploy database clusters via Ansible, validate cluster health, and run ad-hoc commands through a bastion host.
 
 **Working directory for all commands:** the repository root (`dbabrain`)

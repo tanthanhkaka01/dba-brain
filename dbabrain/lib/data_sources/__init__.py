@@ -501,11 +501,14 @@ from dbabrain.lib.data_sources.metric_targets import (  # noqa: E402,F401
     resolve_config_metric_target,
 )
 from dbabrain.lib.data_sources.ssh_auth import (  # noqa: E402,F401
+    PASSPHRASES_FILENAME,
     SSH_KEYS_DIRNAME,
+    key_passphrase,
     resolve_ssh_key,
     resolve_ssh_password,
     ssh_keys_dir,
     ssh_login,
+    with_key_passphrase,
 )
 from dbabrain.lib.data_sources.target_resolve import (  # noqa: E402,F401
     TargetResolveError,

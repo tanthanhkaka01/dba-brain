@@ -1198,3 +1198,29 @@ def run_restore_said(monkeypatch, request: dict[str, Any], said: list, *, engine
                                restore_id=str(request.get("restore_id") or ""), engine=engine, target=target,
                                source=source)
     return workflow.run_restore_by_id(request, say=say, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _a_node_holds_a_valid_dbabrain_key(request, monkeypatch):
+    """Every test's node holds a valid dbabrain key, unless it is about the key (1.0.0, K4).
+
+    Reports, backup / restore, SRE and the MCP server refuse to start without one; the suite tests
+    what they do, not that a test machine has no key. A test of the gate itself is marked
+    ``real_key_gate`` and reads the node's store the way a real run does.
+    """
+    if request.node.get_closest_marker("real_key_gate"):
+        return
+    from datetime import datetime, timedelta, timezone
+
+    from dbabrain.lib import dbabrain_key
+
+    now = datetime.now(timezone.utc)
+    key = dbabrain_key.DbabrainKey(
+        kid="test-suite", email="suite@example.com", plan="free", features=tuple(dbabrain_key.FEATURES),
+        issued_at=now - timedelta(days=1), expires_at=now + timedelta(days=300), node="suite", skid="")
+    active = dbabrain_key.KeyStanding("active", key, "the test suite's key", 300.0)
+    monkeypatch.setattr(dbabrain_key, "node_standing", lambda *_args, **_kwargs: active)
+    # Nor does a scan check that key online once a day, or write what it said beside data/.
+    from dbabrain.jobs import key_watch
+
+    monkeypatch.setattr(key_watch, "watch", lambda _data_dir, gate, **_kwargs: gate)

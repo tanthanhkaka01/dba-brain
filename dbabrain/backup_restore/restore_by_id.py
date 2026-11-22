@@ -122,6 +122,9 @@ def _host_block(job: Any, *, data_dir: Any, load_secrets: Any = None) -> dict[st
         from dbabrain.lib.data_sources import resolve_ssh_key
 
         block["key_file"] = str(resolve_ssh_key(target.key_file, data_dir))
+        from dbabrain.lib.data_sources import with_key_passphrase
+
+        with_key_passphrase(block, data_dir=data_dir)
     elif target.password_ref and load_secrets is not None:
         from dbabrain.backup_restore.spec_builder import _ssh_password
 

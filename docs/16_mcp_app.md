@@ -5,6 +5,8 @@ way 1 of [`audits/20261110_plan_mcp_connector.md`](../audits/20261110_plan_mcp_c
 starts `dbabrain mcp serve`, and every `common.cli` command - and dbabrain's own runtime store - is a
 tool it can call, against the user's own inventory, logins and databases.
 
+> **Needs a dbabrain key (1.0.0).** `dbabrain mcp serve`, `connect` and `call` start only on a node holding a valid key from dbabrain.dev (`dbabrain key-request`, free, an email sign-in - [13](./13_common.md#a-dbabrain-key-key-request-key-renew-key-status-100)). Without one the scheduler does not start them and a run by hand says how to get one and exits 0; after a key's end and its 3 days of grace, new work stops - they refuse with exit 3; `dbabrain mcp tools` lists with no key. [03](./03_app_command_daemon.md#the-dbabrain-key-what-starts-without-one-and-the-warnings-100) has the gate.
+
 ```
 user's machine:  Claude Desktop / Claude Code
                     | stdio (MCP)
@@ -190,6 +192,39 @@ claude.ai (account X) --OAuth + MCP--> Worker mcp.dbabrain.dev     sign-in: Clou
 - **What a call did is recorded where the tool ran:** the `job_runs` row `mcp.<tool>` carries `asked_by` -
   the signed-in address the Worker states (`x-dbabrain-user`, trusted only behind the origin's token or on
   the node's own connection) - on the account's node, or in the demo's store for an account with none.
+
+### dbabrain keys on the same Worker (1.0.0)
+
+The device sign-in also issues **dbabrain keys** (`connector/worker/src/key-token.ts`,
+`key-issue.ts`): `POST /node/link/start` with `{"purpose": "key", "node"}`, the approval page says
+what the key unlocks and for how long, and `/node/link/poll` answers `{email, dbabrain_key}` once. A
+key is `dbbk1.<payload>.<Ed25519 signature>`, signed with the Worker secret `KEY_SIGNING_JWK` (its
+public `x` ships in `lib.dbabrain_key.SIGNING_PUBLIC_KEYS`); 14 days, 365 for an account in
+`OPERATOR_EMAILS`; one active key per account (the earlier is marked `replaced`). KV keeps each key's
+SHA-256 -> `{kid, email, iat, exp, state, node}`, never the key. `GET /key/status` (bearer: the key)
+answers its state - `active`, `grace`, `ended`, `replaced`, `revoked`, `unknown`; `POST
+/admin/key/revoke {email | kid}` takes `AUDIT_TOKEN`. The audit trail gains `key_issue` (method
+`free` / `operator`) and `key_revoke`. `dbabrain mcp serve / connect / call` need a key on the node
+(`tools` does not).
+
+### The AI through dbabrain.dev - the relay (1.0.0)
+
+`POST /ai/v1/messages` (`connector/worker/src/ai-relay.ts`, rules in `ai-rules.ts`) is Anthropic's
+Messages API for a node that holds a dbabrain key (`x-api-key: <the key>`) and no Anthropic key of its
+own (D-36.1: no Claude key is ever handed out). The Worker checks the key (`checkKey`: signed, in its
+term, not replaced or revoked, `ai_relay` among its features), sets the free plan's **cheapest model**
+(read from its price table - `claude-haiku-5-5` today) and **effort `medium`** - a request naming
+others, streaming, server tools, `speed`, betas or more than 8,000 `max_tokens` is refused with what is
+allowed - then reserves the turn in the account's `AiLedger` Durable Object (the month's **$1.00**, UTC;
+20 turns per 10 minutes) and sends it with the operator's `ANTHROPIC_API_KEY`. The answer's `usage` is
+priced by the Worker's table and charged; a turn already running finishes, so the overshoot is one turn.
+A spent month is 403 ("resets on the 1st"), the rate 429, the operator's key or credit failing 503
+("unavailable - your own Anthropic key still works"). There is no global cap (D8): the credit is
+prepaid with auto-reload off. `GET /ai/v1/usage` answers the account's month; **`GET /admin/ai/usage?month=YYYY-MM`**
+(`AUDIT_TOKEN`) answers every account's - turns answered and refused, tokens, cost - summed after each turn in an
+`AiLedger` named `_accounts` (13 months kept). A refused turn leaves an `ai_call` audit row with its status too. The secret `AI_RELAY`
+(`on` / `off`) switches it in one command. Kept per turn: account, key id, model, tokens, cost, time
+(the ledger, 400 days) and an `ai_call` audit row - never the question or the answer.
 
 ## The Connectors Directory
 

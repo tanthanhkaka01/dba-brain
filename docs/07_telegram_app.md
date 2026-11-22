@@ -933,8 +933,10 @@ person runs anything that changes something.
 
 **How it reaches the model, and how the model reaches the estate - no public IP, no inbound port**
 (0.39.0; the operator, 2026-11-14: *which path, does it need a public IP or a server - say it clearly*).
-The node opens every connection, outward. A question goes to `api.anthropic.com:443` over HTTPS (the
-SDK; `http_proxy` in `ai_assist.json` when the network needs one) with the tool definitions; the model
+The node opens every connection, outward. A question goes to `mcp.dbabrain.dev:443` over HTTPS -
+dbabrain.dev's relay, which passes it to Anthropic (1.0.0, `provider: dbabrain`) - or, on the node's
+own key (`provider: anthropic`), to `api.anthropic.com:443` (the SDK; `http_proxy` in
+`ai_assist.json` when the network needs one), with the tool definitions; the model
 answers with the tools it wants run; the node runs them itself - read-only, through the same commands
 a person runs, with this node's credentials - and sends the results in the next request, until the
 model answers in words. Nothing on the internet connects to the node, and no server is needed beside
@@ -1088,8 +1090,10 @@ step by step in `agents_guide.md`'s order - passphrase, clock, store, the first 
 schedule, Telegram, backups, the assistant itself - and `dbabrain init`'s next steps say once that
 the assistant exists and what it needs.
 
-**Switched on by one command: `dbabrain ai-key`** (0.39.0; the operator, 2026-11-14: *a node just
-installed, the AI key added by a CLI command - written in the full guide, first*). Bare on a terminal
+**On the node's own Anthropic key: `dbabrain ai-key`** (0.39.0; the operator, 2026-11-14: *a node just
+installed, the AI key added by a CLI command - written in the full guide, first*). Since 1.0.0 a new
+install needs no Anthropic key - it answers through dbabrain.dev once it has a dbabrain key (below) -
+and `ai-key` is the way to use your own instead. Bare on a terminal
 it asks for the Anthropic key (not echoed); a script pipes `{"value": "<key>"}` to `dbabrain common
 ai-key -` (stdin only, as `secret-set`). The key is stored in the encrypted store first - under the
 `api_key_ref` the settings already name, else `AI_ASSIST_API_KEY`, which is then written there - and
@@ -1097,6 +1101,20 @@ then `ai_assist.json` says `enabled: true` (a root with no file gets one at the 
 ref the settings name is the assistant's own: a new key replaces it; a ref the request names that
 holds another secret is refused unless `overwrite`. A settings file that cannot be read is said, and
 nothing is stored. `init`'s next steps and `AGENTS.md` (section 2) give it first.
+
+**Or no Anthropic key at all: `provider: dbabrain`** (1.0.0, plan A2; D-36.1 - no Claude key is ever
+handed to a user). The same SDK client talks to dbabrain.dev's relay (`lib.ai_assist.RELAY_BASE_URL`,
+docs/16) with the node's dbabrain key (`DBABRAIN_KEY`, `dbabrain key-request`); `api_key_ref` is not
+read. The free plan is $1 a month per account, `claude-haiku-5-5` at effort `medium`, 8,000 tokens a
+turn - and the file states exactly that (`model`, `effort`, `max_output_tokens_turn`) or it is refused:
+the node never sends what dbabrain.dev would refuse, and nothing is changed quietly. A refusal from the
+relay (the month's dollar spent, a key ended) reaches the asker in its own words. **Either provider
+needs a valid dbabrain key** (D3 - `assistant` for the own key, `ai_relay` for the relay): without one
+each question is answered with how to get one, never a queue left unread. `provider` ships
+**`dbabrain`, with the assistant on** (the operator, 2026-11-21: *anyone who wants it signs in and uses it
+through dbabrain.dev*) - a new install answers once it has a dbabrain key; `upgrade-config` writes
+`anthropic` into a file from before 1.0.0, which answered with its own key all along. `ai-key` sets
+`provider: anthropic`.
 
 **Asked for real, on demand: the live scenario** (0.39.0; the operator, 2026-11-14: *a fresh 0.39
 install, the AI key added by the CLI; the assistant asked at the command line how to set up Telegram -

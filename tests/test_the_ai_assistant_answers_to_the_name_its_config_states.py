@@ -87,7 +87,8 @@ def test_a_node_with_no_file_is_given_the_shipped_one_with_its_name(tmp_path):
 
     _stated_ai_assist(tmp_path, dry_run=False, before_write=lambda path: None)
     created = json.loads((tmp_path / "ai_assist.json").read_text(encoding="utf-8"))
-    assert created["assistant_name"] == SHIPPED and created["enabled"] is False
+    # 1.0.0: a new node's assistant is on and answers through dbabrain.dev (it needs a dbabrain key).
+    assert created["assistant_name"] == SHIPPED and created["enabled"] is True and created["provider"] == "dbabrain"
     A.parse_ai_assist(created)
 
 
@@ -152,8 +153,8 @@ def test_every_reply_the_job_writes_itself_carries_the_name(tmp_path):
     _run(root)
     sent = [row["message_text"] for row in
             _rows(root, "SELECT message_text FROM telegram_send_messages ORDER BY send_tlgmsg_id")]
-    assert sent[0] == f"{OTHER} is working on it (claude-sonnet-5-5)..."
-    assert f"\n\n-- {OTHER} · claude-sonnet-5-5 · " in sent[1], "the footer signs the answer"
+    assert sent[0] == f"{OTHER} is working on it (claude-haiku-5-5)..."
+    assert f"\n\n-- {OTHER} · claude-haiku-5-5 · " in sent[1], "the footer signs the answer"
     assert any(text.startswith(f"{OTHER}, dbabrain's AI assistant - write a question in this group") for text in sent)
     assert any(text.startswith(f"{OTHER} (AI assistant) - usage\nSystem - month") for text in sent)
     assert any(f"you are not switched on for {OTHER}, dbabrain's AI assistant" in text for text in sent)

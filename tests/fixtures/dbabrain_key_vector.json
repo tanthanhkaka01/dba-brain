@@ -1,0 +1,24 @@
+{
+  "note": "A dbabrain key signed by a throwaway key (its private half was never kept). Read by connector/worker/test/key-token.test.mts and tests/test_dbabrain_key.py - the two implementations of one format.",
+  "public_x": "yNdbKiNPLikxbuUB2lofu2W41fsb2yOTwJTyCXIZDvg",
+  "skid": "ca48f7ddb3abf223",
+  "token": "dbbk1.eyJleHAiOjE3OTY0Mjg4MDAsImZlYXR1cmVzIjpbInJlcG9ydHMiLCJiYWNrdXBfcmVzdG9yZSIsInNyZSIsIm1jcCIsImFzc2lzdGFudCIsImFpX3JlbGF5Il0sImlhdCI6MTc5NTIxOTIwMCwia2lkIjoidmVjdG9yLWtleS0wMDAxIiwibm9kZSI6InRlc3Qtbm9kZSIsInBsYW4iOiJmcmVlIiwic2tpZCI6ImNhNDhmN2RkYjNhYmYyMjMiLCJzdWIiOiJ2ZWN0b3JAZXhhbXBsZS5jb20iLCJ2IjoxfQ.z7UqbVCdXGajcwrDC60uW-Ui77pZvIkRYmVEF76zo29wDgIUA9gtyKURdp4PlTNLILueF3Ag5nrMJX4jrhb-Cg",
+  "payload": {
+    "exp": 1796428800,
+    "features": [
+      "reports",
+      "backup_restore",
+      "sre",
+      "mcp",
+      "assistant",
+      "ai_relay"
+    ],
+    "iat": 1795219200,
+    "kid": "vector-key-0001",
+    "node": "test-node",
+    "plan": "free",
+    "skid": "ca48f7ddb3abf223",
+    "sub": "vector@example.com",
+    "v": 1
+  }
+}

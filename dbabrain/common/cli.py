@@ -77,6 +77,7 @@ from dbabrain.common.cli_usage import (  # noqa: F401 - re-exported: every name 
     RUN_SQL_USAGE,
     SECRET_SET_USAGE,
     SECRET_REMOVE_USAGE,
+    SEAL_SSH_KEY_USAGE,
     AI_KEY_USAGE,
     SELF_STATUS_USAGE,
     SQLSERVER_INSTANCE_USAGE,
@@ -233,6 +234,35 @@ def _secret_remove_command(argv: list[str]) -> int:
 
 
 
+def _seal_ssh_key_command(argv: list[str]) -> int:
+    """``seal-ssh-key`` - one SSH private key encrypted, its passphrase into the store (1.410)."""
+    import os
+    from pathlib import Path
+
+    from dbabrain.common import ssh_key_seal
+    from dbabrain.lib import response
+    from dbabrain.lib.paths import DEFAULT_DATA_DIR, TOOL_ROOT
+
+    if not argv or argv[0] in {"-h", "--help"}:
+        print(SEAL_SSH_KEY_USAGE)
+        return 0 if argv else 2
+    request, code = _read_json_request(argv[0], SEAL_SSH_KEY_USAGE)
+    if request is None:
+        return code
+    plaintext = (Path(TOOL_ROOT) / "secrets" / "secret_text.json") if request.get("also_plaintext") else None
+    try:
+        data = ssh_key_seal.seal(request, data_dir=DEFAULT_DATA_DIR,
+                                 store_key=os.environ.get("DBABRAIN_SECRET_KEY") or "",
+                                 plaintext_store=plaintext)
+    except Exception as exc:  # noqa: BLE001 - every refusal is an answer, never a traceback.
+        return response.emit(response.fail("seal-ssh-key", str(exc)))
+    return response.emit(response.ok(
+        "seal-ssh-key",
+        message=(f"{'generated and ' if data['generated'] else ''}sealed {data['key_file']}; "
+                 f"its passphrase is {data['passphrase_ref']} in the store"),
+        data=data))
+
+
 def _retire_command(command: str, argv: list[str]) -> int:
     """``entry-remove`` / ``credential-remove`` / ``instance-remove`` / ``report-server-remove`` -
     the CLI face of :mod:`dbabrain.common.config_retire`. A plan unless the request says ``apply``."""
@@ -344,6 +374,8 @@ def _ai_key_command(argv: list[str]) -> int:
         warnings.append("the key does not begin with sk-ant- - an Anthropic API key does; it was stored as given")
     document["enabled"] = True
     document["api_key_ref"] = ref
+    # The node's own Anthropic key: the assistant stops answering through dbabrain.dev (1.0.0).
+    document["provider"] = "anthropic"
     try:
         atomic_write_text(settings_path, dump_json_text(document, indent=indent_of(settings_path, 4)))
     except Exception as exc:  # noqa: BLE001
@@ -1391,12 +1423,19 @@ def _dispatch(argv: list[str]) -> int:
         return _secret_set_command(argv[1:])
     if argv[0] == "secret-remove":
         return _secret_remove_command(argv[1:])
+    if argv[0] == "seal-ssh-key":
+        return _seal_ssh_key_command(argv[1:])
     # Retiring a server, one record per call, the leaf first (1.391). Spelled out: the listing's
     # guard reads the dispatch's names from this source.
     if argv[0] in {"entry-remove", "credential-remove", "instance-remove", "report-server-remove"}:
         return _retire_command(argv[0], argv[1:])
     if argv[0] == "ai-key":
         return _ai_key_command(argv[1:])
+    # 1.0.0: this node's dbabrain key from dbabrain.dev - got (renewed) and read.
+    if argv[0] in {"key-request", "key-renew", "key-status"}:
+        from dbabrain.common import cli_dbabrain_key
+
+        return cli_dbabrain_key.run(argv[0], argv[1:], read_request=_read_json_request)
     if argv[0] == "probe-host":
         return _probe_host_command(argv[1:])
     if argv[0] == "db-status":

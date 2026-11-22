@@ -344,6 +344,10 @@ class ClusterNode:
     description: str = ""
     user: str = ""  # default SSH username for master->this-node operations (control app)
     password_ref: str = ""  # secret_text ref for this node's SSH password (control app auto-resolves it)
+    #: The master's SSH key for this node, by name in data/ssh_keys/ (0.42.0, 1.413): set, the control
+    #: app logs in with it - sealed, its passphrase from passphrases.json - and the password above is
+    #: still what `sudo -S` is fed. Empty: a password login, as before.
+    key_file: str = ""
 
 
 #: Days a file under ``<runtime_dir>/output`` is kept. A file is sent to Telegram within minutes of
@@ -422,7 +426,8 @@ def _parse_cluster_nodes(raw_list: Any) -> tuple[ClusterNode, ...]:
                 nodes.append(ClusterNode(node_id=node_id, host=host,
                                          description=str(item.get("description", "")),
                                          user=str(item.get("user") or item.get("ssh_user") or "").strip(),
-                                         password_ref=str(item.get("password_ref") or item.get("password_env") or "").strip()))
+                                         password_ref=str(item.get("password_ref") or item.get("password_env") or "").strip(),
+                                         key_file=str(item.get("key_file") or "").strip()))
         elif isinstance(item, str) and item.strip():
             nodes.append(ClusterNode(node_id=item.strip(), host=item.strip()))
     return tuple(nodes)

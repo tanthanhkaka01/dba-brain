@@ -200,6 +200,8 @@ def _ssh(login: Any, *, role: str):
         "timeout_seconds": int(login.get("open_timeout_seconds") or 30)}
     if key_file:
         access["key_file"] = key_file
+        if login.get("key_passphrase"):
+            access["key_passphrase"] = str(login["key_passphrase"])
     session = remote_exec.open_session(access)
     try:
         session.client  # connect now: a refused login is this command's error, not a file's

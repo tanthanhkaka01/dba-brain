@@ -36,9 +36,10 @@ def test_the_shipped_file_parses_and_its_defaults_are_the_operators():
     settings = _settings()
     assert settings.budget_usd_month == 10.0
     assert settings.user("100").budget_usd_month == 5.0
-    assert settings.model == "claude-sonnet-5-5"
+    # 1.0.0: the free plan's terms - answered through dbabrain.dev, on from the start.
+    assert settings.model == "claude-haiku-5-5" and settings.provider == "dbabrain"
     assert settings.tools_mode == "read_only"
-    assert settings.enabled is False
+    assert settings.enabled is True
 
 
 def test_a_missing_field_is_refused_by_name():

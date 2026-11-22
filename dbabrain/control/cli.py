@@ -401,7 +401,7 @@ def parse_args(argv):
         "pull-node-config",
         help="Carry back what a LOCAL node registered (bot/console) into this master's data/.")
     pull.add_argument("--from", dest="from_node_path", required=True, metavar="PATH",
-                      help="The node's data/ directory, e.g. D:/Projects/dbabrain_soak_20260909/data")
+                      help="The node's data/ directory, e.g. V:/Projects/dbabrain_soak_20260909/data")
     pull.add_argument("--merge-secrets", action="store_true",
                       help="Also union the node's encrypted secret store. Needs --key/--key-base64; "
                            "a ref differing on both sides refuses and writes nothing.")
@@ -476,6 +476,37 @@ def parse_args(argv):
                     help="With --on-host: run under sudo, fed the SSH password.")
     wr.add_argument("cmd", nargs=argparse.REMAINDER,
                     help="The command to run in the worker container (put it after `--`).")
+
+    rp = sub.add_parser("rotate-passphrase",
+                        help="Change the secret store's passphrase on the master and the worker (1.411): the runtime "
+                             "store's age keys and backup certificates re-sealed as new rows (the old retired), both "
+                             "secret stores sealed again, the worker restarted and unlocked. A plan unless --apply.")
+    _add_target(rp)
+    rp.add_argument("--new-key-base64", dest="new_key_base64", default=None,
+                    help="The NEW passphrase, base64 (prompted when left out). --key / --key-base64 is the old one.")
+    rp.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
+    rp.add_argument("--container", default=DEFAULT_CONTAINER)
+    rp.add_argument("--apply", action="store_true", help="Do it. Without it every store is read and the plan printed.")
+
+    wu = sub.add_parser("unlock-worker",
+                        help="Hand the worker's daemon its passphrase: it starts locked after every start, restart "
+                             "or reboot and runs nothing until then (1.409). Written into its tmpfs unlock file "
+                             "through docker exec, read once and removed by the daemon.")
+    _add_target(wu)
+    wu.add_argument("--container", default=DEFAULT_CONTAINER)
+    wu.add_argument("--force", action="store_true",
+                    help="Write it even when the daemon already says unlocked (a container just recreated).")
+    wu.add_argument("--wait-seconds", type=int, default=90,
+                    help="How long to wait for the daemon to take it; a file not taken is removed again.")
+
+    wp = sub.add_parser("worker-prune",
+                        help="The worker holds one dbabrain: list (or with --apply remove) every other dbabrain "
+                             "image and what deploys left behind (pre_deploy_*, image tars, config_upgrade/). "
+                             "Refuses when the container is not running. deploy and deploy-code end with it.")
+    _add_target(wp)
+    wp.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
+    wp.add_argument("--container", default=DEFAULT_CONTAINER)
+    wp.add_argument("--apply", action="store_true", help="Remove. Without it the worker is read and the list printed.")
 
     from dbabrain.control import worker_data as _wd
     pp = sub.add_parser("worker-pull-data-config",
@@ -838,7 +869,41 @@ def _run(args) -> int:
     elif args.command == "worker-run":
         return worker_exec_ops.run_worker_command(host=host, user=args.user, password=password, port=args.port,
                                                   container=args.container, command=args.cmd,
-                                                  on_host=args.on_host, sudo=args.sudo)
+                                                  on_host=args.on_host, sudo=args.sudo,
+                                                  secret_key=resolve_cli_key(args.key, args.key_base64) or "")
+    elif args.command == "rotate-passphrase":
+        import getpass as _getpass
+
+        from dbabrain.control import passphrase_rotation
+        old_key = deploy_ops._daemon_secret_key(args.key_base64, args.key)
+        if args.new_key_base64:
+            new_key = resolve_cli_key(None, args.new_key_base64) or ""
+        else:
+            new_key = _getpass.getpass("NEW passphrase: ")
+            if new_key != _getpass.getpass("NEW passphrase again: "):
+                print("ERROR: the two do not match.", file=sys.stderr)
+                return 2
+        return passphrase_rotation.rotate_passphrase(
+            host=host, user=args.user, password=password, port=args.port, old_key=old_key, new_key=new_key,
+            remote_dir=args.remote_dir, container=args.container, apply=args.apply)
+    elif args.command == "unlock-worker":
+        from dbabrain.control import worker_unlock
+        from dbabrain.control._support import ssh_connect
+        secret_key = deploy_ops._daemon_secret_key(args.key_base64, args.key)
+        client = ssh_connect(host, args.user, password, args.port)
+        try:
+            return worker_unlock.unlock_worker(client, container=args.container, secret_key=secret_key,
+                                               force=args.force, wait_seconds=args.wait_seconds)
+        finally:
+            client.close()
+    elif args.command == "worker-prune":
+        from dbabrain.control.worker_prune import prune_worker
+        from dbabrain.control._support import ssh_connect
+        client = ssh_connect(host, args.user, password, args.port)
+        try:
+            return prune_worker(client, remote_dir=args.remote_dir, container=args.container, apply=args.apply)
+        finally:
+            client.close()
     elif args.command == "worker-pull-data-config":
         from dbabrain.control import worker_data
         files = args.files

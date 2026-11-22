@@ -49,7 +49,7 @@ ENV = frozenset({"DBABRAIN_TARGET_HOST", "DBABRAIN_NEW_DB_PASSWORD", "DBABRAIN_S
     ("python db_ops/sre/tool.py --dry-run", "python dbabrain/sre/tool.py --dry-run"),
     ("/usr/lib/python3/site-packages/db_ops/common/cli.py",
      "/usr/lib/python3/site-packages/dbabrain/common/cli.py"),
-    (r"D:\Projects\db_ops\db_ops\sre\automation", r"D:\Projects\db_ops\dbabrain\sre\automation"),
+    (r"V:\Projects\db_ops\db_ops\sre\automation", r"V:\Projects\db_ops\dbabrain\sre\automation"),
     ("DB_OPS_TARGET_HOST", "DBABRAIN_TARGET_HOST"),
 ])
 def test_what_names_the_code_is_pointed_at_the_new_name(before, after) -> None:
@@ -64,8 +64,8 @@ def test_what_names_the_code_is_pointed_at_the_new_name(before, after) -> None:
     "DB_OPS_STORE_PASSWORD",               # a secret's ref - not a variable this version reads
     "db_ops_backup_cert",                  # the certificate on the SQL Servers
     "the db_ops toolkit",                  # prose is the operator's
-    r"cd D:\Projects\db_ops",              # the checkout's own folder keeps its name
-    r"D:\Projects\db_ops\data\store_config.json",
+    r"cd V:\Projects\db_ops",              # the checkout's own folder keeps its name
+    r"V:\Projects\db_ops\data\store_config.json",
     r"C:\tools\db_ops_deploy",             # a longer name that only starts with the alias
     # A folder on a host whose next part is named like a component is still a folder on a host:
     # what comes before it is not something that holds the package.

@@ -9,12 +9,17 @@ your scheduled SQL, takes backups and *proves them by restoring them*, checks ob
 real measurement history, and tells you about it — on a schedule, without an agent on any
 monitored machine.
 
-**It sends nothing anywhere by itself.** No telemetry, no usage reporting, no update check. It
-connects to the databases and hosts you list, and — only if you turn each on and give it a key — to
-a chat service and to an AI model's API. Nothing else.
+**It sends nothing you did not switch on.** No telemetry, no usage reporting, no update check. It
+connects to the databases and hosts you list; with a dbabrain key, once a day to dbabrain.dev to check
+that key (the key alone, nothing about your databases); and only if you turn each on, to a chat
+service and to the AI - through dbabrain.dev, or a model's API on your own key. Nothing else.
+**dbabrain.dev collects none of your data**: the key has two jobs only - to authenticate the node and to
+relay its assistant's AI turns - and dbabrain.dev keeps your email, the key's fingerprint and term, and each
+AI turn's tokens and cost; never a question, an answer, or anything from your databases.
 
-**Better with an AI, complete without one.** dbabrain is the harness an AI model works through: give
-it an API key (`dbabrain ai-key`) and its assistant supports the DBA's and the DevOps engineer's
+**Better with an AI, complete without one.** dbabrain is the harness an AI model works through: get
+a free dbabrain key (`dbabrain key-request`, an email sign-in on dbabrain.dev) and its assistant -
+answering through dbabrain.dev, no Anthropic key of yours needed - supports the DBA's and the DevOps engineer's
 daily work on databases and servers - it reads what is happening (alerts, backups, jobs, metrics, a
 read-only query on the server), explains it, and says the exact command for the next step, in
 Telegram or in a terminal; it also guides a new install. It only reads, through the same commands a
@@ -28,7 +33,7 @@ internet connects in, and the commands run on your machine with your credentials
 
 | Way | What runs where | What the network needs |
 | --- | --- | --- |
-| **The assistant** (`ai-key`, then `dbabrain telegram ai-ask` or Telegram) | Your node sends the question to the model's API; the model answers with the dbabrain tools it wants run; your node runs them (read-only) and sends the results in the next request, until the model answers | Outbound HTTPS to `api.anthropic.com:443` (through `http_proxy` in `data/ai_assist.json` when you need one). Telegram is polled outbound (`getUpdates` to `api.telegram.org:443`) - no webhook |
+| **The assistant** (`key-request`, then `dbabrain telegram ai-ask` or Telegram) | Your node sends the question to dbabrain.dev, which passes it to the model's API (or, with `ai-key`, straight to the API on your own Anthropic key); the model answers with the dbabrain tools it wants run; your node runs them (read-only) and sends the results in the next request, until the model answers | Outbound HTTPS to `mcp.dbabrain.dev:443` (with `ai-key`: `api.anthropic.com:443`; through `http_proxy` in `data/ai_assist.json` when you need one). Telegram is polled outbound (`getUpdates` to `api.telegram.org:443`) - no webhook |
 | **An AI app on the same machine** (Claude Desktop, Claude Code, any MCP client) | The app starts `dbabrain mcp serve` as a child process and talks to it over stdin/stdout | Nothing from dbabrain; the app talks to its own model |
 | **claude.ai on the web or a phone** | `dbabrain mcp connect` links your node to the remote connector at `mcp.dbabrain.dev` and keeps one WebSocket open from your node; claude.ai's requests come down it | Outbound HTTPS/WebSocket to `mcp.dbabrain.dev:443`. The public endpoint is dbabrain.dev's, not yours |
 
@@ -48,7 +53,7 @@ is behind a bearer token. What leaves in each case, and what is redacted first:
 | **Alerts and chat commands** | Telegram delivery, one message at a time. Commands people send back are gated by the person's clearance *and* the chat's. |
 | **Configuration as code** | Every decision is a JSON file you keep in version control. A threshold change is a diff and a review, not an edit to somebody's script. |
 | **Secrets kept encrypted** | PBKDF2-HMAC-SHA256 and Fernet. The passphrase is supplied at run time and never written to disk, a log or the store. A password travels on stdin, never as a command-line word. |
-| **AI assistant (optional)** | Day-to-day support for the DBA and the DevOps engineer, on the databases and servers dbabrain watches. Ask in Telegram or at the terminal - *why is this alert firing*, *did last night's backups run*, *which jobs failed*, *what is slow on this server*, *which query regressed* - and it finds the answer itself: the metrics, runs, backups and restores in dbabrain's store, the configuration and the logs, a read-only query on the server. It analyses queries - the heaviest by CPU, reads and duration, ad-hoc and single-use plans, plan regressions and plan changes (Query Store) - and indexes (usage, unused, fragmented, invalid). It explains what it found and what to do, and gives the exact command for the next step (a CLI line or a `/spbot_` command) - running a backup or a restore by hand included. It also walks a new install through its setup. It only reads and proposes; a person runs anything that changes something. Off until you give it a key (`dbabrain ai-key`); every question, tool call, token and cost is kept, under limits you set. |
+| **AI assistant (optional)** | Day-to-day support for the DBA and the DevOps engineer, on the databases and servers dbabrain watches. Ask in Telegram or at the terminal - *why is this alert firing*, *did last night's backups run*, *which jobs failed*, *what is slow on this server*, *which query regressed* - and it finds the answer itself: the metrics, runs, backups and restores in dbabrain's store, the configuration and the logs, a read-only query on the server. It analyses queries - the heaviest by CPU, reads and duration, ad-hoc and single-use plans, plan regressions and plan changes (Query Store) - and indexes (usage, unused, fragmented, invalid). It explains what it found and what to do, and gives the exact command for the next step (a CLI line or a `/spbot_` command) - running a backup or a restore by hand included. It also walks a new install through its setup. It only reads and proposes; a person runs anything that changes something. It answers once the node has a dbabrain key (`dbabrain key-request`), through dbabrain.dev, or on your own Anthropic key (`dbabrain ai-key`); every question, tool call, token and cost is kept, under limits you set. |
 
 **Two ways to read what it is, and both are accurate:**
 
@@ -67,6 +72,11 @@ log with the same shape whoever started it, so "what did the agent do last night
 query as "what did the daemon do last night".
 
 ---
+
+## Status
+
+**1.0 - in production.** The main functions are stable and run in production - on an estate of many SQL Server instances, with a few Oracle and PostgreSQL instances under modest workloads. MySQL and heavier workloads are supported, with less production mileage so far. Reports of how it behaves on other
+estates are welcome (GitHub issues).
 
 ## The goal
 
@@ -119,8 +129,8 @@ current priority; see [`docs/first_run.md`](./docs/first_run.md) for where it st
 
 - **It is not an AI that runs your estate on its own — it is the harness a model works through.**
   The scheduler, the grading, the backups and the alerts are code and reviewed SQL; no model decides
-  any of them, and none is needed for them. The optional assistant calls a model's API only when you
-  give it a key, reads through read-only tools, and proposes commands for a person to run. Every
+  any of them, and none is needed for them. The optional assistant answers through dbabrain.dev once the
+  node has a dbabrain key (or on your own Anthropic key), reads through read-only tools, and proposes commands for a person to run. Every
   capability takes one JSON object and answers with one, and that shape is what lets a human, a
   shell script, a chat command and a model drive the same operation without a translation layer. The
   distinction is worth keeping: an operation that does not reason is one you can audit, and the
@@ -638,10 +648,12 @@ why you can refactor with it.
 Tests read as prose — a module docstring explaining *why the behaviour matters*, then test names
 that are sentences.
 
-## Contact: donations and investment
+## Contact: investors, sponsors and developers welcome
 
-DBA Brain is free, open source, and maintained by one person. If you would like to **donate**,
-**sponsor** the project, or talk about **investment or partnership**, please get in touch directly:
+DBA Brain is free, open source, and maintained by one person - and open to people who want to build
+it further together. **Investors and sponsors**: talk about investment, partnership or sponsorship.
+**Developers**: engines, metrics, reports, fixes - read [`CONTRIBUTING.md`](./CONTRIBUTING.md) and open
+an issue or a pull request, or write first. Get in touch directly:
 
 | | |
 | --- | --- |

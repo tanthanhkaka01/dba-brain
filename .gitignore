@@ -5,6 +5,9 @@
 # leaves a plaintext secret file there. With a real bot token in it, one `git add -A` publishes it.
 **/secrets/*.json
 !**/secrets/*.example.json
+# The master's own SSH keys (0.42.0, 1.413: its login to the worker) - sealed, but a key, its .pub
+# and the passphrases.json naming its ref never leave this machine.
+**/secrets/ssh/
 data/secret_text.json
 # The operator's cloud tokens and keys (Cloudflare, Oracle Cloud - 2026-11-11), kept beside the
 # repo for MCP way 2. A whole folder: its token.txt / config / *.md matched no other pattern.

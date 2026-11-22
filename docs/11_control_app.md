@@ -89,10 +89,10 @@ control app) — they do **not** decide this node's role. Each daemon tick logs 
 | `copy [--host --user --password --remote-dir]` | Upload the bundle to the worker (small files as one tar, the image tar on its own, each hash-checked) (overwrites config/data/assets/image; keeps `logs/` and `runtime/dbabrain.sqlite`). The bundle also carries the canonical `architecture/database-inventory.json` (repo copy, where static blocks like `sqlserver_resources`/`deployment` are edited) into the worker's `runtime/reports/database-inventory.json` — the worker-side canonical the reports app merges health into. Health blocks are rebuilt from the runtime store on the next `inventory-workflow` run, so the overwrite loses nothing durable. After the upload it also **moves aside any top-level directory under `data/` or `assets/` that the bundle no longer carries** — see [Directories the bundle owns](#directories-the-bundle-owns). |
 | `start-daemon [... --key-base64/--key --container --node-role]` | `docker load`, replace the container, start the daemon with `DBABRAIN_NODE_ROLE` (default `worker`), set `restart=unless-stopped`, verify the version, then **prune the images this deploy superseded** (see below). |
 | `deploy [... all of the above ...] [--merge]` | `build-image` → `copy` → `start-daemon` in one shot. **Master → worker**: the master's `data/` and `assets/` overwrite the worker's, so anything registered through the bot since the last deploy is deleted. `--merge` prepends **merge worker secrets** → **merge worker config** → pull `*.sql`, which pulls what the bot created on the worker (SQL tasks/targets, Telegram groups/users, new secret refs) into the master first; a secret ref that differs on both sides then aborts the deploy before anything is built. See [Syncing worker-side config](#syncing-worker-side-config-back-to-the-master). |
-| `deploy-code [--apply] [--skip-build] [--remote-dir --container --platform]` | **Ship the code only** (0.29.0): build `dbabrain:<version>` here, send it as a tar, `docker load` it and compare its id, keep the worker's compose file and a tar of `data/`, `assets/` and `config.json` under `runtime/pre_deploy_<version>_<stamp>/`, point the compose file's tool image at it - with the environment names and container paths the 0.29.0 rename moved (`lib.package_rename`) and nothing else - stop and remove the running container, run `upgrade-config` and `sync-config` in the new image, start, read it back. The worker's own `data/`, `assets/` and `config.json` are never replaced. **Without `--apply` it reads the worker's compose file and prints the plan; nothing is built.** See [Shipping the code only](#shipping-the-code-only). |
+| `deploy-code [--apply] [--skip-build] [--remote-dir --container --platform]` | **Ship the code only** (0.29.0): build `dbabrain:<version>` here, send it as a tar, `docker load` it and compare its id, keep the worker's compose file and a tar of `data/`, `assets/` and `config.json` under `runtime/pre_deploy_<version>_<stamp>/`, point the compose file's tool image at it - with the environment names and container paths the 0.29.0 rename moved (`lib.package_rename`) and nothing else - stop and remove the running container, run `upgrade-config` and `sync-config` in the new image, start, read it back, then remove every other image and that way back (`worker-prune`). The worker's own `data/`, `assets/` and `config.json` are never replaced. **Without `--apply` it reads the worker's compose file and prints the plan; nothing is built.** See [Shipping the code only](#shipping-the-code-only). |
 | `deploy --type <what> [--file-name NAME ...] [--dry-run]` | **Push only what changed.** Uploads the named files into the worker's `data/`/`assets/` bind mounts and stops there - no image build, no bundle, no container restart. `--type config` is the catalogued `data/*.json`, `--type assets` (or `assets/tasks`, `assets\tasks`, `data/ssh_keys`) is a directory; `--file-name` narrows it by filename, path or glob and may be repeated. The config-drift gate still runs, scoped to the files being pushed. See [Pushing one file instead of deploying](#pushing-one-file-instead-of-deploying). |
-| `worker-status [--host --user --key... --container --json --no-metrics]` | Read-only health check: is the daemon container up?, which dbabrain version it runs, and — via the in-container `python -m dbabrain.jobs.status` — every app command on that node (active?, last run time/status, due now?, last error) plus metric freshness per target. If the deployed image predates the status module the command **says so and exits** — it does not fall back to an inline query. The old fallback hard-coded a SQLite path, so against a PostgreSQL node it reported "no data" for a healthy worker; see the note at `dbabrain/control/worker_status.py:17`. It closes with **container network reservations** — see below. |
-| `worker-run [--host --user --key... --container --on-host --sudo] -- <command...>` | Run an **arbitrary command inside the worker container** from the master. The command after `--` is passed through verbatim (each token shell-quoted), so any `python -m dbabrain.<app>.cli ...` can be triggered on the worker without hard-coding. Exit code + stdout/stderr are returned. **`--on-host`** runs it on the worker **host** instead (compose file, `docker pull`, the bind mounts) with the same login; one quoted argument is a shell line. **`--sudo`** runs that under sudo, fed the SSH password. An image upgrade is `worker-run --on-host -- 'cd /opt/dbabrain && docker compose pull && docker compose up -d'`. The line it echoes (`[remote] $ ...`) and the one a failure names are shown with every passphrase hidden - the value after `--key` / `--key-base64` / `--key_base64` and an assigned `DBABRAIN_SECRET_KEY=` / `DBABRAIN_KEY_BASE64=`, quoted values whole (`lib.secret_text.redact_key_arguments`); the line run on the host is unchanged. |
+| `worker-status [--host --user --key... --container --json --no-metrics]` | Read-only health check: is the daemon container up?, which dbabrain version it runs, and — via the in-container `python -m dbabrain.db.cli node-status` (the shared `db` layer's report since 1.0.0 - it was `jobs.status`, another app's CLI, R42) — every app command on that node (active?, last run time/status, due now?, last error) plus metric freshness per target. If the deployed image predates the status module the command **says so and exits** — it does not fall back to an inline query. The old fallback hard-coded a SQLite path, so against a PostgreSQL node it reported "no data" for a healthy worker; see the note at `dbabrain/control/worker_status.py:17`. It closes with **container network reservations** — see below. It opens with the daemon's **lock** state (`locked` says how to unlock); the passphrase it gives the in-container status reaches it on stdin - it used to be `--key_base64 <value>` on the host's argv, which `ps` shows every login (1.409). |
+| `worker-run [--host --user --key... --container --on-host --sudo] -- <command...>` | Run an **arbitrary command inside the worker container** from the master. The command after `--` is passed through verbatim (each token shell-quoted), so any `python -m dbabrain.<app>.cli ...` can be triggered on the worker without hard-coding. Exit code + stdout/stderr are returned. **`--on-host`** runs it on the worker **host** instead (compose file, `docker pull`, the bind mounts) with the same login; one quoted argument is a shell line. **`--sudo`** runs that under sudo, fed the SSH password. An image upgrade is `worker-run --on-host -- 'cd /opt/dbabrain && docker compose pull && docker compose up -d'`. The line it echoes (`[remote] $ ...`) and the one a failure names are shown with every passphrase hidden - the value after `--key` / `--key-base64` / `--key_base64` and an assigned `DBABRAIN_SECRET_KEY=` / `DBABRAIN_KEY_BASE64=`, quoted values whole (`lib.secret_text.redact_key_arguments`); the line run on the host is unchanged. In the container a command gets the passphrase given to `worker-run` on stdin, in its own environment (1.409: the container's configuration no longer holds it). |
 | `worker-create-db-docker [--host --user --key...] --name --engine --version --mode --replicas --host-port --password-ref [--password-text --overwrite-secret --worker-host --containers-dir --network-subnet --install-docker --no-register --force --dry-run]` | Builds a lab database **on the worker's host**: `common.cli create-db-docker` with the worker's SSH login as `remote`, the login and the database password on stdin (see `docs/10_sre_app.md` for what gets built). The password (`--password-text`, stored only after the build succeeds) and the connection record are written **here, on this node**, with `created_by: dbabrain.control.worker-create-db-docker`; the worker has them after the next deploy. Since 0.24.0 - it used to run `sre.cli create-db-docker` inside the worker container (one app driving another's CLI, rules R42, with the passphrase on that command line), so `--container` and `--pull-config` are accepted and do nothing. The SSH user runs `docker` itself; `--install-docker` prepares a host where it cannot (sudo, with the SSH password). |
 | `pull-node-config --from <node>/data [--merge-secrets --key... --dry-run]` | **Carry back what a LOCAL node created.** The sibling of `worker-pull-data-config` for a node that is an ordinary directory on a PC rather than the worker container - which is what the estate is since it moved off the container. Same merge rules, because it is the same function underneath: union by key with the master winning a shared key, named leaves only for field-merged files, and a secret ref that differs on both sides refuses and writes nothing. `store_config.json` and `telegram_config.json` are never carried back - a node's own store declaration and its `getUpdates` cursor are per-node state, and copying either back breaks the node it came from or the one it lands on. |
 | `worker-pull-data-config [--host --user --key... --from-worker-path --to-master-path --files --all-json --include-secrets --merge-secrets --plaintext-secret-path --overwrite --dry-run]` | Copy updated `data/` config files from the worker back to the master over SFTP (the worker's `data/` is bind-mounted on the host at `<remote-dir>/data`). Defaults to just `docker_db_connections.json`; `--all-json` widens to every `*.json` (still excluding the encrypted secret store unless `--include-secrets`). Existing master files are skipped unless `--overwrite`; `--dry-run` prints the plan. |
@@ -104,9 +104,41 @@ control app) — they do **not** decide this node's role. Each daemon tick logs 
 python -m dbabrain.control.cli worker-pull-data-config `
     --key-base64 "<base64-passphrase>" --all-json --merge-secrets --overwrite
 ```
+| `rotate-passphrase --new-key-base64 <new> [--apply]` | **Change the secret store's passphrase** on the master and the worker (0.42.0, 1.411): the runtime store's age keys and backup certificates re-sealed as new rows (the old ones retired, kept), both secret stores sealed again, the worker stopped, started and unlocked with the new one. A plan unless `--apply`. See [Changing the passphrase](#changing-the-passphrase-rotate-passphrase-0420). |
+| `unlock-worker [--force --wait-seconds N --container]` | **Hand the worker's daemon its passphrase** (0.42.0, 1.409). The worker's daemon starts **locked** after every start, restart and reboot and runs nothing until then; this writes the passphrase into its tmpfs unlock file through `docker exec -i` (a script on stdin, never an argv), waits for the daemon to take it and say `unlocked`, and removes a file it did not take. A daemon already unlocked is left alone unless `--force`. See [The worker starts locked](#the-worker-starts-locked-unlock-worker). |
+| `worker-prune [--apply] [--remote-dir --container]` | **The worker holds one dbabrain** (2026-11-20): list, or with `--apply` remove, every `dbabrain` image other than the one the running container uses, and what deploys left behind (`runtime/pre_deploy_*`, `pre_soak_*`, `config_upgrade/`, `images/`, `dbabrain_image.tar`). Refuses when the container is not running. `deploy` and `deploy-code` end with it. See [The worker holds one dbabrain](#the-worker-holds-one-dbabrain-worker-prune). |
 | `inventory-health [--host --user --password --days --date --container ...]` | **(legacy — moving to reports app)** Trigger the reports app's `build-inventory-health` inside the worker container, copy the dated overlay into `runtime/reports/`, and merge its health blocks into `architecture/database-inventory.json` (servers without metrics — e.g. lab VMs — are left untouched). |
 
-### `start-daemon` prunes what it replaced
+### The worker holds one dbabrain (`worker-prune`)
+
+**The operator, 2026-11-20** (translated): *clean every old version off the worker; from now on a
+deploy keeps no backup and no old version - the worker holds a single dbabrain*. Read on the host
+that day: 54 superseded images, 70 image tars under `runtime/images/` (24 GB), 66
+`runtime/pre_deploy_*` folders and `runtime/pre_soak_0_28_0` - each a `data.tgz` of `data/`, so one
+more copy of the encrypted secret store and of `data/ssh_keys/*.key`, readable by any login on the
+host - and 36 folders of `upgrade-config` copies under `runtime/config_upgrade/`. All of it went
+that day with `worker-prune --apply`.
+
+`control.worker_prune.prune_worker` is the last step of `start-daemon` (so of `deploy`) and of
+`deploy-code --apply`, and `worker-prune [--apply]` runs it by hand (a list unless `--apply`):
+
+- **What stays is the image the running container uses**, read from the container, with every tag
+  it carries. Every other `dbabrain` image is removed, then `docker image prune -f`.
+- `runtime/pre_deploy_*`, `runtime/pre_soak_*`, `runtime/config_upgrade/`, `runtime/images/` and
+  `dbabrain_image.tar` are removed.
+- **A container that is not running refuses the whole prune** (exit 3): then a leftover may be the
+  way back, and which image is "the one" is not known.
+- Under `sudo` (the container writes as root), never `check`: a deploy that worked is not reported
+  as failed over its tidying.
+- **It closes what it keeps** (0.42.0 item 1.408): `data/`, `runtime/`, `logs/` 750,
+  `data/ssh_keys/` 700, every private key and `encrypted_secret_text.json` 600 - read 2026-11-20 the
+  unencrypted SSH keys were 644/664 in a 755 folder, open to any login on the host. Directories, not
+  their trees. A plan lists the modes and every key wider than 600.
+- **Rolling back is a rebuild** of the previous tag (`git archive` on the build host,
+  `deploy-code --image-tar --image-id`), not a pile on the production host.
+
+Until 2026-11-20 the step was `_prune_old_images`, keeping the newest five version tags; the
+history below is why a prune exists at all.
 
 Every deploy ends in `docker load`, which adds `dbabrain:<version>` and repoints `dbabrain:latest`.
 Nothing removed the version it superseded, so the pile grew once per deploy. Measured on the worker
@@ -116,16 +148,96 @@ cost rather than a one-off — 2.85.32 through 2.85.49 is seventeen versions in 
 each build changes the layer holding the project source, so every version carries its own delta
 even where the base layers are shared.
 
-`_prune_old_images` now runs as step 5, after the daemon is up and verified:
 
-- `dbabrain:latest` is **never** removed — it is what the running container was created from.
-- The newest `KEEP_IMAGE_VERSIONS` (5) version tags stay, so rolling back a bad release is a
-  `docker run` away and needs no rebuild. Ordering is `sort -V`, not `sort`: a lexical sort puts
-  `2.85.10` before `2.85.9` and would keep an arbitrary set rather than the newest.
-- Removing a *tag* is not removing an image. `docker image prune -f` afterwards collects only the
-  layers no tag references at all.
-- Best-effort (`check=False`). A deploy that worked must not be reported as failed because the
-  tidying afterwards did not.
+### The worker starts locked (`unlock-worker`)
+
+**The operator, 2026-11-20** (translated): *anyone who reaches the worker's OS can still get the key
+and decrypt my secrets*; then *after a reboot the master unlocks*. Read on the host that day: the
+container was started with `DBABRAIN_SECRET_KEY` in its environment, Docker keeps that in the
+container's configuration, so `docker inspect` printed it to the `docker` group and the container's
+`config.v2.json` held it **in clear on the host's disk** - through reboots, in every backup or
+snapshot of the VM (plan `audits/20261120_plan_worker_secret_exposure.md`, F1/F2; item 1.409).
+
+- **The compose file names an unlock file, not the passphrase**: `DBABRAIN_UNLOCK_FILE:
+  /run/dbabrain/unlock`, with the host's `/run/dbabrain` mounted at the same path. The host's
+  `/run` is a tmpfs - a reboot empties it; `deploy-code` refuses a host where it is not.
+  `deploy-code` rewrites the worker's file once (the `DBABRAIN_SECRET_KEY` entry and the comment
+  above it become the unlock entry, the mount is added); `docker-compose.runtime.yml` (`deploy`) has
+  it.
+- **The daemon starts locked** (`dbabrain.jobs.unlock`): before it opens the store it waits for the
+  file, reads it, **removes it whatever it held**, and keeps the passphrase only if it opens the
+  secret store - a wrong one is refused and said. It holds it in its own memory; its children still
+  inherit it in their environment (root inside the container; the pipe the plan describes is
+  later). `<unlock file>.state` says `locked` (since when, why), `unlocked` or `stopped` - never a
+  secret.
+- **`unlock-worker` hands it over** from the master: a script on stdin pipes the passphrase into
+  `docker exec -i ... sh -c 'cat > "$DBABRAIN_UNLOCK_FILE.new" && mv ...'` (0600), waits for the
+  state to say `unlocked`, and removes a file the daemon did not take within `--wait-seconds`
+  (90): a passphrase at rest is what this replaces. `deploy-code --apply` and `start-daemon` end
+  with it (`force`: a container just recreated still shows its predecessor's state).
+- **A locked daemon runs nothing and cannot say so on Telegram** - the token is in the store it
+  cannot open. `worker-status` shows the lock first. After a reboot or a restart of the container,
+  run `unlock-worker --key-base64 <key>`.
+- **One-off containers and `docker exec`** get the passphrase on stdin too: `deploy-code`'s
+  `upgrade-config` / `sync-config` runs (`-e DBABRAIN_SECRET_KEY` would put it in that container's
+  configuration while it runs), `worker-run` and `worker-status` in the container.
+- A node that does not set `DBABRAIN_UNLOCK_FILE` is unchanged: `--key` / `--key-base64` or
+  `DBABRAIN_SECRET_KEY` as before.
+
+### Changing the passphrase (`rotate-passphrase`, 0.42.0)
+
+The operator, 2026-11-21 (translated): *change the worker's key; the secrets need not change*; *do not
+update the important data and lose its trace - set the old one inactive, then make the new one active*;
+*keep no old copy of the secret store*. One command moves everything the passphrase opens, or nothing
+(`control.passphrase_rotation`, item 1.411):
+
+```bash
+python -m dbabrain.control.cli rotate-passphrase --key-base64 "<old>" --new-key-base64 "<new>"           # plan
+python -m dbabrain.control.cli rotate-passphrase --key-base64 "<old>" --new-key-base64 "<new>" --apply
+```
+
+1. **Plan** (all a run without `--apply` does): the master's and the worker's secret stores open with the
+   old passphrase, and every active envelope of the runtime store - `repository_keys` (age keys) and
+   `backup_certificates` - opens with it. Anything that does not stops the run before a change.
+2. The worker's container is stopped (`docker compose stop -t 120`).
+3. **The runtime store, one transaction**: each active row copied into a new row sealed with the new
+   passphrase; the old row keeps its envelope byte for byte and gets `retired_at`, `replaced_by`,
+   `retired_reason` (`db.passphrase_rotation`, `db.envelope_generations`).
+4. The master's secret store sealed with the new passphrase and read back (`lib.secret_text.rekey_secret_text_file`).
+5. The worker's store fetched (the container is stopped), sealed here, written there whole, fetched again
+   and opened with the new passphrase. No old copy is kept of either store.
+6. The container started - locked - and unlocked with the new passphrase (`unlock-worker`), which the
+   daemon takes only if it opens the worker's store.
+7. The runtime store planned again with the new passphrase: every active envelope opens.
+
+A failed step says which, and what is done; nothing is retried. The plaintext source
+(`secrets/secret_text.json`) holds no passphrase. After it: every place that holds the passphrase - this
+repository's `CLAUDE.md`, the operator's start scripts - takes the new one; the old one opens only the
+retired rows and the old copies already outside (git history, VM snapshots), which is why the secrets
+themselves were the operator's call (not rotated, 2026-11-21).
+
+### The master logs into the worker with a sealed key (0.42.0)
+
+A worker node in `config.json` with **`key_file`** (a name in `data/ssh_keys/`) is reached with that
+key: `control._support.ssh_connect` finds the node by host, resolves the key and - sealed, as every
+key is from 1.410 - its passphrase through `passphrases.json`, opened with the store passphrase the
+command was given. The node's `password_ref` stays: it is what `sudo -S` is fed. With a key the
+login, the worker's sshd can refuse passwords (1.413, the operator 2026-11-20: *turn it all off*).
+
+### `worker-status` ends with the worker's secret hygiene (0.42.0)
+
+Seven checks, read on the host by name, mode and count - never a value
+(`worker_status.secret_hygiene_script`): `DBABRAIN_SECRET_KEY` in the container's configuration
+(`docker inspect`, so `config.v2.json` on disk), a `*.key` wider than 600, a key that opens with no
+passphrase (`ssh-keygen -y -P ''`, its output dropped), `data/` readable by any login, `pre_deploy_*`
+/ `pre_soak_*` copies of `data/`, more than one `dbabrain` image, sshd password logins. Each line is
+`OK` or `BAD` with what to run; a check that could not read what it checks says so and is not
+counted as closed. Read on 2026-11-21 on 2.87.108, before the 1.409/1.410 deploy: 4 of 7 open (the
+passphrase in `docker inspect`, one key wider than 600, four keys with no passphrase, sshd password
+logins); later that day, the keys sealed, the master's and the container's own host login keys
+and sshd's passwords off, **all 7 closed**. A `Match` block that turns passwords back on keeps the check
+open (`off, except: Match ...`) - it was the container's network for an hour, while its login moved to
+a key (`authorized_keys` `from="172.30.240.0/24"`).
 
 ### `worker-status` checks the host's container network reservations
 
@@ -194,10 +306,11 @@ python -m dbabrain.control.cli worker-create-db-docker `
 ### Notes
 
 - Secrets travel **encrypted** in the bundle (`data/encrypted_secret_text.json`); the
-  passphrase reaches the daemon in `DBABRAIN_SECRET_KEY` - exported by a start script sent on stdin,
-  handed to the container by name only (`-e DBABRAIN_SECRET_KEY`) - and is never bundled and never an
-  argument: as `--key_base64` it sat in the container's command for its whole life, readable with
-  `docker inspect` and `ps` (review 0.25.0, B2.4/F6.1). The `--key-base64` you pass to the control
+  passphrase reaches the worker's daemon through its tmpfs unlock file after it starts
+  (`unlock-worker`, 1.409) - never bundled, never an argument (as `--key_base64` it sat in the
+  container's command for its whole life, readable with `docker inspect` and `ps` - review 0.25.0,
+  B2.4/F6.1), and since 0.42.0 never in the container's environment (`-e DBABRAIN_SECRET_KEY` put it
+  in `docker inspect` and in `config.v2.json` on the host's disk). The `--key-base64` you pass to the control
   commands here stays on this machine; it also decrypts the worker SSH password for them.
 - `inventory-health` never copies the live store — it runs the extraction query
   inside the container and transfers only the small dated overlay.
@@ -247,10 +360,18 @@ python -m dbabrain.control.cli deploy-code --key-base64 "<key>" --apply    # bui
   must be there), and the environment-variable names and `/app/tools/...` paths are moved by the
   same rules `upgrade-config` applies to `data/`. A host folder, a docker network and another
   service's image are left alone.
-- **The way back is written first**: `runtime/pre_deploy_<version>_<stamp>/docker-compose.yml.before`
-  and `data.tgz` (`data/`, `assets/`, `config.json`). The previous image stays loaded.
-- **The passphrase** reaches `docker compose` through a script on stdin, base64 on its second line
-  and decoded by a shell builtin - never on an argv, never on the line the remote gate echoes.
+- **The way back is written first, and lives for the switch only**:
+  `runtime/pre_deploy_<version>_<stamp>/docker-compose.yml.before` and `data.tgz` (`data/`,
+  `assets/`, `config.json`). Once the new container runs, `worker_prune` removes it with the loaded
+  tar, `upgrade-config`'s copies and every other image (2026-11-20); a failed switch keeps them,
+  and the answer names the backup only then.
+- **The passphrase** is never in the host shell's environment or a container's configuration
+  (1.409): each one-off `docker compose run --rm` reads it base64 on stdin inside the container, and
+  the new daemon starts locked and is handed it by `unlock-worker` once `up -d` has started it - the
+  run fails, naming `unlock-worker`, if it stays locked. Never on an argv, never on the line the
+  remote gate echoes. **The first `deploy-code` of 0.42.0 rewrites the compose file's
+  `DBABRAIN_SECRET_KEY` entry** into `DBABRAIN_UNLOCK_FILE` and mounts `/run/dbabrain` (shown in the
+  plan); a host whose `/run` is not a tmpfs is refused.
 - **The estate is without a scheduler** from the stop until `up -d`: the `upgrade-config` plan and
   apply and a `sync-config` run in between (76 s on 0.28.0's hand run).
 
@@ -643,10 +764,11 @@ docker image ls | grep dbabrain          # should show dbabrain:latest
 docker compose run --rm dbabrain \
   python -m dbabrain.metrics.cli --config config.json collect --dry-run --key_base64 "<base64-passphrase>"
 
-# 3. start the daemon with the passphrase in its ENVIRONMENT + the worker node role
-#    (read it without echo; `-e DBABRAIN_SECRET_KEY` names the variable, the value is not on any command line)
-read -rs DBABRAIN_SECRET_KEY && export DBABRAIN_SECRET_KEY
-docker compose run -d --name dbabrain_daemon -e DBABRAIN_NODE_ROLE=worker -e DBABRAIN_SECRET_KEY dbabrain daemon
+# 3. start the daemon - LOCKED: the compose file names an unlock file (DBABRAIN_UNLOCK_FILE), not the key
+docker compose run -d --service-ports --name dbabrain_daemon -e DBABRAIN_NODE_ROLE=worker dbabrain daemon
+
+# 3b. hand it the passphrase (from the master; read once and removed by the daemon)
+#     python -m dbabrain.control.cli unlock-worker --container dbabrain_daemon --key-base64 "<base64-passphrase>"
 
 # 4. confirm it is running
 docker ps | grep dbabrain_daemon
@@ -656,21 +778,18 @@ The passphrase is given in the environment only (0.25.0 review, B2.4/F6.1). On a
 (`daemon --key_base64 …`) it was readable by every user on the host for the container's whole
 life (`ps`, `/proc/<pid>/cmdline`, `docker inspect`), and the daemon used to copy it onto every
 child's command line too; it now hands it to children in `DBABRAIN_SECRET_KEY` only. `daemon --key`
-/ `--key_base64` still work for a one-off by hand. `control deploy` does the same as step 3 for
-you: the key travels to the worker on stdin. It is still visible to the `docker` group through
-`docker inspect` (root-equivalent anyway).
+/ `--key_base64` still work for a one-off by hand. Since 0.42.0 (1.409) the container is not given
+it at all - `-e DBABRAIN_SECRET_KEY` put it in `docker inspect` and in clear in the container's
+`config.v2.json` on disk: the daemon starts locked and `unlock-worker` hands it over (steps 3 and
+3b; `control deploy` does both). See [The worker starts locked](#the-worker-starts-locked-unlock-worker).
 
 `DBABRAIN_NODE_ROLE=worker` makes the daemon run only `app_commands.json` entries with
 `node_role` of `worker` or `all`. The control app's `start-daemon` sets this for you
 (default `worker`, override with `--node-role`).
 
-> **Restart behavior.** Because the key is never persisted, a stopped container
-> cannot auto-restart with the key. Re-run the step-3 command to restart. (If you
-> accept the key living in Docker's container metadata — visible via
-> `docker inspect` — you may instead export it as in step 3 and use
-> `docker run -d --restart unless-stopped -e DBABRAIN_NODE_ROLE=worker -e DBABRAIN_SECRET_KEY <mounts> dbabrain:latest daemon`
-> so it survives reboots; the strict "nothing stored" option is the `compose run`
-> command above. The control app's `start-daemon` uses `restart=unless-stopped`.)
+> **Restart behavior.** The key is never persisted, so a container that restarts (its
+> `unless-stopped` policy, a reboot) comes back **locked**: it runs nothing until
+> `unlock-worker` hands the passphrase over again. `worker-status` shows the lock.
 
 ### B6. Check status, logs, and errors
 

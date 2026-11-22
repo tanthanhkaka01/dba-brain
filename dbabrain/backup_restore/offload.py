@@ -251,7 +251,8 @@ class _Hosts:
         self.source_host = host_block(source, secrets=secrets, data_dir=data_dir)
         self.repository_host = host_block(repository, secrets=secrets, data_dir=data_dir)
         self.share = _share_request(entry, secrets) if entry.offload.source_share else None
-        login = {k: self.source_host[k] for k in ("host", "port", "username", "password", "key_file")}
+        login = {k: self.source_host[k] for k in ("host", "port", "username", "password", "key_file",
+                                                  "key_passphrase") if k in self.source_host}
         # A backup the database wrote inside its container (0.37.0): on the host it may sit in a
         # Docker volume under /var/lib/docker, which only root enters - the store's first offload
         # found "no file" there. It is read where it was written: listed, hashed, copied and
@@ -263,7 +264,8 @@ class _Hosts:
         self.copy_source: dict[str, Any] = (
             {"source_share": {k: v for k, v in self.share.items() if k != "subpath"}} if self.share
             else {"source": login})
-        self.target = {k: self.repository_host[k] for k in ("host", "port", "username", "password", "key_file")}
+        self.target = {k: self.repository_host[k] for k in ("host", "port", "username", "password", "key_file",
+                                                            "key_passphrase") if k in self.repository_host}
         self.copy_errors: dict[str, str] = {}
         #: Set by offload_entry when the pass encrypts on the way (1.330); each copied file's .age facts.
         self.sealing: Any = None

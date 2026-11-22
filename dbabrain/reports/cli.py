@@ -339,6 +339,11 @@ def main(argv: list[str]) -> int:
         # needs the passphrase already in the environment.
         from dbabrain.lib.secret_text import set_key_env
         set_key_env(getattr(args, "key", None), getattr(args, "key_base64", None))
+        # 1.0.0 (K4): reports need a dbabrain key - by hand and by the bot as by the scheduler.
+        from dbabrain.lib import dbabrain_key
+        refused = dbabrain_key.said_at_the_door(dbabrain_key.gate_here("reports"), app="reports")
+        if refused is not None:
+            return refused
 
         config_path = str(resolve_config_path("reports", args.config))
         config = load_config(config_path)

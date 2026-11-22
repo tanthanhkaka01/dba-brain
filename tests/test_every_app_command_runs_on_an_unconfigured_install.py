@@ -19,6 +19,11 @@ errors every cycle on a correct install teaches its reader to ignore the log.
 
 These run the real commands in subprocesses against a real ``init``-ed root, because the property
 is about the product as it is started, not about any one function inside it.
+
+**Since 1.0.0 an empty install has no dbabrain key** (plan K4: *without a key, metrics and instant
+alerts; no reports, no backup / restore*). A command that needs one exits 0 by hand, saying how to
+get a key - no key is a state, not a failure - and the scheduler does not start it at all: one pass
+over the schedule leaves no run for it, and the line that says why. Every other job is still `done`.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ import pytest
 
 from dbabrain.common import scaffold
 from dbabrain.jobs.daemon import use_this_interpreter
+from dbabrain.lib import dbabrain_key
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CATALOGUE = REPO_ROOT / "dbabrain" / "jobs" / "catalogue" / "app_commands.json"
@@ -165,6 +171,11 @@ def test_one_daemon_pass_over_the_whole_schedule_returns_and_every_job_is_done(t
     with sqlite3.connect(f"{store_file.as_uri()}?mode=ro", uri=True) as conn:
         status = dict(conn.execute("SELECT job_code, status FROM job_runs").fetchall())
     for command in JOBS:
+        if dbabrain_key.feature_of_command(command["command_text"]):
+            # No key on an empty install: not started, and said - never a failed run every cycle.
+            assert command["app_command_id"] not in status, f"{command['app_command_id']} ran without a key"
+            assert "skip_key" in stderr and command["app_command_id"] in stderr
+            continue
         assert status.get(command["app_command_id"]) == "done", (
             f"{command['app_command_id']}: {status.get(command['app_command_id'])!r}")
     assert not {c["app_command_id"] for c in SERVICES} & set(status), "a service ran in --once"

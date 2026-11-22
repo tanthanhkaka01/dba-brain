@@ -36,19 +36,27 @@ dbabrain init
 It writes nine files and then prints the next six commands. It **never overwrites** — the files it
 writes are the ones you edit immediately afterwards, so a second `init` cannot destroy your work.
 
-**The first thing to do, if you have an Anthropic API key: switch the AI assistant on** (0.39.0). It
-walks you through everything below - the passphrase, the clock, the first database, Telegram,
-backups - and answers questions about this install; it only reads, and proposes each command for you
-to run. With the passphrase set (`DBABRAIN_SECRET_KEY`):
+**The first thing to do: get this node a dbabrain key** (1.0.0) - free, an email sign-in on
+dbabrain.dev. Reports, backup / restore, SRE, the MCP server and the AI assistant need it; metrics,
+instant alerts, SLA and SQL tasks run without one. The assistant then answers **through dbabrain.dev**
+- no Anthropic key of yours, $1 of AI a month free (Claude Haiku 5.5) - and walks you through
+everything below: the passphrase, the clock, the first database, Telegram, backups. It only reads,
+and proposes each command for you to run. With the passphrase set (`DBABRAIN_SECRET_KEY`):
 
 ```bash
 pip install "dbabrain[ai]"
-dbabrain ai-key                                    # paste the key; it is not shown
+dbabrain key-request                               # open the link it prints, sign in with your email, approve
 dbabrain telegram ai-ask "What do I set up next?"
 ```
 
-`ai-key` stores the key in `data/encrypted_secret_text.json` and sets `enabled` and `api_key_ref` in
-`data/ai_assist.json`; run it again to replace the key. `init` prints the same lines first.
+`key-request` stores the key (14 days; `dbabrain key-renew` for the next) in
+`data/encrypted_secret_text.json`; `dbabrain key-status` says how long it has left. **dbabrain.dev collects none of your data**: the key only authenticates
+the node and relays its assistant's AI turns; no question, answer or database content is kept. **One key per
+email:** asking again on a second node replaces the first node's key at once (its reports and backups
+stop at its next daily check) - copy `DBABRAIN_KEY` to the other node with `secret-set` instead. `init` prints the
+same lines first. **With your own Anthropic key instead** - another model, another budget - run
+`dbabrain ai-key` (paste the key; it is not shown): it stores it and sets `provider: anthropic` in
+`data/ai_assist.json`. The dbabrain key is still needed.
 
 One of the nine is **`AGENTS.md`, written into the tool root rather than into any repository**: an
 agent that has just run `init` is standing in that directory, and a guide in a repository it never

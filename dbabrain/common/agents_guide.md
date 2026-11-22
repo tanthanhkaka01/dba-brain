@@ -6,8 +6,8 @@ A copy somebody edited is saved to `runtime/agents_guide/` first - keep your own
 file. Before a root exists, `dbabrain guide` prints it. Read it before running anything: this
 toolkit reaches real databases and sends to real chats.
 
-**Have an Anthropic API key? Set the AI assistant up first** (section 2, after the passphrase): it then
-walks you through every later step, reading only, and proposes each command for you to run.
+**Get this node a free key from dbabrain.dev first** (section 2, after the passphrase): reports, backups
+and the AI assistant need it, and the assistant then walks you through every later step, reading only.
 
 ## 0. The ten rules
 
@@ -38,16 +38,14 @@ walks you through every later step, reading only, and proposes each command for 
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install "dbabrain[postgres,mssql,ssh,winrm]"   # Windows: .venv\Scripts\pip
+.venv/bin/pip install "dbabrain[postgres,mssql,ssh,winrm,ai]"   # Windows: .venv\Scripts\pip
 dbabrain init          # writes config.json, data/, runtime/, secrets/ and this AGENTS.md
 dbabrain guide         # prints this file; writes nothing
 ```
 
-Extras: `mssql` (SQL Server: also needs Microsoft ODBC Driver 18), `postgres`, `ssh`, `winrm` (the
-OS side of Windows hosts). `init` never overwrites a configuration file you edited; re-run it after
-an upgrade to add files a new version introduced and to replace this guide with the new version's.
-Then move the existing files to the new version's field names - plan first, apply only after
-reading the plan, and **before starting the daemon** on the upgraded node:
+Extras: `mssql` (also Microsoft ODBC Driver 18), `postgres`, `ssh`, `winrm` (Windows hosts), `ai`. After an
+upgrade: re-run `init` (it adds new files, never overwrites yours), then move the files to the new
+names - read the plan, apply it **before starting the daemon**:
 
 ```bash
 dbabrain common upgrade-config '{}'                     # plan; writes nothing
@@ -68,14 +66,17 @@ export DBABRAIN_SECRET_KEY='<passphrase>'     # PowerShell: $env:DBABRAIN_SECRET
 Commands also take `--key` or `--key-base64` (base64 is safer in shells where `$`, `#` or `^` mean
 something). Without the key, anything that needs a password fails, and the daemon exits.
 
-### The AI assistant - set it up first
+### The key from dbabrain.dev - get it first
 
-`ai-key` stores the Anthropic API key encrypted and switches the assistant on (`data/ai_assist.json`:
-`enabled`, `api_key_ref`); it asks for the key and does not echo it. Its name is `assistant_name` there.
-
+A **free key from dbabrain.dev** (an email sign-in a person approves) only authenticates the node and relays
+its AI turns - dbabrain.dev collects none of your data. Reports, backup / restore, SRE, MCP and the assistant
+need it; metrics, alerts, SLA and SQL tasks do not. It lasts **14 days** (warnings 7, 3, 1 day(s) before), then
+3 days of grace, then new reports and backups stop - a restore a person asks for still runs. **One key per
+email**: asking again on a second node replaces the first node's key - copy `DBABRAIN_KEY` with `secret-set`.
+The assistant answers through dbabrain.dev; with your own Anthropic key, `dbabrain ai-key`. Commands:
 ```bash
-pip install "dbabrain[ai]"
-dbabrain ai-key                                     # paste the key; run it again to replace it
+dbabrain key-request                                # prints a link; a person approves; later key-renew
+dbabrain key-status                                 # days left, and what it unlocks now
 dbabrain telegram ai-ask "What do I set up next?"   # ask here; in Telegram: section 12
 ```
 
@@ -128,8 +129,7 @@ USE msdb; CREATE USER monitor_user FOR LOGIN monitor_user;
 ALTER ROLE db_datareader ADD MEMBER monitor_user;     -- backup age reads msdb.dbo.backupset
 ```
 
-The older path (record by hand, password in `secrets/secret_text.json`, `dbabrain encrypt-secret`)
-**replaces** the whole store with that file - never once `secret-set` or `instance-add` has stored one.
+The older path (by hand, then `dbabrain encrypt-secret`) **replaces** the whole store - never use it after `secret-set`.
 
 Then prove it before trusting it:
 
@@ -256,6 +256,7 @@ dbabrain common app-command-set '{"app_code": "APP-METRICS", "time_window": {"re
 | Which backups/restores are configured, on which days | `dbabrain backup-restore list-backups` / `list-restores` |
 | Which SQL tasks exist and when they run | `dbabrain sql-tasks list-tasks --all` |
 | What an SLA says | `dbabrain sla validate` |
+| Is this node's key from dbabrain.dev valid; how long is left | `dbabrain key-status` |
 
 Logs: `logs/` (`logs/errors.log` holds only errors) - read after the questions above, not instead.
 
@@ -356,13 +357,11 @@ dbabrain reports --config config.json use-base-url --this-node
 ```
 
 The daemon serves the console and the reports (`APP-WEBHOST`); `self-status` prints the URLs.
-The console reads reports and edits configuration; adding a database is `instance-add`.
 
 ## 14. Results store
 
-SQLite in `runtime/` by default. PostgreSQL: fill the `postgresql` block in `data/store_config.json`,
-then `dbabrain db use-store postgresql` and `dbabrain db init`. Several nodes may share one PostgreSQL
-database **only on different schemas**, and still only one scheduler per estate.
+SQLite in `runtime/` by default. PostgreSQL: fill `data/store_config.json`'s `postgresql` block, then
+`dbabrain db use-store postgresql` and `db init`; nodes sharing one database need different schemas.
 
 ## 15. Moving or copying an estate
 
@@ -392,6 +391,7 @@ bundle carries `store_config.json`: point the new node at its own store, and sto
 | Password errors after a restore drill | the target now answers to the SOURCE's logins |
 | Telegram 409 | a second poller on the same token |
 | The daemon exited at start | `DBABRAIN_SECRET_KEY` not set |
+| Reports / backups stopped; the log says `skip_key` | `dbabrain key-status`: none, ended or replaced - `key-request` / `key-renew` (section 2) |
 
 ## Where the full documentation is
 

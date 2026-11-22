@@ -69,6 +69,11 @@ __all__ = [
 ]
 
 
+#: Beside the SSH keys: which secret ref opens each sealed key (0.42.0, 1.410) - ``{"<key file name>":
+#: {"passphrase_ref": "<ref>"}}``. Names only; the passphrases are in the encrypted secret store.
+PASSPHRASES_FILENAME = "passphrases.json"
+
+
 def is_key_name(key_file: str) -> bool:
     """Whether ``key_file`` names a key by its bare file name - one to be found under
     ``data/ssh_keys/`` - rather than giving a path.

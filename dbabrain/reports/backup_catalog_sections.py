@@ -146,7 +146,8 @@ def load_repository(catalog: Any, backup_rows: list[dict]) -> dict[int, dict]:
     members = catalog.offload_members_of(ids)
     store = RepositoryEncryptionStore(catalog.target)
     sealed = store.files_of_many(ids)
-    keys = {int(k["key_id"]): k for k in store.keys()}
+    # Every generation: a file names the key_id it was encrypted under, which may be a retired row (1.411).
+    keys = {int(k["key_id"]): k for k in store.keys(include_retired=True)}
     by_id = {int(r["file_id"]): r for r in backup_rows}
     return {fid: repository_facts(by_id[fid], members.get(fid, []), sealed.get(fid, []), keys) for fid in ids}
 

@@ -905,6 +905,15 @@ def create_db_docker_on_worker(
             db_password, _source = registry.resolve_password_value(
                 spec.password_env, key=key, key_base64=key_base64, data_dir=data_dir,
                 allow_missing=dry_run)
+        # The worker's sshd takes no password from the master (0.42.0, 1.413): its key, when the node
+        # names one; the password still rides along - it is what `sudo -S` is fed there.
+        from dbabrain.control._support import worker_key_login
+
+        key_file, key_passphrase = worker_key_login(host)
+        remote = {"host": host, "port": int(port), "username": user, "password": password or "",
+                  "key_file": key_file}
+        if key_passphrase:
+            remote["key_passphrase"] = key_passphrase
         request = {
             "name": spec.name, "engine": spec.engine, "version": spec.version, "mode": spec.mode,
             "host_port": spec.host_port, "password_ref": spec.password_env,
@@ -912,8 +921,7 @@ def create_db_docker_on_worker(
             # A flag, else what this node's configuration states for its labs. The command reads no
             # configuration and assumes no folder: a request that states none is refused by name.
             "containers_dir": containers_dir or folders.containers_dir,
-            "remote": {"host": host, "port": int(port), "username": user,
-                       "password": password or "", "key_file": ""},
+            "remote": remote,
             "install_docker": bool(install_docker),
             "force": bool(force), "dry_run": bool(dry_run),
         }

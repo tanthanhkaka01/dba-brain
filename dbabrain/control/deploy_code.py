@@ -13,7 +13,11 @@ What it changes on the worker, and nothing else:
 - the image: built here from this tree, sent as a tar, loaded, its id compared with the one built;
 - the compose file: the tool's ``image:`` line, and - through ``lib.package_rename``, the rules
   ``upgrade-config`` applies to ``data/`` - the environment-variable names and the container paths
-  that name the code (0.29.0 renamed both). Every other line is the worker's and stays;
+  that name the code (0.29.0 renamed both). And the passphrase's line (0.42.0, item 1.409): the
+  ``DBABRAIN_SECRET_KEY`` environment entry becomes ``DBABRAIN_UNLOCK_FILE`` and the host's
+  ``/run/dbabrain`` (a ``tmpfs``) is mounted, so the daemon starts locked and is handed the
+  passphrase after the start (``control.worker_unlock``) - never again in Docker's configuration,
+  which kept it in clear on the host's disk. Every other line is the worker's and stays;
 - the node's ``data/``: what ``upgrade-config`` and ``sync-config`` in the new image change.
 
 **The image may be built elsewhere** (``--image-tar`` with ``--image-id``, 2026-11-11 - the
@@ -22,16 +26,21 @@ id ``docker image inspect`` gave there. Nothing then needs Docker here; the work
 still held to that id, and a tar that is not of this version's tag is refused by the load check.
 
 Before it writes anything it keeps the compose file and a tar of ``data/``, ``assets/`` and
-``config.json`` under ``runtime/pre_deploy_<version>_<stamp>/`` - the way back. Without ``--apply``
-it builds nothing and changes nothing: it reads the worker and prints the plan.
+``config.json`` under ``runtime/pre_deploy_<version>_<stamp>/`` - the way back **for the switch
+only**. Once the new container runs, that folder, the loaded tar, ``upgrade-config``'s copies and
+every other ``dbabrain`` image are removed (``worker_prune``; the operator, 2026-11-20: *the worker
+holds a single dbabrain, no backup, no old version*). A failed switch keeps them. Rolling back is a
+rebuild of the previous tag, sent the same way. Without ``--apply`` it builds nothing and changes
+nothing: it reads the worker and prints the plan.
 
-The passphrase reaches the remote ``docker compose`` through a script on stdin, never an argv, and
-not on the script's first line, which is the only line the remote gate echoes.
+The passphrase reaches the one-off ``docker compose run`` containers and the new daemon through a
+script on stdin, never an argv, never a container's configuration, and not on the script's first
+line, which is the only line the remote gate echoes.
 """
 
 from __future__ import annotations
 
-import base64
+import difflib
 import re
 import shlex
 import subprocess
@@ -51,6 +60,8 @@ from dbabrain.control._support import (
     ssh_connect,
     ssh_run,
 )
+from dbabrain.control.worker_prune import prune_worker
+from dbabrain.control.worker_unlock import UNLOCK_DIR, UNLOCK_FILE, keyed_compose_run, unlock_worker
 from dbabrain.lib import package_rename
 from dbabrain.lib.timezone import file_stamp
 
@@ -96,11 +107,88 @@ def plan_compose(text: str, image: str) -> ComposePlan:
         renamed = package_rename.renamed(line, COMPOSE_ENV_NAMES) if number != index else line
         if renamed != line:
             lines[number] = renamed
+    lines = unlock_through_a_file(lines, service_index=index)
     new_text = "".join(lines)
-    old_lines, new_lines = text.splitlines(), new_text.splitlines()
-    plan.changes = [(old, new) for old, new in zip(old_lines, new_lines) if old != new]
+    plan.changes = _changed_lines(text.splitlines(), new_text.splitlines())
     plan.text = new_text
     return plan
+
+
+def _changed_lines(old_lines: list[str], new_lines: list[str]) -> list[tuple[str, str]]:
+    """Pairs of (before, after); a line only added or only removed is paired with ``""``."""
+    changes: list[tuple[str, str]] = []
+    matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
+    for tag, a0, a1, b0, b1 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        old, new = old_lines[a0:a1], new_lines[b0:b1]
+        width = max(len(old), len(new))
+        old += [""] * (width - len(old))
+        new += [""] * (width - len(new))
+        changes.extend(zip(old, new))
+    return changes
+
+
+_KEY_ENTRY = re.compile(r"^(?P<lead>\s*)(?:(?P<dash>-\s*)DBABRAIN_SECRET_KEY(?:=.*)?|DBABRAIN_SECRET_KEY:.*)\s*$")
+_UNLOCK_ENTRY = re.compile(r"^\s*(?:-\s*)?DBABRAIN_UNLOCK_FILE[:=]")
+_UNLOCK_COMMENT = ("# The passphrase is NOT here: the daemon starts locked and the master hands it over",
+                   "# into this file (tmpfs), read once and removed - `control unlock-worker` (0.42.0, 1.409).")
+
+
+def unlock_through_a_file(lines: list[str], *, service_index: int) -> list[str]:
+    """The tool's service with its passphrase entry turned into the unlock file, and its tmpfs mounted.
+
+    The ``DBABRAIN_SECRET_KEY`` entry - either compose spelling - and the comment block right above
+    it are replaced by ``DBABRAIN_UNLOCK_FILE``; ``/run/dbabrain`` is added to the service's
+    volumes. A file already converted is returned unchanged. A service that neither hands the
+    passphrase over nor names an unlock file is not one this command understands: the daemon it
+    would start could decrypt nothing.
+    """
+    lines = list(lines)
+    start, end = _service_span(lines, service_index)
+    ending = lines[service_index][len(lines[service_index].rstrip("\r\n")):] or "\n"
+    if not any(_UNLOCK_ENTRY.match(line.rstrip("\r\n")) for line in lines[start:end]):
+        hits = [n for n in range(start, end) if _KEY_ENTRY.match(lines[n].rstrip("\r\n"))]
+        if len(hits) != 1:
+            raise DeployCodeError("the tool's service hands over no passphrase (DBABRAIN_SECRET_KEY) and names no "
+                                  "unlock file (DBABRAIN_UNLOCK_FILE); expected exactly one of them")
+        at = hits[0]
+        match = _KEY_ENTRY.match(lines[at].rstrip("\r\n"))
+        lead = match["lead"]
+        entry = (f"{lead}- DBABRAIN_UNLOCK_FILE={UNLOCK_FILE}" if match["dash"] is not None
+                 else f"{lead}DBABRAIN_UNLOCK_FILE: {UNLOCK_FILE}")
+        top = at
+        while top - 1 > service_index and lines[top - 1].startswith(lead + "#"):
+            top -= 1
+        lines[top:at + 1] = [*(f"{lead}{comment}{ending}" for comment in _UNLOCK_COMMENT), f"{entry}{ending}"]
+        start, end = _service_span(lines, service_index)
+    if not any(f"{UNLOCK_DIR}:" in line for line in lines[start:end]):
+        volumes = [n for n in range(start, end) if re.match(r"^\s+volumes:\s*$", lines[n].rstrip("\r\n"))]
+        if len(volumes) != 1:
+            raise DeployCodeError(f"the tool's service has {len(volumes)} volumes: key(s); expected one, "
+                                  f"to mount {UNLOCK_DIR}")
+        item = next((line for line in lines[volumes[0] + 1:end] if line.lstrip().startswith("- ")), None)
+        if item is None:
+            raise DeployCodeError("the tool's service's volumes: list is empty; cannot place the unlock mount")
+        indent = item[:len(item) - len(item.lstrip())]
+        lines[volumes[0] + 1:volumes[0] + 1] = [
+            f"{indent}# tmpfs on the host: the daemon's unlock file, gone with a reboot (1.409){ending}",
+            f"{indent}- {UNLOCK_DIR}:{UNLOCK_DIR}{ending}"]
+    return lines
+
+
+def _service_span(lines: list[str], index: int) -> tuple[int, int]:
+    """The lines of the service the line at *index* belongs to: from its name to the next one."""
+    top = index
+    while top > 0 and not re.match(r"^  [A-Za-z0-9_.\-]+:\s*$", lines[top].rstrip("\r\n")):
+        top -= 1
+    end = top + 1
+    while end < len(lines):
+        bare = lines[end].rstrip("\r\n")
+        if bare.strip() and not bare.lstrip().startswith("#") and len(bare) - len(bare.lstrip()) <= 2:
+            break
+        end += 1
+    return top, end
 
 
 def compose_service(text: str) -> str:
@@ -119,17 +207,23 @@ def compose_service(text: str) -> str:
     raise DeployCodeError("the compose file names no service")
 
 
-def keyed_script(remote_dir: str, secret_key: str, commands: list[str]) -> str:
-    """A script that exports the passphrase and runs *commands* in *remote_dir*.
+def switch_script(remote_dir: str, service: str, secret_key: str) -> str:
+    """Stop the old container, upgrade the configuration in the new image, start the new one.
 
-    The first line is ``cd`` - the remote gate echoes that line alone - and the key arrives
-    base64-encoded through ``printf``, a shell builtin, so no process ever has it on its argv.
+    The first line is ``cd`` - the remote gate echoes that line alone. The passphrase is in no
+    shell's environment and no container's configuration: each one-off run reads it on stdin
+    (:func:`keyed_compose_run`), and the daemon ``up -d`` starts is locked until it is handed over.
     """
-    encoded = base64.b64encode(secret_key.encode("utf-8")).decode("ascii")
-    body = "\n".join(commands)
-    return (f"cd {shlex.quote(remote_dir)} || exit 1\n"
-            f"export DBABRAIN_SECRET_KEY=\"$(printf %s '{encoded}' | base64 -d)\"\n"
-            f"set -e\n{body}\n")
+    return "\n".join([
+        f"cd {shlex.quote(remote_dir)} || exit 1",
+        "set -e",
+        "docker compose stop -t 120",
+        "docker compose rm -f",
+        keyed_compose_run(service, secret_key, "common upgrade-config '{}'"),
+        keyed_compose_run(service, secret_key, "common upgrade-config '{\"dry_run\": false}'"),
+        keyed_compose_run(service, secret_key, "db --config config.json sync-config '{}'"),
+        "docker compose up -d",
+    ]) + "\n"
 
 
 def _local_image_id(tag: str) -> str:
@@ -169,6 +263,10 @@ def deploy_code(*, host: str, user: str, password: str, port: int = 22, secret_k
 
     client = ssh_connect(host, user, password, port)
     try:
+        code, fstype, _ = ssh_capture(client, f"stat -f -c %T {shlex.quote(UNLOCK_DIR.rsplit('/', 1)[0] or '/')}")
+        if code == 0 and fstype.strip() and fstype.strip() != "tmpfs":
+            raise DeployCodeError(f"{UNLOCK_DIR} is on {fstype.strip()}, not a tmpfs: the passphrase written there "
+                                  "would outlive a reboot and sit on the disk")
         code, compose_text, err = ssh_capture(client, f"cat {shlex.quote(compose_path)}")
         if code != 0:
             raise DeployCodeError(f"cannot read {compose_path}: {err.strip()[:200]}")
@@ -184,7 +282,9 @@ def deploy_code(*, host: str, user: str, password: str, port: int = 22, secret_k
                  "keep the compose file and a tar of data/, assets/, config.json",
                  "write the compose file", "stop and remove the running container",
                  "upgrade-config (plan, then apply) and sync-config in the new image",
-                 "start, then read the container and its version back"]
+                 "start (locked), then hand the daemon its passphrase (unlock-worker)",
+                 "read the container and its version back",
+                 "remove every other dbabrain image, the tar and the way back (worker_prune)"]
         if not apply:
             print("PLAN ONLY - nothing built, nothing changed. --apply would:\n  "
                   + "\n  ".join(f"{n}. {s}" for n, s in enumerate(steps, 1)))
@@ -217,20 +317,22 @@ def deploy_code(*, host: str, user: str, password: str, port: int = 22, secret_k
                         f"tar czf {backup}/data.tgz data assets config.json")
         client.put_bytes(plan.text.encode("utf-8"), compose_path)
 
-        run = f"docker compose run --rm --no-deps -T {shlex.quote(service)} dbabrain"
-        _remote_script(client, keyed_script(remote_dir, secret_key, [
-            "docker compose stop -t 120",
-            "docker compose rm -f",
-            f"{run} common upgrade-config '{{}}'",
-            f"{run} common upgrade-config '{{\"dry_run\": false}}'",
-            f"{run} db --config config.json sync-config '{{}}'",
-            "docker compose up -d",
-        ]), "the switch")
+        _remote_script(client, switch_script(remote_dir, service, secret_key), "the switch")
+        # The new daemon waits locked; the predecessor's state may still be on the tmpfs, hence force.
+        if unlock_worker(client, container=container, secret_key=secret_key, force=True) != 0:
+            raise DeployCodeError("the new container runs but its daemon is still locked - run "
+                                  "`control unlock-worker` (the way back is kept under runtime/pre_deploy_*)")
         code, state, _ = ssh_capture(client, "docker inspect -f '{{.RestartCount}} {{.State.Status}} "
                                              f"{{{{.Config.Image}}}}' {shlex.quote(container)}")
         print(f"container {container}: {state.strip()}")
         ssh_run(client, f"docker exec {shlex.quote(container)} dbabrain --version")
-        return {"applied": True, "image": image, "image_id": local_id, "backup": f"{remote_dir}/{backup}",
+        # The way back lived only for the switch. Once the new container runs, it goes, with every
+        # other image and the tar just loaded: the worker holds one dbabrain (worker_prune). A
+        # container that is not running keeps all of it - prune_worker refuses then.
+        pruned = prune_worker(client, remote_dir=remote_dir, container=container, apply=True)
+        return {"applied": True, "image": image, "image_id": local_id,
+                "backup": f"{remote_dir}/{backup}" if pruned != 0 else "",
+                "pruned": pruned == 0,
                 "previous_image": plan.previous_image, "container_state": state.strip()}
     finally:
         client.close()

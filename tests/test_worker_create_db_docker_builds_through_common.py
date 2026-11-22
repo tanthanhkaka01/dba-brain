@@ -62,6 +62,19 @@ def test_the_build_is_common_s_on_the_worker_s_host_with_the_login_in_the_reques
     assert request["password"] == "db-pw" and request["password_ref"] == "PG_LAB_01_PASSWORD"
 
 
+def test_a_worker_node_with_a_key_is_logged_into_with_it_and_its_password_kept_for_sudo(tmp_path, built,
+                                                                                         monkeypatch):
+    """0.42.0, 1.413: the worker's sshd takes no password from the master - the node's sealed key."""
+    from dbabrain.control import _support
+
+    monkeypatch.setattr(_support, "worker_key_login",
+                        lambda host: ("/keys/to-worker.key", "s3aled") if host == "192.0.2.10" else ("", ""))
+    assert _create(tmp_path, password_text="db-pw") == 0
+    [(_command, request)] = built
+    assert request["remote"] == {"host": "192.0.2.10", "port": 22, "username": "ops", "password": "ssh-pw",
+                                 "key_file": "/keys/to-worker.key", "key_passphrase": "s3aled"}
+
+
 def test_the_record_is_written_here_and_says_control_made_it(tmp_path, built):
     _create(tmp_path, password_text="db-pw")
     entries = registry.load_registry(registry.default_registry_path(tmp_path))[registry.REGISTRY_ROOT_KEY]

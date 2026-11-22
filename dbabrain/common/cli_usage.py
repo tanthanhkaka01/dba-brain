@@ -69,11 +69,15 @@ USAGE = (
     "  remote-credential-add  Register one host's OS login + the cmd_access naming it (see --help)\n"
     "  secret-set       Store one secret encrypted, never in clear; request on stdin (see --help)\n"
     "  secret-remove    Remove one secret, proven by its value; request on stdin (see --help)\n"
+    "  seal-ssh-key     Encrypt one SSH private key, its passphrase into the store (see --help)\n"
     "  entry-remove     Retire: remove ONE record of a data/*.json list, refused while named (see --help)\n"
     "  credential-remove  Retire: remove ONE login of users.json, refused while named (see --help)\n"
     "  instance-remove  Retire: remove ONE server from db_instances.json, refused while named (see --help)\n"
     "  report-server-remove  Retire: take a server off the report's canonical inventory (see --help)\n"
     "  ai-key           Store the AI assistant's API key and switch the assistant on (see --help)\n"
+    "  key-request      Get this node a dbabrain key from dbabrain.dev - an email sign-in (see --help)\n"
+    "  key-renew        The same: a new key, the earlier one replaced (see --help)\n"
+    "  key-status       This node's dbabrain key: its term, dbabrain.dev's answer, what it unlocks (see --help)\n"
     "  probe-host       What a host listens on, and what dbabrain can do with it (see --help)\n"
     "  metric-severity  Remap one metric's statuses for one server_id, e.g. WARNING -> LOGGING; or a list (see --help)\n"
     "  instance-active  Switch one server_id on or off for every app: its active flag (see --help)\n"
@@ -370,6 +374,30 @@ SECRET_SET_USAGE = (
     "secrets/secret_text.json. If that file exists and does not hold this ref, the next encrypt-secret\n"
     "drops the secret stored here - and on a fresh node, whose scaffold holds no secrets at all, it\n"
     "drops every secret instance-add and this command ever stored.\n"
+)
+
+SEAL_SSH_KEY_USAGE = (
+    "usage: python -m dbabrain.common.cli seal-ssh-key '<json-request>' | @file.json | -\n"
+    "\n"
+    "Seals ONE SSH private key (0.42.0, 1.410): the file is rewritten encrypted in OpenSSH's own\n"
+    "format (bcrypt KDF), with a random passphrase of its own stored under passphrase_ref in this\n"
+    "node's encrypted store - so the key file alone opens nothing. passphrases.json beside the key\n"
+    "names the ref (names only); every login that uses the key resolves it from there.\n"
+    "\n"
+    '  {"key_file": "/app/tools/dbabrain/data/ssh_keys/repo.key", "passphrase_ref": "SSH_KEY_REPO"}\n'
+    '  {"key_file": "<full path>", "passphrase_ref": "SSH_KEY_WORKER", "generate": true,\n'
+    '   "comment": "dbabrain@master"}\n'
+    "\n"
+    "  key_file        required. The key's FULL path (this command reads no configuration)\n"
+    "  passphrase_ref  required. A ref not yet in the store - a different value there is refused\n"
+    "  generate        make a new ed25519 pair there (and its .pub) instead; never over a file\n"
+    "  comment         the .pub's comment when generating (default: the file's name)\n"
+    "  also_plaintext  also write the ref into secrets/secret_text.json (a master: deploy\n"
+    "                  regenerates the store from it)\n"
+    "\n"
+    "Needs DBABRAIN_SECRET_KEY (the store's passphrase). A key already encrypted is refused. The\n"
+    "passphrase is stored and read back BEFORE the key is replaced, and the sealed key is proven to\n"
+    "open to the same public key; it is never printed or returned.\n"
 )
 
 SECRET_REMOVE_USAGE = (

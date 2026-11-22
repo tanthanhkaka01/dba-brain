@@ -175,6 +175,7 @@ def host_block(target: Any, *, secrets: dict[str, str], data_dir: str | Path | N
         "port": target.port,
         "username": target.username,
         "key_file": _resolved_key_file(target, data_dir),
+        "key_passphrase": _key_passphrase(target, data_dir, secrets),
         "password": _ssh_password(target, secrets),
         # How to reach it, which is a different question from what runs there: a Windows
         # SQL Server may answer on SSH or on WinRM, and hostcmd dispatches on this.
@@ -200,6 +201,17 @@ def _resolved_key_file(target: Any, data_dir: str | Path | None = None) -> str:
     from dbabrain.lib.data_sources import resolve_ssh_key
 
     return str(resolve_ssh_key(target.key_file, data_dir) or "")
+
+
+def _key_passphrase(target: Any, data_dir: str | Path | None = None,
+                    secrets: dict[str, str] | None = None) -> str:
+    """What opens the target's key when it is sealed (1.410); empty otherwise."""
+    key_file = _resolved_key_file(target, data_dir)
+    if not key_file:
+        return ""
+    from dbabrain.lib.data_sources import key_passphrase
+
+    return key_passphrase(key_file, data_dir=data_dir, secrets=secrets or None)
 
 
 def _ssh_password(target: Any, secrets: dict[str, str]) -> str:

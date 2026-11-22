@@ -33,8 +33,8 @@ import urllib.request
 from typing import Any
 
 from dbabrain.lib import errors
+from dbabrain.lib.dbabrain_key import DEFAULT_SERVER  # one definition of dbabrain.dev's address
 
-DEFAULT_SERVER = "https://mcp.dbabrain.dev"
 NODE_TOKEN_REF = "DBABRAIN_MCP_NODE_TOKEN"
 #: The frames a node takes at once - more wait their turn, so one person cannot flood their own node.
 MAX_IN_FLIGHT = 8

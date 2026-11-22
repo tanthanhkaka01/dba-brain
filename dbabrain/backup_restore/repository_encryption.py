@@ -389,8 +389,10 @@ def sealed_rows(store: RepositoryEncryptionStore, *, backup_id: str) -> dict[int
     decrypt to the backup's bytes and its plain file gone - each with those files. Only such a row's
     source may be released: a row encrypted in part has no whole proven copy on the repository."""
     sealed: dict[int, list[dict[str, Any]]] = {}
+    # Two reads for the whole entry, never one per row: see files_of_backup (2026-11-20).
+    recorded = store.files_of_backup(backup_id=backup_id)
     for file_id, done in store.done_rows(backup_id=backup_id).items():
-        files = store.files_of(file_id)
+        files = recorded.get(file_id) or []
         if (files and len(files) >= int(done.get("encrypted_files") or 0)
                 and all(f.get("proven_at") and f.get("plain_deleted_at") for f in files)):
             sealed[file_id] = files

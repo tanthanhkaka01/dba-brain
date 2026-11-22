@@ -1064,6 +1064,11 @@ def _cmd_access_json(target: MetricTarget) -> dict[str, Any]:
             access["key_file"] = data_sources.resolve_ssh_key(key_file)
         except Exception:  # noqa: BLE001 - left as named: `common` refuses it in the same words.
             pass
+    if Path(str(access.get("key_file") or "")).is_absolute():
+        try:
+            data_sources.with_key_passphrase(access)   # a sealed key's passphrase (1.410)
+        except Exception:  # noqa: BLE001 - the connect then fails naming the sealed key.
+            pass
     return access
 
 

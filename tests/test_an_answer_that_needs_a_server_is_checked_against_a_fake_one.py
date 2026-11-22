@@ -16,6 +16,7 @@ rows builds a whole answer, in the envelope, with keys the reference describes. 
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 import io
 import json
 import shlex
@@ -930,6 +931,48 @@ def test_decrypt_on_host(host, monkeypatch, capsys):
     assert identity not in host.ran[-1], "the key travels on stdin, never in the command"
 
 
+# --------------------------------------------------------------------------- #
+# dbabrain.dev (1.0.0): the device sign-in answered by a fake, the key signed by a throwaway key
+# --------------------------------------------------------------------------- #
+def _dbabrain_dev(monkeypatch):
+    from dbabrain.common import dbabrain_key_admin
+    from dbabrain.lib import dbabrain_key
+    from tests.test_dbabrain_key import Signer
+
+    signer = Signer()
+    token = signer.token(issued=datetime.now(timezone.utc))
+    monkeypatch.setattr(dbabrain_key, "SIGNING_PUBLIC_KEYS", signer.keys)
+    monkeypatch.setenv("DBABRAIN_SECRET_KEY", "a-throwaway-passphrase-for-this-test-only")
+    monkeypatch.setattr(dbabrain_key_admin.time, "sleep", lambda _seconds: None)
+
+    def http(method, url, *, body=None, bearer="", timeout=30):
+        if url.endswith("/node/link/start"):
+            return 200, {"device_code": "d", "user_code": "ABCD-EFGH", "interval": 2, "expires_in": 600,
+                         "verification_uri": "https://dev.example/link"}
+        if url.endswith("/node/link/poll"):
+            return 200, {"email": "a@example.com", "dbabrain_key": token}
+        return 200, {"kid": "k-1", "state": "active"}
+
+    monkeypatch.setattr(dbabrain_key_admin, "_http", http)
+    monkeypatch.setattr(dbabrain_key_admin.request_key, "__kwdefaults__",
+                        {**dbabrain_key_admin.request_key.__kwdefaults__, "http": http})
+    monkeypatch.setattr(dbabrain_key_admin.key_status, "__kwdefaults__",
+                        {**dbabrain_key_admin.key_status.__kwdefaults__, "http": http})
+
+
+def test_key_request(monkeypatch, capsys):
+    _dbabrain_dev(monkeypatch)
+    _holds(_answer(monkeypatch, capsys, "key-request", {"node": "lab", "wait": True}), "key-request")
+
+
+def test_key_renew(monkeypatch, capsys):
+    _dbabrain_dev(monkeypatch)
+    _answer(monkeypatch, capsys, "key-request", {"wait": True})
+    body = _answer(monkeypatch, capsys, "key-renew", {"wait": True})
+    _holds(body, "key-renew")
+    assert body["data"]["replaced"] is True
+
+
 #: Every command a test here answers. The R09 guard's baseline (ANSWER_NOT_YET_SEEN) is what
 #: neither its runs nor these answer - it reads this set.
 ANSWERED_WITH_A_FAKE_SERVER = frozenset({
@@ -942,6 +985,7 @@ ANSWERED_WITH_A_FAKE_SERVER = frozenset({
     "move-db-docker", "run-sqlcmd", "smb-list", "smb-delete", "smb-credential", "copy-schema",
     "rotate-password", "file-checksum", "backup-stop", "copy-files",
     "encrypt-file", "verify-encrypted-file", "fetch-decrypted-file", "decrypt-on-host",
+    "key-request", "key-renew",
 })
 
 

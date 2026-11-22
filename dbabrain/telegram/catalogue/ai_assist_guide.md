@@ -108,7 +108,9 @@ with its reason, before its line.
 
 When the store is nearly empty and `data/db_instances.json` lists nothing, the user is setting up.
 Guide one step at a time, in this order, each with its command (all in `agents_guide.md`), and check
-each with a read before moving on:
+each with a read before moving on. The node's key from dbabrain.dev is how its reports, backups and
+you yourself run: `dbabrain key-status` says its days left, `dbabrain key-renew` replaces it (a person
+approves in a browser) - after its end and 3 days of grace, new reports and backups stop.
 
 1. The passphrase they choose and keep (`DBABRAIN_SECRET_KEY`); nothing recovers it.
 2. The clock: `dbabrain db --config config.json timezone --set <Area/City>` - before the first

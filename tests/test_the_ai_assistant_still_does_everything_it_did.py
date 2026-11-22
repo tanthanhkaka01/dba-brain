@@ -103,8 +103,13 @@ SETTINGS_BEFORE = {
     "run_sql_server_ids": [], "run_sql_credential_name": "", "run_sql_max_rows": 200,
     "run_sql_timeout_seconds": 60, "bot_commands_enabled": True,
 }
-#: What 0.38.0 adds to the file: the name, and the switch of the tool that says how to run a backup.
-SETTINGS_ADDED = {"assistant_name", "backup_runbook_enabled"}
+#: What 0.38.0 adds to the file: the name, and the switch of the tool that says how to run a backup;
+#: and 1.0.0 who answers (`provider`: the own Anthropic key, or the AI through dbabrain.dev).
+SETTINGS_ADDED = {"assistant_name", "backup_runbook_enabled", "provider"}
+#: What 1.0.0 ships differently, for a NEW install only (the operator, 2026-11-21: *anyone who wants it
+#: signs in and uses it through dbabrain.dev*): on, through the relay, on its free plan's terms. A file
+#: from before keeps every value it states - and upgrade-config tells it `provider: anthropic`.
+SETTINGS_CHANGED_AT_1_0_0 = {"enabled": True, "model": "claude-haiku-5-5", "max_output_tokens_turn": 8000}
 NODE = {"role": "worker", "backend": "postgresql", "timezone": "+07:00"}
 
 
@@ -207,7 +212,7 @@ def test_the_guide_keeps_every_section_it_had_and_gains_one():
 # --------------------------------------------------------------------------- #
 def test_every_setting_it_had_ships_at_the_value_it_shipped_with():
     shipped = A.shipped_document()
-    assert {name: shipped[name] for name in SETTINGS_BEFORE} == SETTINGS_BEFORE
+    assert {name: shipped[name] for name in SETTINGS_BEFORE} == {**SETTINGS_BEFORE, **SETTINGS_CHANGED_AT_1_0_0}
     assert set(shipped) - set(SETTINGS_BEFORE) - {"prices", "users"} == SETTINGS_ADDED
     assert [row["model"] for row in shipped["prices"]] == ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"]
     assert shipped["users"] == []
@@ -227,6 +232,8 @@ def test_a_file_from_before_the_name_runs_again_after_one_upgrade():
     assert set(A.state_ai_assist(old)) == SETTINGS_ADDED
     settings = A.parse_ai_assist(old)
     assert settings.budget_usd_month == 50.0 and settings.enabled is True and settings.user("1").active is True
+    # It answered with its own Anthropic key: still so after the upgrade, never moved to the relay.
+    assert settings.provider == "anthropic" and settings.model == "claude-sonnet-5-5"
 
 
 # --------------------------------------------------------------------------- #

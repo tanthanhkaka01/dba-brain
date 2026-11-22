@@ -18,12 +18,62 @@ from pathlib import Path
 from typing import Any
 
 from dbabrain.lib import data_sources
-from dbabrain.lib.cmd_access import is_key_name
+from dbabrain.lib.cmd_access import PASSPHRASES_FILENAME, is_key_name
 from dbabrain.lib.ssh_errors import SshError
 
 SSH_KEYS_DIRNAME = "ssh_keys"
 
-__all__ = ["SSH_KEYS_DIRNAME", "resolve_ssh_key", "resolve_ssh_password", "ssh_keys_dir", "ssh_login"]
+__all__ = ["PASSPHRASES_FILENAME", "SSH_KEYS_DIRNAME", "key_passphrase", "resolve_ssh_key",
+           "resolve_ssh_password", "ssh_keys_dir", "ssh_login", "with_key_passphrase"]
+
+
+def key_passphrase(key_path: str | Path, *, data_dir: str | Path | None = None,
+                   secrets: dict[str, str] | None = None) -> str:
+    """What opens the key at *key_path*, or ``""`` for a key that is not sealed.
+
+    A sealed key (1.410) is a private key kept encrypted in OpenSSH's format: the file alone opens
+    nothing, its passphrase is a secret like any other. ``passphrases.json`` in the key's own
+    folder names the ref; it is resolved from *secrets* when given, else from the node's store with
+    the node's passphrase. A key listed there whose ref does not resolve raises :class:`SshError` -
+    a sealed key without its passphrase cannot log in, and saying so here names the cause.
+    """
+    path = Path(str(key_path or ""))
+    if not str(key_path or "").strip():
+        return ""
+    registry = path.parent / PASSPHRASES_FILENAME
+    if not registry.is_file():
+        return ""
+    import json
+
+    try:
+        entries = json.loads(registry.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise SshError(f"{registry} cannot be read: {exc}") from exc
+    entry = entries.get(path.name) if isinstance(entries, dict) else None
+    ref = str((entry or {}).get("passphrase_ref") or "").strip() if isinstance(entry, dict) else ""
+    if not ref:
+        return ""
+    if secrets is None:
+        try:
+            secrets = data_sources.load_secret_text(data_dir)
+        except Exception as exc:  # noqa: BLE001 - no key, wrong key, corrupt store.
+            raise SshError(f"SSH key {path.name} is sealed and the secret store holding its "
+                           f"passphrase ({ref}) cannot be read: {exc}") from exc
+    value = str(secrets.get(ref) or "")
+    if not value:
+        raise SshError(f"SSH key {path.name} is sealed and its passphrase ref {ref} is not in the "
+                       "secret store.")
+    return value
+
+
+def with_key_passphrase(block: dict[str, Any], *, data_dir: str | Path | None = None,
+                        secrets: dict[str, str] | None = None) -> dict[str, Any]:
+    """*block* with ``key_passphrase`` added when its ``key_file`` (a resolved path) is sealed."""
+    key_file = str(block.get("key_file") or "").strip()
+    passphrase = key_passphrase(key_file, data_dir=data_dir, secrets=secrets) if key_file else ""
+    if passphrase:
+        block["key_passphrase"] = passphrase
+    return block
 
 
 def ssh_keys_dir(data_dir: str | Path | None = None) -> Path:
@@ -141,6 +191,7 @@ def ssh_login(
         port = int(values.get("port") or 22)
     except (TypeError, ValueError):
         port = 22
-    return {"host": str(values.get("host") or default_host or "").strip(), "port": port,
-            "username": str(merged.get("username") or "").strip(), "password": password,
-            "key_file": key_file}
+    return with_key_passphrase(
+        {"host": str(values.get("host") or default_host or "").strip(), "port": port,
+         "username": str(merged.get("username") or "").strip(), "password": password,
+         "key_file": key_file}, data_dir=data_dir)

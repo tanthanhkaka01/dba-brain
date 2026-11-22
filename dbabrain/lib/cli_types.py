@@ -797,6 +797,18 @@ SecretRemoveAnswer = TypedDict('SecretRemoveAnswer', {
 }, total=False)
 
 
+#: One SSH private key sealed: its public half and where its passphrase is (never the value). (seal-ssh-key)
+SealSshKeyAnswer = TypedDict('SealSshKeyAnswer', {
+    'key_file': str | None,
+    'passphrase_ref': str | None,
+    'generated': bool | None,
+    'public_key': str | None,
+    'fingerprint': str | None,
+    'registry': str | None,
+    'store': str | None,
+}, total=False)
+
+
 #: One record of a data/*.json list to remove, found by its fields; a plan unless apply. (entry-remove)
 EntryRemoveRequest = TypedDict('EntryRemoveRequest', {
     'data_dir': str | None,
@@ -895,6 +907,25 @@ AiKeyAnswer = TypedDict('AiKeyAnswer', {
     'store': str | None,
     'next': str | None,
     'warnings': list[str] | None,
+}, total=False)
+
+
+#: The dbabrain key stored: where, whether it replaced one, and what it holds (never the key itself). (key-request, key-renew)
+KeyRequestAnswer = TypedDict('KeyRequestAnswer', {
+    'ref': str | None,
+    'store': str | None,
+    'replaced': bool | None,
+    'key': dict[str, Any] | None,
+    'state': str | None,
+}, total=False)
+
+
+#: Where this node's dbabrain key stands, and what each gated feature may do now. (key-status)
+KeyStatusAnswer = TypedDict('KeyStatusAnswer', {
+    'standing': dict[str, Any] | None,
+    'online': dict[str, Any] | None,
+    'features': dict[str, Any] | None,
+    'how_to_get': str | None,
 }, total=False)
 
 
@@ -1917,11 +1948,36 @@ SecretRemoveRequest = TypedDict('SecretRemoveRequest', {
 }, total=False)
 
 
+#: One SSH private key to seal (or generate and seal) by its full path, and the ref for its passphrase. (seal-ssh-key)
+SealSshKeyRequest = TypedDict('SealSshKeyRequest', {
+    'key_file': Required[str | None],
+    'passphrase_ref': Required[str | None],
+    'generate': bool | None,
+    'comment': str | None,
+    'also_plaintext': bool | None,
+}, total=False)
+
+
 #: The AI assistant's API key. Stdin only (or the prompt): never on a command line. (ai-key)
 AiKeyRequest = TypedDict('AiKeyRequest', {
     'value': Required[str],
     'ref': str | None,
     'overwrite': bool | None,
+}, total=False)
+
+
+#: Get this node a dbabrain key from dbabrain.dev: an email sign-in, the key into the encrypted store. (key-request, key-renew)
+KeyRequestRequest = TypedDict('KeyRequestRequest', {
+    'node': str | None,
+    'server': str | None,
+    'wait': bool | None,
+}, total=False)
+
+
+#: This node's dbabrain key read offline, and dbabrain.dev's answer about it. (key-status)
+KeyStatusRequest = TypedDict('KeyStatusRequest', {
+    'online': bool | None,
+    'server': str | None,
 }, total=False)
 
 
@@ -2287,6 +2343,7 @@ __all__ = [
     'ConfigEditAnswer',
     'SecretSetAnswer',
     'SecretRemoveAnswer',
+    'SealSshKeyAnswer',
     'EntryRemoveRequest',
     'EntryRemoveAnswer',
     'CredentialRemoveRequest',
@@ -2296,6 +2353,8 @@ __all__ = [
     'ReportServerRemoveRequest',
     'ReportServerRemoveAnswer',
     'AiKeyAnswer',
+    'KeyRequestAnswer',
+    'KeyStatusAnswer',
     'RunSqlAnswer',
     'RunCmdAnswer',
     'TraceSessionAnswer',
@@ -2363,7 +2422,10 @@ __all__ = [
     'AppCommandSetRequest',
     'SecretSetRequest',
     'SecretRemoveRequest',
+    'SealSshKeyRequest',
     'AiKeyRequest',
+    'KeyRequestRequest',
+    'KeyStatusRequest',
     'RunSqlRequest',
     'RunCmdRequest',
     'TraceSessionRequest',

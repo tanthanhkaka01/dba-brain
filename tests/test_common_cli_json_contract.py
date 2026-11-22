@@ -99,6 +99,10 @@ ALL_COMMANDS = [
     "standardize-field-names", "upgrade-config",
     # 0.24.0: back from the root package (rules R41) - its two resolvers are lib's now.
     "check-credentials",
+    # 0.42.0 (1.410): one SSH private key encrypted, its passphrase into the store - no secret in the request.
+    "seal-ssh-key",
+    # 1.0.0: this node's dbabrain key - the key arrives from dbabrain.dev, never in the request.
+    "key-request", "key-renew", "key-status",
     # Left this file on 2026-08-15 and covered elsewhere now, for the same reason in each case —
     # they were not shared-layer work:
     #   queue-telegram-message, ops-status, restore-drill-status

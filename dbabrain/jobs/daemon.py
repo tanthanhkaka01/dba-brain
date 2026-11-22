@@ -38,7 +38,11 @@ from dbabrain.lib import app_timeout, daemon_state, node_identity, process_liven
 from dbabrain.lib.process_liveness import child_start_marker, own_group_kwargs, stop_process_tree
 from dbabrain.lib import node_role as node_role_rule
 from dbabrain.lib import run_mode as run_mode_lib
+from dbabrain.lib import app_schedule
 from dbabrain.db.store import utc_now_text
+from dbabrain.jobs import key_gate as key_gate_mod
+from dbabrain.jobs import key_watch
+from dbabrain.jobs import unlock as daemon_unlock
 from dbabrain.jobs.models import JobRun
 from dbabrain.logging_ops import LOG_SCOPE_ENV_VAR, build_log_paths, log_event, log_function_error, setup_app_logger, validate_log_scope
 from dbabrain.logging_ops.handlers import archive_yesterday_if_missing, ensure_current_log_file
@@ -51,43 +55,9 @@ from dbabrain.lib.paths import DEFAULT_DATA_DIR, REPO_ROOT, TOOL_ROOT  # noqa: F
 MAX_OUTPUT_CHARS = 8000
 
 
-@dataclass(frozen=True)
-class AppCommand:
-    app_command_id: str
-    app_code: str
-    app_name: str
-    display_name: str
-    log_scope: str
-    working_dir: str
-    command_text: str
-    time_window: TimeWindow
-    active: bool
-    node_role: str = "all"  # master | worker | all — which cluster node runs this command
-    #: sync (default) = the daemon waits for one run to finish before starting the next; async =
-    #: it starts the command whenever it is due, in flight or not, up to max_parallel. An async
-    #: command must refuse its own duplicate work — see dbabrain/lib/run_mode.py.
-    run_mode: run_mode_lib.RunMode = field(default_factory=run_mode_lib.RunMode)
-
-    @property
-    def repeat_interval_seconds(self) -> int | None:
-        return self.time_window.repeat_interval
-
-    @property
-    def retry_interval_seconds(self) -> int:
-        # Explicit None check so 0 (retry immediately) survives instead of falling back to 60.
-        value = self.time_window.retry_interval
-        return int(value) if value is not None else 60
-
-    @property
-    def timeout_seconds(self) -> int:
-        # Explicit None check so 0 (no timeout-kill) survives instead of falling back to 300.
-        value = self.time_window.timeout
-        return int(value) if value is not None else 300
-
-    @property
-    def timeout_disabled(self) -> bool:
-        """timeout == 0 => long-running service; the daemon never timeout-kills it."""
-        return self.time_window.timeout == 0
+#: One app command and the rules that schedule it live in ``lib.app_schedule`` (1.0.0): the node's
+#: status report reads by them too, from the shared ``db`` layer (rules R42).
+AppCommand = app_schedule.AppCommand
 
 
 @dataclass
@@ -307,6 +277,17 @@ def main(argv: list[str]) -> int:
         config = load_config(resolve_config_path("jobs", args.config))
         patch_stdout(config.log_dir / "jobs_runtime.log", app_name="jobs")
         logger = setup_app_logger(config, app_name="jobs", enable_telegram_alerts=False)
+        # Before the store: its password is in the secret store, and so is everything else. A node
+        # that names an unlock file starts locked and waits for the master to hand the passphrase
+        # over (dbabrain.jobs.unlock, 1.409) - never from Docker's configuration, where it was in
+        # clear on the host's disk. Read into this process only; its children still inherit it.
+        unlock_file = daemon_unlock.unlock_file_from_env()
+        if unlock_file is not None and not os.environ.get(SECRET_KEY_ENV_VAR):
+            os.environ[SECRET_KEY_ENV_VAR] = daemon_unlock.wait_for_unlock(
+                unlock_file, data_dir=Path(args.data_dir).resolve(),
+                on_event=lambda name, fields: log_app_event(logger, name, status="locked"
+                                                            if name != "app.daemon.unlocked" else "running",
+                                                            **fields))
         store = DbaBrainStore.from_config(config)
         # A daemon started *during* a store restart must wait for it exactly as a running one does.
         # Without this the first attempt to bring the estate back up after a store bounce exits on
@@ -458,11 +439,8 @@ def record_node_timezone(*, store: Any, config: Any, logger: Any = None) -> None
 
 
 def _command_runs_on_node(command: AppCommand, node_role: str) -> bool:
-    """True if this command should run on a node with the given role. ``all`` (and the
-    legacy aliases ``both``/``any``/empty) runs everywhere; otherwise the command's
-    node_role must equal the node role (``master`` runs master+all, ``worker`` runs
-    worker+all)."""
-    return node_role_rule.runs_on(command.node_role, node_role, default="all")
+    """:func:`lib.app_schedule.runs_on_node`, under the name the daemon has always used."""
+    return app_schedule.runs_on_node(command, node_role)
 
 
 def run_scheduler_scan(
@@ -525,6 +503,20 @@ def run_scheduler_scan(
 
     sweep_run_requests(store, logger=logger)
     requests = open_run_requests(store, logger=logger)
+    # The dbabrain key, read once a scan (1.0.0, K4): reports, backup / restore, SRE and the MCP
+    # connector start only while it allows; nothing else is asked. Never a reason the scan stops.
+    try:
+        key_gate = key_gate_mod.KeyGate.for_scan(data_dir)
+        # K5: the day's online check of the key, and the warnings before and after its end.
+        key_gate = key_watch.watch(
+            data_dir, key_gate, now=datetime.now(timezone.utc),
+            push=lambda level, text: _push_daemon_telegram(
+                store=store, level=level, message=text, note="dbabrain key", source_id="dbabrain_key"),
+            check_online=_check_key_online,
+            regate=lambda: key_gate_mod.KeyGate.for_scan(data_dir))
+    except Exception as exc:  # noqa: BLE001 - node_standing already answers instead of raising
+        key_gate = None
+        log_app_event(logger, "app.daemon.key_gate_failed", status="warning", level="warning", error=str(exc)[:200])
 
     for app_command in active_commands:
         if single_pass and app_command.timeout_disabled:
@@ -604,6 +596,9 @@ def run_scheduler_scan(
                 request_id=requested["request_id"],
                 requested_by=requested["requested_by"],
             )
+        if key_gate is not None and not _key_allows(key_gate, app_command, store=store, logger=logger,
+                                                    requested=requested):
+            continue
         try:
             start_app_command(
                 config=config,
@@ -630,6 +625,39 @@ def run_scheduler_scan(
             # turned that into a crash loop that ran nothing past the bad entry.
             record_start_failure(store, app_command, exc, logger=logger)
             continue
+
+
+def _check_key_online() -> None:
+    """D5: ``common.cli key-status`` asks dbabrain.dev and keeps its answer beside data/."""
+    from dbabrain.transport import common_cli
+
+    common_cli.run_allowing_failure("key-status", {}, timeout_seconds=60)
+
+
+def _key_allows(key_gate: Any, app_command: AppCommand, *, store: Any, logger: Any, requested: Any) -> bool:
+    """Whether the dbabrain key lets this due command start - said once on Telegram, logged each time."""
+    gated = key_gate.decide(app_command.command_text, requested=requested is not None)
+    if gated is None:
+        return True
+    feature, decision = gated
+    if not decision.allowed:
+        # Only a refusal: the term and the grace are said once for the node by key_watch.
+        key_gate.say_once(feature, decision, lambda level, text: _push_daemon_telegram(
+            store=store, level=level, message=f"{app_command.display_name}: {text}",
+            metadata=app_command_metadata(app_command, feature=feature),
+            note="dbabrain key", source_id="dbabrain_key"))
+    if decision.allowed:
+        return True
+    log_app_event(logger, "app.daemon.command.skip_key", app_command=app_command, status="skipped",
+                  reason="dbabrain_key", feature=feature, detail=decision.sentence)
+    if requested is not None:
+        # Closed with the reason, not put back: put back, it would be claimed and refused every tick.
+        try:
+            _run_request_store(store).mark_done(int(requested["request_id"]), note=decision.sentence[:300])
+        except Exception as exc:  # noqa: BLE001 - only the console's badge
+            log_app_event(logger, "app.daemon.requests.finish_failed", status="warning", level="warning",
+                          error=str(exc)[:200])
+    return False
 
 
 def _is_store_trouble(error: BaseException) -> bool:
@@ -1019,26 +1047,8 @@ def start_app_command(
 
 def app_command_due(app_command: AppCommand, latest_run: Any | None,
                     now: datetime | None = None) -> DueVerdict:
-    """Whether this command runs now, with the reason when it does not.
-
-    One call into :func:`dbabrain.lib.time_window.due_from_row`, which reads the anchor off the row
-    and applies the rule. The daemon's two defaults are stated here and nowhere else: a failed
-    command retries after 60 s and an unstated ``timeout`` is 300 s.
-    """
-    return due_from_row(
-        time_window=app_command.time_window,
-        row=latest_run,
-        now=now or datetime.now(timezone.utc),
-        retry_default=60,
-        timeout_default=300,
-        # An `async` command's own run in flight is not a reason to withhold the next one - that is
-        # what the field means, and `max_parallel` is the cap. Without this the store-side due check
-        # answered "running within timeout" and the concurrency never happened: measured
-        # 2026-09-19, where one scan ran two long tasks one after the other for three minutes while
-        # the daemon started nothing beside it. What keeps the *work* from doubling is the claim,
-        # not this check.
-        running_blocks=not app_command.run_mode.is_async,
-    )
+    """Whether this command runs now, with the reason when it does not - :func:`lib.app_schedule.due`."""
+    return app_schedule.due(app_command, latest_run, now)
 
 
 def app_command_is_due(app_command: AppCommand, latest_run: Any | None, now: datetime | None = None) -> bool:
@@ -1051,8 +1061,7 @@ def app_command_in_schedule_window(app_command: AppCommand, now_local: datetime 
     # schedule mean whatever clock the machine was set to, so the same app_commands.json
     # fired at 01:00 Vietnam on the master and 01:00 UTC in the container - and the only
     # thing holding the two together was a TZ line in docker-compose.yml.
-    current = now_local or display_now()
-    return is_time_window_open(app_command.time_window, current)
+    return app_schedule.window_open(app_command, now_local or display_now())
 
 
 #: A stale RUNNING row older than this is history, not news. The daemon has restarted many times
@@ -1399,6 +1408,8 @@ def _push_daemon_telegram(
     level: str,
     message: str,
     metadata: dict[str, Any] | None = None,
+    note: str = "Daemon stale recovery notification",
+    source_id: str = "stale_recovery",
 ) -> None:
     """Queue a daemon notification, if the shared router says this level may alert.
 
@@ -1428,9 +1439,9 @@ def _push_daemon_telegram(
             "chat_id": chat_id,
             "text": text,
             "level": level,
-            "note": "Daemon stale recovery notification",
+            "note": note,
             "source_type": "daemon_events",
-            "source_id": "stale_recovery",
+            "source_id": source_id,
             "metadata": metadata or {},
         }, fallback_store=store)
     except Exception as exc:
@@ -1622,35 +1633,9 @@ def load_app_commands(path: Path, *, logger: Any = None) -> dict[str, AppCommand
     data = load_json_file(path)
     commands: list[AppCommand] = []
     for item in data.get("app_commands", []):
-        app_command_id = str(item["app_command_id"])
-        parsed_time_window = parse_time_window_config(
-            item,
-            context=f"app_commands.{app_command_id}",
-            defaults={
-                "from_day": 1,
-                "to_day": 31,
-                "from_hour": 0,
-                "to_hour": 23,
-                "retry_interval": 60,
-                "timeout": 300,
-            },
-        )
-        log_deprecated_time_window_warnings(logger, parsed_time_window.warnings)
-        commands.append(
-            AppCommand(
-                app_command_id=app_command_id,
-                app_code=str(item.get("app_code") or item["app_command_id"]),
-                app_name=str(item.get("app_name") or item.get("app_code") or item["app_command_id"]),
-                display_name=str(item.get("display_name") or item.get("command_name") or item.get("app_name") or item["app_command_id"]),
-                log_scope=validate_app_command_log_scope(item),
-                working_dir=str(item.get("working_dir", "")),
-                command_text=str(item.get("command_text", "")),
-                time_window=parsed_time_window.time_window,
-                active=bool(item.get("active", True)),
-                node_role=(str(item.get("node_role", "all")).strip().lower() or "all"),
-                run_mode=run_mode_lib.parse(item),
-            )
-        )
+        command, warnings = app_schedule.parse_app_command(item, log_scope=validate_app_command_log_scope(item))
+        log_deprecated_time_window_warnings(logger, warnings)
+        commands.append(command)
     return {command.app_command_id: command for command in commands}
 
 

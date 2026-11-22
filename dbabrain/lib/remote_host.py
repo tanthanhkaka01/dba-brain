@@ -116,13 +116,16 @@ class RemoteHost:
     """One Linux host, reached over SSH by ``common.cli``. Nothing is open between calls."""
 
     def __init__(self, *, host: str, username: str, call: Call, port: int = 22, password: str = "",
-                 key_file: str = "", auth_type: str = "", connect_timeout_seconds: int = 30) -> None:
+                 key_file: str = "", auth_type: str = "", connect_timeout_seconds: int = 30,
+                 key_passphrase: str = "") -> None:
         self.host = str(host)
         self.username = str(username)
         self.port = int(port or 22)
         self.password = str(password or "")
         self.key_file = str(key_file or "")
-        self.auth_type = str(auth_type or "") or ("password" if self.password else "key")
+        self.key_passphrase = str(key_passphrase or "")
+        # A key wins: with one, the password is what `sudo -S` is fed, not the login (1.413).
+        self.auth_type = str(auth_type or "") or ("key" if self.key_file or not self.password else "password")
         self.connect_timeout_seconds = int(connect_timeout_seconds or 30)
         self._call = call
 
@@ -150,6 +153,8 @@ class RemoteHost:
             block["password"] = self.password
         if self.key_file:
             block["key_file"] = self.key_file
+            if self.key_passphrase:
+                block["key_passphrase"] = self.key_passphrase
         return block
 
     def close(self) -> None:

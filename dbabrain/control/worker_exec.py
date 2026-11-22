@@ -21,11 +21,13 @@ import shlex
 import sys
 
 from dbabrain.control._support import DEFAULT_CONTAINER, ssh_connect, ssh_run
+from dbabrain.control.worker_unlock import keyed_exec_script
+from dbabrain.lib.secret_text import redact_key_arguments
 
 
 def run_worker_command(*, host: str, user: str, password: str | None, port: int = 22,
                        container: str = DEFAULT_CONTAINER, command: list[str],
-                       on_host: bool = False, sudo: bool = False) -> int:
+                       on_host: bool = False, sudo: bool = False, secret_key: str = "") -> int:
     # argparse REMAINDER may keep a leading "--" separator — drop it.
     cmd = list(command or [])
     if cmd and cmd[0] == "--":
@@ -37,6 +39,22 @@ def run_worker_command(*, host: str, user: str, password: str | None, port: int 
         return 2
 
     quoted = " ".join(shlex.quote(t) for t in cmd)
+    if not on_host and secret_key:
+        # The container's configuration no longer holds the passphrase (1.409), so a command in it
+        # gets the one this run was given - on stdin, in that command's environment only.
+        client = ssh_connect(host, user, password, port)
+        try:
+            print(f"# worker {user}@{host}", flush=True)
+            print(f"[remote] $ docker exec {container} {redact_key_arguments(quoted)}", flush=True)
+            result = client.run_script(keyed_exec_script(container, secret_key, cmd,
+                                                         header="dbabrain: worker-run"))
+            if result.stdout:
+                print(result.stdout.rstrip())
+            if result.stderr:
+                print(result.stderr.rstrip(), file=sys.stderr)
+            return result.exit_code
+        finally:
+            client.close()
     if on_host:
         # One token is a whole shell line (`cd /opt/dbabrain && docker compose ps`); several are
         # one command and its arguments, quoted as they came.

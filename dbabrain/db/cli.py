@@ -185,6 +185,14 @@ def build_parser() -> argparse.ArgumentParser:
                      help='Optional JSON object: {"format": "txt", "record": true, "list": true, "set": "UTC"}.')
     tzc.set_defaults(handler=_handle_timezone)
 
+    # 1.0.0: this node's app commands, their last runs and its metric freshness - what the
+    # master's `control worker-status` runs in the worker's container (was `jobs.status`, rules R42).
+    nst = subparsers.add_parser(
+        "node-status", help="This node's app commands, their last runs, and how fresh its metrics are.")
+    nst.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    nst.add_argument("--no-metrics", action="store_true", help="Skip the metric_results freshness section.")
+    nst.set_defaults(handler=_handle_node_status)
+
     ver = subparsers.add_parser(
         "verify-migration", help="Compare row counts per table between SQLite and PostgreSQL.")
     _add_secret_args(ver)
@@ -328,6 +336,16 @@ def _handle_use_store(args) -> int:
     after = load_config(config_path)
     print(f"backend            : {after.store.backend}")
     print(f"active connection  : {after.store.connection_string}")
+    return 0
+
+
+def _handle_node_status(args) -> int:
+    from dbabrain.db import node_status
+
+    report = node_status.build_status(config_path=args.config, with_metrics=not args.no_metrics,
+                                      key=secret_text.resolve_cli_key(getattr(args, "key", None),
+                                                                      getattr(args, "key_base64", None)))
+    print(node_status.render(report, as_json=args.json))
     return 0
 
 

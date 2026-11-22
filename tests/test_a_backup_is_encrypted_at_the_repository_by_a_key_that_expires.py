@@ -645,6 +645,27 @@ def test_only_a_row_whose_every_file_is_proven_and_its_plain_file_gone_is_sealed
     assert E.is_encrypted(store, backup_id="B1") == {1, 2, 3, 4, 5}, "every other row is held at its source"
 
 
+def test_the_sealed_rows_are_read_in_one_query_however_long_the_entrys_history(tmp_path, monkeypatch):
+    # One connection per row ever encrypted was 13 minutes a pass on a LOG entry of ~10,000 rows
+    # (2026-11-20): its sources waited two hours to be released, and longer each day.
+    store = RepositoryEncryptionStore(tmp_path / "store.sqlite")
+    for file_id in range(1, 41):
+        _record(store, file_id, f"/nas/{file_id}.trn")
+        store.mark_row_done(file_id=file_id, backup_id="B1", repository_server_id="REPO", encrypted_files=1,
+                            key_id=1)
+    _record(store, 99, "/nas/other.trn")
+    store.mark_row_done(file_id=99, backup_id="B2", repository_server_id="REPO", encrypted_files=1, key_id=1)
+
+    def one_at_a_time(file_id):
+        raise AssertionError("sealed_rows asked the store row by row")
+
+    monkeypatch.setattr(store, "files_of", one_at_a_time)
+    sealed = E.sealed_rows(store, backup_id="B1")
+
+    assert set(sealed) == set(range(1, 41)), "another entry's rows are not this entry's"
+    assert [f["encrypted_path"] for f in sealed[7]] == ["/nas/7.trn.age"]
+
+
 @needs_sh
 def test_a_pass_seals_the_row_it_encrypts(world):
     row, _ = _row(world)

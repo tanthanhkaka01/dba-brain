@@ -39,6 +39,9 @@ from typing import Any
 from dbabrain.lib.file_lock import FileLock
 
 SECRET_KEY_ENV_VAR = "DBABRAIN_SECRET_KEY"
+#: A path, never a value: where a daemon started without the passphrase waits for it to be handed
+#: over in a file it reads once and removes (``dbabrain.jobs.unlock``, 0.42.0 item 1.409).
+UNLOCK_FILE_ENV_VAR = "DBABRAIN_UNLOCK_FILE"
 ENCRYPTED_SECRET_TEXT_FILENAME = "encrypted_secret_text.json"
 SECRET_TEXT_FILENAME = "secret_text.json"
 
@@ -363,6 +366,37 @@ def remove_secret_text(data_dir: str | Path, ref: str, value: str, *, key: str |
             write_secret_file(plain_path, json.dumps({name: plain[name] for name in sorted(plain)},
                                                       indent=2, ensure_ascii=False) + "\n")
     return {"removed": in_store, "plaintext_removed": in_plain}
+
+
+def rekey_secret_text(text: str, *, old_key: str, new_key: str) -> tuple[str, int]:
+    """The encrypted store in *text* sealed again with *new_key*: ``(new text, number of secrets)``.
+
+    Opened with *old_key* (a wrong one raises and nothing is made), sealed with a fresh salt, and the
+    result opened again with *new_key* and compared secret by secret before it is answered - the
+    caller writes only what is already proven (0.42.0, 1.411). No old copy is kept: the operator,
+    2026-11-21, chose that for the secret store.
+    """
+    if not old_key or not new_key or old_key == new_key:
+        raise ValueError("an old and a different new passphrase are both required")
+    blob = json.loads(text)
+    if not is_encrypted_blob(blob):
+        raise errors.InvalidConfig("not an encrypted secret store")
+    secrets = decrypt_secret_text(blob, old_key)
+    sealed = json.dumps(encrypt_secret_text(secrets, new_key), indent=2) + "\n"
+    if decrypt_secret_text(json.loads(sealed), new_key) != secrets:
+        raise errors.InvalidConfig("the store sealed with the new passphrase does not read back the same")
+    return sealed, len(secrets)
+
+
+def rekey_secret_text_file(path: str | Path, *, old_key: str, new_key: str) -> int:
+    """:func:`rekey_secret_text` on a file, under the store's lock, written whole (0600 kept)."""
+    path = Path(path)
+    with FileLock(path):
+        sealed, count = rekey_secret_text(path.read_text(encoding="utf-8-sig"), old_key=old_key, new_key=new_key)
+        write_secret_file(path, sealed)
+        if decrypt_secret_text(json.loads(path.read_text(encoding="utf-8")), new_key) is None:
+            raise errors.InvalidConfig(f"{path} does not open with the new passphrase after it was written")
+    return count
 
 
 def encrypt_secret_text_file(source: str | Path, dest: str | Path, key: str) -> int:

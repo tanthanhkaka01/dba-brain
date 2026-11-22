@@ -241,7 +241,8 @@ last night", against the same table.
 
 **What this does not make it.** The operations do not reason: no model schedules, grades, backs up
 or alerts, and none is needed for any of it. A model is a caller - the optional assistant
-(`telegram` app, on only with an API key, read-only tools, `docs/07_telegram_app.md`), an MCP client
+(`telegram` app, answering through dbabrain.dev once the node has a dbabrain key, or on its own
+Anthropic key; read-only tools, `docs/07_telegram_app.md`), an MCP client
 (`docs/16_mcp_app.md`), or an agent in a shell - and it reaches the estate through the same commands
 a person runs. A layer that does not reason is a layer you can audit, and every judgement that
 carries consequences — restore this, fail over that — stays with whoever is accountable for it. The

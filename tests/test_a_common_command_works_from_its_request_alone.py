@@ -82,6 +82,10 @@ CONFIGURATION_IS_ITS_JOB = frozenset({
     "self-status",
     # 0.39.0: the AI assistant's key into the encrypted store and ai_assist.json switched on.
     "ai-key",
+    # 0.42.0 (1.410): one SSH key sealed in place, its passphrase into the node's store - secret-set's kind.
+    "seal-ssh-key",
+    # 1.0.0: the node's dbabrain key into its store, and read from it - secret-set's kind again.
+    "key-request", "key-renew", "key-status",
 })
 
 #: `init` writes a whole tool root into the directory it is given. Its runs here each get a directory
@@ -389,6 +393,8 @@ _ON_AN_EMPTY_ROOT = {
     "check-credentials": {},
     # This node, reported with nothing configured: the zone's default, no app scheduled.
     "self-status": {},
+    # No key on a new install: said as a state, with how to get one - and dbabrain.dev is not asked.
+    "key-status": {},
 }
 _TEST_KEY = "a-throwaway-passphrase-for-this-test-only"
 
@@ -431,6 +437,9 @@ def _on_a_root_init_wrote(work: Path, root: Path) -> dict[str, list[tuple[str, d
         # 0.41.0: a secret is removed after it was stored - in order, on its own root.
         "secret-remove": [("secret-set", {"ref": "LAB_PASSWORD", "value": "not-a-real-password"}),
                           ("secret-remove", {"ref": "LAB_PASSWORD", "value": "not-a-real-password"})],
+        # 0.42.0, 1.410: a pair made and sealed at the full path the request names.
+        "seal-ssh-key": [("seal-ssh-key", {"key_file": str(work / "sealed_keys" / "lab.key"),
+                                           "passphrase_ref": "LAB_SSH_KEY", "generate": True})],
         "instance-remove": [("instance-add", _INSTANCE),
                             ("instance-remove", {"server_id": _INSTANCE["server_id"], "apply": True})],
         "credential-remove": [("remote-credential-add", {"server_id": "LAB-192-0-2-11", "username": "tuser",

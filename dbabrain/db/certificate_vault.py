@@ -32,6 +32,7 @@ import re
 from typing import Any
 
 from dbabrain.db import backend as backend_mod
+from dbabrain.db import envelope_generations as G
 from dbabrain.db.backend import StoreTarget
 from dbabrain.db.store import utc_now_text as utc_text
 from dbabrain.lib import errors
@@ -40,7 +41,9 @@ from dbabrain.lib.integrity import SHA1_HEX as _SHA1
 from dbabrain.lib.integrity import SHA256_HEX as _SHA256
 
 #: Bumped when this table changes.
-CERTIFICATE_VAULT_SCHEMA_VERSION = 1
+#: 2 (0.42.0, 1.411): the retire columns; UNIQUE (server, name, thumbprint) over the active rows only -
+#: a passphrase change seals each pair into a new row and retires the old one, never rewriting it.
+CERTIFICATE_VAULT_SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS backup_certificates
@@ -64,11 +67,17 @@ CREATE TABLE IF NOT EXISTS backup_certificates
     backup_id TEXT NULL,
     verified_at TEXT NULL,
     source_deleted_at TEXT NULL,
-    CONSTRAINT uq_backup_certificates UNIQUE (server_id, certificate_name, thumbprint)
+    retired_at TEXT NULL,
+    replaced_by INTEGER NULL,
+    retired_reason TEXT NULL
 );
 
 CREATE INDEX IF NOT EXISTS ix_backup_certificates_name ON backup_certificates (server_id, certificate_name);
 """
+
+
+#: One ACTIVE row per certificate (schema 2).
+_UNIQUE = ("server_id", "certificate_name", "thumbprint")
 
 
 class CertificateVaultError(errors.OperationFailed):
@@ -105,6 +114,9 @@ class CertificateVault:
         with self.connect() as conn:
             backend_mod.acquire_schema_lock(conn)
             conn.executescript(SCHEMA_SQL)
+            G.migrate(conn, self.target.store.backend, table="backup_certificates",
+                      old_constraint="uq_backup_certificates", index="uq_backup_certificates_active",
+                      unique_columns=_UNIQUE, schema_sql=SCHEMA_SQL)
             backend_mod.record_schema_version(conn, "CertificateVault", CERTIFICATE_VAULT_SCHEMA_VERSION)
         backend_mod.mark_schema_ready("CertificateVault", self.target)
 
@@ -203,11 +215,12 @@ class CertificateVault:
             if thumbprint:
                 row = conn.execute(
                     "SELECT * FROM backup_certificates WHERE server_id = ? AND certificate_name = ? "
-                    "AND thumbprint = ?", (server_id, certificate_name, thumbprint.lower())).fetchone()
+                    "AND thumbprint = ? AND retired_at IS NULL",
+                    (server_id, certificate_name, thumbprint.lower())).fetchone()
             else:
                 row = conn.execute(
                     "SELECT * FROM backup_certificates WHERE server_id = ? AND certificate_name = ? "
-                    "AND verified_at IS NOT NULL ORDER BY certificate_id DESC LIMIT 1",
+                    "AND verified_at IS NOT NULL AND retired_at IS NULL ORDER BY certificate_id DESC LIMIT 1",
                     (server_id, certificate_name)).fetchone()
         return dict(row) if row is not None else None
 
@@ -217,12 +230,17 @@ class CertificateVault:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT thumbprint FROM backup_certificates WHERE server_id = ? AND certificate_name = ? "
-                "AND verified_at IS NOT NULL ORDER BY certificate_id", (server_id, certificate_name)).fetchall()
+                "AND verified_at IS NOT NULL AND retired_at IS NULL ORDER BY certificate_id",
+                (server_id, certificate_name)).fetchall()
         return [str(r["thumbprint"]) for r in rows]
 
     def pair(self, certificate_id: int, *, passphrase: str) -> tuple[bytes, bytes, dict[str, Any]]:
-        """``(cer, pvk, row)`` decrypted, on a connection of its own."""
+        """``(cer, pvk, row)`` decrypted, on a connection of its own. A retired row is followed to the
+        active row of the same certificate - sealed with today's passphrase (1.411)."""
         row = self.get(certificate_id)
+        if row is not None and row.get("retired_at"):
+            row = self.find(server_id=row["server_id"], certificate_name=row["certificate_name"],
+                            thumbprint=row["thumbprint"])
         if row is None:
             raise CertificateVaultError(f"no certificate row {certificate_id}.")
         try:
@@ -232,13 +250,25 @@ class CertificateVault:
             raise CertificateVaultError(f"certificate row {certificate_id} cannot be decrypted: "
                                         f"{type(exc).__name__}: {exc}") from exc
 
-    def listing(self) -> list[dict[str, Any]]:
-        """Every row, without its envelope - what an operator reads."""
+    def listing(self, *, include_retired: bool = False) -> list[dict[str, Any]]:
+        """Every active row, without its envelope - what an operator reads; with ``include_retired`` the
+        retired generations too."""
         self.initialize()
+        active = "" if include_retired else " WHERE retired_at IS NULL"
         with self.connect() as conn:
-            rows = conn.execute("SELECT * FROM backup_certificates ORDER BY server_id, certificate_name, "
+            rows = conn.execute(f"SELECT * FROM backup_certificates{active} ORDER BY server_id, certificate_name, "
                                 "certificate_id").fetchall()
         return [{k: v for k, v in dict(r).items() if k != "envelope"} for r in rows]
+
+
+def reseal(vault: CertificateVault, conn: Any, *, old_passphrase: str, new_passphrase: str,
+           reason: str) -> list[dict[str, Any]]:
+    """Every active pair re-sealed with *new_passphrase* as a new row, the old row retired - on the
+    caller's connection (:func:`dbabrain.db.envelope_generations.reseal`)."""
+    vault.initialize()
+    return G.reseal(conn, table="backup_certificates", id_column="certificate_id", envelope_column="envelope",
+                    unique_columns=_UNIQUE, old_passphrase=old_passphrase, new_passphrase=new_passphrase,
+                    reason=reason)
 
 
 def _last_part(path: str) -> str:

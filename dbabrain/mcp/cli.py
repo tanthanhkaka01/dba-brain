@@ -89,6 +89,14 @@ def _arguments(text: str) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     node = _node(args.home)
+    if args.command != "tools":
+        # 1.0.0 (K4): serving, connecting and calling need a dbabrain key (D2); listing does not.
+        from dbabrain.lib import dbabrain_key
+
+        refused = dbabrain_key.said_at_the_door(
+            dbabrain_key.gate_here("mcp", data_dir=getattr(node, "data_dir", None)), app="dbabrain mcp")
+        if refused is not None:
+            return refused
     if args.command == "tools":
         from dbabrain.mcp.server import tool_list
 

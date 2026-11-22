@@ -2611,13 +2611,42 @@ script it belongs in `common` with a CLI — and the reason is visible in the ou
 lift moved 90 records and checked 183 file references in one command, and refused twice before it
 was allowed to write.
 
+## A dbabrain key (`key-request`, `key-renew`, `key-status`, 1.0.0)
+
+Reports, backup / restore, SRE, the MCP server and the assistant need a dbabrain key; without one a
+node keeps its metrics, instant alerts, SLA and SQL tasks (plan
+`audits/20261121_plan_dbabrain_key_and_ai_relay.md`). `common/dbabrain_key_admin.py`:
+
+- **`dbabrain key-request`** - the device sign-in `mcp connect` uses, with `{"purpose": "key"}`: a code
+  and a link are printed, the person signs in on dbabrain.dev with their email and approves, and the
+  signed key arrives once. The order is the point: the **store opens first** (a key handed over and
+  then not storable is lost, and it has already replaced the account's earlier one); the key is
+  **read before it is kept** (one this release cannot read is refused - upgrade first); it is stored
+  as `DBABRAIN_KEY` (on a master also in `secrets/secret_text.json`, or the next deploy drops it) and
+  **read back**. With no terminal it is refused unless the request says `"wait": true` (someone reads
+  the output - `worker-run`). A key lasts **14 days** (an account in the Worker's `OPERATOR_EMAILS`
+  365); `key-renew` is the same command. Request `{node, server, wait}`; answer `{ref, store,
+  replaced, key, state}` - never the key itself.
+- **`dbabrain key-status`** - the standing offline (signature, term, grace) and, when the node holds a
+  key, dbabrain.dev's answer (`GET /key/status`, the key as its own bearer), kept in
+  `runtime/dbabrain_key_status.json` beside `data/` for the gate; a check that fails is said and is
+  not a revocation. `{"online": false}` reads offline only. Answer `{standing, online, features,
+  how_to_get}`. The daemon runs it once a day ([03](./03_app_command_daemon.md#the-dbabrain-key-what-starts-without-one-and-the-warnings-100)).
+- Both need `DBABRAIN_SECRET_KEY`; both are configuration commands for R09 (they write the store and
+  the runtime file) and run on an empty root (`key-status`: `none`, and dbabrain.dev is not asked).
+- **The operator's estate is one account**: the key is asked for on the master and reaches the worker
+  in the secret union of a deploy. A key asked for on the worker as well would replace the master's
+  on dbabrain.dev, and differ - the next deploy stops at `SecretMergeConflict`, as it should.
+
 ## The AI assistant's key (`ai-key`, 0.39.0)
 
-`dbabrain ai-key` - the first step of a new install, right after `init` and the passphrase (the
-operator, 2026-11-14: *the AI key added by one CLI command, written in the full guide, first*). It
-stores the Anthropic API key in the encrypted store and switches the assistant on in
-`data/ai_assist.json` (`enabled: true`, `api_key_ref` naming the key), so `dbabrain telegram ai-ask`
-answers at once. Bare on a terminal it asks for the key (`getpass`, not echoed); a script pipes
+`dbabrain ai-key` - the assistant on the node's **own** Anthropic key (0.39.0, the operator,
+2026-11-14: *the AI key added by one CLI command*). Since 1.0.0 the first step of a new install is
+`dbabrain key-request` instead: the shipped assistant answers through dbabrain.dev with no Anthropic
+key (section above). `ai-key` stores the Anthropic API key in the encrypted store and switches the
+assistant to it in `data/ai_assist.json` (`enabled: true`, `api_key_ref` naming the key,
+`provider: anthropic`), so `dbabrain telegram ai-ask` answers on it at once; the dbabrain key is still
+needed (D3). Bare on a terminal it asks for the key (`getpass`, not echoed); a script pipes
 `{"value": "<key>"}` to `dbabrain common ai-key -` - stdin only, as `secret-set`, listed in
 `STDIN_ONLY_COMMANDS`.
 
@@ -2680,6 +2709,37 @@ the value must match* (`lib.secret_text.remove_secret_text`).
   `tests/test_a_secret_is_removed_only_by_its_value.py`.
 - **Refused while a record names the ref** (0.41.0, 1.391): a login, an entry or a setting in `data/`
   that still names it is said (file and path) and nothing is removed - step 3 of retiring a server.
+
+## Sealing an SSH private key (`seal-ssh-key`, 0.42.0)
+
+Read on the worker on 2026-11-20: four private keys lay unencrypted in `data/ssh_keys/` at 644/664,
+open to any login on the host and to any copy of the folder (item 1.410, plan
+`audits/20261120_plan_worker_secret_exposure.md` F4). The operator chose *an encrypted file*: the key
+stays a file standard tools read, encrypted in OpenSSH's own format (bcrypt KDF), with a random
+passphrase of its own in the encrypted secret store (`common.ssh_key_seal`).
+
+```bash
+python -m dbabrain.common.cli seal-ssh-key '{"key_file": "/app/tools/dbabrain/data/ssh_keys/repo.key", "passphrase_ref": "SSH_KEY_REPO"}'
+python -m dbabrain.common.cli seal-ssh-key @request.json   # {"key_file", "passphrase_ref", "generate": true, "comment"}
+```
+
+- **In this order**, so a failure leaves the key as it was: read the key (a key already encrypted is
+  refused), store a random passphrase under `passphrase_ref` and read it back (a ref holding another
+  value is refused), encrypt and prove the result opens - the way `SSHClient.connect` opens it - to
+  the same public key, then rename it over the old file (0600) and name the ref in
+  **`passphrases.json`** beside the key (names only).
+- **`generate: true`** makes a new ed25519 pair there, sealed, with its `.pub`; never over a file.
+- **Every login finds the passphrase by the key**: `lib.data_sources.key_passphrase` reads
+  `passphrases.json` in the key's folder and resolves the ref; `ssh_login`, `host_access`, the
+  backup / restore / offload / prune host blocks and the metrics collector add **`key_passphrase`**
+  beside `key_file`, and `common` carries it to paramiko (`open_ssh_client(passphrase=)`): `remote_exec`,
+  `hostcmd`, `filecopy`, `cli_backup_copy`, `sqlcmd_run`, `docker_db`. No inventory record changes. A
+  sealed key whose ref does not resolve fails naming the key and the ref.
+- **The passphrase is never printed or returned.** Needs `DBABRAIN_SECRET_KEY`; `also_plaintext`
+  writes the ref into `secrets/secret_text.json` too (a master). Each node's store is its own: a key
+  sealed on the master needs the same ref and value on the worker (`secret-set` there) before its
+  `data/ssh_keys/` is pushed.
+- Held by `tests/test_a_sealed_ssh_key_opens_only_with_its_passphrase.py`.
 
 ## Retiring a server, one record at a time (`entry-remove`, `credential-remove`, `instance-remove`, `report-server-remove`, 0.41.0)
 
@@ -3330,6 +3390,7 @@ python -m dbabrain.common.cli rotate-password '<json>'  # password_rotation: cha
 python -m dbabrain.common.cli check-secret '<json>'     # secret_check: prove each secret still logs in
 <request> | python -m dbabrain.common.cli secret-set -  # lib.secret_text: one secret into the encrypted store
 <request> | python -m dbabrain.common.cli secret-remove -  # lib.secret_text: one secret out, proven by its value
+python -m dbabrain.common.cli seal-ssh-key '<json>'  # common.ssh_key_seal: one SSH key encrypted, its passphrase into the store
 python -m dbabrain.common.cli entry-remove '<json>'     # config_retire: one record of a data/*.json list, refused while named
 python -m dbabrain.common.cli credential-remove '<json>'  # config_retire: one login of users.json
 python -m dbabrain.common.cli instance-remove '<json>'  # config_retire: one server of db_instances.json

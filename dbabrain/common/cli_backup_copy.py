@@ -195,6 +195,8 @@ def _open(login: Any, *, role: str):
         "timeout_seconds": int(login.get("open_timeout_seconds") or 30)}
     if key_file:
         access["key_file"] = key_file
+        if login.get("key_passphrase"):
+            access["key_passphrase"] = str(login["key_passphrase"])
     session = remote_exec.open_session(access)
     session.client  # connect now, so a refused login is this call's error, not a later one's
     return session

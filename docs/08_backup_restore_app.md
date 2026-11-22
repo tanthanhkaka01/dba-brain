@@ -2,6 +2,8 @@
 
 ## Purpose
 
+> **Needs a dbabrain key (1.0.0).** Backups, offloads, prunes and scheduled restores start only on a node holding a valid key from dbabrain.dev (`dbabrain key-request`, free, an email sign-in - [13](./13_common.md#a-dbabrain-key-key-request-key-renew-key-status-100)). Without one the scheduler does not start them and a run by hand says how to get one and exits 0; after a key's end and its 3 days of grace, new work stops - a restore a person asks for still runs (said CRITICAL), and nothing already backed up becomes unreadable (`backup_restore.cli` `NEW_WORK_COMMANDS`). [03](./03_app_command_daemon.md#the-dbabrain-key-what-starts-without-one-and-the-warnings-100) has the gate.
+
 The Backup Restore App copies backup files, restores SQL Server FULL (and optionally DIFF + LOG) backups into a DR database, verifies restore health, and records restore history. Point-in-time restore (PITR) is supported wherever the logs cover the moment: SQL Server transaction log backups, PostgreSQL WAL and Oracle archived logs. See *Point in time, drilled on every engine*.
 
 ## Before a restore copies anything: does it fit?
@@ -979,7 +981,9 @@ every `.age` file is proven and whose plain files are gone from the repository
 after each `.age` file is hashed again on the repository and held to the bytes and sha256 recorded
 when it was made; one of other bytes, or gone, keeps the source and says which file. A row encrypted
 only in part, or not yet proven, stays at its source. An encrypted copy expires on the repository like
-a plain one, by its `.age` files (the repository's retention, below).
+a plain one, by its `.age` files (the repository's retention, below). Which rows are sealed is read for
+the whole entry in two queries each pass (`files_of_backup`, 0.42.0): read one row at a time it cost
+13 minutes a pass on a 15-minute LOG entry of ~10,000 encrypted rows and held its sources ~2 hours.
 
 **A Windows server** is read over its share (`offload_source_share`, `_username`, `_password_ref` -
 an administrative share such as `\\host\D$\SQLBK_DBOPS` serves when its login may use it), or,

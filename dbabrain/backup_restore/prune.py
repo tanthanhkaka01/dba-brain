@@ -109,7 +109,7 @@ def prune_job_request(job: Any, *, target: Any, secrets: dict[str, str] | None =
     # The same two helpers the backup spec uses, so a prune reaches a host exactly the way the
     # backup that filled it did. Resolved here rather than left to `common`, which holds no
     # credentials and would otherwise be handed a key_file it cannot find.
-    from dbabrain.backup_restore.spec_builder import _resolved_key_file, _ssh_password
+    from dbabrain.backup_restore.spec_builder import _key_passphrase, _resolved_key_file, _ssh_password
 
     login = (sql_login(job, secrets=secrets, data_dir=data_dir)
              if str(job.db_type or "").strip().lower() == "sqlserver" else None)
@@ -136,6 +136,7 @@ def prune_job_request(job: Any, *, target: Any, secrets: dict[str, str] | None =
             "username": target.username,
             "container": target.container_name,
             "key_file": _resolved_key_file(target, data_dir),
+            "key_passphrase": _key_passphrase(target, data_dir, secrets or {}),
             "password": _ssh_password(target, secrets or {}),
             # The dbabrain user is not in the docker group on these hosts; the metrics collectors
             # and the backup scripts both reach docker through sudo for the same reason.

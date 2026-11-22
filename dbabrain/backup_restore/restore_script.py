@@ -568,6 +568,9 @@ def _ssh_login(target: BackupTarget, *, data_dir, key, key_base64) -> dict[str, 
     key_filename = resolve_ssh_key(target.key_file, data_dir) if target.key_file else None
     if key_filename:
         login["key_file"] = str(key_filename)
+        from dbabrain.lib.data_sources import with_key_passphrase
+
+        with_key_passphrase(login, data_dir=data_dir)
     else:
         login["password"] = resolve_ssh_password(
             password=None, password_ref=target.password_ref,

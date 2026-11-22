@@ -147,6 +147,7 @@ def resolve_password(password: str | None, *, host: str, user: str,
         if not secret_key:
             secret_key = os.environ.get(SECRET_KEY_ENV_VAR) or None
         if secret_key:
+            _STORE_KEY.append(secret_key)
             try:
                 secrets = data_sources.load_secret_text(key=secret_key)
             except Exception as exc:  # noqa: BLE001 - wrong key etc.; fall back to prompt.
@@ -166,12 +167,47 @@ def resolve_password(password: str | None, *, host: str, user: str,
 # --------------------------------------------------------------------------- #
 def ssh_connect(host: str, user: str, password: str, port: int = 22) -> RemoteHost:
     """The worker host, reached through ``common.cli``. Nothing is opened here: each command and
-    each transfer is its own session, so a login that fails says so on the first call."""
+    each transfer is its own session, so a login that fails says so on the first call.
+
+    A worker node in ``config.json`` with a ``key_file`` is logged into with that key (0.42.0, 1.413:
+    the worker's sshd takes no passwords); the password still rides along for ``sudo -S``.
+    """
     from dbabrain.transport import common_cli
 
-    print(f"Connecting to {user}@{host}:{port} ...", flush=True)
+    key_file, key_passphrase = worker_key_login(host)
+    print(f"Connecting to {user}@{host}:{port}{' (key)' if key_file else ''} ...", flush=True)
     return RemoteHost(host=host, username=user, password=password or "", port=port,
+                      key_file=key_file, key_passphrase=key_passphrase,
                       call=common_cli.run_allowing_failure)
+
+
+#: The store passphrase a control command was given, kept for the key login of the same run: a
+#: sealed key's passphrase is in the store (set by :func:`resolve_password`).
+_STORE_KEY: list[str] = []
+
+
+def worker_key_login(host: str, config_path: str | Path | None = None) -> tuple[str, str]:
+    """``(key path, passphrase)`` for the worker node at *host*, or ``("", "")`` for a password login."""
+    try:
+        config = load_config(config_path or DEFAULT_CONFIG_PATH)
+    except Exception:  # noqa: BLE001 - no config: a password login, as before.
+        return "", ""
+    node = next((n for n in config.worker if n.host == host and n.key_file), None)
+    if node is None:
+        return "", ""
+    from dbabrain.lib import data_sources
+
+    from dbabrain.lib.cmd_access import is_key_name
+
+    named = node.key_file
+    # A bare name is a key in data/ssh_keys/; any other relative path is under the tool root (the master's
+    # own key lives in secrets/ssh/), never under whatever folder the command was started in.
+    if not Path(named).is_absolute() and not is_key_name(named):
+        named = str(TOOL_ROOT / named)
+    path = data_sources.resolve_ssh_key(named)
+    store_key = (_STORE_KEY[-1] if _STORE_KEY else "") or os.environ.get("DBABRAIN_SECRET_KEY", "")
+    secrets = data_sources.load_secret_text(key=store_key) if store_key else None
+    return path, data_sources.key_passphrase(path, secrets=secrets)
 
 
 def _emit(text: str, *, err: bool = False) -> None:

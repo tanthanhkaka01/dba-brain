@@ -95,6 +95,47 @@ scan reads one JSON file and compares timestamps, and an app with nothing due ex
 the cost of asking is far below the cost of an interval nobody can see in the config they are
 reading.
 
+## Started locked: the passphrase in a file (0.42.0)
+
+A node that sets `DBABRAIN_UNLOCK_FILE` (a path on a tmpfs - the worker's compose file names
+`/run/dbabrain/unlock`) is given its passphrase **after** it starts, never in its environment or on
+its command line: Docker kept a container's environment in its configuration, in clear on the host's
+disk (item 1.409, plan `audits/20261120_plan_worker_secret_exposure.md`). `dbabrain/jobs/unlock.py`:
+
+- Before it opens the store the daemon waits - **locked**, running nothing - for the file. It reads
+  it, **removes it whatever it held**, and keeps the passphrase only if it opens
+  `data/encrypted_secret_text.json`; a wrong one is refused (`app.daemon.unlock_refused`) and it
+  waits again. Then it holds it in its own memory and its children inherit it as before.
+- `<unlock file>.state` (JSON, no secret) says `locked` since when and why, `unlocked`, or
+  `stopped`. It is how the master sees a locked node: a locked daemon cannot reach Telegram (the
+  token is in the store).
+- The master writes the file: `control unlock-worker` ([11](./11_control_app.md#the-worker-starts-locked-unlock-worker)).
+  A restart or a reboot loses the passphrase by design, and the daemon waits again.
+- Without `DBABRAIN_UNLOCK_FILE`, or with `DBABRAIN_SECRET_KEY` / `--key` already given, nothing
+  changes: no wait.
+
+## The dbabrain key: what starts without one, and the warnings (1.0.0)
+
+Reports, backup / restore, SRE and the MCP connector need a **dbabrain key** - free, from
+dbabrain.dev after an email sign-in (`dbabrain key-request`, [13](./13_common.md#a-dbabrain-key-key-request-key-renew-key-status-100));
+metrics, instant alerts, SLA, SQL tasks, the console and everything else do not (plan
+`audits/20261121_plan_dbabrain_key_and_ai_relay.md`). The rules are `lib.dbabrain_key`'s; the daemon
+asks them once a scan:
+
+- **The gate** (`jobs/key_gate.py`): a due command whose module needs a feature
+  (`lib.dbabrain_key.COMMAND_FEATURES`) is not started while the key does not allow it - logged
+  `app.daemon.command.skip_key`, like a closed window, and said on Telegram **once per process** per
+  reason - only what it refuses; the term and the grace are the watch's, said once for the node. A run a person requested of backup / restore is work already asked for and runs after the
+  key's grace too, said CRITICAL; a requested report is new work. A request refused is closed with
+  the reason, not put back.
+- **The watch** (`jobs/key_watch.py`): once a day the key is checked online (`common.cli key-status`;
+  one try a day, a failed check is not a revocation), and the end is said - 14, 7, 3 and 1 day(s)
+  before (WARNING, the last CRITICAL; only the steps shorter than the key's own term, so a 14-day key's
+  first warning is at 7 - not on the day it arrives), CRITICAL every day of the 3-day grace, CRITICAL every day after
+  it or after a revocation (new reports and backups have stopped; a restore asked for still runs).
+  No key at all is not repeated: a metrics-only install is a correct one. What was said is kept in
+  `runtime/dbabrain_key_said.json`, so a restart does not say a step twice.
+
 ## How to Run
 
 Run forever with a 1-second scan interval:

@@ -909,9 +909,12 @@ def execute_over_ssh(
     from dbabrain.lib.remote_host import RemoteHost
     from dbabrain.transport import common_cli
 
+    from dbabrain.lib.data_sources import key_passphrase
+
     remote = RemoteHost(
         host=target.host, username=target.username, port=target.port,
         password=password or "", key_file=str(key_filename or ""),
+        key_passphrase=key_passphrase(key_filename, data_dir=data_dir) if key_filename else "",
         auth_type="key" if key_filename else "password",
         call=common_cli.run_allowing_failure)
     result = remote.run_script(payload, timeout_seconds=timeout or None)

@@ -30,7 +30,7 @@ from dbabrain.lib.data_sources import (
     _resolve_data_dir, find_database_credential, load_credentials, load_db_instances,
     load_remote_credentials, load_secret_text, load_sqlserver_instance_policy,
 )
-from dbabrain.lib.data_sources.ssh_auth import resolve_ssh_key
+from dbabrain.lib.data_sources.ssh_auth import resolve_ssh_key, with_key_passphrase
 from dbabrain.lib.data_sources.target_resolve import (
     TargetResolveError, normalize_db_type, resolve_target_instance,
 )
@@ -168,6 +168,12 @@ def host_access(target: str, *, data_dir: str | Path | None = None,
                     credential, dict(secrets) if secrets is not None else load_secret_text(data_dir))
             except Exception as exc:  # noqa: BLE001 - no key, unreadable store, missing ref.
                 raise RequestFillError(f"{label}: {exc}") from exc
+    if access.get("key_file") and str(access.get("auth_type") or "key") != "password":
+        try:
+            with_key_passphrase(access, data_dir=data_dir,
+                                secrets=dict(secrets) if secrets is not None else None)
+        except Exception as exc:  # noqa: BLE001 - a sealed key whose passphrase does not resolve.
+            raise RequestFillError(f"{label}: {exc}") from exc
     # `auth_type` stays what the configuration says: this adds the secret it names, nothing else.
     access.update({key: instance[key] for key in (*_PROFILE_KEYS, *_RUNTIME_KEYS)
                    if instance.get(key) not in (None, "") and key not in access})

@@ -488,9 +488,19 @@ def main(argv: list[str] | None = None) -> int:
     if not hasattr(args, "handler"):
         parser.print_help()
         return 0
-
     if args.command == "run-cmd-adhoc":
-        return _run_cmd_adhoc(args)
+        return _run_cmd_adhoc(args)  # it takes its key, then asks the gate below itself
+    # 1.0.0 (K4): the SRE commands need a dbabrain key (D2). The passphrase first - the key is in the store.
+    from dbabrain.lib.secret_text import set_key_env
+
+    try:
+        set_key_env(getattr(args, "key", None), getattr(args, "key_base64", None))
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    refused = _key_door()
+    if refused is not None:
+        return refused
 
     logger = None
     try:
@@ -723,8 +733,13 @@ def _remote_login(args: argparse.Namespace, *, data_dir: str) -> dict:
             password_env=getattr(args, "remote_password_env", None),
             key=args.key, key_base64=args.key_base64, data_dir=data_dir,
         )
-    return {"host": args.remote_host, "port": int(args.remote_port or 22),
-            "username": args.remote_user, "password": password, "key_file": key_file}
+    login = {"host": args.remote_host, "port": int(args.remote_port or 22),
+             "username": args.remote_user, "password": password, "key_file": key_file}
+    if key_file:
+        from dbabrain.lib.data_sources import with_key_passphrase
+
+        with_key_passphrase(login, data_dir=data_dir)
+    return login
 
 
 def _handle_create_db_docker(args: argparse.Namespace, logger, *, sre_config=None) -> int:
@@ -1048,6 +1063,13 @@ def _handle_register_db_connection(args: argparse.Namespace, logger, *, sre_conf
     return 0
 
 
+def _key_door(data_dir: Path | None = None) -> int | None:
+    """1.0.0 (K4): the SRE commands need a dbabrain key (D2) - None to go on, else the exit code."""
+    from dbabrain.lib import dbabrain_key
+
+    return dbabrain_key.said_at_the_door(dbabrain_key.gate_here("sre", data_dir=data_dir), app="sre")
+
+
 def _run_cmd_adhoc(args: argparse.Namespace) -> int:
     """``run-cmd-adhoc``, routed before the app's own start: the key and this node's data/, a log
     line if the configuration allows one, and stdout left alone - the command's output is the
@@ -1061,6 +1083,9 @@ def _run_cmd_adhoc(args: argparse.Namespace) -> int:
         return 2
     logger = None
     data_dir = Path(args.data_dir) if args.data_dir else TOOL_ROOT / "data"
+    refused = _key_door(data_dir)
+    if refused is not None:
+        return refused
     try:
         config_path = str(resolve_config_path("sre", args.config))
         if not args.data_dir:

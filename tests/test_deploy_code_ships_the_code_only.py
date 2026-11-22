@@ -10,7 +10,10 @@ the written-down run to what made the hand run safe:
 - the compose file keeps every line that is the worker's: only the tool's image, and the names the
   0.29.0 rename moved, change - never a host folder or a docker network;
 - the way back is kept before anything is written;
-- the passphrase never reaches an argv, and not the one script line the remote gate echoes.
+- the passphrase never reaches an argv, and not the one script line the remote gate echoes;
+- since 0.42.0 (1.409) it never reaches a container's configuration either: the compose file's
+  passphrase entry becomes an unlock file on a tmpfs, and the new daemon is handed the passphrase
+  after it starts.
 """
 
 from __future__ import annotations
@@ -49,12 +52,14 @@ def test_the_image_line_and_the_renamed_names_change_and_nothing_else() -> None:
     assert plan.previous_image == "db_ops:2.87.37"
     assert "    image: dbabrain:2.88.0\n" in plan.text
     assert "DBABRAIN_NODE_ROLE: worker" in plan.text
-    assert '"${DBABRAIN_SECRET_KEY:?pass the passphrase}"' in plan.text
+    assert "SECRET_KEY" not in plan.text, "the passphrase entry and its comment are gone (1.409)"
+    assert "      DBABRAIN_UNLOCK_FILE: /run/dbabrain/unlock\n" in plan.text
+    assert "      - /run/dbabrain:/run/dbabrain\n" in plan.text
     assert "./data:/app/tools/dbabrain/data" in plan.text
     for kept in ("/opt/db_ops/containers:/opt/db_ops/containers", "name: db_ops_default",
                  "image: postgres:18"):
         assert kept in plan.text, f"{kept} is the host's or another service's"
-    assert len(plan.text.splitlines()) == len(COMPOSE.splitlines())
+    assert len(plan.text.splitlines()) == len(COMPOSE.splitlines()) + 3
 
 
 def test_a_second_plan_on_the_new_file_changes_only_the_image() -> None:
@@ -84,12 +89,15 @@ def test_the_service_is_read_from_the_file() -> None:
 
 
 def test_the_passphrase_is_on_no_argv_and_not_on_the_echoed_line() -> None:
-    script = deploy_code.keyed_script("/opt/dbabrain", "Pa$$#word^1", ["docker compose up -d"])
+    script = deploy_code.switch_script("/opt/dbabrain", "dbabrain", "Pa$$#word^1")
     first, *rest = script.splitlines()
+    encoded = "UGEkJCN3b3JkXjE="
 
-    assert first.startswith("cd ") and "Pa$$" not in first
-    assert "Pa$$#word^1" not in script, "the key travels encoded, decoded by a builtin"
-    assert any("printf %s" in line and "base64 -d" in line for line in rest)
+    assert first.startswith("cd ") and encoded not in first
+    assert "Pa$$#word^1" not in script, "the key travels encoded, decoded inside the container"
+    assert "export DBABRAIN_SECRET_KEY=" not in script, "not in the host shell's environment"
+    assert "-e DBABRAIN_SECRET_KEY" not in script, "never in a container's configuration"
+    assert all(encoded in line for line in rest if line.startswith("printf"))
 
 
 class _Client:
@@ -105,6 +113,13 @@ class _Client:
     def run_script(self, script):
         self.calls.append(("script", script))
         return type("R", (), {"ok": True, "stdout": "", "stderr": "", "exit_code": 0})()
+
+    def run(self, command):
+        # The unlock's reads of the daemon's state: locked before the passphrase is written, unlocked after.
+        written = any(kind == "script" and "unlock the worker" in text for kind, text in self.calls)
+        state = '{"state": "unlocked", "at": "2"}' if written else '{"state": "locked", "at": "1"}'
+        return type("R", (), {"ok": True, "exit_code": 0, "stderr": "",
+                              "stdout": f"/run/dbabrain/unlock\nnone\n{state}\n"})()
 
     def close(self):
         self.calls.append(("close", ""))
@@ -123,6 +138,8 @@ def worker(monkeypatch):
 
     def capture(_client, command):
         commands.append(command)
+        if command.startswith("stat -f"):
+            return 0, "tmpfs\n", ""
         if command.startswith("cat "):
             return 0, COMPOSE, ""
         if "image inspect" in command:
@@ -135,6 +152,9 @@ def worker(monkeypatch):
 
     monkeypatch.setattr(deploy_code, "ssh_capture", capture)
     monkeypatch.setattr(deploy_code, "ssh_run", run)
+    monkeypatch.setattr(deploy_code, "prune_worker",
+                        lambda _client, **kwargs: commands.append(f"PRUNE {kwargs}") or 0)
+    monkeypatch.setattr("dbabrain.control.worker_unlock.time.sleep", lambda _s: None)
     return client, commands, built
 
 
@@ -150,7 +170,7 @@ def test_without_apply_nothing_is_built_sent_or_written(worker) -> None:
     assert answer["applied"] is False and answer["image"] == "dbabrain:2.88.0"
     assert built == []
     assert [kind for kind, _ in client.calls] == ["close"]
-    assert commands == ["cat /opt/dbabrain/docker-compose.yml"]
+    assert commands == ["stat -f -c %T /run", "cat /opt/dbabrain/docker-compose.yml"]
 
 
 def test_with_apply_the_way_back_is_kept_before_the_compose_file_is_written(worker) -> None:
@@ -160,10 +180,31 @@ def test_with_apply_the_way_back_is_kept_before_the_compose_file_is_written(work
     assert answer["applied"] is True
     assert built[0][:2] == ["docker", "build"] and built[1][:2] == ["docker", "save"]
     kinds = [kind for kind, _ in client.calls]
-    assert kinds == ["put", "write", "script", "close"]
+    assert kinds == ["put", "write", "script", "script", "close"]
     backup = next(command for command in commands if "pre_deploy_2.88.0_" in command)
     assert "docker-compose.yml.before" in backup and "data.tgz data assets config.json" in backup
     assert commands.index(backup) < len(commands) - 2, "kept before the switch"
+
+
+def test_once_the_new_container_runs_the_way_back_and_every_other_image_go(worker) -> None:
+    """The operator, 2026-11-20: the worker holds a single dbabrain - no backup, no old version.
+
+    The way back exists for the switch only; the prune is the last thing the run does, after the
+    container has been read back, and the answer then names no backup that is no longer there.
+    """
+    _client, commands, _built = worker
+    answer = _deploy(apply=True)
+
+    assert commands[-1].startswith("PRUNE ") and "'apply': True" in commands[-1]
+    assert answer["pruned"] is True and answer["backup"] == ""
+
+
+def test_a_prune_that_refused_leaves_the_way_back_named(worker, monkeypatch) -> None:
+    """prune_worker refuses when the container is not running; the backup is then still there."""
+    monkeypatch.setattr(deploy_code, "prune_worker", lambda _client, **_kwargs: 3)
+    answer = _deploy(apply=True)
+
+    assert answer["pruned"] is False and "pre_deploy_2.88.0_" in answer["backup"]
 
 
 def test_the_switch_upgrades_the_configuration_in_the_new_image_before_it_starts(worker) -> None:
@@ -171,9 +212,12 @@ def test_the_switch_upgrades_the_configuration_in_the_new_image_before_it_starts
     _deploy(apply=True)
 
     script = next(text for kind, text in client.calls if kind == "script")
-    order = [line for line in script.splitlines()
-             if line.startswith("docker compose") and "export" not in line]
-    run = "docker compose run --rm --no-deps -T dbabrain dbabrain"
+    lines = [line for line in script.splitlines() if "docker compose" in line]
+    # A one-off run reads the passphrase on stdin: `printf ... | docker compose run ... sh -c '...' sh <args>`.
+    order = [line if not line.startswith("printf") else
+             line.split("| ", 1)[1].split(" sh -c ")[0] + " " + line.rsplit("' sh ", 1)[1]
+             for line in lines]
+    run = "docker compose run --rm --no-deps -T dbabrain"
     assert order == [
         "docker compose stop -t 120",
         "docker compose rm -f",
@@ -185,9 +229,34 @@ def test_the_switch_upgrades_the_configuration_in_the_new_image_before_it_starts
     assert "k3y" not in script
 
 
+def test_the_new_daemon_is_handed_its_passphrase_after_it_starts(worker) -> None:
+    client, _commands, _built = worker
+    answer = _deploy(apply=True)
+
+    scripts = [text for kind, text in client.calls if kind == "script"]
+    assert "docker compose up -d" in scripts[0] and "unlock the worker" in scripts[1]
+    assert "k3y" not in scripts[1], "encoded, on stdin"
+    assert answer["applied"] is True
+
+
+def test_a_daemon_that_stays_locked_stops_the_run_and_says_how_to_unlock(worker, monkeypatch) -> None:
+    monkeypatch.setattr(deploy_code, "unlock_worker", lambda _client, **_kwargs: 1)
+    with pytest.raises(deploy_code.DeployCodeError, match="unlock-worker"):
+        _deploy(apply=True)
+
+
+def test_a_worker_whose_run_folder_is_not_a_tmpfs_is_refused(worker, monkeypatch) -> None:
+    client, _commands, _built = worker
+    monkeypatch.setattr(deploy_code, "ssh_capture", lambda _c, command: (0, "ext2/ext3\n", ""))
+    with pytest.raises(deploy_code.DeployCodeError, match="not a tmpfs"):
+        _deploy(apply=True)
+    assert "write" not in [kind for kind, _ in client.calls]
+
+
 def test_an_image_that_did_not_load_as_built_stops_the_run(worker, monkeypatch) -> None:
     client, _commands, _built = worker
     monkeypatch.setattr(deploy_code, "ssh_capture", lambda _c, command: (
+        (0, "tmpfs", "") if command.startswith("stat -f") else
         (0, COMPOSE, "") if command.startswith("cat ") else (0, "sha256:other\n", "")))
 
     with pytest.raises(deploy_code.DeployCodeError, match="not the one built"):
@@ -209,6 +278,7 @@ def test_an_image_tar_built_elsewhere_is_sent_and_held_to_its_id_with_no_docker_
     monkeypatch.setattr(deploy_code, "require_docker", lambda: pytest.fail("no Docker is needed here"))
     monkeypatch.setattr(deploy_code, "_local_image_id", lambda tag: pytest.fail("no local image is read"))
     monkeypatch.setattr(deploy_code, "ssh_capture", lambda _c, command: (
+        (0, "tmpfs", "") if command.startswith("stat -f") else
         (0, COMPOSE, "") if command.startswith("cat ") else
         (0, ID + "\n", "") if "image inspect" in command else (0, "0 running dbabrain:2.88.0\n", "")))
 
