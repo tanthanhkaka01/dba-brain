@@ -88,7 +88,7 @@ class _FakeClient:
 
 @pytest.fixture
 def fake_sdk(monkeypatch):
-    import anthropic
+    anthropic = pytest.importorskip("anthropic")
 
     monkeypatch.setattr(anthropic, "Anthropic", _FakeClient)
     _FakeClient.raise_with = None

@@ -584,6 +584,8 @@ _SEEDED = sorted({*_on_a_root_init_wrote(Path("."), Path(".")), *_AFTER_THE_EXPO
 @pytest.mark.parametrize("command", _SEEDED)
 def test_a_configuration_command_works_on_a_root_init_wrote(answers, command):
     """What a new install has is what these edit: an `init` root, and the steps before."""
+    if command == "seal-ssh-key":
+        pytest.importorskip("bcrypt")  # the [ssh] extra: the core install seals no key
     result = answers[("seeded", command)]
     assert result["body"] is not None and result["body"]["success"] is True, (
         f"{command} on a root init wrote: {_said(result)[:300]}")
@@ -659,6 +661,8 @@ def test_every_key_a_successful_answer_carries_is_described(answers, tmp_path):
             undescribed.setdefault(command, set()).update(extra)
     assert not undescribed, f"answer keys the reference does not describe: {undescribed}"
     unseen = set(COMMANDS) - checked - _answered_with_a_fake_server() - REFUSED_COMMANDS
+    if importlib.util.find_spec("bcrypt") is None:
+        unseen.discard("seal-ssh-key")  # it cannot succeed without the [ssh] extra
     assert not unseen - ANSWER_NOT_YET_SEEN, (
         "no run here answers these, so nothing checks their keys - add a case: "
         f"{sorted(unseen - ANSWER_NOT_YET_SEEN)}")

@@ -328,7 +328,10 @@ def test_another_services_secret_entry_is_not_touched():
 def test_the_runtime_compose_file_of_a_full_deploy_hands_over_no_passphrase():
     from dbabrain.control._support import DBABRAIN_ROOT
 
-    text = (DBABRAIN_ROOT / "docker-compose.runtime.yml").read_text(encoding="utf-8")
+    path = DBABRAIN_ROOT / "docker-compose.runtime.yml"
+    if not path.is_file():
+        pytest.skip("this tree does not carry the full deploy's compose file")
+    text = path.read_text(encoding="utf-8")
     settings = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
     assert not any("SECRET_KEY" in line for line in settings)
     assert "      DBABRAIN_UNLOCK_FILE: /run/dbabrain/unlock" in settings

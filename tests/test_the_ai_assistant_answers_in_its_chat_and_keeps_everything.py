@@ -243,6 +243,7 @@ def test_not_configured_is_a_state_not_an_error(tmp_path):
     answer = job.run_ai_assist(config=config, config_path=tmp_path / "config.json")
     assert answer["skipped"] is True and "enabled is false" in answer["reason"]
     # 1.0.0: the shipped file is on and answers through dbabrain.dev - with no dbabrain key yet, a state too.
+    pytest.importorskip("anthropic")  # without the [ai] extra the package is what is missing
     (tmp_path / "data" / "ai_assist.json").write_text(json.dumps(A.shipped_document()), encoding="utf-8")
     answer = job.run_ai_assist(config=config, config_path=tmp_path / "config.json")
     assert answer["skipped"] is True and "dbabrain key-request" in answer["reason"]

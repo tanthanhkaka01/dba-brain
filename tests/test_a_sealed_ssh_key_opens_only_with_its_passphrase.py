@@ -16,6 +16,7 @@ key stays a file standard tools read, its random passphrase is in the encrypted 
 
 from __future__ import annotations
 
+import importlib.util
 import json
 
 import pytest
@@ -28,6 +29,10 @@ from dbabrain.lib.data_sources import ssh_auth
 from dbabrain.lib.ssh_errors import SshError
 
 STORE_KEY = "node passphrase #1"
+
+#: Sealing a key and opening it are the [ssh] extra's (paramiko brings bcrypt); the core install `ci` tests
+#: has neither.
+needs_ssh = pytest.mark.skipif(importlib.util.find_spec("paramiko") is None, reason="the [ssh] extra is not installed")
 
 
 @pytest.fixture
@@ -58,6 +63,7 @@ def _seal(request, capsys):
     return code, answer
 
 
+@needs_ssh
 def test_a_key_is_sealed_after_its_passphrase_is_stored_and_opens_only_with_it(node, capsys):
     import paramiko
 
@@ -79,6 +85,7 @@ def test_a_key_is_sealed_after_its_passphrase_is_stored_and_opens_only_with_it(n
     assert answer["data"]["fingerprint"].startswith("SHA256:")
 
 
+@needs_ssh
 def test_a_key_already_encrypted_is_refused_and_left_as_it_was(node, capsys):
     _data, keys = node
     path = keys / "repo.key"
@@ -104,6 +111,7 @@ def test_a_ref_that_holds_another_value_is_refused_and_the_key_is_not_touched(no
     assert not (keys / "passphrases.json").exists()
 
 
+@needs_ssh
 def test_a_new_pair_is_generated_sealed_and_never_over_a_file(node, capsys):
     import paramiko
 
@@ -130,6 +138,7 @@ def test_a_name_instead_of_a_full_path_is_refused(node, capsys):
 # --------------------------------------------------------------------------- #
 # A login that names a sealed key carries its passphrase
 # --------------------------------------------------------------------------- #
+@needs_ssh
 def test_the_passphrase_is_found_by_the_key_and_an_unsealed_key_needs_none(node, capsys):
     data, keys = node
     sealed, plain = keys / "repo.key", keys / "plain.key"
@@ -152,6 +161,7 @@ def test_a_sealed_key_whose_ref_is_gone_says_so(node):
         ssh_auth.key_passphrase(keys / "repo.key", secrets={})
 
 
+@needs_ssh
 def test_paramiko_is_handed_the_passphrase_and_never_shown_it(monkeypatch):
     from dbabrain.common import remote_exec, ssh
 
@@ -201,6 +211,7 @@ def test_every_builder_carries_the_passphrase_beside_the_key(build):
     assert access["key_passphrase"] == "s3aled" and access["key_file"] == "/keys/repo.key"
 
 
+@needs_ssh
 def test_the_master_logs_into_the_worker_with_the_key_its_node_names(node, capsys, tmp_path, monkeypatch):
     from dbabrain.control import _support
 

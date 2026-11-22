@@ -57,6 +57,16 @@
       "allow_command": 10,
       "active": true,
       "note": "Scheduled SQL task output and failures."
+    },
+    {
+      "group_id": "-1000000000006",
+      "title": "ACME DBA - Assistant",
+      "group_type": "group",
+      "notify_level": "ai_assist",
+      "source_notify_level": "",
+      "allow_command": 10,
+      "active": true,
+      "note": "Where the AI assistant reads its questions and answers them - ai_assist.json telegram_chat names this level."
     }
   ]
 }
