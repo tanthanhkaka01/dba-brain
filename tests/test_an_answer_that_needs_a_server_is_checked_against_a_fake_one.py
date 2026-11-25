@@ -417,6 +417,43 @@ def test_list_jobs(server, monkeypatch, capsys):
     _holds(_answer(monkeypatch, capsys, "list-jobs", {"connection": _SQL}), "list-jobs")
 
 
+def test_table_info(server, monkeypatch, capsys):
+    server.answers["FROM sys.columns c"] = (["schema_name", "table_name", "ordinal", "column_name", "data_type"],
+                                            [("dbo", "orders", 1, "id", "int")])
+    server.answers["FROM sys.indexes i"] = (["index_name", "index_type", "key_columns"], [("pk", "CLUSTERED", "id")])
+    server.answers["FROM sys.dm_db_partition_stats"] = (["row_count", "reserved_mb"], [(10, 0.1)])
+    body = _answer(monkeypatch, capsys, "table-info", {"connection": _SQL, "object": "dbo.orders"})
+    _holds(body, "table-info")
+    assert body["data"]["columns"][0]["column_name"] == "id" and body["data"]["row_count"] == 10
+
+
+def test_object_source(server, monkeypatch, capsys):
+    server.answers["OBJECT_DEFINITION"] = (["object_name", "object_type", "definition", "modified_at"],
+                                           [("dbo.p", "SQL_STORED_PROCEDURE", "CREATE PROCEDURE dbo.p AS SELECT 1", None)])
+    _holds(_answer(monkeypatch, capsys, "object-source", {"connection": _SQL, "object": "dbo.p"}), "object-source")
+
+
+def test_db_activity(server, monkeypatch, capsys):
+    server.answers["sys.dm_os_waiting_tasks"] = (["wait_type", "waiting_tasks"], [("LCK_M_X", 3)])
+    body = _answer(monkeypatch, capsys, "db-activity", {"connection": _SQL, "view": "waits"})
+    _holds(body, "db-activity")
+    assert body["data"]["rows"] == [{"wait_type": "LCK_M_X", "waiting_tasks": 3}]
+
+
+def test_query_plan(server, monkeypatch, capsys):
+    plan = ('<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan"><BatchSequence><Batch>'
+            '<Statements><StmtSimple StatementSubTreeCost="0.5"><QueryPlan><MissingIndexes><MissingIndexGroup Impact="90">'
+            '<MissingIndex Schema="[dbo]" Table="[orders]"><ColumnGroup Usage="EQUALITY"><Column Name="[cust]"/>'
+            '</ColumnGroup></MissingIndex></MissingIndexGroup></MissingIndexes><RelOp PhysicalOp="Table Scan" '
+            'LogicalOp="Table Scan" EstimateRows="100" EstimatedTotalSubtreeCost="0.5"/></QueryPlan></StmtSimple>'
+            '</Statements></Batch></BatchSequence></ShowPlanXML>')
+    server.answers["select * from orders"] = (["Microsoft SQL Server 2005 XML Showplan"], [(plan,)])
+    body = _answer(monkeypatch, capsys, "query-plan", {"connection": _SQL, "sql_text": "select * from orders"})
+    _holds(body, "query-plan")
+    assert body["data"]["missing_indexes"][0]["table"] == "dbo.orders" and body["data"]["estimated_cost"] == 0.5
+    assert any("SET SHOWPLAN_XML ON" in sql for sql in server.executed), "compiled, never run"
+
+
 def test_trace_session(server, monkeypatch, capsys):
     _holds(_answer(monkeypatch, capsys, "trace-session", {"connection": _SQL, "session_id": 55}),
            "trace-session")
@@ -986,6 +1023,7 @@ ANSWERED_WITH_A_FAKE_SERVER = frozenset({
     "rotate-password", "file-checksum", "backup-stop", "copy-files",
     "encrypt-file", "verify-encrypted-file", "fetch-decrypted-file", "decrypt-on-host",
     "key-request", "key-renew",
+    "table-info", "object-source", "db-activity", "query-plan",
 })
 
 

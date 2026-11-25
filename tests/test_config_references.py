@@ -190,6 +190,25 @@ def test_a_notify_level_that_is_in_neither_file_is_reported(data_dir):
     assert [item["value"] for item in dangling] == ["renamed_level"]
 
 
+def test_an_assistant_naming_its_chat_before_any_chat_exists_is_not_configured_not_dangling(data_dir):
+    """A new install ships the assistant on and no chat at all (1.1.0, 1.423): not configured is a state."""
+    _write(data_dir, "ai_assist.json", {"enabled": True, "telegram_chat": "ai_assist"})
+    _write(data_dir, "telegram_groups.json", {"telegram_groups": []})
+    _write(data_dir, "telegram_config.json", {"level_chat_map": {}})
+
+    result = config_references.check(data_dir)
+
+    assert result["ok"] and [item["value"] for item in result["not_configured"]] == ["ai_assist"]
+
+
+def test_once_any_chat_exists_a_chat_the_assistant_names_and_nobody_has_is_dangling(data_dir):
+    _write(data_dir, "ai_assist.json", {"enabled": True, "telegram_chat": "ai_assist"})
+
+    result = config_references.check(data_dir)
+
+    assert [item["value"] for item in result["dangling"]] == ["ai_assist"] and result["not_configured"] == []
+
+
 # --------------------------------------------------------------------------- #
 # The rules themselves, and this estate
 # --------------------------------------------------------------------------- #

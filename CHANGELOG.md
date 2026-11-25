@@ -11,6 +11,43 @@ longer form they were released with.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-25
+
+### Upgrading
+
+- An Oracle bridge's secret (`sql_access.secret_ref`) is read from the secret store only, no longer from an
+  environment variable of that name: store it with `secret-set` if it was there.
+- `LOCK_TRANSACTION_HOLDERS`: the item `lock_scan_skipped` is now `lock_scan_sampled`, graded by its holders;
+  four new `sql_settings`, and `lock_scan_skip_above` 1,000,000. Upgrade the code before a `metric_definitions.json` that states them.
+
+### Added
+
+- `table-info`, `object-source`, `db-activity` and `query-plan`: a table's columns and indexes, an object's text,
+  what a server runs now, and a statement's estimated plan - compiled, never run. Each is an MCP tool too.
+
+### Changed
+
+- MCP: every command stays a tool; a request can no longer state how a server is reached (`sql_access`),
+  put unread text into `run-sql`'s statement, or write a file outside the node's output folders.
+- MCP: `metric-batch` takes a `server_id`; it runs no command where `run-cmd` is switched off and only
+  reads where `run-sql-write` is. `metric-batch`, `guide` and `inventory-summary` say they change something.
+- MCP: `read-file` reads no secret file of a node and answers no file holding a stored secret.
+- A login a node fills in goes only where its inventory's `sql_access` sends it.
+- MCP: `run-sql` is no longer marked read-only. It runs with the rights of the login the node stores for the server,
+  DML and DDL included; its SELECT check guards against a mistake. A login with read rights keeps it to reading.
+- MCP: `dbabrain mcp serve` and `call` start without a dbabrain key. Tools that only read answer; a tool marked
+  destructive says how to get a key. `connect` still needs one.
+- `LOCK_TRANSACTION_HOLDERS` above its limit samples the locks instead of skipping them, so the holders are
+  named at any number of locks; CRITICAL is a holder's age or who waits on it, no longer the count.
+
+### Fixed
+
+- `seal-ssh-key` without the `[ssh]` extra names the extra to install instead of `Need bcrypt module`.
+- A new install's `check-references` says the assistant's chat is not configured yet, instead of dangling.
+- `LOCK_TRANSACTION_HOLDERS` no longer writes a row per lock into tempdb while it reads them, which held up other
+  sessions when a server held more than a million write locks: they are grouped as they are read.
+- A path on a Windows share that holds a quote is refused instead of ending the `smbclient` command it is in.
+
 ## [1.0.0] - 2026-11-22
 
 ### Upgrading
@@ -4307,7 +4344,8 @@ the documentation names one, it says so.
   metric definitions, the Telegram support commands, the runtime log, the schema export directory
   and the working directory of two subprocess calls. All of them now share the one resolution.
 
-[Unreleased]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.41.0...v1.0.0
 [0.41.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.39.0...v0.41.0
 [0.39.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.38.0...v0.39.0

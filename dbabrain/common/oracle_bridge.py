@@ -137,14 +137,12 @@ def encrypt_token(connect: str, mode: str, secret: str, *, now: float) -> str:
 # Connect string
 # --------------------------------------------------------------------------- #
 def resolve_secret(sql_access: dict[str, Any], secrets: dict[str, str]) -> str:
-    """Bridge shared secret: ``secret_ref`` from the secret store, else the environment.
+    """Bridge shared secret: ``secret_ref`` among the secrets stated with the request, and nowhere else.
 
-    The ref names both places, which is the convention everywhere else in dbabrain — see
-    ``remote_exec._resolve_secret_value``: "refs double as env var names across dbabrain". Until
-    2026-08-21 the environment fallback read one hardcoded name instead, and that name was derived
-    from a real host (``TOKEN_<ip>_ORACLE_BRIDGE``). It leaked an address into the source, and it
-    silently ignored the ref the config actually named — so a second bridge, on a second host,
-    could not be given its own secret through the environment at all.
+    Not from the environment (1.1.0, 1.416; ``password_ref`` left it under G3.5). The ref is whatever the
+    request named, so one naming an environment variable of a known value sealed the login with a key
+    anybody could write down. An app that reaches a bridge states the secret its inventory names
+    (``request_fill.bridge_secrets``).
     """
     ref = str(sql_access.get("secret_ref") or "").strip()
     if not ref:
@@ -153,12 +151,9 @@ def resolve_secret(sql_access: dict[str, Any], secrets: dict[str, str]) -> str:
         )
     if secrets.get(ref):
         return secrets[ref]
-    env_secret = os.environ.get(ref, "").strip()
-    if env_secret:
-        return env_secret
     raise LegacyOracleError(
-        f"Oracle bridge secret not found: put {ref!r} in the secret store, "
-        f"or set an environment variable of that name."
+        f"Oracle bridge secret not found: {ref!r} is not among the secrets stated with this request - "
+        "put it in the secret store of the node whose inventory names it."
     )
 
 

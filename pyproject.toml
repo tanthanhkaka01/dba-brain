@@ -16,13 +16,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dbabrain"
-description = "Database operations toolkit: metrics, reports, scheduled SQL, backup/restore validation, SLA checks."
+description = "Open-source DBA tool: graded health metrics and alerts for SQL Server, Oracle, PostgreSQL and MySQL, backups proven by restore, reports, scheduled SQL, SLA checks and a database MCP server for AI agents."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
-keywords = ["dba", "database", "sqlserver", "oracle", "postgresql", "mysql", "monitoring", "operations"]
-version = "1.0.0"
+keywords = ["dba", "dba-tool", "database", "database-tools", "sqlserver", "sql-server", "oracle", "postgresql", "mysql",
+            "monitoring", "backup", "restore", "operations", "mcp", "mcp-server", "ai-agents", "claude"]
+version = "1.1.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #

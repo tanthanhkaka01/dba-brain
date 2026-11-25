@@ -46,10 +46,12 @@ INSTRUCTIONS = (
     "dbabrain is a DBA operations toolkit. Each tool named like a command (db-status, run-sql, list-databases, "
     "...) runs that dbabrain common.cli command; its JSON request is the `request` argument, and a server is "
     "named by its `server_id` (list-targets lists them) - the connection and the host login are completed from "
-    "this node's inventory and encrypted secret store. run-sql reads only; run-sql-write changes data and keeps "
-    "it only with commit. store_schema and store_query read dbabrain's own runtime store (job runs, metrics, "
+    "this node's inventory and encrypted secret store. run-sql and run-sql-write run with the rights of the login "
+    "the node stores for that server - DML and DDL included where the login has them; run-sql checks for one "
+    "SELECT and rolls back, run-sql-write keeps what it changed only with commit. store_schema and store_query read dbabrain's own runtime store (job runs, metrics, "
     "the backup catalog, SLA). A tool marked destructive changes something; an emergency operation takes "
-    "`confirm`: \"yes\" and a `reason` in its request."
+    "`confirm`: \"yes\" and a `reason` in its request. On a node without a dbabrain key the tools that only read "
+    "answer, and a tool marked destructive answers how to get a key."
 )
 
 
@@ -73,6 +75,8 @@ class Node:
     _config: Any = field(default=None, repr=False)
     #: The store's file as it was when ``_secrets`` was read: (mtime_ns, size), None when absent.
     _secrets_stamp: tuple[int, int] | None = field(default=None, repr=False)
+    #: ``key_decision``'s last answer and what it was read under: (store stamp, minute), decision.
+    _key_decision: tuple[Any, Any] | None = field(default=None, repr=False)
 
     def _store_stamp(self) -> tuple[int, int] | None:
         from dbabrain.lib.secret_text import ENCRYPTED_SECRET_TEXT_FILENAME
@@ -100,6 +104,17 @@ class Node:
             # Every answer is redacted against the store as it is now: a new secret is hidden too.
             self._redactor = None
         return self._secrets
+
+    def key_decision(self) -> Any:
+        """May a tool that needs a key run now (1.1.0, 1.425) - ``lib.dbabrain_key.gate_here``, the door every
+        gated command asks. Kept for a minute and while the store's file is the same: a key set while the server
+        runs counts within a minute, and a run of calls does not decrypt the store for each."""
+        from dbabrain.lib import dbabrain_key as dk
+
+        stamp = (self._store_stamp(), int(time.monotonic() // 60))
+        if self._key_decision is None or self._key_decision[0] != stamp:
+            self._key_decision = (stamp, dk.gate_here("mcp", data_dir=self.data_dir))
+        return self._key_decision[1]
 
     def redact(self, text: str) -> str:
         secrets = self.secrets()
@@ -149,6 +164,13 @@ def call_tool(node: Node, tool: str, arguments: dict[str, Any] | None) -> str:
         if not node.settings.offers(tool):
             raise McpToolError(f"the tool {tool} is switched off in {M.FILE_NAME}"
                                + ("" if node.settings.enabled else " (enabled is false)") + ".")
+        if M.needs_key(tool, node.operations):
+            # 1.1.0, 1.425: the server starts with no key; the line is per call - a tool that only reads answers,
+            # one marked destructive needs the key, and nothing of it runs without one.
+            decision = node.key_decision()
+            if not decision.allowed:
+                raise McpToolError(f"{tool} is marked destructive, so it needs a dbabrain key on this node (the tools "
+                                   f"that only read answer without one): {decision.sentence}")
         if tool in M.STORE_TOOLS:
             answer = _store_tool(node, tool, arguments)
             ok = True
@@ -169,6 +191,8 @@ def call_tool(node: Node, tool: str, arguments: dict[str, Any] | None) -> str:
 
 
 def _command_tool(node: Node, command: str, request: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    # run-sql writes its result file where a tool that only reads would: its own output folders.
+    tool_reads_only = M.is_read_only(command, node.operations) or command == "run-sql"
     carried = M.secrets_carried(command, request)
     if carried:
         # Refused before anything runs, and without echoing what was sent (0.39.0).
@@ -177,10 +201,22 @@ def _command_tool(node: Node, command: str, request: dict[str, Any]) -> tuple[di
             "itself, where it is stored encrypted and never echoed - `dbabrain common secret-set -` (the request "
             "on stdin), or `dbabrain ai-key` for the assistant's key - then name it here by its reference "
             "(`password_ref`). A login the node completes from its own store needs nothing: name the server_id.")
+    routes = M.routes_stated(request)
+    if routes:
+        raise McpToolError(
+            f"how a server is reached is this node's inventory's to say - this request states {', '.join(routes)}. "
+            "Name the server_id: a server the inventory reaches through a bridge is still reached that way.")
     if command == "run-sql":
         request = _read_only_sql_request(request)
     elif command == M.SQL_WRITE_TOOL:
         command = "run-sql"
+    elif command == "metric-batch":
+        request = _metric_batch_request(node, request)
+    elif command == "read-file" and M.is_secret_file(str(request.get("path") or "")):
+        raise McpToolError("no secret leaves through MCP - this path is one of a node's own secret files.")
+    if tool_reads_only and M.written_outside(request):
+        raise McpToolError(f"{', '.join(M.written_outside(request))}: a tool that only reads writes its file under "
+                           f"{' or '.join(M.OUTPUT_FOLDERS)} of the node's root - a relative path there.")
     if command not in node.commands():
         raise McpToolError(f"{command} is not a common.cli command (list-targets, run-sql, db-status, ...).")
     from dbabrain.lib.data_sources import request_fill
@@ -201,24 +237,45 @@ def _command_tool(node: Node, command: str, request: dict[str, Any]) -> tuple[di
                     "output": str(result.stdout or "")[-20000:], "stderr": mask_sensitive_text(str(result.stderr or ""))[-4000:]}
     # The request it ran is never handed back: it holds the password it was completed with.
     envelope.pop("request", None)
+    if command == "read-file" and _answers_a_secret(node, envelope):
+        return {"success": False, "operation": command, "error":
+                "no secret leaves through MCP - the file holds a value of this node's secret store."}, False
     return envelope, bool(envelope.get("success"))
 
 
 def _read_only_sql_request(request: dict[str, Any]) -> dict[str, Any]:
-    """``run-sql``'s read-only half: one statement given as text, held to ``lib.read_only_sql`` before it
-    runs, and never committed - a DDL statement commits by itself on Oracle and MySQL, so a rollback alone
-    would not keep this tool read-only."""
+    """``run-sql``'s checked half - ``lib.mcp_tools.read_only_request``."""
+    return M.read_only_request(request)
+
+
+def _metric_batch_request(node: Node, request: dict[str, Any]) -> dict[str, Any]:
+    """``metric-batch`` on the node's own terms (1.1.0, 1.415): **what is switched off by name stays off whatever
+    tool asks for it**. Its items run a program here or a script on a host - what ``run-cmd`` is - and SQL that is
+    committed as it runs - what ``run-sql-write`` is. With those tools on, nothing is held back."""
     from dbabrain.lib.read_only_sql import read_only_sql
 
-    if request.get("sql_file"):
-        raise McpToolError("run-sql takes the statement as `sql_text` (a file's SQL is not checked); "
-                           f"{M.SQL_WRITE_TOOL} runs a file.")
-    checked = dict(request)
-    checked["sql_text"] = read_only_sql(str(request.get("sql_text") or request.get("sql") or ""))
-    checked.pop("sql", None)
-    for flag in ("commit", "autocommit"):
-        checked.pop(flag, None)
-    return checked
+    items = request.get("items")
+    for index, item in enumerate(items if isinstance(items, list) else []):
+        kind = str(item.get("kind") or "") if isinstance(item, dict) else ""
+        if kind in ("local", "script") and not node.settings.offers("run-cmd"):
+            raise McpToolError(f"items[{index}] is a {kind} item: it runs a command, and run-cmd is switched off in "
+                               f"{M.FILE_NAME}.")
+        if kind == "sql" and not node.settings.offers(M.SQL_WRITE_TOOL):
+            read_only_sql(str(item.get("sql") or ""))
+    return request
+
+
+def _answers_a_secret(node: Node, envelope: dict[str, Any]) -> bool:
+    """``read-file``'s bytes travel as base64, where the redactor matches nothing: read them."""
+    import base64
+    import binascii
+
+    data = envelope.get("data")
+    try:
+        content = base64.b64decode(str((data or {}).get("base64") or "") if isinstance(data, dict) else "")
+    except (binascii.Error, ValueError):
+        return True
+    return M.holds_a_secret(content, node.secrets())
 
 
 def _store_tool(node: Node, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -269,18 +326,19 @@ def tool_list(node: Node) -> list[dict[str, Any]]:
         # One of the two hints on every tool (the directory's rule): what does not only read, changes.
         read_only = M.is_read_only(command, node.operations)
         tools.append({"name": command, "kind": "command", "destructive": not read_only, "read_only": read_only,
+                      "needs_key": M.needs_key(command, node.operations),
                       "description": M.describe(command, entry, fills=bool(request_fill.FILLS.get(command)),
                                                 destructive=not read_only)})
         if command == "run-sql" and node.settings.offers(M.SQL_WRITE_TOOL):
             tools.append({"name": M.SQL_WRITE_TOOL, "kind": "command", "destructive": True, "read_only": False,
-                          "description": M.describe_sql_write(entry)})
+                          "needs_key": True, "description": M.describe_sql_write(entry)})
     for name, text in (("store_schema", "dbabrain's runtime store: every table and its columns, or one table's "
                                         "columns with their types (`table`)."),
                        ("store_query", "One read-only SELECT on dbabrain's runtime store (`sql`), always rolled "
                                        "back; `max_rows` up to the node's cap. Tables: store_schema.")):
         if node.settings.offers(name):
             tools.append({"name": name, "kind": "store", "destructive": False, "read_only": True,
-                          "description": text})
+                          "needs_key": False, "description": text})
     return tools
 
 

@@ -161,9 +161,14 @@ def test_run_sql_gets_the_same_login_as_the_operations_do(data_dir):
 
 
 def test_an_8i_bridge_target_carries_its_signing_secret_and_nothing_else(data_dir):
-    bridge = {"method": "api", "secret_ref": "BRIDGE_REF", "url": "http://bridge"}
+    """The bridge is the inventory's (1.1.0, 1.416) - a request naming another is refused."""
+    bridge = {"method": "api", "secret_ref": "BRIDGE_REF", "bridge_url": "http://bridge"}
+    path = data_dir / "db_instances.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["db_instances"][0]["sql_access"] = bridge
+    path.write_text(json.dumps(document), encoding="utf-8")
 
-    filled = fill_request("run-sql", {"target": "LAB-10-0-0-5", "sql": "select 1", "sql_access": bridge},
+    filled = fill_request("run-sql", {"target": "LAB-10-0-0-5", "sql": "select 1"},
                           data_dir=data_dir, secrets={**SECRETS, "BRIDGE_REF": "sign-me"})
 
     assert filled["secrets"] == {"BRIDGE_REF": "sign-me"}

@@ -343,7 +343,14 @@ Every capability except message delivery works with no route off the machines yo
   carries a password, a key or a token is refused before it runs; the person types the secret on the
   node (`secret-set`, `ai-key`) and the model names it by its reference. Every answer is redacted.
 
-An air-gapped install is therefore the default shape, not a special mode.
+**A node without a network** (1.0.0): metrics and their grading, scheduled SQL, the SLA checks and
+the console run with no network at all. Reports, backup / restore, the SRE commands, the MCP server and
+the assistant need a dbabrain key, and a key comes from dbabrain.dev: `key-request`, and `key-renew`
+every 14 days, need the network for their email sign-in. The key is then checked on the node, offline
+(`lib/dbabrain_key.py`: its signature and its term), and a daily check that cannot reach dbabrain.dev
+is not a revocation - so a key asked for on a connected machine and copied into the node's store
+(`secret-set`, ref `DBABRAIN_KEY`) serves a node with no network until its term and grace end, and is
+copied again after each renewal. Telegram and the assistant need the network by their nature.
 
 ---
 

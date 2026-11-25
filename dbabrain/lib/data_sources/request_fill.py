@@ -260,6 +260,7 @@ _RULES = "rules"
 _BUNDLE_SECRETS = "secrets"
 _BRIDGE_SECRETS = "bridge_secrets"
 _ADDRESS = "address"
+_METRIC_TARGET = "metric_target"
 
 #: What each command needs stated, beside what its caller already put in the request. A command
 #: missing here needs nothing filled.
@@ -267,6 +268,7 @@ FILLS: dict[str, tuple[str, ...]] = {
     "shrink-log": (_SQL, _RULES), "kill-spid": (_SQL, _RULES), "start-job": (_SQL, _RULES),
     "disable-job": (_SQL, _RULES),
     "list-databases": (_SQL,), "list-schemas": (_SQL,), "list-jobs": (_SQL,), "db-status": (_SQL,),
+    "table-info": (_SQL,), "object-source": (_SQL,), "db-activity": (_SQL,), "query-plan": (_SQL,),
     "create-table-from-xlsx": (_SQL,), "trace-session": (_SQL,), "copy-schema": (_SQL,),
     "host-facts": (_HOST, _HOST_POLICY), "host-service": (_HOST, _HOST_POLICY, _RULES),
     "host-restart": (_HOST, _HOST_POLICY, _RULES),
@@ -282,6 +284,8 @@ FILLS: dict[str, tuple[str, ...]] = {
     "run-cmd": (_HOST,), "fetch-file": (_HOST,), "send-file": (_HOST,), "pack-files": (_HOST,),
     "relay-file": (_HOST,),
     "probe-host": (_ADDRESS,),
+    # A server_id in place of the target's connection facts, and a host login for a script item (1.1.0, 1.415).
+    "metric-batch": (_METRIC_TARGET,),
 }
 
 
@@ -296,7 +300,8 @@ def fill_request(command: str, request: Mapping[str, Any], *, data_dir: str | Pa
     needs = FILLS.get(command, ())
     if not needs:
         return filled
-    if secrets is None and any(kind in needs for kind in (_SQL, _HOST, _BUNDLE_SECRETS)) and command != "relay-file":
+    if secrets is None and any(kind in needs for kind in (_SQL, _HOST, _BUNDLE_SECRETS, _METRIC_TARGET)) \
+            and command != "relay-file":
         secrets = _secrets_once(data_dir)
     target = str(filled.get("target") or filled.get("server_id") or "").strip()
     if command == "relay-file":
@@ -316,10 +321,14 @@ def fill_request(command: str, request: Mapping[str, Any], *, data_dir: str | Pa
                     data_dir=data_dir, secrets=secrets)
             filled[side] = endpoint
         return filled
-    if _SQL in needs and "connection" not in filled:
+    if command == "metric-batch":
+        return _metric_batch(filled, data_dir=data_dir, secrets=secrets)
+    ours = _SQL in needs and "connection" not in filled
+    if ours:
         filled["connection"] = sql_connection(
             _need(target, command), credential_name=str(filled.get("credential_name") or filled.get("user_ref") or ""),
             data_dir=data_dir, secrets=secrets)
+        _as_the_inventory_reaches_it(command, filled)
     if _HOST in needs and "access" not in filled:
         filled["access"] = host_access(_need(target, command), data_dir=data_dir, secrets=secrets)
     if _HOST_POLICY in needs and "policy" not in filled:
@@ -328,16 +337,59 @@ def fill_request(command: str, request: Mapping[str, Any], *, data_dir: str | Pa
         filled["policy"] = instance_policy(data_dir=data_dir)
     if _RULES in needs and "rules" not in filled:
         filled["rules"] = operation_rules(_operation(command, filled), data_dir=data_dir)
-    if _BRIDGE_SECRETS in needs and "secrets" not in filled:
+    if _BRIDGE_SECRETS in needs and ours and "secrets" not in filled:
         # An 8i target is reached through a bridge whose token is signed with a stored secret;
-        # run-sql opens no store, so the refs its sql_access names travel with the request.
-        block = filled.get("sql_access") or (filled.get("connection") or {}).get("sql_access") or {}
+        # run-sql opens no store, so the refs its inventory record names travel with the request.
+        block = filled["connection"].get("sql_access") or {}
         if sql_access_rules.secret_refs(dict(block)):
             filled["secrets"] = bridge_secrets(block, secrets if secrets is not None else _secrets_once(data_dir))
     if _ADDRESS in needs and not str(filled.get("host") or "").strip():
         filled.update(probe_address(_need(target, command), data_dir=data_dir))
     if _BUNDLE_SECRETS in needs and "secrets" not in filled and filled.get("bundle_dir"):
         filled["secrets"] = bundle_secrets(str(filled["bundle_dir"]), secrets=secrets or {})
+    return filled
+
+
+def _as_the_inventory_reaches_it(command: str, filled: Mapping[str, Any]) -> None:
+    """A login this node fills in goes only where this node's inventory sends it (1.1.0, 1.416).
+
+    ``sql_access`` was the request's to state even then: ``api`` named the address the login - or any
+    stored secret, by its ref - was sent to, and ``subprocess`` the program that was started with it. A
+    caller that states the whole ``connection`` with its own login still states its ``sql_access`` too."""
+    stated = filled.get("sql_access")
+    own = filled["connection"].get("sql_access") or {"method": "direct"}
+    if stated in (None, "", {}) or stated in (own, {"method": "direct"}):
+        return
+    raise RequestFillError(
+        f"{command}: sql_access is the inventory's - this node's login is sent only where db_instances.json says. "
+        "Change the instance's sql_access there, or state the whole connection, login included.")
+
+
+def _metric_batch(filled: dict[str, Any], *, data_dir: str | Path | None, secrets: Mapping[str, str] | None
+                  ) -> dict[str, Any]:
+    """``metric-batch`` by ``server_id``: the target's connection facts, its bridge's secrets, and the host login
+    of a script item that states none. A request stating its ``target`` as an object - the metrics app's - is kept."""
+    name = filled.pop("server_id", None) or filled.get("target")
+    if not isinstance(name, str) or not name.strip():
+        return filled
+    name = name.strip()
+    items = [dict(item) if isinstance(item, Mapping) else item for item in filled.get("items") or []]
+    kinds = {str(item.get("kind") or "") for item in items if isinstance(item, Mapping)}
+    target: dict[str, Any] = {"target_id": name}
+    if "sql" in kinds:
+        link = sql_connection(name, credential_name=str(filled.pop("credential_name", "") or ""),
+                              data_dir=data_dir, secrets=secrets)
+        target.update({key: link[key] for key in ("db_type", "host", "port", "database", "service_name", "username",
+                                                  "password", "sqlserver_driver", "sqlserver_tls_verify", "sql_access")
+                       if key in link})
+        if sql_access_rules.is_legacy(link.get("sql_access")):
+            target["credential"] = {key: link[key] for key in ("username", "password", "role") if key in link}
+            target["service_name"] = link.get("service_name") or link.get("instance_name") or ""
+            filled["secrets"] = bridge_secrets(link["sql_access"], secrets or {})
+    for item in items:
+        if isinstance(item, dict) and item.get("kind") == "script" and "access" not in item:
+            item["access"] = host_access(name, data_dir=data_dir, secrets=secrets)
+    filled["target"], filled["items"] = target, items
     return filled
 
 

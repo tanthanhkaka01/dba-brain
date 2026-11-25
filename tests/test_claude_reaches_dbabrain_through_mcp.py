@@ -380,9 +380,13 @@ def test_no_description_tells_claude_how_to_behave(tmp_path):
     assert "ask the person" not in S.INSTRUCTIONS.lower()
 
 
-def test_run_sql_reads_only_and_names_the_sql_it_takes_and_run_sql_write_is_its_other_half(tmp_path, ran, logged):
+def test_run_sql_says_whose_rights_it_runs_with_and_run_sql_write_is_its_other_half(tmp_path, ran, logged):
+    """The operator, 2026-11-23: run-sql is not read-only - it runs with the rights of the stored login."""
     tools = {t["name"]: t for t in S.tool_list(_node(tmp_path))}
-    assert tools["run-sql"]["read_only"] and tools[M.SQL_WRITE_TOOL]["destructive"]
+    assert tools["run-sql"]["destructive"] and not tools["run-sql"]["read_only"] and tools[M.SQL_WRITE_TOOL]["destructive"]
+    assert "rights of the login this node stores" in tools["run-sql"]["description"]
+    assert "DML and DDL" in tools["run-sql"]["description"] and "Read-only" not in tools["run-sql"]["description"]
+    assert "reads only" not in S.INSTRUCTIONS
     assert "learn.microsoft.com" in tools["run-sql"]["description"] and "postgresql.org" in tools["run-sql"]["description"]
     node = _node(tmp_path)
     S.call_tool(node, "run-sql", {"request": {"server_id": "SRV", "sql_text": "SELECT 1", "commit": True}})

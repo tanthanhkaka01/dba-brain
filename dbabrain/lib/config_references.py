@@ -145,12 +145,15 @@ def check(data_dir: str | Path | None = None) -> dict[str, Any]:
     """Every declared pointer in ``data_dir``, followed.
 
     Returns ``dangling`` (active records pointing at nothing — the ones that will fail at run time),
-    ``inactive`` (the same, on a record nobody runs) and ``unreadable`` (a rule naming a file that is
-    not there, which is a rule to fix rather than an estate to fix).
+    ``inactive`` (the same, on a record nobody runs), ``not_configured`` (a pointer into a set nothing has
+    been put in yet, on a rule that says ``unconfigured_is_a_state`` - 1.1.0, 1.423: a new install's assistant
+    names its chat before any chat exists) and ``unreadable`` (a rule naming a file that is not there, which
+    is a rule to fix rather than an estate to fix).
     """
     root = Path(data_dir or DEFAULT_DATA_DIR)
     dangling: list[dict[str, str]] = []
     inactive: list[dict[str, str]] = []
+    not_configured: list[dict[str, str]] = []
     unreadable: list[dict[str, str]] = []
     checked = 0
 
@@ -204,6 +207,11 @@ def check(data_dir: str | Path | None = None) -> dict[str, Any]:
                     "detail": f"{value!r} is in none of: {'; '.join(target_labels)}",
                     "why": str(rule.get("why") or ""),
                 }
+                if not allowed and rule.get("unconfigured_is_a_state") is True:
+                    # Nothing to point at yet is not configured, not broken (CLAUDE.md: "not configured is a
+                    # state, not a failure"); it is said, and not failed.
+                    not_configured.append(finding)
+                    continue
                 (dangling if _is_active(record, active_field) else inactive).append(finding)
 
     return {
@@ -211,6 +219,7 @@ def check(data_dir: str | Path | None = None) -> dict[str, Any]:
         "pointers_checked": checked,
         "dangling": dangling,
         "inactive": inactive,
+        "not_configured": not_configured,
         "unreadable": unreadable,
         "ok": not dangling,
     }

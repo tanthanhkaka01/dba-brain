@@ -335,6 +335,13 @@ def _stated_cases(work: Path) -> dict[str, tuple[str, dict, str]]:
         "list-schemas": ("list-schemas", {"connection": _SQL, "database_name": "d", "timeout_seconds": 3},
                          _SQL_REACHED),
         "list-jobs": ("list-jobs", {"connection": _SQL, "timeout_seconds": 3}, _SQL_REACHED),
+        # 1.1.0, 1.421: inside a database and what it runs now.
+        "table-info": ("table-info", {"connection": _SQL, "object": "dbo.t", "timeout_seconds": 3}, _SQL_REACHED),
+        "object-source": ("object-source", {"connection": _SQL, "object": "dbo.p", "timeout_seconds": 3},
+                          _SQL_REACHED),
+        "db-activity": ("db-activity", {"connection": _SQL, "view": "waits", "timeout_seconds": 3}, _SQL_REACHED),
+        "query-plan": ("query-plan", {"connection": _SQL, "sql_text": "select 1", "timeout_seconds": 3},
+                       _SQL_REACHED),
         # An unreachable instance is an answer, not a failure: the status says so.
         "db-status": ("db-status", {"connection": _SQL, "timeout_seconds": 3}, "ok"),
         "create-table-from-xlsx": ("create-table-from-xlsx", {

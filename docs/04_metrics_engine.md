@@ -780,44 +780,30 @@ three concerns, kept separate so nothing is double-collected:
 So a DB-in-Docker target collects `sql` + `docker`; the shared host OS lives on the VM target;
 OS (`cmd`) metrics are turned off on the container targets with `metrics.disabled_collector_types: ["cmd"]`.
 
-## A scan that must not always run, and a threshold that is configuration (0.28.0)
+## A read that is bounded, and a threshold that is configuration (0.28.0, 1.1.0)
 
-`LOCK_TRANSACTION_HOLDERS` starts by reading `sys.dm_tran_locks` whole, and enumerating the lock
-manager takes latches on the lock manager. On 2026-10-07 one session on an ERP server held
-1,137,515 locks in a transaction 44 hours old; the metric's scan outlived its 60-second timeout and
-became the head of **68 waiting sessions**. The monitoring query was the incident's head blocker,
-and nothing bounded the scan by the size of what it scanned.
-
-**The size is read first, and above the limit the scan is not run.** Both variants (2012 and later,
-and `legacy_2008r2/`) open with the same block, word for word:
+`LOCK_TRANSACTION_HOLDERS` reads `sys.dm_tran_locks`, which costs by the lock: about 11 microseconds each on
+a busy server (59,000 locks in 0.65 s), so 10 million is two minutes. Both SQL Server variants (2012 and
+later, and `legacy_2008r2/`) open with the same block, word for word, which reads the size first -
+`Lock Owner Blocks` from `sys.dm_os_performance_counters`, the locks in use now; not the lock manager's
+memory, which stays after the locks are gone (30 GB with 14,000 locks in use).
 
 | | |
 | --- | --- |
-| What is read | `Lock Owner Blocks` from `sys.dm_os_performance_counters` - the locks in use now, which is what a scan would have to walk. One row, nothing enumerated |
-| Why not the lock manager's memory | that store keeps its pages after the locks are gone. Measured 2026-10-09 on the server of the incident: **3,700 MB** with **800** locks in use (798 rows in `sys.dm_tran_locks`). A limit in megabytes would have stayed CRITICAL for good |
-| Above the limit | no scan. One row, item `lock_scan_skipped`, **CRITICAL** when credible (the oldest open user transaction is old enough to have built the count at `@lock_count_credible_locks_per_second`, default 2,000,000), **WARNING** when not (the counter kept a past peak and no open transaction could hold that many locks): the count, the limit, credibility flag, oldest transaction age, and the sessions most likely to hold the locks |
-| Who is named | the open transactions, from the transaction DMVs (they do not touch the lock manager), largest first by log written - up to five, plus the oldest. Each is a row `SPID=n` with login, host, `client_ip`, program, database, the transaction's age and its log. When the count is credible, **two are CRITICAL: the largest writer and the oldest open transaction** - one of them is the holder whether it changed a million rows or only read them under an isolation level that keeps its shared locks; the rest are WARNING. When the count is not credible, **none is CRITICAL - all are WARNING** (named only as context) |
-| What it cannot say | a session's lock count. That is the scan |
-| What it does not do | create a temp table (the scan below does): a server in this state is the last place to create one |
+| At or below the limit | every lock, **grouped as it is read** into a table made before the read (`HASH GROUP`, `MAXDOP 1`): 58,742 locks become 8 rows. Until 1.1.0 it was `SELECT ... INTO`, a row per lock: on one server the six times this metric was the head blocker (13 to 68 sessions, `LATCH_EX`) it was writing more than a million rows to tempdb inside the statement that read them |
+| Above the limit | the first `lock_sample_rows` rows, **sampled**, no temp table. The view gives its rows as it walks the lock hash, so `TOP` ends it early and the cost no longer depends on how many locks there are. 10,000 of 62,736 locks gave the two largest holders 59.8 % and 34.9 % (the whole: 62.4 % and 35.7 %); 20,000 of 85,140 gave 46,701 and 35,486 locks (counted whole seconds before: 46,766 and 35,453). The `DATABASE` locks, one per connection, come first and are not counted |
+| What it says | item `lock_scan_sampled`: the locks in use in millions, the limit, how many rows were sampled, what share of the locks that is and how long it took, the lock memory, and each holder; and a row per session (up to five with 1 % or more, plus the oldest transaction): its share, its locks (estimated from the share and the counter), login, host, `client_ip`, program, database, its transaction's age and log, and how many sessions wait on it |
+| Its severity | never the count's: jobs here build 2 to 20 million locks and end. A session with `lock_holder_min_share_pct` of the sample is **CRITICAL** when its transaction is `lock_holder_critical_seconds` old, or is 15 minutes old and somebody waits on it; **WARNING** at `lock_holder_warning_seconds`, or when somebody waits on it; else LOGGING. The server's row is its worst holder's |
+| A past peak | a sample that ends before `lock_sample_rows` is every lock there is, whatever the counter says (it is refreshed periodically and kept 15.7 M for eight minutes after a job ended): LOGGING. So is a count no open transaction is old enough to have built at `lock_count_credible_locks_per_second` (2,000,000) |
 
-Where the counters are not available the block reads 0 and the scan runs as it always did - the
+Where the counters are not available the block reads 0 and the locks are read whole as they always were - the
 guard fails open. One SQL Server 2012 instance of this estate reads 0 for every lock counter.
 
-**The limit is `sql_settings.lock_scan_skip_above`, 2,000,000** - raised from 500,000 by the
-operator on 2026-10-15, **above the size that stalled a server**. Read on 2026-10-09 across
-fourteen SQL Server targets, the locks in use ranged from 2,500 to 96,000; the scan has been
-measured at 1.2 s for 260,000 rows; 1.2 million stalled a server (2026-10-07). A lock manager of
-1.2 to 2 million is scanned again under this limit, by that decision. An Agent job's peaks on
-one server run 4 to 15.7 million and are skipped either way.
-
-Beside it, **`sql_settings.lock_count_credible_locks_per_second` (default 2,000,000)** asks whether
-any open user transaction is old enough to have built the count at that rate: `Lock Owner Blocks`
-is refreshed periodically and was seen reading the job's 15.7 M for eight minutes after it ended,
-while the only open transaction was one second old. A rate rather than a fixed age, because the
-same job's real 8.6 M had transactions only 50 s old; 2,000,000 a second is above the whole
-server's measured 1.2 M lock requests a second. When the oldest open user transaction is too young,
-the skip row is WARNING (stating the counter shows a past peak) and every SPID row is WARNING; the
-scan is skipped all the same.
+The numbers are `sql_settings` of the metric's SQL Server variants: `lock_scan_skip_above` (1,000,000 since
+1.1.0, about 11 s of reading; 2,000,000 before; its name is from when the read was skipped), `lock_sample_rows` (200,000),
+`lock_holder_min_share_pct` (10), `lock_holder_warning_seconds` (1800), `lock_holder_critical_seconds` (14400),
+`lock_count_credible_locks_per_second` (2,000,000). A node's `metric_definitions.json` that states one the
+installed SQL does not declare fails the metric: the code goes to a node before the file.
 
 ### `sql_settings` - a number the SQL takes from configuration
 
@@ -827,7 +813,7 @@ shipped file. A metric may now state
 
 ```json
 "sql_settings": {
-  "lock_scan_skip_above": 2000000,
+  "lock_scan_skip_above": 1000000,
   "lock_count_credible_locks_per_second": 2000000
 }
 ```
@@ -835,7 +821,7 @@ shipped file. A metric may now state
 and its SQL declares the same name with its default, on a line of its own:
 
 ```sql
-DECLARE @lock_scan_skip_above bigint = 2000000;
+DECLARE @lock_scan_skip_above bigint = 1000000;
 DECLARE @lock_count_credible_locks_per_second bigint = 2000000;
 ```
 
@@ -853,7 +839,7 @@ Deliberately narrow, because this writes into SQL text:
   applies each metric's settings to each of its supported variant files;
 - **a number that is one engine's goes on that engine's variants**: a variant may state its own
   `sql_settings`, written over the metric's when that variant runs (`collector._sql_settings_for`).
-  `LOCK_TRANSACTION_HOLDERS`'s two limits are on its SQL Server variants since 0.30.0: stated for
+  `LOCK_TRANSACTION_HOLDERS`'s limits are on its SQL Server variants since 0.30.0: stated for
   the metric, they failed its new PostgreSQL and Oracle files, which have no lock manager to guard.
 
 ### An idle session holding an application lock it owns (0.30.0)

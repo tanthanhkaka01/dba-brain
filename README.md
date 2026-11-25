@@ -1,9 +1,10 @@
+<!-- mcp-name: dev.dbabrain/dbabrain -->
 # DBA Brain
 
 **[dbabrain.dev](https://dbabrain.dev/)** · [PyPI](https://pypi.org/project/dbabrain/) ·
 [Downloads](https://pypistats.org/packages/dbabrain) · `pip install dbabrain`
 
-**A database operations toolkit for people who are on call.** It collects health metrics from your
+**An open-source DBA tool for DBAs, SREs and DevOps engineers.** It collects health metrics from your
 SQL Server, Oracle, PostgreSQL and MySQL instances, grades them against policies you write, runs
 your scheduled SQL, takes backups and *proves them by restoring them*, checks objectives against
 real measurement history, and tells you about it — on a schedule, without an agent on any
@@ -89,7 +90,7 @@ Three commitments, and they are meant to be held to:
 | --- | --- |
 | **Reliable** | Every operation is typed, logged and repeatable. A scheduled run that failed can be replayed by hand from the same JSON request. Backups are not reported as successful — they are **restored, and the restore is the proof**. |
 | **Cheap for an agent to use** | An agent working a database from a shell pays, in context, for every raw result set it reads — on every check, most of them healthy. Here it sends a small request and reads a **graded verdict**, then pulls the evidence only for what came back bad. |
-| **Not dependent on one** | No model is required. With a key, the assistant makes setup and day-to-day questions easier; without one, nothing is contacted and the daemon, the schedules, the reports and the alerts all still run. The model is a caller, never a component the estate depends on. |
+| **Not dependent on one** | No model is required. The assistant makes setup and day-to-day questions easier; without it, no model is contacted, and the daemon, the schedules, the reports and the alerts all still run. The model is a caller, never a component the estate depends on. |
 
 The shape of that, because it is the whole argument in one picture:
 

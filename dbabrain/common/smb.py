@@ -84,8 +84,14 @@ def _timeout(request: dict[str, Any], default: int) -> int:
 
 
 def _subpath(value: Any) -> str:
-    """A path under the share, backslash-separated, no leading or trailing separator."""
-    return str(value or "").replace("/", "\\").strip("\\")
+    """A path under the share, backslash-separated, no leading or trailing separator.
+
+    It becomes part of an ``smbclient -c`` command line, where a quote ends the path and ``!`` starts a
+    program on this node (1.1.0, 1.415). No name on a Windows share holds a quote or a control character."""
+    text = str(value or "").replace("/", "\\").strip("\\")
+    if '"' in text or any(ord(char) < 32 for char in text):
+        raise SmbError(f"a path on a share holds no quote and no control character: {text!r}")
+    return text
 
 
 def _unc(host: str, share: str, subpath: str = "") -> Path:

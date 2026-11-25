@@ -1473,6 +1473,10 @@ def _dispatch(argv: list[str]) -> int:
         from dbabrain.common import cli_catalog
 
         return cli_catalog.run(argv[0], argv[1:], read_request=_read_json_request)
+    if argv[0] in {"table-info", "object-source", "db-activity", "query-plan"}:
+        from dbabrain.common import cli_inspect
+
+        return cli_inspect.run(argv[0], argv[1:], read_request=_read_json_request)
     if argv[0] == "copy-schema":
         from dbabrain.common import cli_schema
 

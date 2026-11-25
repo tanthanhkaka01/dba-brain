@@ -158,11 +158,10 @@ links that resolved, looked right and pointed at somebody else's estate. Unset n
 `report_base_url()` returns `""` rather than `"/"`, because a root-relative URL is a different
 claim and one nobody made.
 
-The same correction reached `oracle_bridge.resolve_secret()`. Its environment fallback read one
-hardcoded variable name derived from a real host; it now reads a variable named by the config's
-own `sql_access.secret_ref`, which is the convention the rest of the tree already documents in
-`remote_exec`: *refs double as env var names across dbabrain*. Besides removing the address, that
-is what lets a second bridge on a second host have its own secret at all.
+`oracle_bridge.resolve_secret()` reads the bridge's secret among those stated with the request, by the
+ref the inventory's `sql_access.secret_ref` names, and nowhere else - never the environment (1.1.0): the
+ref is the request's, and a variable of a known value is no key. Each bridge has its own ref, so a second
+bridge on a second host has its own secret.
 
 Secrets never appear in any key — redact before building the response, not after.
 
@@ -1220,6 +1219,25 @@ against the in-process code first: 23 scenarios - rows, empty, connect and execu
 missing credential, a per-database cluster with one database refused, ssh rows, a non-zero exit,
 non-JSON stdout, auth rejected, a command and a connect timeout, env secrets, a local script and
 its timeout, a docker container, the 8i bridge up and down - store the same rows through the batch.
+
+### `table-info`, `object-source`, `db-activity`, `query-plan` - inside a database, and what it runs now (1.1.0)
+
+What an agent reads before it writes a query - at least 8 of 22 failed MCP `run-sql` calls on 2026-11-22 were
+*Invalid column name*. `common.db_inspect`, one SQL of its own per engine, run through `sql_run` like the catalog
+commands, with the rights of the login the request states; an app (MCP, the bot) fills it from a `server_id`.
+
+| Command | Answers | Engines |
+| --- | --- | --- |
+| `table-info` `{"object": "dbo.Orders"}` | `columns` (type, length, nullable, identity, computed, default), `indexes` (keys, included, filter, unique, primary, disabled), `row_count`, `reserved_mb` | SQL Server, PostgreSQL, Oracle, MySQL |
+| `object-source` `{"object": "dbo.usp_x"}` | `objects`: each definition of that name - procedure, function, view, trigger (Oracle: package, type, from `ALL_SOURCE`) | the four |
+| `db-activity` `{"view": ...}` | `requests` running now, `blocking`, `waits` now, `top_queries` since the plans were cached; `max_rows` 1-1000 (50) | SQL Server, PostgreSQL (`top_queries` needs `pg_stat_statements`), Oracle; MySQL `requests` and `top_queries` |
+| `query-plan` `{"sql_text": ...}` | the estimated plan - **compiled, never run** (SQL Server `SHOWPLAN_XML`, with `estimated_cost`, `top_operators`, `missing_indexes`; PostgreSQL and MySQL `EXPLAIN` without `ANALYZE`) | not Oracle: `EXPLAIN PLAN` writes to a table |
+
+A name is checked to be a name (letters, digits, `_ $ # @ -`, spaces, dots, and `[ ] " \`` around a part) and
+written in as a literal. `query-plan` refuses a GO line and a `SHOWPLAN` / `NOEXEC` / `PARSEONLY` / `FMTONLY` in
+the statement on SQL Server - a batch that switched the showplan off would run what follows - and a second
+statement after an `EXPLAIN`. Run on SQL Server 2022, PostgreSQL 18, Oracle 23 and MySQL on 2026-11-23: a
+`WAITFOR DELAY` of 8 s and a `pg_sleep(8)` came back in 0.2 s. Over MCP they are tools that read.
 
 ### Where the layer does not meet this yet
 
@@ -2613,8 +2631,9 @@ was allowed to write.
 
 ## A dbabrain key (`key-request`, `key-renew`, `key-status`, 1.0.0)
 
-Reports, backup / restore, SRE, the MCP server and the assistant need a dbabrain key; without one a
-node keeps its metrics, instant alerts, SLA and SQL tasks (plan
+Reports, backup / restore, SRE, the MCP server's tools that change something (1.1.0; the readers answer
+without a key) and the assistant need a dbabrain key; without one a node keeps its metrics, instant
+alerts, SLA and SQL tasks (plan
 `audits/20261121_plan_dbabrain_key_and_ai_relay.md`). `common/dbabrain_key_admin.py`:
 
 - **`dbabrain key-request`** - the device sign-in `mcp connect` uses, with `{"purpose": "key"}`: a code

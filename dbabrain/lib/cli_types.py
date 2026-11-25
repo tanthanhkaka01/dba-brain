@@ -373,6 +373,81 @@ SchemaListAnswer = TypedDict('SchemaListAnswer', {
 }, total=False)
 
 
+#: One database object or the server's activity read: a table, a definition, what runs now, a plan. (table-info, object-source, db-activity, query-plan)
+DbInspectRequest = TypedDict('DbInspectRequest', {
+    'target': str | None,
+    'credential_name': str | None,
+    'sql_access': dict[str, Any] | None,
+    'database_name': str | None,
+    'object': str | None,
+    'view': str | None,
+    'sql_text': str | None,
+    'max_rows': int | None,
+    'timeout_seconds': int | None,
+    'connection': dict[str, Any] | None,
+}, total=False)
+
+
+#: One table's columns, indexes, rows and size. (table-info)
+TableInfoAnswer = TypedDict('TableInfoAnswer', {
+    'server_id': str | None,
+    'db_type': str | None,
+    'database_name': str | None,
+    'credential_name': str | None,
+    'username': str | None,
+    'object': str | None,
+    'columns': list[Any] | None,
+    'indexes': list[Any] | None,
+    'column_count': int | None,
+    'index_count': int | None,
+    'row_count': int | None,
+    'reserved_mb': float | None,
+}, total=False)
+
+
+#: The text of one procedure, function, view or trigger. (object-source)
+ObjectSourceAnswer = TypedDict('ObjectSourceAnswer', {
+    'server_id': str | None,
+    'db_type': str | None,
+    'database_name': str | None,
+    'credential_name': str | None,
+    'username': str | None,
+    'object': str | None,
+    'objects': list[Any] | None,
+    'count': int | None,
+}, total=False)
+
+
+#: What the server is doing now, one view of it. (db-activity)
+DbActivityAnswer = TypedDict('DbActivityAnswer', {
+    'server_id': str | None,
+    'db_type': str | None,
+    'database_name': str | None,
+    'credential_name': str | None,
+    'username': str | None,
+    'view': str | None,
+    'rows': list[Any] | None,
+    'count': int | None,
+}, total=False)
+
+
+#: The estimated plan of one statement, compiled and never run. (query-plan)
+QueryPlanAnswer = TypedDict('QueryPlanAnswer', {
+    'server_id': str | None,
+    'db_type': str | None,
+    'database_name': str | None,
+    'credential_name': str | None,
+    'username': str | None,
+    'format': str | None,
+    'plan': str | None,
+    'plan_truncated': bool | None,
+    'estimated_cost': float | None,
+    'estimated_rows': float | None,
+    'top_operators': list[Any] | None,
+    'missing_indexes': list[Any] | None,
+}, total=False)
+
+
 #: The scheduled jobs on one instance. (list-jobs)
 JobListAnswer = TypedDict('JobListAnswer', {
     'server_id': str | None,
@@ -451,6 +526,7 @@ CheckReferencesAnswer = TypedDict('CheckReferencesAnswer', {
     'pointers_checked': int | None,
     'dangling': list[Any] | None,
     'inactive': list[Any] | None,
+    'not_configured': list[Any] | None,
     'unreadable': list[Any] | None,
     'ok': bool | None,
 }, total=False)
@@ -2313,6 +2389,11 @@ __all__ = [
     'FilesDeleteVerifiedAnswer',
     'DatabaseListAnswer',
     'SchemaListAnswer',
+    'DbInspectRequest',
+    'TableInfoAnswer',
+    'ObjectSourceAnswer',
+    'DbActivityAnswer',
+    'QueryPlanAnswer',
     'JobListAnswer',
     'TableLoadAnswer',
     'DescribeObjectAnswer',

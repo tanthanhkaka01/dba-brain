@@ -89,14 +89,22 @@ def _arguments(text: str) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     node = _node(args.home)
-    if args.command != "tools":
-        # 1.0.0 (K4): serving, connecting and calling need a dbabrain key (D2); listing does not.
+    if args.command == "connect":
+        # 1.0.0 (K4): linking this node to dbabrain.dev's connector needs a dbabrain key (D2).
         from dbabrain.lib import dbabrain_key
 
         refused = dbabrain_key.said_at_the_door(
             dbabrain_key.gate_here("mcp", data_dir=getattr(node, "data_dir", None)), app="dbabrain mcp")
         if refused is not None:
             return refused
+    elif args.command == "serve":
+        # 1.1.0, 1.425 (the operator, 2026-11-25: *let a few tools be called without signing in*): the server
+        # starts with no key - the tools that only read answer, a tool marked destructive says how to get one
+        # (server.call_tool decides per call). Said once here, on stderr, so a stdio client's stream stays clean.
+        decision = node.key_decision()
+        if decision.sentence:
+            print(f"dbabrain mcp: {decision.level.upper()}: {decision.sentence}"
+                  + ("" if decision.allowed else " - until then the tools that only read answer."), file=sys.stderr)
     if args.command == "tools":
         from dbabrain.mcp.server import tool_list
 
@@ -106,7 +114,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for tool in tools:
                 mark = "DESTRUCTIVE" if tool["destructive"] else ("read-only" if tool["read_only"] else "changes")
-                print(f"{tool['name']:<34} {mark:<11} {tool['description'].splitlines()[0][:90]}")
+                key = "needs key" if tool["needs_key"] else "no key"
+                print(f"{tool['name']:<34} {mark:<11} {key:<9} {tool['description'].splitlines()[0][:90]}")
             print(f"\n{len(tools)} tool(s); switched off: {', '.join(node.settings.disabled_tools) or 'none'}"
                   + ("" if node.settings.enabled else " - the server is OFF (enabled false)"))
         return 0

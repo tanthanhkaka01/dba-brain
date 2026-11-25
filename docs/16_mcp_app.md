@@ -5,7 +5,7 @@ way 1 of [`audits/20261110_plan_mcp_connector.md`](../audits/20261110_plan_mcp_c
 starts `dbabrain mcp serve`, and every `common.cli` command - and dbabrain's own runtime store - is a
 tool it can call, against the user's own inventory, logins and databases.
 
-> **Needs a dbabrain key (1.0.0).** `dbabrain mcp serve`, `connect` and `call` start only on a node holding a valid key from dbabrain.dev (`dbabrain key-request`, free, an email sign-in - [13](./13_common.md#a-dbabrain-key-key-request-key-renew-key-status-100)). Without one the scheduler does not start them and a run by hand says how to get one and exits 0; after a key's end and its 3 days of grace, new work stops - they refuse with exit 3; `dbabrain mcp tools` lists with no key. [03](./03_app_command_daemon.md#the-dbabrain-key-what-starts-without-one-and-the-warnings-100) has the gate.
+> **A dbabrain key for what changes something (1.1.0; in 1.0.0 the whole server needed one).** `dbabrain mcp serve` and `call` start with no key: a tool that only reads (`readOnlyHint` - the `list-*` and `check-*` tools, `db-status`, `describe-object`, `table-info`, `db-activity`, `query-plan`, `store_query`, ...) answers, and a tool marked destructive (`run-sql` and `run-sql-write` among them) answers that it needs a key and how to get one - `dbabrain key-request`, free, an email sign-in ([13](./13_common.md#a-dbabrain-key-key-request-key-renew-key-status-100)) - and none of it runs. `serve` says so once on stderr. The line is the tool's hint (`lib.mcp_tools.needs_key`); each call asks the same door as every gated command (`lib.dbabrain_key.gate_here`, kept a minute), so a key set while the server runs counts within a minute, and after a key's end and its 3 days of grace the destructive tools stop again while the readers go on. **`connect`** - linking the node to dbabrain.dev's connector - needs the key up front: without one a run by hand says how to get one and exits 0, after the grace it refuses with exit 3, and the scheduler does not start it. `dbabrain mcp tools` lists every tool with no key, marked `needs key` / `no key`. [03](./03_app_command_daemon.md#the-dbabrain-key-what-starts-without-one-and-the-warnings-100) has the gate.
 
 ```
 user's machine:  Claude Desktop / Claude Code
@@ -31,14 +31,20 @@ Package `dbabrain/mcp/` (`cli.py`, `server.py`, `catalogue/mcp_tools.json`); rul
 - **`server_id` is enough.** Where a command needs a connection or a host login, the request is
   completed from the node's inventory and secret store (`lib.data_sources.request_fill`) - the way
   `run-sql-adhoc` and `run-cmd-adhoc` complete theirs. Claude never sees or writes a password.
+- **What is inside a database** (1.1.0): `table-info` (columns, indexes, size), `object-source` (a procedure's,
+  view's or trigger's text), `db-activity` (running now, blocking, waits, top queries), `query-plan` (the estimated
+  plan, compiled and never run) - read before a query is written ([13](./13_common.md)).
 - **`store_schema` / `store_query`** - dbabrain's runtime store: its tables, and one SELECT
   (`db.read_only_query`: `lib.read_only_sql`, a read-only transaction, a statement timeout, always
   rolled back, capped at `store_query_max_rows`). `web_users`, `web_sessions` and
   `web_login_attempts` are blocked (`store_blocked_tables`).
-- **`run-sql` only reads; `run-sql-write` is its other half** (the directory refuses one tool that both reads
-  and writes): `run-sql` takes one statement as `sql_text`, held to `lib.read_only_sql` before it runs, never
-  committed (a DDL commits by itself on Oracle and MySQL, so a rollback alone would not do); `run-sql-write`
-  keeps what it changed only when the request says `commit`. Both name each engine's SQL reference.
+- **`run-sql` and `run-sql-write` run with the rights of the login this node stores for the server** - the
+  instance's `default_credential_name` in `users.json`, or the request's `credential_name`. What that login may
+  do, they may do, DML and DDL included: **`run-sql` is not read-only, and is not marked so** (1.1.0, the
+  operator, 2026-11-23). `run-sql` takes one statement as `sql_text`, checks that it is one SELECT
+  (`lib.read_only_sql`) and never commits; the check reads text and can be passed, so it is a guard against a
+  mistake, not a boundary. `run-sql-write` keeps what it changed only when the request says `commit`. To keep a
+  server to reading, store a login there that can only read. Both name each engine's SQL reference.
 
 An app (R03): it never imports `common` - each command runs as `python -m dbabrain.common.cli` through
 `dbabrain.transport` - and never another app; it reads the store through `db` and its rules from `lib`.
@@ -63,10 +69,24 @@ An app (R03): it never imports `common` - each command runs as `python -m dbabra
    ai-key`), then named here by its reference (`password_ref`). A command that could only be refused
    (`secret-set`, `secret-remove`, `ai-key`, the three that need an age `identity`) is not offered. A login the node
    completes from its own store is not one - name the `server_id`.
-4. **Every answer is capped** at `max_chars` and says how much was cut.
-5. **Every call is recorded** (`log_calls`): a `job_runs` row `mcp.<tool>` - the tool, the
+4. **A request reaches what its tool is for, and nothing behind it** (1.1.0). Every command stays a tool; what
+   a request may not state is refused by name:
+   - **how a server is reached** - `sql_access` with a route of its own, in any tool. A server whose inventory
+     record goes through a bridge is still reached that way by its `server_id`. A login the node fills in goes only
+     where the inventory sends it, for the console and the bot too;
+   - **`run-sql`**: `define` values are put into the text before it is checked, `prelude` only declares bound values,
+     `driver` is a name; a file a read-only tool writes goes under `runtime/output/` or `runtime/instance_bundles/`;
+   - **what is switched off stays off**: an item of `metric-batch` that runs a command is refused where `run-cmd` is
+     off, and its SQL only reads where `run-sql-write` is off. It takes a `server_id` in place of its `target`;
+   - **`read-file`** reads no secret file of a node and answers no file holding a value of the store.
+
+   `metric-batch`, `guide` and `inventory-summary` are marked as changing something. A tool marked read-only, and each
+   of its fields, is named in `tests/test_an_mcp_request_cannot_reach_past_its_tool.py`: a new one fails there until it
+   is judged.
+5. **Every answer is capped** at `max_chars` and says how much was cut.
+6. **Every call is recorded** (`log_calls`): a `job_runs` row `mcp.<tool>` - the tool, the
    `server_id`, the node's user, duration, done or failed - shown on the console's runs page.
-6. **A tool is switched off by name** in `disabled_tools`; `enabled: false` offers none.
+7. **A tool is switched off by name** in `disabled_tools`; `enabled: false` offers none.
 
 ## The settings - `data/mcp_tools.json`
 
@@ -204,8 +224,9 @@ public `x` ships in `lib.dbabrain_key.SIGNING_PUBLIC_KEYS`); 14 days, 365 for an
 SHA-256 -> `{kid, email, iat, exp, state, node}`, never the key. `GET /key/status` (bearer: the key)
 answers its state - `active`, `grace`, `ended`, `replaced`, `revoked`, `unknown`; `POST
 /admin/key/revoke {email | kid}` takes `AUDIT_TOKEN`. The audit trail gains `key_issue` (method
-`free` / `operator`) and `key_revoke`. `dbabrain mcp serve / connect / call` need a key on the node
-(`tools` does not).
+`free` / `operator`) and `key_revoke`. `dbabrain mcp connect` needs a key on the node; `serve` and
+`call` answer the tools that only read without one, and need it for a tool marked destructive (1.1.0);
+`tools` needs none.
 
 ### The AI through dbabrain.dev - the relay (1.0.0)
 
@@ -236,7 +257,7 @@ submission): submitted by the operator at claude.ai/directory/manage -> Submit n
 | --- | --- |
 | a remote HTTPS server, OAuth | the Worker (Access sign-in, OAuth 2.1 with dynamic client registration) |
 | every tool a `title` and `readOnlyHint` or `destructiveHint` | `server.tool_list` - one of the two on every tool |
-| no tool that both reads and writes | `run-sql` (read-only, checked, never committed) / `run-sql-write` |
+| no tool that both reads and writes | `run-sql` (one SELECT checked, never committed - marked as changing something: it runs with the stored login's rights) / `run-sql-write` (commits) |
 | a custom query tool names its API | `run-sql` / `run-sql-write` name each engine's SQL reference |
 | descriptions state facts, never steer Claude | `lib.mcp_tools.describe`, a test |
 | privacy policy, documentation, support, icon | `https://mcp.dbabrain.dev/privacy`, `/docs`, support@dbabrain.dev, `/icon.svg` |

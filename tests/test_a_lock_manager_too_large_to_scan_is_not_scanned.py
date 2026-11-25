@@ -1,31 +1,25 @@
-"""A lock manager too large to enumerate is not enumerated - and saying so is the finding.
+"""A lock manager too large to read whole is sampled, and who holds the locks is what is graded.
 
-`LOCK_TRANSACTION_HOLDERS` starts by reading `sys.dm_tran_locks` whole, and enumerating the lock
-manager takes latches on the lock manager. On 2026-10-07 one session on an ERP server held
-1,137,515 locks in a transaction 44 hours old. The metric's scan outlived its 60-second timeout and
-became the head of 68 waiting sessions: the monitoring query was the outage's head blocker. Nothing
-bounded the scan by the size of what it scanned.
+`LOCK_TRANSACTION_HOLDERS` reads `sys.dm_tran_locks`, and that costs by the lock. On 2026-10-07 one
+session on an ERP server held 1,137,515 locks in a transaction 44 hours old; the metric's read
+outlived its 60-second timeout and was the head blocker of 68 sessions. Until 1.1.0 it therefore read
+nothing above a limit, named holders by the log they wrote, and was CRITICAL for the count alone - on
+a server whose jobs build 2 to 20 million locks and end, and then for six days on end while five
+sessions built 161 million.
 
-Four decisions are held here, each made from a measurement on the estate's servers (2026-10-09):
+What is held here, each from a measurement on the estate's servers (2026-10-09, 2026-11-23):
 
-- **The size is read before the scan, from a counter that enumerates nothing, and above the limit
-  the scan is not run.** The skip is one row (CRITICAL when credible, WARNING when showing a past
-  peak), and it names the sessions most likely to hold the locks - with their login, host and client
-  address - from the transaction DMVs, which do not touch the lock manager.
-- **The counter is the locks in use (`Lock Owner Blocks`), not the lock manager's memory.** That
-  store keeps its pages after the locks are gone: the same server read 3,700 MB with 800 locks in
-  use two days after the incident, so a limit in megabytes would have stayed CRITICAL for good.
-- **The limit is configuration.** A collector's thresholds were literals in its SQL - the one place
-  a threshold could not be configured. A metric may now state `sql_settings`, and only a number is
-  ever written into the file, into a `DECLARE` the file itself carries with its default.
-- **The lock count is credible only when an open user transaction is old enough to have built it.**
-  `Lock Owner Blocks` is refreshed periodically and can hold a past peak for minutes after an Agent
-  job ends; a count at or above the limit with no transaction old enough to have built it at
-  `lock_count_credible_locks_per_second` (default 2,000,000) is WARNING, notes the past peak, and
-  leaves every SPID row at WARNING.
-
-The SQL itself was run on SQL Server 2008 R2, 2019 and 2022 with the limit forced to 1; what can be
-held without a server is held below.
+- **The size is read before the locks, from a counter that enumerates nothing** (`Lock Owner Blocks` -
+  the locks in use, not the store's memory, which stays after they are gone: 30 GB with 14,000 locks).
+- **Above the limit the first rows are sampled.** The view gives its rows as it walks the lock hash, so
+  TOP ends it early, and the cost no longer depends on how many locks there are: 10,000 of 62,736 gave
+  the two largest holders 59.8 % and 34.9 %, the whole 62.4 % and 35.7 %.
+- **The size alone is not a finding.** A holder with a share of the sample is, by its transaction's age
+  or by who waits on it; a sample that ends early is every lock there is, and the counter is behind.
+- **No row per lock reaches tempdb.** Below the limit the locks are grouped as they are read, into a
+  table made before; the six times this metric blocked others it was writing more than a million rows
+  inside the statement that read them.
+- **The limits are configuration**: `sql_settings`, a number and nothing else.
 """
 
 from __future__ import annotations
@@ -48,7 +42,7 @@ CATALOGUE = REPO_ROOT / "dbabrain" / "metrics" / "catalogue" / "metric_definitio
 VARIANTS = ("sqlserver/025_sqlserver_transaction_lock_holders.sql",
             "sqlserver/legacy_2008r2/025_sqlserver_transaction_lock_holders.sql")
 
-GUARD_STARTS = "-- 0. Is the lock manager too large to enumerate at all?"
+GUARD_STARTS = "-- 0. Is the lock manager too large to read whole?"
 GUARD_ENDS = "    RETURN;\nEND\n"
 
 
@@ -76,7 +70,7 @@ def _metrics() -> list[dict]:
 # The guard comes first, and does not do what it guards against
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("relative", VARIANTS)
-def test_both_variants_declare_lock_count_credible_locks_per_second_before_the_skip_branch(relative):
+def test_both_variants_declare_lock_count_credible_locks_per_second_before_the_sample_branch(relative):
     text = _text(relative)
     decl = "DECLARE @lock_count_credible_locks_per_second bigint = 2000000;"
     assert decl in text
@@ -92,19 +86,41 @@ def test_the_size_is_read_before_anything_enumerates_the_lock_manager(relative):
 
 
 @pytest.mark.parametrize("relative", VARIANTS)
-def test_the_skip_leaves_before_the_scan_and_never_reads_the_locks_itself(relative):
+def test_the_sample_is_bounded_and_the_whole_read_never_follows_it(relative):
     guard = _code(_guard(relative))
 
-    assert "sys.dm_tran_locks" not in guard, "the skip branch would be the scan it replaces"
-    assert guard.rstrip().endswith("RETURN;\nEND"), "without RETURN the scan runs after the skip"
+    assert guard.count("sys.dm_tran_locks") == 1, "one bounded read"
+    read = " ".join(guard[guard.index("SELECT TOP (@lock_sample_rows)"):].split())
+    assert read.startswith("SELECT TOP (@lock_sample_rows) tl.request_session_id AS sid, tl.resource_type, "
+                           "tl.request_status FROM sys.dm_tran_locks tl) x"), "TOP is on the view itself"
+    assert "MAXDOP 1" in guard, "one reader walks the lock manager"
+    assert guard.rstrip().endswith("RETURN;\nEND"), "without RETURN the whole read runs after the sample"
 
 
 @pytest.mark.parametrize("relative", VARIANTS)
-def test_the_skip_creates_no_temp_table(relative):
+def test_a_connections_own_database_lock_is_not_a_holders(relative):
+    """One per connection, and they come first: counted, 1000 rows were a third of them."""
+    assert "x.resource_type <> 'DATABASE'" in _code(_guard(relative))
+
+
+@pytest.mark.parametrize("relative", VARIANTS)
+def test_the_sample_creates_no_temp_table(relative):
     """A server in this state is the last place to create one."""
     guard = _code(_guard(relative))
 
     assert "INTO #" not in guard and "CREATE TABLE" not in guard.upper()
+
+
+@pytest.mark.parametrize("relative", VARIANTS)
+def test_below_the_limit_the_locks_are_grouped_as_they_are_read_and_never_written_one_by_one(relative):
+    code = _code(_text(relative))
+    scan = " ".join(code[code.index("CREATE TABLE #locks"):].split())
+
+    assert "INTO #locks FROM" not in scan, "SELECT ... INTO writes a row per lock inside the read"
+    insert = scan[scan.index("INSERT INTO #locks"):scan.index("OPTION (HASH GROUP, MAXDOP 1);")]
+    assert "COUNT_BIG(*) FROM sys.dm_tran_locks tl" in insert and "GROUP BY tl.request_session_id" in insert
+    assert "SUM(tl.lock_count) AS lock_count" in scan, "what was counted by rows is summed"
+    assert scan.count("COUNT(*) AS lock_count") == 0
 
 
 @pytest.mark.parametrize("relative", VARIANTS)
@@ -117,44 +133,58 @@ def test_the_size_is_the_locks_in_use_not_the_memory_of_the_store(relative):
 
 
 # --------------------------------------------------------------------------- #
-# The skip is a finding, and it names who
+# What the sample says
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("relative", VARIANTS)
-def test_the_skip_is_critical_and_names_the_session_and_where_it_connects_from(relative):
+def test_the_sample_names_the_session_its_share_and_where_it_connects_from(relative):
     guard = _code(_guard(relative))
 
-    assert "CAST('lock_scan_skipped' AS varchar(256)) AS metric_item" in guard
-    assert "CAST(CASE WHEN @count_credible = 1 THEN 'CRITICAL' ELSE 'WARNING' END AS varchar(16)) AS status" in guard
-    for said in ("spid=", "login=", "host=", "client_ip=", "program=", "database=",
-                 "open_tran_seconds=", "log_records="):
-        assert said in guard, f"the skip rows do not say {said}"
+    assert "CAST('lock_scan_sampled' AS varchar(256)) AS metric_item" in guard
+    for said in ("spid=", "share_pct=", "lock_count=", "blocked_sessions=", "login=", "host=", "client_ip=",
+                 "program=", "database=", "open_tran_seconds=", "log_records="):
+        assert said in guard, f"the rows do not say {said}"
 
 
 @pytest.mark.parametrize("relative", VARIANTS)
-def test_the_skip_row_status_is_chosen_by_the_credibility_of_the_lock_count(relative):
-    guard = _code(_guard(relative))
+def test_the_message_opens_with_how_many_locks_how_many_were_sampled_and_how_long_it_took(relative):
+    """The operator, 2026-11-23: say how many million locks, how many were sampled, and the rest."""
+    guard = " ".join(_code(_guard(relative)).split())
 
-    assert "CAST(CASE WHEN @count_credible = 1 THEN 'CRITICAL' ELSE 'WARNING' END AS varchar(16)) AS status" in guard
-
-
-@pytest.mark.parametrize("relative", VARIANTS)
-def test_the_largest_writer_and_the_oldest_transaction_are_both_critical(relative):
-    """A holder that only read - millions of shared locks, no log - has no log to rank by."""
-    guard = _code(_guard(relative))
-
-    assert "CASE WHEN @count_credible = 1 AND (h.rn = 1 OR h.rn_age = 1) THEN 'CRITICAL' ELSE 'WARNING' END" in guard
-    assert "WHERE h.rn <= 5 OR h.rn_age = 1" in guard, "the oldest must be a row even when sixth"
+    for said in ("'locks in use ' + CAST(CAST(@locks_in_use / 1000000.0 AS decimal(12, 2))", "' M, read whole up to '",
+                 "'; sampled '", "100.0 * @sample_rows / @locks_in_use", "@sample_ms / 1000.0", "'; lock memory '"):
+        assert said.lstrip("'; ") in guard, said
+    assert guard.count("+ @said") == 3, "each of the three openings says it"
 
 
 @pytest.mark.parametrize("relative", VARIANTS)
-def test_in_the_skip_branch_no_spid_row_is_critical_unless_the_count_is_credible(relative):
-    guard = _code(_guard(relative))
+def test_a_holder_is_graded_by_its_age_and_by_who_waits_never_by_the_count(relative):
+    guard = " ".join(_code(_guard(relative)).split())
 
-    assert "CASE WHEN @count_credible = 1 AND (h.rn = 1 OR h.rn_age = 1) THEN 'CRITICAL' ELSE 'WARNING' END" in guard
+    assert ("CASE WHEN @count_credible = 0 OR h.share_pct < @lock_holder_min_share_pct THEN 0 "
+            "WHEN h.open_tran_seconds >= @lock_holder_critical_seconds THEN 2 "
+            "WHEN h.open_tran_seconds >= @critical_tran_seconds AND h.blocked_sessions > 0 THEN 2 "
+            "WHEN h.open_tran_seconds >= @lock_holder_warning_seconds THEN 1 "
+            "WHEN h.blocked_sessions > 0 THEN 1 ELSE 0 END AS grade") in guard
+    assert ("CASE ISNULL((SELECT MAX(g0.grade) FROM Graded g0), 0) "
+            "WHEN 2 THEN 'CRITICAL' WHEN 1 THEN 'WARNING' ELSE 'LOGGING' END") in guard, "the server's row is its worst holder's"
 
 
 @pytest.mark.parametrize("relative", VARIANTS)
-def test_the_skip_rows_have_the_columns_the_scan_rows_have(relative):
+def test_a_sample_that_ended_early_is_every_lock_there_is(relative):
+    """The counter keeps a past peak for minutes: what was read whole is the truth, and nothing is paged for it."""
+    guard = " ".join(_code(_guard(relative)).split())
+
+    assert "WHEN @sample_rows < @lock_sample_rows THEN 0" in guard
+    assert "CASE WHEN @sample_rows < @lock_sample_rows OR @sample_locks = 0 THEN ISNULL(p.locks, 0)" in guard
+
+
+@pytest.mark.parametrize("relative", VARIANTS)
+def test_the_oldest_transaction_is_named_beside_the_holders(relative):
+    assert "OR (h.rn_age = 1 AND h.open_tran_seconds > 0)" in _code(_guard(relative))
+
+
+@pytest.mark.parametrize("relative", VARIANTS)
+def test_the_sample_rows_have_the_columns_the_scan_rows_have(relative):
     """One result set either way: a reader of this metric must not need to know which ran."""
     guard = _guard(relative)
 
@@ -222,7 +252,9 @@ def test_the_catalogue_states_the_limit_on_the_sql_server_variants_and_the_loade
     metric = next(metric for metric in _metrics() if metric["metric_code"] == "LOCK_TRANSACTION_HOLDERS")
     loaded = next(metric for metric in load_metric_definitions(CATALOGUE)
                   if metric.metric_code == "LOCK_TRANSACTION_HOLDERS")
-    expected = {"lock_scan_skip_above": 2000000, "lock_count_credible_locks_per_second": 2000000}
+    expected = {"lock_scan_skip_above": 1000000, "lock_count_credible_locks_per_second": 2000000,
+                "lock_sample_rows": 200000, "lock_holder_min_share_pct": 10,
+                "lock_holder_warning_seconds": 1800, "lock_holder_critical_seconds": 14400}
 
     assert "sql_settings" not in metric
     for variant in metric["variants"]:
@@ -257,11 +289,11 @@ def test_every_setting_the_catalogue_states_is_one_every_variant_of_its_metric_d
 def test_the_default_in_each_file_is_the_number_the_catalogue_ships():
     """Run by hand, the file behaves as a node with the shipped catalogue does."""
     for relative in VARIANTS:
-        assert "DECLARE @lock_scan_skip_above bigint = 2000000;" in _text(relative)
+        assert "DECLARE @lock_scan_skip_above bigint = 1000000;" in _text(relative)
         assert "DECLARE @lock_count_credible_locks_per_second bigint = 2000000;" in _text(relative)
 
 
-def test_the_three_metric_definitions_files_state_the_credible_rate_and_the_2m_limit_for_this_metric():
+def test_the_three_metric_definitions_files_state_the_credible_rate_and_the_limit_for_this_metric():
     files = present_copies(
         REPO_ROOT / "data" / "metric_definitions.json",
         REPO_ROOT / "data" / "metric_definitions.example.json",
@@ -277,7 +309,7 @@ def test_the_three_metric_definitions_files_state_the_credible_rate_and_the_2m_l
             assert settings.get("lock_count_credible_locks_per_second") == 2000000, (
                 f"{path.name} {variant['name']} does not state lock_count_credible_locks_per_second: 2000000"
             )
-            assert settings.get("lock_scan_skip_above") == 2000000
+            assert settings.get("lock_scan_skip_above") == 1000000
 
 
 def test_apply_sql_settings_writes_a_configured_value_into_the_new_declare():
@@ -310,7 +342,7 @@ def test_a_variant_setting_reaches_only_its_own_file():
     by_engine = {v.db_type: v for v in metric.variants if v.path is not None and v.db_type != "sqlserver"}
     sql_server = next(v for v in metric.variants if v.name == "sqlserver_modern_2012_plus")
 
-    assert _sql_settings_for(metric, sql_server.path)["lock_scan_skip_above"] == 2000000
+    assert _sql_settings_for(metric, sql_server.path)["lock_scan_skip_above"] == 1000000
     for engine in ("postgresql", "oracle"):
         assert _sql_settings_for(metric, by_engine[engine].path) == {}
         apply_sql_settings(by_engine[engine].path.read_text(encoding="utf-8"), {})

@@ -214,7 +214,9 @@ pointing at something that is gone is how an estate retires a target, so those a
 `inactive` instead. A password_ref is NOT checked here - the secret store is encrypted, so that
 question belongs to `check-secret`, which answers it by authenticating.
 
-data: {"pointers_checked", "dangling", "inactive", "unreadable", "ok"}
+data: {"pointers_checked", "dangling", "inactive", "not_configured", "unreadable", "ok"}
+`not_configured`: a pointer into something nothing has been put in yet - a new install's assistant
+names its chat before any Telegram chat exists. Said, not failed.
 Exit code is 0 when nothing active dangles, 1 when something does.
 
 This is the check that would have caught, a day early:
@@ -227,12 +229,15 @@ def _references(request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     message = (f"{result['pointers_checked']} pointer(s): "
                + ("none dangling" if result["ok"] else f"{len(result['dangling'])} DANGLING")
                + (f", {len(result['inactive'])} on inactive record(s)" if result["inactive"] else "")
+               + (f", {len(result['not_configured'])} not configured yet" if result["not_configured"] else "")
                + (f", {len(result['unreadable'])} rule(s) skipped" if result["unreadable"] else ""))
     if str(request.get("format") or "").strip().lower() == "txt":
         for item in result["dangling"]:
             print(f"DANGLING  {item['where']} -> {item['value']}: {item['detail']}")
         for item in result["inactive"]:
             print(f"inactive  {item['where']} -> {item['value']}: {item['detail']}")
+        for item in result["not_configured"]:
+            print(f"not configured  {item['where']} -> {item['value']}: nothing to point at yet")
         for item in result["unreadable"]:
             print(f"skipped   {item['rule']}: {item['file']} {item['detail']}")
     return message, result

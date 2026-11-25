@@ -118,7 +118,8 @@ disk (item 1.409, plan `audits/20261120_plan_worker_secret_exposure.md`). `dbabr
 
 Reports, backup / restore, SRE and the MCP connector need a **dbabrain key** - free, from
 dbabrain.dev after an email sign-in (`dbabrain key-request`, [13](./13_common.md#a-dbabrain-key-key-request-key-renew-key-status-100));
-metrics, instant alerts, SLA, SQL tasks, the console and everything else do not (plan
+metrics, instant alerts, SLA, SQL tasks, the console, the MCP tools that only read (1.1.0,
+[16](./16_mcp_app.md)) and everything else do not (plan
 `audits/20261121_plan_dbabrain_key_and_ai_relay.md`). The rules are `lib.dbabrain_key`'s; the daemon
 asks them once a scan:
 

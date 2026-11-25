@@ -12,7 +12,7 @@ DECLARE @applock_idle_warning_seconds int = 300;     -- 5 min idle holding one: 
 DECLARE @applock_idle_critical_seconds int = 1800;   -- 30 min idle holding one: an incident
 DECLARE @applock_idle_abandoned_seconds int = 60;    -- 1 min idle while somebody waits on it
 
--- sys.dm_tran_locks is read into a temp table first because the query below reads it twice:
+-- sys.dm_tran_locks is read once, grouped, because the query below needs it twice:
 -- once for the per-session aggregate, and once more INSIDE the message column - a correlated
 -- subquery that runs per output row. On 192.0.2.115 (1127 sessions, one holding 22,137
 -- locks) that meant materialising the whole lock manager 62 times for 61 rows of output, and
@@ -23,43 +23,44 @@ DECLARE @applock_idle_abandoned_seconds int = 60;    -- 1 min idle while somebod
 -- taken at two different instants, so a session's lock_count and its lock_by_type could
 -- disagree in the same message.
 -- ---------------------------------------------------------------------------
--- 0. Is the lock manager too large to enumerate at all?
+-- 0. Is the lock manager too large to read whole?
 -- ---------------------------------------------------------------------------
--- Everything below starts by reading sys.dm_tran_locks whole, and enumerating the lock manager
--- takes latches ON the lock manager. On 2026-10-07 one session on an ERP server held 1,137,515
--- locks in a transaction 44 hours old; this metric's scan outlived its 60-second timeout and
--- became the head of 68 waiting sessions, every one of them queued behind a monitoring query.
--- Nothing bounded the scan by the size of what it scanned.
---
--- So the size is read first, from a counter that enumerates nothing, and above the limit the
--- scan is NOT run. That is itself the finding, and it is CRITICAL: a lock manager that large is
--- an incident whoever is waiting, and it is the one moment this metric must not add to it.
+-- Reading sys.dm_tran_locks costs by the lock: about 11 microseconds each on a busy ERP server
+-- (59,000 locks in 0.65 s, 2026-11-23), so 10 million is two minutes and 100 million twenty. The
+-- size is read first, from a counter that enumerates nothing, and above the limit the locks are
+-- SAMPLED instead of read whole (until 1.1.0 they were not read at all).
 --
 -- * The counter is 'Lock Owner Blocks' - the locks in use now, which is what a scan would have
 --   to walk (measured: 800 on the counter against 798 rows of sys.dm_tran_locks). NOT the size
---   of the lock manager's memory: that store keeps its pages after the locks are gone - the same
---   server read 3,700 MB with 800 locks in use, two days after the incident - so a limit in
---   megabytes would have stayed CRITICAL for good.
--- * The limit is configuration: metric_definitions.json states sql_settings.lock_scan_skip_above
---   and it is written into the DECLARE below, whose number is only the default. 2,000,000 since
---   2026-10-15, the operator's: ABOVE the 1.2 M that stalled a server, so a lock manager of 1.2 to
---   2 M is scanned again; the scan was measured at 260,000 in 1.2 s. It was 500,000 before.
--- * Who holds the locks cannot be counted without the scan, so the holders are named by what
---   can be read without it: the open transactions, largest first by log written, then oldest.
---   That ranking named the 2026-10-07 session. Each row carries the session, its login, host,
---   client address and program. Two are CRITICAL: the largest writer and the oldest open
---   transaction. One of the two is the holder whether it changed a million rows or only read
---   them under an isolation level that keeps its shared locks - a session that wrote nothing
---   has no log to rank by. The rest are WARNING.
--- * No temp table here, unlike below: a server in this state is the last place to create one.
-DECLARE @lock_scan_skip_above bigint = 2000000;
--- The counter is refreshed periodically and can hold a past peak: on 2026-10-15 it read 15.7 M
--- for eight minutes after an Agent job that built them had ended, with one transaction open on
--- the server, a second old. Locks belong to transactions, and a transaction builds them at a
--- bounded rate, so a count is credible only if the oldest open user transaction is old enough
--- to have built it at this many locks a second. A rate rather than a fixed age: the same job's
--- real 8.6 M at 08:00 had transactions 50 s old, which a 60-second bound would have called a
--- past peak. 2,000,000 is above the whole server's measured 1.2 M lock requests a second.
+--   of the lock manager's memory: that store keeps its pages after the locks are gone - 3,700 MB
+--   with 800 locks in use in 2026-10, 30 GB with 14,000 on 2026-11-23 - so a limit in megabytes
+--   would have stayed CRITICAL for good.
+-- * The sample is the first @lock_sample_rows rows. The view gives its rows as it walks the lock
+--   hash: TOP stops it early (TOP 1000 of 59,000 took 0 ms where all of them took 650), and what
+--   comes first is spread over the holders as the whole is - 10,000 of 62,736 locks gave the two
+--   largest holders 59.8 % and 34.9 %, the whole 62.4 % and 35.7 % (2026-11-23). The DATABASE
+--   locks, one per connection, come first and are not counted. So the cost no longer depends on
+--   how many locks there are, and the holders are named by their locks: until 1.1.0 by the log
+--   they wrote, which a session that only reads does not write.
+-- * A sample that ends before @lock_sample_rows is every lock there is, whatever the counter says:
+--   the counter is refreshed periodically and can hold a past peak (2026-10-15: 15.7 M for eight
+--   minutes after the job that built them had ended). It is then LOGGING, nothing to act on.
+-- * The size alone is not a finding: jobs on this estate build 2 to 20 million locks and end. What
+--   is graded is who holds them - a session with @lock_holder_min_share_pct of the sample whose
+--   transaction is old, or that somebody waits on. On 2026-11-17 to 11-23 five sessions held 161
+--   million locks in transactions open for six days; a limit on the count alone had paged every
+--   five minutes since the first evening, and for every short job before it.
+-- * The sample goes into a variable, not a temp table: writing a row per lock into tempdb inside
+--   the statement that reads them is what other sessions queued behind (see the scan below).
+DECLARE @lock_scan_skip_above bigint = 1000000;
+DECLARE @lock_sample_rows bigint = 200000;
+DECLARE @lock_holder_min_share_pct int = 10;
+DECLARE @lock_holder_warning_seconds int = 1800;     -- 30 min holding that many: worth a look
+DECLARE @lock_holder_critical_seconds int = 14400;   -- 4 h: nobody is coming back to it
+-- Locks belong to transactions, and a transaction builds them at a bounded rate, so the counter is
+-- credible only if the oldest open user transaction is old enough to have built it at this many
+-- locks a second. A rate rather than a fixed age: a job's real 8.6 M had transactions 50 s old.
+-- 2,000,000 is above the whole server's measured 1.2 M lock requests a second.
 DECLARE @lock_count_credible_locks_per_second bigint = 2000000;
 DECLARE @locks_in_use bigint;
 DECLARE @lock_memory_mb bigint;
@@ -77,10 +78,13 @@ IF ISNULL(@locks_in_use, 0) >= @lock_scan_skip_above
 BEGIN
     DECLARE @oldest_open_tran_seconds int;
     DECLARE @count_credible int;
+    DECLARE @sample xml;
+    DECLARE @sample_rows bigint;
+    DECLARE @sample_locks bigint;
+    DECLARE @sample_started datetime;
+    DECLARE @sample_ms int;
+    DECLARE @said varchar(400);
 
-    -- A lock count at or above the limit is credible only if an open user transaction is old
-    -- enough to have built it. The counter (Lock Owner Blocks) is refreshed periodically and can
-    -- hold a past peak for minutes after an Agent job finishes.
     SELECT
         @oldest_open_tran_seconds = ISNULL(MAX(CASE
             WHEN DATEDIFF(SECOND, at.transaction_begin_time, GETDATE()) < 0 THEN 0
@@ -94,13 +98,48 @@ BEGIN
     WHERE s.is_user_process = 1
       AND st.session_id <> @@SPID;
 
+    SET @sample_started = GETDATE();
+    SELECT @sample = (
+        SELECT x.sid AS [@sid],
+               COUNT_BIG(*) AS [@rows],
+               SUM(CASE WHEN x.resource_type <> 'DATABASE' AND x.request_status = 'GRANT'
+                        THEN CAST(1 AS bigint) ELSE 0 END) AS [@locks]
+        FROM (SELECT TOP (@lock_sample_rows)
+                     tl.request_session_id AS sid, tl.resource_type, tl.request_status
+              FROM sys.dm_tran_locks tl) x
+        GROUP BY x.sid
+        FOR XML PATH('h'), TYPE)
+    OPTION (HASH GROUP, MAXDOP 1);
+    SET @sample_ms = DATEDIFF(MILLISECOND, @sample_started, GETDATE());
+
+    SELECT @sample_rows = ISNULL(SUM(q.h.value('@rows', 'bigint')), 0),
+           @sample_locks = ISNULL(SUM(q.h.value('@locks', 'bigint')), 0)
+    FROM @sample.nodes('/h') q(h);
+
     SET @count_credible = CASE
+        -- The sample ended early: it is every lock there is, and the counter is behind.
+        WHEN @sample_rows < @lock_sample_rows THEN 0
         WHEN CAST(@oldest_open_tran_seconds AS bigint) * @lock_count_credible_locks_per_second
              >= @locks_in_use THEN 1
         ELSE 0
     END;
 
-    ;WITH OpenTran AS
+    -- The numbers a reader needs first, in the units a person says them in.
+    SET @said = 'locks in use ' + CAST(CAST(@locks_in_use / 1000000.0 AS decimal(12, 2)) AS varchar(20))
+        + ' M, read whole up to ' + CAST(CAST(@lock_scan_skip_above / 1000000.0 AS decimal(12, 2)) AS varchar(20))
+        + ' M; sampled ' + CAST(@sample_rows AS varchar(20)) + ' of them'
+        + CASE WHEN @locks_in_use > 0 AND @sample_rows >= @lock_sample_rows
+               THEN ' (' + CAST(CAST(100.0 * @sample_rows / @locks_in_use AS decimal(9, 3)) AS varchar(20)) + ' %)'
+               ELSE '' END
+        + ' in ' + CAST(CAST(@sample_ms / 1000.0 AS decimal(9, 2)) AS varchar(20)) + ' s'
+        + '; lock memory ' + ISNULL(CAST(CAST(@lock_memory_mb / 1024.0 AS decimal(9, 1)) AS varchar(20)), '?') + ' GB. ';
+
+    ;WITH Sampled AS
+    (
+        SELECT q.h.value('@sid', 'int') AS session_id, q.h.value('@locks', 'bigint') AS locks
+        FROM @sample.nodes('/h') q(h)
+    ),
+    OpenTran AS
     (
         SELECT
             st.session_id,
@@ -118,14 +157,25 @@ BEGIN
     Holder AS
     (
         SELECT
-            o.session_id,
+            s.session_id,
             o.oldest_tran_begin_time,
-            o.log_records,
-            o.log_bytes,
+            ISNULL(o.log_records, 0) AS log_records,
+            ISNULL(o.log_bytes, 0) AS log_bytes,
             CASE
-                WHEN DATEDIFF(SECOND, o.oldest_tran_begin_time, GETDATE()) < 0 THEN 0
+                WHEN o.oldest_tran_begin_time IS NULL
+                     OR DATEDIFF(SECOND, o.oldest_tran_begin_time, GETDATE()) < 0 THEN 0
                 ELSE DATEDIFF(SECOND, o.oldest_tran_begin_time, GETDATE())
             END AS open_tran_seconds,
+            ISNULL(p.locks, 0) AS sampled_locks,
+            CASE WHEN @sample_locks > 0
+                 THEN CAST(100.0 * ISNULL(p.locks, 0) / @sample_locks AS decimal(5, 1))
+                 ELSE 0 END AS share_pct,
+            -- Every lock was read when the sample ended early; else its share of the counter.
+            CASE WHEN @sample_rows < @lock_sample_rows OR @sample_locks = 0 THEN ISNULL(p.locks, 0)
+                 ELSE CAST(1.0 * ISNULL(p.locks, 0) / @sample_locks * @locks_in_use AS bigint)
+            END AS locks_held,
+            CAST((SELECT COUNT(*) FROM sys.dm_exec_requests br
+                  WHERE br.blocking_session_id = s.session_id) AS int) AS blocked_sessions,
             s.status AS session_status,
             s.login_name,
             s.host_name,
@@ -139,27 +189,52 @@ BEGIN
              FROM sys.dm_tran_session_transactions st2
              JOIN sys.dm_tran_database_transactions dt2
                  ON dt2.transaction_id = st2.transaction_id
-             WHERE st2.session_id = o.session_id
+             WHERE st2.session_id = s.session_id
              ORDER BY dt2.database_transaction_log_bytes_used DESC) AS database_name,
             CAST(CASE WHEN LEN(f.flat) > 700
                       THEN LEFT(f.flat, 250) + ' ... ' + RIGHT(f.flat, 450)
                       ELSE f.flat END AS varchar(max)) AS last_sql,
-            ROW_NUMBER() OVER (ORDER BY o.log_bytes DESC, o.oldest_tran_begin_time ASC,
-                                        o.session_id) AS rn,
-            ROW_NUMBER() OVER (ORDER BY o.oldest_tran_begin_time ASC, o.session_id) AS rn_age
-        FROM OpenTran o
-        JOIN sys.dm_exec_sessions s
-            ON s.session_id = o.session_id
+            ROW_NUMBER() OVER (ORDER BY ISNULL(p.locks, 0) DESC, ISNULL(o.log_bytes, 0) DESC,
+                                        s.session_id) AS rn,
+            ROW_NUMBER() OVER (ORDER BY CASE WHEN o.oldest_tran_begin_time IS NULL THEN 1 ELSE 0 END,
+                                        o.oldest_tran_begin_time ASC, s.session_id) AS rn_age
+        FROM sys.dm_exec_sessions s
+        LEFT JOIN OpenTran o
+            ON o.session_id = s.session_id
+        LEFT JOIN Sampled p
+            ON p.session_id = s.session_id
         -- One connection per session: a MARS session has several rows here, and each would
         -- repeat the session in the ranking.
         OUTER APPLY (SELECT TOP (1) c.client_net_address, c.most_recent_sql_handle
                      FROM sys.dm_exec_connections c
-                     WHERE c.session_id = o.session_id
+                     WHERE c.session_id = s.session_id
                      ORDER BY c.connect_time) cn
         OUTER APPLY sys.dm_exec_sql_text(cn.most_recent_sql_handle) t
         CROSS APPLY (SELECT flat = REPLACE(REPLACE(REPLACE(ISNULL(t.text, ''),
                                     CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' ')) f
         WHERE s.is_user_process = 1
+          AND s.session_id <> @@SPID
+          AND (o.session_id IS NOT NULL OR p.locks > 0)
+    ),
+    Graded AS
+    (
+        SELECT
+            h.session_id, h.oldest_tran_begin_time, h.log_records, h.log_bytes, h.open_tran_seconds,
+            h.sampled_locks, h.share_pct, h.locks_held, h.blocked_sessions, h.session_status,
+            h.login_name, h.host_name, h.program_name, h.last_request_end_time, h.client_ip,
+            h.database_name, h.last_sql, h.rn, h.rn_age,
+            CASE
+                WHEN @count_credible = 0 OR h.share_pct < @lock_holder_min_share_pct THEN 0
+                WHEN h.open_tran_seconds >= @lock_holder_critical_seconds THEN 2
+                WHEN h.open_tran_seconds >= @critical_tran_seconds AND h.blocked_sessions > 0 THEN 2
+                WHEN h.open_tran_seconds >= @lock_holder_warning_seconds THEN 1
+                WHEN h.blocked_sessions > 0 THEN 1
+                ELSE 0
+            END AS grade
+        FROM Holder h
+        -- A holder is a session with a share of the sample; the oldest transaction is named beside
+        -- them, sampled or not.
+        WHERE (h.rn <= 5 AND h.share_pct >= 1) OR (h.rn_age = 1 AND h.open_tran_seconds > 0)
     )
     SELECT out_rows.metric_item, out_rows.metric_value, out_rows.metric_unit, out_rows.status,
            out_rows.lock_seconds, out_rows.message
@@ -167,46 +242,49 @@ BEGIN
     (
         SELECT
             0 AS sort_key,
-            CAST('lock_scan_skipped' AS varchar(256)) AS metric_item,
+            CAST('lock_scan_sampled' AS varchar(256)) AS metric_item,
             CAST(@locks_in_use AS varchar(32)) AS metric_value,
             CAST('lock(s)' AS varchar(32)) AS metric_unit,
-            CAST(CASE WHEN @count_credible = 1 THEN 'CRITICAL' ELSE 'WARNING' END AS varchar(16)) AS status,
+            CAST(CASE ISNULL((SELECT MAX(g0.grade) FROM Graded g0), 0)
+                      WHEN 2 THEN 'CRITICAL' WHEN 1 THEN 'WARNING' ELSE 'LOGGING' END
+                 AS varchar(16)) AS status,
             @oldest_open_tran_seconds AS lock_seconds,
             CAST(
                 CASE
-                    WHEN @count_credible = 1 THEN
-                        'Lock scan SKIPPED: the lock manager holds ' + CAST(@locks_in_use AS varchar(32))
-                        + ' locks, at or above the limit of ' + CAST(@lock_scan_skip_above AS varchar(32))
-                        + '. Enumerating that many latches the lock manager and stalls every session that '
-                        + 'takes or releases a lock, so lock counts per session are not known; the holders '
-                        + 'named are the open transactions, largest first by log written, and the oldest. '
-                    ELSE
-                        'Lock scan SKIPPED: the counter reads ' + CAST(@locks_in_use AS varchar(32))
-                        + ' locks at or above the limit, but the oldest open transaction is '
+                    WHEN @sample_rows < @lock_sample_rows THEN
+                        'Locks read whole: ' + @said + 'The sample ended early, so it is every lock there is ('
+                        + CAST(@sample_rows AS varchar(32))
+                        + ') and the counter (Lock Owner Blocks, refreshed periodically) is showing a past peak. '
+                    WHEN @count_credible = 0 THEN
+                        'Locks SAMPLED: ' + @said + 'The oldest open transaction is '
                         + CAST(@oldest_open_tran_seconds AS varchar(32))
                         + ' s old: at ' + CAST(@lock_count_credible_locks_per_second AS varchar(32))
-                        + ' locks a second none could have built them, so the counter (Lock Owner Blocks, '
-                        + 'refreshed periodically) is showing a past peak; the scan is skipped all the same. '
+                        + ' locks a second none could have built them, so the counter is showing a past peak. '
+                    ELSE
+                        'Locks SAMPLED: ' + @said
+                        + 'Too many to read whole: the locks of each holder are estimated from its share of the sample. '
                 END
                 + 'locks_in_use=' + CAST(@locks_in_use AS varchar(32))
                 + ', limit=' + CAST(@lock_scan_skip_above AS varchar(32))
+                + ', sampled=' + CAST(@sample_rows AS varchar(32))
+                + ', sample_ms=' + CAST(@sample_ms AS varchar(20))
                 + ', lock_memory_mb=' + ISNULL(CAST(@lock_memory_mb AS varchar(32)), '')
-                + ', sessions_with_open_tran=' + CAST((SELECT COUNT(*) FROM Holder hc) AS varchar(20))
-                + ', largest_open_transactions='
+                + ', holders='
                 + ISNULL(STUFF((
                     SELECT ' | spid=' + CAST(h2.session_id AS varchar(20))
+                         + ' share_pct=' + CAST(h2.share_pct AS varchar(20))
+                         + ' locks=' + CAST(CAST(h2.locks_held / 1000000.0 AS decimal(12, 2)) AS varchar(20)) + 'M'
+                         + ' open_tran_seconds=' + CAST(h2.open_tran_seconds AS varchar(20))
+                         + ' blocked_sessions=' + CAST(h2.blocked_sessions AS varchar(20))
                          + ' client_ip=' + ISNULL(h2.client_ip, '')
                          + ' login=' + ISNULL(h2.login_name, '')
                          + ' host=' + ISNULL(h2.host_name, '')
                          + ' database=' + ISNULL(h2.database_name, '')
-                         + ' open_tran_seconds=' + CAST(h2.open_tran_seconds AS varchar(20))
-                         + ' log_records=' + CAST(h2.log_records AS varchar(30))
                          + CASE WHEN h2.rn_age = 1 THEN ' (the oldest)' ELSE '' END
-                    FROM Holder h2
-                    WHERE h2.rn <= 5 OR h2.rn_age = 1
+                    FROM Graded h2
                     ORDER BY h2.rn
                     FOR XML PATH(''), TYPE
-                  ).value('.', 'nvarchar(max)'), 1, 3, ''), 'none - no session has a transaction open')
+                  ).value('.', 'nvarchar(max)'), 1, 3, ''), 'none - no session holds a share of them')
                 + ', count_credible=' + CAST(@count_credible AS varchar(10))
                 + ', oldest_open_tran_seconds=' + CAST(@oldest_open_tran_seconds AS varchar(20))
             AS varchar(max)) AS message
@@ -216,20 +294,23 @@ BEGIN
         SELECT
             h.rn AS sort_key,
             CAST('SPID=' + CAST(h.session_id AS varchar(20)) AS varchar(256)) AS metric_item,
-            CAST(h.log_records AS varchar(32)) AS metric_value,
-            CAST('log record(s)' AS varchar(32)) AS metric_unit,
-            -- When the count is credible, the largest writer and the oldest transaction are the
-            -- two to look at first (CRITICAL) and the rest WARNING. When not credible, none is
-            -- CRITICAL - all WARNING (they are named only as context).
-            CAST(CASE WHEN @count_credible = 1 AND (h.rn = 1 OR h.rn_age = 1) THEN 'CRITICAL' ELSE 'WARNING' END
+            CAST(h.locks_held AS varchar(32)) AS metric_value,
+            CAST('lock(s)' AS varchar(32)) AS metric_unit,
+            CAST(CASE h.grade WHEN 2 THEN 'CRITICAL' WHEN 1 THEN 'WARNING' ELSE 'LOGGING' END
                  AS varchar(16)) AS status,
             h.open_tran_seconds AS lock_seconds,
             CAST(
-                'Open transaction on a server whose locks were too many to scan - likely lock '
-                + 'holder number ' + CAST(h.rn AS varchar(10)) + ' by log written'
-                + CASE WHEN h.rn_age = 1 THEN ', and the oldest open transaction' ELSE '' END
-                + '; its lock count is not known. '
+                'Session holding locks on a server whose locks were sampled'
+                + CASE WHEN h.rn_age = 1 THEN ' - the oldest open transaction' ELSE '' END + '. '
                 + 'spid=' + CAST(h.session_id AS varchar(20))
+                + ', share_pct=' + CAST(h.share_pct AS varchar(20))
+                + ', lock_count=' + CAST(h.locks_held AS varchar(30))
+                + CASE WHEN @sample_rows < @lock_sample_rows THEN ''
+                       ELSE ' (estimated, ' + CAST(CAST(h.locks_held / 1000000.0 AS decimal(12, 2)) AS varchar(20))
+                            + ' M of ' + CAST(CAST(@locks_in_use / 1000000.0 AS decimal(12, 2)) AS varchar(20))
+                            + ' M, from ' + CAST(h.sampled_locks AS varchar(20)) + ' of '
+                            + CAST(@sample_locks AS varchar(20)) + ' sampled)' END
+                + ', blocked_sessions=' + CAST(h.blocked_sessions AS varchar(20))
                 + ', open_tran_seconds=' + CAST(h.open_tran_seconds AS varchar(20))
                 + ', log_records=' + CAST(h.log_records AS varchar(30))
                 + ', log_mb=' + CAST(h.log_bytes / 1048576 AS varchar(30))
@@ -244,8 +325,7 @@ BEGIN
                 + ', locks_in_use=' + CAST(@locks_in_use AS varchar(32))
                 + ', last_sql=' + ISNULL(h.last_sql, '')
             AS varchar(max)) AS message
-        FROM Holder h
-        WHERE h.rn <= 5 OR h.rn_age = 1
+        FROM Graded h
     ) out_rows
     ORDER BY out_rows.sort_key;
 
@@ -255,6 +335,26 @@ END
 IF OBJECT_ID('tempdb..#locks') IS NOT NULL
     DROP TABLE #locks;
 
+-- Grouped as it is read, into a table made before the read. Until 1.1.0 it was SELECT ... INTO, a
+-- row per lock: on 192.0.2.115 every time more than a million write locks went through it (1.05 to
+-- 1.93 million rows, 24 to 54 s, 2026-10-24 to 11-02, and 2026-10-07) it was slow, and six times it
+-- was the head blocker of 13 to 68 sessions, waiting on LATCH_EX - tempdb was being written inside
+-- the one statement and transaction that read the locks. With as many locks and 15 of them written
+-- it took 9 to 18 s and nobody waited. Grouped, 58,742 locks become 8 rows, and the hash aggregate
+-- has read them all before the first is written. MAXDOP 1: one reader walks the lock manager.
+CREATE TABLE #locks
+(
+    request_session_id   int,
+    resource_database_id int,
+    resource_type        nvarchar(60),
+    request_mode         nvarchar(60),
+    request_owner_type   nvarchar(60),
+    applock_name         nvarchar(256),
+    lock_count           bigint
+);
+
+INSERT INTO #locks (request_session_id, resource_database_id, resource_type, request_mode,
+                    request_owner_type, applock_name, lock_count)
 SELECT
     tl.request_session_id,
     tl.resource_database_id,
@@ -262,8 +362,8 @@ SELECT
     tl.request_mode,
     tl.request_owner_type,
     CAST(CASE WHEN tl.resource_type = 'APPLICATION'
-              THEN LTRIM(RTRIM(tl.resource_description)) END AS nvarchar(256)) AS applock_name
-INTO #locks
+              THEN LTRIM(RTRIM(tl.resource_description)) END AS nvarchar(256)) AS applock_name,
+    COUNT_BIG(*)
 FROM sys.dm_tran_locks tl
 WHERE tl.request_status = 'GRANT'
   AND (tl.request_mode IN ('X','IX','IU','U','RangeX-X','Sch-M')
@@ -274,7 +374,16 @@ WHERE tl.request_status = 'GRANT'
   -- itself a temp-table create, which takes X locks on tempdb OBJECT, so this metric started
   -- alerting on itself the hour that optimisation shipped: "SPID=79, 24 lock(s), program=
   -- python3.12, open_tran=0". A monitoring query is not a finding about the server.
-  AND tl.request_session_id <> @@SPID;
+  AND tl.request_session_id <> @@SPID
+GROUP BY
+    tl.request_session_id,
+    tl.resource_database_id,
+    tl.resource_type,
+    tl.request_mode,
+    tl.request_owner_type,
+    CAST(CASE WHEN tl.resource_type = 'APPLICATION'
+              THEN LTRIM(RTRIM(tl.resource_description)) END AS nvarchar(256))
+OPTION (HASH GROUP, MAXDOP 1);
 
 ;WITH TranAge AS
 (
@@ -297,11 +406,12 @@ LockAgg AS
 (
     SELECT
         tl.request_session_id AS session_id,
-        COUNT(*) AS lock_count,
-        SUM(CASE WHEN tl.request_mode IN ('X','IX','IU','U','RangeX-X','Sch-M') THEN 1 ELSE 0 END) AS strong_lock_count,
-        SUM(CASE WHEN tl.resource_database_id = 2 THEN 1 ELSE 0 END) AS tempdb_lock_count,
+        SUM(tl.lock_count) AS lock_count,
+        SUM(CASE WHEN tl.request_mode IN ('X','IX','IU','U','RangeX-X','Sch-M')
+                 THEN tl.lock_count ELSE 0 END) AS strong_lock_count,
+        SUM(CASE WHEN tl.resource_database_id = 2 THEN tl.lock_count ELSE 0 END) AS tempdb_lock_count,
         SUM(CASE WHEN tl.resource_type = 'APPLICATION' AND tl.request_owner_type = 'SESSION'
-                 THEN 1 ELSE 0 END) AS session_applock_count,
+                 THEN tl.lock_count ELSE 0 END) AS session_applock_count,
         MIN(tl.resource_database_id) AS min_database_id,
         MAX(tl.resource_database_id) AS max_database_id
     FROM #locks tl
@@ -388,7 +498,7 @@ SELECT
                 + ISNULL(DB_NAME(x.resource_database_id), 'dbid=' + CAST(x.resource_database_id AS varchar(20)))
                 + '.' + x.resource_type
                 + '.' + x.request_mode
-                + '=' + CAST(COUNT(*) AS varchar(20))
+                + '=' + CAST(SUM(x.lock_count) AS varchar(20))
             FROM #locks x
             WHERE x.request_session_id = s.session_id
             GROUP BY

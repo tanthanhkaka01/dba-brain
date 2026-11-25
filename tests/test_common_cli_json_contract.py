@@ -91,6 +91,8 @@ ALL_COMMANDS = [
     # 0.37.0: one backup file encrypted with age at the repository, then proven by decrypting it.
     "encrypt-file", "verify-encrypted-file", "fetch-decrypted-file", "decrypt-on-host",
     "list-databases", "list-schemas", "list-jobs", "create-table-from-xlsx",
+    # 1.1.0, 1.421: a table, an object's source, the activity, a plan.
+    "table-info", "object-source", "db-activity", "query-plan",
     "copy-schema", "db-status",
     # 2026-09-19. The shared config objects, answerable from outside Python: what a field means,
     # whether a schedule is due, and whether the estate's own files obey the reference.

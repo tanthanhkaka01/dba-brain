@@ -2707,8 +2707,12 @@
           "name": "sqlserver_legacy_2008r2",
           "file": "sqlserver/legacy_2008r2/025_sqlserver_transaction_lock_holders.sql",
           "sql_settings": {
-            "lock_scan_skip_above": 2000000,
-            "lock_count_credible_locks_per_second": 2000000
+            "lock_scan_skip_above": 1000000,
+            "lock_count_credible_locks_per_second": 2000000,
+            "lock_sample_rows": 200000,
+            "lock_holder_min_share_pct": 10,
+            "lock_holder_warning_seconds": 1800,
+            "lock_holder_critical_seconds": 14400
           }
         },
         {
@@ -2717,8 +2721,12 @@
           "name": "sqlserver_modern_2012_plus",
           "file": "sqlserver/025_sqlserver_transaction_lock_holders.sql",
           "sql_settings": {
-            "lock_scan_skip_above": 2000000,
-            "lock_count_credible_locks_per_second": 2000000
+            "lock_scan_skip_above": 1000000,
+            "lock_count_credible_locks_per_second": 2000000,
+            "lock_sample_rows": 200000,
+            "lock_holder_min_share_pct": 10,
+            "lock_holder_warning_seconds": 1800,
+            "lock_holder_critical_seconds": 14400
           }
         },
         {

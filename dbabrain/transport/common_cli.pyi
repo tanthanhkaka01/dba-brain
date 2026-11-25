@@ -88,6 +88,9 @@ def run(command: Literal['create-table-from-xlsx'], request: t.TableLoadRequest 
 def run(command: Literal['credential-remove'], request: t.CredentialRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.CredentialRemoveAnswer: ...
 
 @overload
+def run(command: Literal['db-activity'], request: t.DbInspectRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.DbActivityAnswer: ...
+
+@overload
 def run(command: Literal['db-status'], request: t.DbStatusRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.DbStatusAnswer: ...
 
 @overload
@@ -223,6 +226,9 @@ def run(command: Literal['metric-toggle'], request: t.MetricToggleRequest | dict
 def run(command: Literal['move-db-docker'], request: t.MoveDbDockerRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.MoveDbDockerAnswer: ...
 
 @overload
+def run(command: Literal['object-source'], request: t.DbInspectRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.ObjectSourceAnswer: ...
+
+@overload
 def run(command: Literal['pack-backup'], request: t.BackupPackRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.BackupPackAnswer: ...
 
 @overload
@@ -245,6 +251,9 @@ def run(command: Literal['pull-file'], request: t.BackupPackRequest | dict[str, 
 
 @overload
 def run(command: Literal['push-file'], request: t.BackupPackRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.FilePullPushAnswer: ...
+
+@overload
+def run(command: Literal['query-plan'], request: t.DbInspectRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.QueryPlanAnswer: ...
 
 @overload
 def run(command: Literal['read-file'], request: t.ReadFileRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.ReadFileAnswer: ...
@@ -346,6 +355,9 @@ def run(command: Literal['standardize-field-names'], request: t.ConfigMigrationR
 def run(command: Literal['start-job'], request: t.SqlserverEmergencyRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.GateReportAnswer: ...
 
 @overload
+def run(command: Literal['table-info'], request: t.DbInspectRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.TableInfoAnswer: ...
+
+@overload
 def run(command: Literal['trace-session'], request: t.TraceSessionRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> t.TraceSessionAnswer: ...
 
 @overload
@@ -422,6 +434,9 @@ def run_allowing_failure(command: Literal['create-table-from-xlsx'], request: t.
 
 @overload
 def run_allowing_failure(command: Literal['credential-remove'], request: t.CredentialRemoveRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.CredentialRemoveAnswer, str]: ...
+
+@overload
+def run_allowing_failure(command: Literal['db-activity'], request: t.DbInspectRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.DbActivityAnswer, str]: ...
 
 @overload
 def run_allowing_failure(command: Literal['db-status'], request: t.DbStatusRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.DbStatusAnswer, str]: ...
@@ -559,6 +574,9 @@ def run_allowing_failure(command: Literal['metric-toggle'], request: t.MetricTog
 def run_allowing_failure(command: Literal['move-db-docker'], request: t.MoveDbDockerRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.MoveDbDockerAnswer, str]: ...
 
 @overload
+def run_allowing_failure(command: Literal['object-source'], request: t.DbInspectRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.ObjectSourceAnswer, str]: ...
+
+@overload
 def run_allowing_failure(command: Literal['pack-backup'], request: t.BackupPackRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.BackupPackAnswer, str]: ...
 
 @overload
@@ -581,6 +599,9 @@ def run_allowing_failure(command: Literal['pull-file'], request: t.BackupPackReq
 
 @overload
 def run_allowing_failure(command: Literal['push-file'], request: t.BackupPackRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.FilePullPushAnswer, str]: ...
+
+@overload
+def run_allowing_failure(command: Literal['query-plan'], request: t.DbInspectRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.QueryPlanAnswer, str]: ...
 
 @overload
 def run_allowing_failure(command: Literal['read-file'], request: t.ReadFileRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.ReadFileAnswer, str]: ...
@@ -680,6 +701,9 @@ def run_allowing_failure(command: Literal['standardize-field-names'], request: t
 
 @overload
 def run_allowing_failure(command: Literal['start-job'], request: t.SqlserverEmergencyRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.GateReportAnswer, str]: ...
+
+@overload
+def run_allowing_failure(command: Literal['table-info'], request: t.DbInspectRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.TableInfoAnswer, str]: ...
 
 @overload
 def run_allowing_failure(command: Literal['trace-session'], request: t.TraceSessionRequest | dict[str, Any], *, timeout_seconds: int | None = ..., stream_stderr: bool = ...) -> tuple[bool, t.TraceSessionAnswer, str]: ...

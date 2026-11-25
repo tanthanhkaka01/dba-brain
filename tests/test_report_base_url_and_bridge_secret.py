@@ -73,23 +73,21 @@ def test_the_secret_store_answers_first() -> None:
     assert secret == "from-store"
 
 
-def test_the_ref_names_its_own_environment_variable(monkeypatch) -> None:
-    """The convention the rest of dbabrain already uses: refs double as env var names.
-
-    This is what a second bridge on a second host needs — its own ref, its own variable.
-    """
+def test_the_environment_never_answers_for_the_store(monkeypatch) -> None:
+    """The ref is the request's (1.1.0, 1.416): one naming a variable whose value anybody knows sealed the
+    login with a key anybody could write down."""
     monkeypatch.setenv("BRIDGE_TOKEN_B", "from-environment")
 
-    assert resolve_secret({"secret_ref": "BRIDGE_TOKEN_B"}, {}) == "from-environment"
+    with pytest.raises(LegacyOracleError, match="BRIDGE_TOKEN_B"):
+        resolve_secret({"secret_ref": "BRIDGE_TOKEN_B"}, {})
 
 
-def test_two_bridges_do_not_share_one_variable(monkeypatch) -> None:
-    """The old behaviour read one hardcoded name, so the second bridge could never be configured."""
-    monkeypatch.setenv("BRIDGE_TOKEN_HOST_A", "secret-a")
-    monkeypatch.setenv("BRIDGE_TOKEN_HOST_B", "secret-b")
+def test_two_bridges_do_not_share_one_secret() -> None:
+    """One name was hardcoded once, so the second bridge could never be configured."""
+    secrets = {"BRIDGE_TOKEN_HOST_A": "secret-a", "BRIDGE_TOKEN_HOST_B": "secret-b"}
 
-    assert resolve_secret({"secret_ref": "BRIDGE_TOKEN_HOST_A"}, {}) == "secret-a"
-    assert resolve_secret({"secret_ref": "BRIDGE_TOKEN_HOST_B"}, {}) == "secret-b"
+    assert resolve_secret({"secret_ref": "BRIDGE_TOKEN_HOST_A"}, secrets) == "secret-a"
+    assert resolve_secret({"secret_ref": "BRIDGE_TOKEN_HOST_B"}, secrets) == "secret-b"
 
 
 def test_a_missing_secret_says_which_ref_it_wanted(monkeypatch) -> None:

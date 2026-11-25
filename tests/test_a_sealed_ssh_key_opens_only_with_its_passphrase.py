@@ -130,6 +130,26 @@ def test_a_new_pair_is_generated_sealed_and_never_over_a_file(node, capsys):
     assert code != 0 and "never overwrites" in answer["error"]
 
 
+def test_without_bcrypt_the_answer_names_the_extra_to_install(node, capsys, monkeypatch):
+    """1.1.0, 1.422: it said cryptography's own *Need bcrypt module* (found by CI on the core install)."""
+    from cryptography.exceptions import UnsupportedAlgorithm
+    from cryptography.hazmat.primitives.serialization import ssh
+
+    def no_bcrypt(*_a, **_k):
+        raise UnsupportedAlgorithm("Need bcrypt module")
+
+    monkeypatch.setattr(ssh, "_bcrypt_kdf", no_bcrypt)
+    _data, keys = node
+    path = keys / "repo.key"
+    _rsa_pem(path)
+    before = path.read_bytes()
+
+    code, answer = _seal({"key_file": str(path), "passphrase_ref": "SSH_KEY_REPO"}, capsys)
+
+    assert code != 0 and "[ssh]" in answer["error"] and "pip install" in answer["error"]
+    assert path.read_bytes() == before
+
+
 def test_a_name_instead_of_a_full_path_is_refused(node, capsys):
     code, answer = _seal({"key_file": "repo.key", "passphrase_ref": "SSH_KEY_REPO"}, capsys)
     assert code != 0 and "full path" in answer["error"]

@@ -13135,6 +13135,812 @@
             ]
         },
         {
+            "object": "input_db_inspect",
+            "kind": "input",
+            "required": false,
+            "one_line": "One database object or the server's activity read: a table, a definition, what runs now, a plan.",
+            "parsed_in": "dbabrain/common/db_inspect.py",
+            "parsers": [
+                "dbabrain/common/db_inspect.py",
+                "dbabrain/common/cli_inspect.py"
+            ],
+            "commands": [
+                "table-info",
+                "object-source",
+                "db-activity",
+                "query-plan"
+            ],
+            "kind_note": "kind 'input': the JSON object a common.cli command takes (inline, @file or -). The suite holds every key its parsers read to these fields, and every command to exactly one input entry.",
+            "used_in": [],
+            "legacy_fields": {
+                "database": "database_name"
+            },
+            "field_count": 10,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "target",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The machine or instance: a server_id, or `<db_type> <ip>[:port]`."
+                },
+                {
+                    "field": "credential_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Which login in users.json; default: the instance's own."
+                },
+                {
+                    "field": "sql_access",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "How to reach the SQL engine - the inventory's (the 8i bridge)."
+                },
+                {
+                    "field": "database_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database to read in; SQL Server: else master."
+                },
+                {
+                    "field": "object",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "table-info / object-source: the object, `name`, `schema.name` or `[schema].[name]`."
+                },
+                {
+                    "field": "view",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "requests | blocking | waits | top_queries",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true,
+                        "enum": [
+                            "requests",
+                            "blocking",
+                            "waits",
+                            "top_queries"
+                        ]
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "db-activity: requests (default) | blocking | waits | top_queries."
+                },
+                {
+                    "field": "sql_text",
+                    "type": "string",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "query-plan: the one statement to compile - never run."
+                },
+                {
+                    "field": "max_rows",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "1 to 1000",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 1,
+                        "max": 1000
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "db-activity: rows at most, 1 to 1000 (default 50)."
+                },
+                {
+                    "field": "timeout_seconds",
+                    "type": "integer",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "seconds",
+                    "purpose": "How long to wait."
+                },
+                {
+                    "field": "connection",
+                    "type": "object",
+                    "required": false,
+                    "default": "none - optional",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database login, complete: db_type, host, port, username, password. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
+                }
+            ]
+        },
+        {
+            "object": "output_table_info",
+            "kind": "output",
+            "required": false,
+            "one_line": "One table's columns, indexes, rows and size.",
+            "parsed_in": "dbabrain/common/db_inspect.py",
+            "produced_in": [
+                "dbabrain/common/db_inspect.py"
+            ],
+            "commands": [
+                "table-info"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 12,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The machine it ran against."
+                },
+                {
+                    "field": "db_type",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The engine."
+                },
+                {
+                    "field": "database_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database it read in."
+                },
+                {
+                    "field": "credential_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The login it ran as - its rights are what it could read."
+                },
+                {
+                    "field": "username",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "That login's user name."
+                },
+                {
+                    "field": "object",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "`schema.name` as the server knows it."
+                },
+                {
+                    "field": "columns",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Each column: ordinal, column_name, data_type, max_length, numeric_precision / scale, is_nullable, is_identity, is_computed, default_value."
+                },
+                {
+                    "field": "indexes",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Each index: index_name, index_type, is_unique, is_primary_key, is_disabled, key_columns, included_columns, filter."
+                },
+                {
+                    "field": "column_count",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Columns."
+                },
+                {
+                    "field": "index_count",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Indexes."
+                },
+                {
+                    "field": "row_count",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Rows, as the catalog counts them (an estimate on PostgreSQL and Oracle)."
+                },
+                {
+                    "field": "reserved_mb",
+                    "type": "number",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Space the table and its indexes take."
+                }
+            ]
+        },
+        {
+            "object": "output_object_source",
+            "kind": "output",
+            "required": false,
+            "one_line": "The text of one procedure, function, view or trigger.",
+            "parsed_in": "dbabrain/common/db_inspect.py",
+            "produced_in": [
+                "dbabrain/common/db_inspect.py"
+            ],
+            "commands": [
+                "object-source"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 8,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The machine it ran against."
+                },
+                {
+                    "field": "db_type",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The engine."
+                },
+                {
+                    "field": "database_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database it read in."
+                },
+                {
+                    "field": "credential_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The login it ran as - its rights are what it could read."
+                },
+                {
+                    "field": "username",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "That login's user name."
+                },
+                {
+                    "field": "object",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The name asked for."
+                },
+                {
+                    "field": "objects",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Each definition: object_name, object_type, definition, modified_at (every overload on PostgreSQL)."
+                },
+                {
+                    "field": "count",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Definitions found."
+                }
+            ]
+        },
+        {
+            "object": "output_db_activity",
+            "kind": "output",
+            "required": false,
+            "one_line": "What the server is doing now, one view of it.",
+            "parsed_in": "dbabrain/common/db_inspect.py",
+            "produced_in": [
+                "dbabrain/common/db_inspect.py"
+            ],
+            "commands": [
+                "db-activity"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 8,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The machine it ran against."
+                },
+                {
+                    "field": "db_type",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The engine."
+                },
+                {
+                    "field": "database_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database it read in."
+                },
+                {
+                    "field": "credential_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The login it ran as - its rights are what it could read."
+                },
+                {
+                    "field": "username",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "That login's user name."
+                },
+                {
+                    "field": "view",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The view answered."
+                },
+                {
+                    "field": "rows",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Its rows, each with the engine's own columns."
+                },
+                {
+                    "field": "count",
+                    "type": "integer",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "integer",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Rows."
+                }
+            ]
+        },
+        {
+            "object": "output_query_plan",
+            "kind": "output",
+            "required": false,
+            "one_line": "The estimated plan of one statement, compiled and never run.",
+            "parsed_in": "dbabrain/common/db_inspect.py",
+            "produced_in": [
+                "dbabrain/common/db_inspect.py"
+            ],
+            "commands": [
+                "query-plan"
+            ],
+            "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
+            "used_in": [],
+            "legacy_fields": {},
+            "field_count": 12,
+            "required_field_count": 0,
+            "fields": [
+                {
+                    "field": "server_id",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The machine it ran against."
+                },
+                {
+                    "field": "db_type",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The engine."
+                },
+                {
+                    "field": "database_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The database it read in."
+                },
+                {
+                    "field": "credential_name",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The login it ran as - its rights are what it could read."
+                },
+                {
+                    "field": "username",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "That login's user name."
+                },
+                {
+                    "field": "format",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "showplan_xml (SQL Server) or explain_json (PostgreSQL, MySQL)."
+                },
+                {
+                    "field": "plan",
+                    "type": "string",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "text",
+                    "constraint": {
+                        "kind": "string",
+                        "nullable": true,
+                        "allow_empty": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The plan as the engine wrote it."
+                },
+                {
+                    "field": "plan_truncated",
+                    "type": "boolean",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "true | false",
+                    "constraint": {
+                        "kind": "boolean",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The plan was longer than 200,000 characters and was cut."
+                },
+                {
+                    "field": "estimated_cost",
+                    "type": "number",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The optimizer's cost for the whole statement."
+                },
+                {
+                    "field": "estimated_rows",
+                    "type": "number",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "0 and up",
+                    "constraint": {
+                        "kind": "number",
+                        "nullable": true,
+                        "min": 0
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "PostgreSQL: rows the top node expects."
+                },
+                {
+                    "field": "top_operators",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "The costliest operators: operator, logical, estimated_rows, subtree_cost."
+                },
+                {
+                    "field": "missing_indexes",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "SQL Server: the indexes the optimizer asks for - impact_pct, table, equality, inequality, include."
+                }
+            ]
+        },
+        {
             "object": "output_job_list",
             "kind": "output",
             "required": false,
@@ -13894,7 +14700,7 @@
             "kind_note": "kind 'output': what a common.cli command answers under `data`, not a config file. check-objects does not walk it; the suite holds each field to the code that produces it, and every command to exactly one of these entries.",
             "used_in": [],
             "legacy_fields": {},
-            "field_count": 6,
+            "field_count": 7,
             "required_field_count": 0,
             "fields": [
                 {
@@ -13950,6 +14756,19 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Inactive records pointing nowhere - reported, not failed."
+                },
+                {
+                    "field": "not_configured",
+                    "type": "array",
+                    "required": false,
+                    "default": "absent when it does not apply",
+                    "range_text": "a list",
+                    "constraint": {
+                        "kind": "array",
+                        "nullable": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Pointers into a set nothing has been put in yet, on a rule that says so (a new install's assistant naming its chat before any chat exists) - said, not failed."
                 },
                 {
                     "field": "unreadable",

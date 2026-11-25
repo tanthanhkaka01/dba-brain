@@ -191,6 +191,7 @@
                 "field": "telegram_chat",
                 "active_field": "enabled"
             },
+            "unconfigured_is_a_state": true,
             "to": [
                 {
                     "file": "telegram_groups.json",

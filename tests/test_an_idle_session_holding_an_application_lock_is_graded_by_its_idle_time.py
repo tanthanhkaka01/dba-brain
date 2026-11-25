@@ -126,8 +126,9 @@ def test_the_snapshot_takes_a_session_owned_application_lock_in_any_mode(relativ
 
 @pytest.mark.parametrize("relative", VARIANTS)
 def test_the_lock_manager_is_still_read_once_and_only_after_the_size_guard(relative):
+    """Once by the branch that runs: the bounded sample above the limit, the whole below it."""
     code = _code(_text(relative))
-    assert code.count("sys.dm_tran_locks") == 1
+    assert code.count("sys.dm_tran_locks") == 2 and _scan(relative).count("sys.dm_tran_locks") == 1
     assert code.index("@lock_scan_skip_above") < code.index("FROM sys.dm_tran_locks")
 
 

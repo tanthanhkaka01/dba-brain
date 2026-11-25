@@ -81,14 +81,31 @@ def fingerprint(public: str) -> str:
 
 def sealed_bytes(private_key, passphrase: str) -> bytes:
     serialization, _ = _crypto()
-    return private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
-                                     serialization.BestAvailableEncryption(passphrase.encode("utf-8")))
+    try:
+        return private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                                         serialization.BestAvailableEncryption(passphrase.encode("utf-8")))
+    except Exception as exc:  # noqa: BLE001 - cryptography's UnsupportedAlgorithm, named below
+        _say_the_extra(exc)
+        raise
+
+
+def _say_the_extra(exc: BaseException) -> None:
+    """OpenSSH's format seals with bcrypt, which the [ssh] extra brings (paramiko needs it). Without it the
+    answer was cryptography's own *Need bcrypt module* (found by CI on 1.0.0, 1.1.0 item 1.422)."""
+    if "bcrypt" in str(exc).lower():
+        from dbabrain.lib.packaging import install_hint
+
+        raise SealError(f"sealing a key needs the [ssh] extra (bcrypt, paramiko): {install_hint('ssh')}") from exc
 
 
 def prove_it_opens(data: bytes, passphrase: str, expected_public: str) -> None:
     """The sealed key opens with *passphrase* to *expected_public* - read the way the client reads it."""
     serialization, _ = _crypto()
-    opened = serialization.load_ssh_private_key(data, password=passphrase.encode("utf-8"))
+    try:
+        opened = serialization.load_ssh_private_key(data, password=passphrase.encode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - see _say_the_extra
+        _say_the_extra(exc)
+        raise
     if public_line(opened).split()[:2] != expected_public.split()[:2]:
         raise SealError("the sealed key does not open to the same public key; nothing was changed")
     from dbabrain.common.ssh import open_key_file
