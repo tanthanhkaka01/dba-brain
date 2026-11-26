@@ -2,7 +2,9 @@
 # DBA Brain
 
 **[dbabrain.dev](https://dbabrain.dev/)** · [PyPI](https://pypi.org/project/dbabrain/) ·
-[Downloads](https://pypistats.org/packages/dbabrain) · `pip install dbabrain`
+[Downloads](https://pypistats.org/packages/dbabrain) · `pip install dbabrain` ·
+MCP: [mcpservers.org](https://mcpservers.org/servers/tanthanhkaka01/dba-brain) ·
+[Glama](https://glama.ai/mcp/connectors/dev.dbabrain/dbabrain)
 
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/tanthanhkaka01/dba-brain)
 [![DBA Brain MCP connector on Glama](https://glama.ai/mcp/connectors/dev.dbabrain/dbabrain/badges/score.svg)](https://glama.ai/mcp/connectors/dev.dbabrain/dbabrain)
