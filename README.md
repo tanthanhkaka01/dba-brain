@@ -212,6 +212,11 @@ Every command answers in the same envelope, whether the work succeeded or not:
 | --- | --- | --- | --- | --- | --- |
 | full / diff / log | to a disposable target | latest or a point in time | the result | what was proven, and when | and apply retention |
 
+Each engine, step by step on dbabrain.dev:
+[SQL Server](https://dbabrain.dev/en/sql-server-backup-verification/) ·
+[PostgreSQL](https://dbabrain.dev/en/postgresql-backup-verification/) ·
+[Oracle RMAN](https://dbabrain.dev/en/oracle-rman-backup-validation/).
+
 ---
 
 ## Capabilities

@@ -322,12 +322,11 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
   own entries too, on every PostgreSQL and Oracle registration — they are not part of a chain and run
   on a 15-minute cadence rather than nightly.
 
-* **PostgreSQL and Oracle backups require a container.** `DOCKER_CONTAINER` is not optional and
-  every command in both engine scripts goes through `docker exec`; there is no host-native path, so
-  an engine installed directly on a VM cannot be backed up by dbabrain. Every PostgreSQL and Oracle
-  target in this estate is a container, so nothing is blocked — but the failure on a native instance
-  is `DOCKER_CONTAINER is not set`, which reads like a configuration mistake rather than a missing
-  capability. SQL Server has no such limit.
+* **PostgreSQL and Oracle backups run in a container or on the host.** `DOCKER_CONTAINER` is optional
+  since 0.21.0: set, every command in both engine scripts goes through `docker exec` into that
+  container; unset, the same commands run on the database host itself, which then needs the
+  engine's client tools on its `PATH` - a host without them is refused by name (`psql is not on
+  PATH and DOCKER_CONTAINER is not set`). The container path is the one exercised most.
 
 * **What else a job's `env` can say to an engine script.** All optional, all defaulting to the
   behaviour every entry in this estate already has:
@@ -373,16 +372,11 @@ prefer `@file`: a single-quoted JSON argument does not survive the shell.
   was due. **Keep `repeat_interval` under a day on a weekday-gated job**: `weekdays` decides which
   day and the interval decides whether it is due, so a multi-day interval lets the due moment walk
   past the window and skip whole weeks.
-* **The PostgreSQL and Oracle backup scripts require a container, and one cluster per container.**
-  `DOCKER_CONTAINER` is required and every command goes through `docker exec`, so an engine
-  installed **natively** on a VM cannot be backed up by these scripts at all — the failure is
-  `DOCKER_CONTAINER is not set`, which reads like a config mistake rather than a missing capability.
-  There is also no `PGPORT`/`PGHOST` and no `ORACLE_SID` in their env contract: `psql` and
-  `pg_basebackup` are called with no `-h`/`-p` and land on the container's default socket, and
-  `rman target /` connects to whatever SID the image's login profile exports. So **two clusters or
-  two SIDs inside one container cannot be addressed**, and the `port` in `db_instances.json` is the
+* **Which cluster or instance a script reaches is the entry's env.** `psql` and `pg_basebackup`
+  land on the default socket unless `PG_PORT` names the port, and RMAN connects to the
+  `ORACLE_SID` the entry states (required since 1.387); the `port` in `db_instances.json` is the
   published host port, which these scripts never use. Different containers on one host, and
-  different hosts, are fine and are what the estate runs.
+  different hosts, are fine.
 * **An incremental that cannot chain takes a baseline instead, in the same run.** PostgreSQL's
   `pg_basebackup --incremental` needs WAL summaries covering the parent's LSN range, and a baseline
   taken before `summarize_wal` was enabled can never be chained onto — no retry can produce
