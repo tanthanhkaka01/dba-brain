@@ -14,6 +14,10 @@ arrives when the picture is added.
 Four things are held together: the URL names a file that exists, the export has a decision for
 that file, the source distribution carries it, and nothing sits in `docs/img/` that no page shows -
 a picture nobody references is one nobody will notice going stale.
+
+The one picture the repository cannot ship is a directory's badge for its own listing of DBA Brain:
+it draws the listing's state, which only that directory knows. Each is named in `DIRECTORY_BADGES`,
+so a picture from anywhere else is still refused.
 """
 
 from __future__ import annotations
@@ -29,6 +33,13 @@ PICTURES = REPO_ROOT / "docs" / "img"
 
 #: Where the public repository serves a file of its default branch from, byte for byte.
 RAW_BASE = "https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/"
+
+#: The badges directories serve for their listing of DBA Brain, named one by one (the operator,
+#: 2026-11-26: the listings' badges go on the README).
+DIRECTORY_BADGES = (
+    "https://mcpservers.org/badge.svg",
+    "https://glama.ai/mcp/connectors/dev.dbabrain/dbabrain/badges/score.svg",
+)
 
 #: `![alt](target)` - the target of every picture on the page, whatever it points at.
 _PICTURE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
@@ -65,7 +76,9 @@ def test_the_readme_shows_pictures_at_all() -> None:
 
 def test_every_picture_is_named_by_its_full_url() -> None:
     relative = [
-        target for target in _pictures_the_readme_shows() if not target.startswith(RAW_BASE)
+        target
+        for target in _pictures_the_readme_shows()
+        if not target.startswith(RAW_BASE) and target not in DIRECTORY_BADGES
     ]
     assert not relative, (
         "PyPI renders this README too, and a picture it cannot fetch is a broken picture there. "
@@ -119,4 +132,13 @@ def test_no_picture_is_kept_that_no_page_shows() -> None:
     assert not orphans, (
         "These files are in docs/img and no page shows them. A picture nobody references is one "
         "nobody notices going stale - show it or delete it:\n" + _listed(orphans)
+    )
+
+
+def test_every_directory_badge_is_still_on_the_readme() -> None:
+    """A badge dropped from the page leaves an allowance the next picture from that address inherits."""
+    shown = set(_pictures_the_readme_shows())
+    unused = [badge for badge in DIRECTORY_BADGES if badge not in shown]
+    assert not unused, (
+        "DIRECTORY_BADGES names badges the README no longer shows:\n" + _listed(unused)
     )

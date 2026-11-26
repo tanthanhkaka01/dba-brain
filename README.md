@@ -4,6 +4,9 @@
 **[dbabrain.dev](https://dbabrain.dev/)** · [PyPI](https://pypi.org/project/dbabrain/) ·
 [Downloads](https://pypistats.org/packages/dbabrain) · `pip install dbabrain`
 
+[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/tanthanhkaka01/dba-brain)
+[![DBA Brain MCP connector on Glama](https://glama.ai/mcp/connectors/dev.dbabrain/dbabrain/badges/score.svg)](https://glama.ai/mcp/connectors/dev.dbabrain/dbabrain)
+
 **An open-source DBA tool for DBAs, SREs and DevOps engineers.** It collects health metrics from your
 SQL Server, Oracle, PostgreSQL and MySQL instances, grades them against policies you write, runs
 your scheduled SQL, takes backups and *proves them by restoring them*, checks objectives against
