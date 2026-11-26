@@ -38,6 +38,7 @@ RAW_BASE = "https://raw.githubusercontent.com/tanthanhkaka01/dba-brain/main/"
 #: 2026-11-26: the listings' badges go on the README).
 DIRECTORY_BADGES = (
     "https://mcpservers.org/badge.svg",
+    "https://glama.ai/mcp/servers/tanthanhkaka01/dba-brain/badges/score.svg",
     "https://glama.ai/mcp/connectors/dev.dbabrain/dbabrain/badges/score.svg",
 )
 
