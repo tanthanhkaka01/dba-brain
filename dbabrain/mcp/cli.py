@@ -86,6 +86,20 @@ def _arguments(text: str) -> dict[str, Any]:
     return value
 
 
+def _answer_stream() -> None:
+    """``call`` and ``tools`` print answers that hold any character - a job's ✅, a Vietnamese name. On Windows
+    stdout is the ANSI code page: redirected to a file, ``mcp call store_query`` died with ``UnicodeEncodeError``
+    on the first ✅ in a job's message (2026-11-26, reading the worker's runs). Piped or redirected, the answer
+    leaves as UTF-8, as common.cli's does; a console keeps its own code page and shows ``?`` for what it cannot
+    draw instead of a traceback. ``serve`` is not touched: its stdout is the SDK's JSON-RPC stream."""
+    if not hasattr(sys.stdout, "reconfigure"):
+        return
+    if sys.stdout.isatty():
+        sys.stdout.reconfigure(errors="replace")
+    else:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     node = _node(args.home)
@@ -105,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
         if decision.sentence:
             print(f"dbabrain mcp: {decision.level.upper()}: {decision.sentence}"
                   + ("" if decision.allowed else " - until then the tools that only read answer."), file=sys.stderr)
+    if args.command in ("tools", "call"):
+        _answer_stream()
     if args.command == "tools":
         from dbabrain.mcp.server import tool_list
 

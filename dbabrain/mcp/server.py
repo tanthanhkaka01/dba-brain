@@ -325,13 +325,16 @@ def tool_list(node: Node) -> list[dict[str, Any]]:
             continue
         # One of the two hints on every tool (the directory's rule): what does not only read, changes.
         read_only = M.is_read_only(command, node.operations)
+        fills = request_fill.FILLS.get(command, ())
+        schema = M.request_schema(command, entry, fills=fills)
         tools.append({"name": command, "kind": "command", "destructive": not read_only, "read_only": read_only,
                       "needs_key": M.needs_key(command, node.operations),
-                      "description": M.describe(command, entry, fills=bool(request_fill.FILLS.get(command)),
-                                                destructive=not read_only)})
+                      "description": M.describe(command, entry, list_fields=False),
+                      "request_schema": schema})
         if command == "run-sql" and node.settings.offers(M.SQL_WRITE_TOOL):
             tools.append({"name": M.SQL_WRITE_TOOL, "kind": "command", "destructive": True, "read_only": False,
-                          "needs_key": True, "description": M.describe_sql_write(entry)})
+                          "needs_key": True, "description": M.describe_sql_write(entry, list_fields=False),
+                          "request_schema": schema})
     for name, text in (("store_schema", "dbabrain's runtime store: every table and its columns, or one table's "
                                         "columns with their types (`table`)."),
                        ("store_query", "One read-only SELECT on dbabrain's runtime store (`sql`), always rolled "
@@ -373,6 +376,14 @@ def build_server(node: Node) -> Any:
                                       destructive_hint=spec["destructive"], open_world_hint=spec["kind"] == "command")
         fn = _tool_function(node, name)
         server.add_tool(fn, name=name, description=spec["description"], annotations=annotations)
+        if spec.get("request_schema") is not None:
+            # The SDK builds the advertised schema from the function's signature - one `request` of any shape. The
+            # reference's fields replace it there (lib.mcp_tools.request_schema); the call itself is still checked
+            # field by field by the command's own request check, as on the command line.
+            request = {**spec["request_schema"], "description": "The command's request."}
+            server._tool_manager.get_tool(name).parameters = {
+                "type": "object", "properties": {"request": request},
+                **({"required": ["request"]} if request.get("required") else {})}
     return server
 
 

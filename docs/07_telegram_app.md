@@ -240,6 +240,29 @@ workflow every second and by `group-add` / `group-level` / `user-level`. Each ho
 so an operator's change is no longer overwritten by a workflow pass that read the file before it
 (review 0.25.0 F8.2).
 
+## When the road to Telegram fails (1.2.0)
+
+Read on the worker on 2026-11-26: in 14 days the bot's run failed 835 times because Telegram could not be
+reached - its gateway answered HTTP 502 (484), a read timed out (184), a connection was reset (95), a TLS
+handshake timed out (61) - and in 30 days 69 queued messages were marked `send_status = -1` for it and never
+sent. A read timing out and a connection closed without a response were not even wrapped: they came out of
+`response.read()` as bare errors.
+
+- **`api.TelegramUnreachable`** (an `errors.Unreachable`) is what a 5xx, a timeout, a reset, a TLS failure or a
+  connection closed mid-response raises, around the request only - a document missing on disk is not one. A
+  4xx is still a refusal (`OperationFailed`), a 429 still `TelegramRateLimited`.
+- **The row goes back to the queue** at the first such failure, with `last_fail_text` and the parts it had
+  delivered, as a 429 does - no further attempt against the same road, never `-1`. A read that timed out may
+  have reached the chat, so the message can arrive twice: the price of never losing an alert.
+- **The pass starts no other row** once one chat met it (they share the one way out); the counts say
+  `unreachable`.
+- **`getUpdates` failing does not stop the pass**: the commands already stored are answered and the queue is
+  sent, and the offset stays where it was, so the next pass fetches the same updates.
+- **`run-workflow` / `save-updates` end as a state** (`skipped`, *Telegram not reached this pass*, exit 0) when
+  the road or a rate limit stops them - an error cost the bot the daemon's retry interval each time.
+
+Held by `tests/test_a_message_outlives_telegram_being_unreachable.py`.
+
 ## How to Run
 
 ```powershell

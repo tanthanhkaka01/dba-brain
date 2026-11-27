@@ -13305,7 +13305,13 @@
                     "measured_against": "not a time value",
                     "purpose": "The database login, complete: db_type, host, port, username, password. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
-            ]
+            ],
+            "command_lines": {
+                "table-info": "One table's columns (type, length, nullable, identity, computed, default), its indexes (keys, included columns, filter, unique, disabled), its row count and reserved MB.",
+                "object-source": "The definition of a procedure, function, view or trigger by name (on Oracle also a package or type).",
+                "db-activity": "What a server runs now: the requests running, who blocks whom, the waits now, and the top queries since their plans were cached.",
+                "query-plan": "One statement's estimated plan, compiled and never run: SQL Server SHOWPLAN_XML with its cost, top operators and missing indexes; PostgreSQL and MySQL EXPLAIN without ANALYZE."
+            }
         },
         {
             "object": "output_table_info",
@@ -22075,7 +22081,12 @@
                     "measured_against": "not a time value",
                     "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
-            ]
+            ],
+            "command_lines": {
+                "host-facts": "Read one host's state and the state of the services the request names - nothing is changed.",
+                "host-service": "Start, stop or restart services on a host and wait for the state asked.",
+                "host-restart": "Restart a host and prove it came back, its named services running."
+            }
         },
         {
             "object": "input_sqlserver_emergency",
@@ -22336,7 +22347,13 @@
                     "measured_against": "not a time value",
                     "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
-            ]
+            ],
+            "command_lines": {
+                "kill-spid": "Kill one SQL Server session by its spid - a break-glass action, confirmed and with a reason.",
+                "shrink-log": "Shrink one SQL Server database's transaction log file - a break-glass action, confirmed and with a reason.",
+                "start-job": "Start one SQL Server Agent job now - a break-glass action, confirmed and with a reason.",
+                "disable-job": "Disable one SQL Server Agent job - a break-glass action, confirmed and with a reason."
+            }
         },
         {
             "object": "input_sqlserver_patch",
@@ -22650,7 +22667,12 @@
                     "measured_against": "not a time value",
                     "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
-            ]
+            ],
+            "command_lines": {
+                "sqlserver-precheck": "Whether one SQL Server instance is safe to patch now: host, installer and SQL gates and the maintenance window, read-only.",
+                "sqlserver-apply-cu": "Apply a staged cumulative update to one SQL Server instance.",
+                "sqlserver-verify-build": "Check that one SQL Server instance reached the build its cumulative update should give."
+            }
         },
         {
             "object": "input_sqlserver_instance",
@@ -22936,7 +22958,12 @@
                     "measured_against": "not a time value",
                     "purpose": "What the operation costs to confirm: {level, confirmations, challenge, effects} - the node's own emergency_operations.json entry for it. Absent, the ladder the package ships prices it; malformed, it is refused rather than read as none. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09)."
                 }
-            ]
+            ],
+            "command_lines": {
+                "sqlserver-export-instance": "Read an instance's server-level metadata and write it as SQL files and a manifest - read-only.",
+                "sqlserver-replay-instance": "Apply an exported bundle of server-level metadata to a target instance, in dependency order.",
+                "sqlserver-verify-instance": "Compare a target instance with an exported bundle - read-only."
+            }
         },
         {
             "object": "input_file_transfer",
@@ -23165,7 +23192,13 @@
                     "measured_against": "not a time value",
                     "purpose": "relay-file: {access, target, path}."
                 }
-            ]
+            ],
+            "command_lines": {
+                "fetch-file": "Copy one file from a host to this node over the host's own access.",
+                "send-file": "Copy one file from this node to a host over the host's own access.",
+                "pack-files": "Pack files on a host into one archive and answer its SHA-256.",
+                "relay-file": "Copy one file from one host to another, its SHA-256 checked at both ends."
+            }
         },
         {
             "object": "input_backup_pack",
@@ -23312,7 +23345,12 @@
                     "measured_against": "seconds",
                     "purpose": "How long to wait."
                 }
-            ]
+            ],
+            "command_lines": {
+                "pack-backup": "Pack a backup folder where it lives into one tar or zip archive, hashed where it was made.",
+                "pull-file": "Pull one file - a packed backup - from a host to this node, its SHA-256 compared at both ends and a mismatch refused.",
+                "push-file": "Push one file - a packed backup - from this node to a host, its SHA-256 compared at both ends and a mismatch refused."
+            }
         },
         {
             "object": "input_file_checksum",
@@ -23902,7 +23940,11 @@
                     "measured_against": "not a time value",
                     "purpose": "PostgreSQL (0.35.0, 1.250): answer every segment name under wal/ on the log row - what a restore's WAL continuity is read from. Off by default: a cluster archives thousands."
                 }
-            ]
+            ],
+            "command_lines": {
+                "list-backup-files": "List the backup files a directory holds.",
+                "prune-backup-files": "Say which backup files a retention rule would remove - it deletes nothing."
+            }
         },
         {
             "object": "input_file_delete",
@@ -25343,7 +25385,12 @@
                     "measured_against": "not a time value",
                     "purpose": "The database login, complete: db_type, host, port, username, password - and, where they apply, database, instance_name, service_name, sqlserver_driver, sqlserver_tls_verify and sql_access (the 8i bridge); server_id and credential_name ride along as labels. The app that calls fills it from its own data/ (dbabrain.lib.data_sources.request_fill); common.cli reads no configuration (rules R09). It carries a password, so the request goes on stdin."
                 }
-            ]
+            ],
+            "command_lines": {
+                "list-databases": "List one instance's databases with the state the engine reports.",
+                "list-schemas": "List one database's schemas with the state the engine reports.",
+                "list-jobs": "List the jobs of an instance's own scheduler - SQL Server Agent, Oracle's scheduler, pg_cron - and whether each is enabled."
+            }
         },
         {
             "object": "input_table_load",
@@ -25824,7 +25871,12 @@
                     "measured_against": "not a time value",
                     "purpose": "json (default) | txt."
                 }
-            ]
+            ],
+            "command_lines": {
+                "check-credentials": "Check that every target in this node's data/ resolves a login.",
+                "check-objects": "Check this node's data/*.json against the reference this version ships.",
+                "check-references": "Find each pointer between two config files that lands nowhere."
+            }
         },
         {
             "object": "input_config_migration",
@@ -25900,7 +25952,11 @@
                     "measured_against": "not a time value",
                     "purpose": "upgrade-config: some steps."
                 }
-            ]
+            ],
+            "command_lines": {
+                "upgrade-config": "Move this node's config to this version's shapes after an upgrade - a plan unless dry_run is false.",
+                "standardize-field-names": "Move this node's data/*.json to the standard field names."
+            }
         },
         {
             "object": "input_restore_step",
@@ -26301,7 +26357,12 @@
                     "measured_against": "seconds",
                     "purpose": "PostgreSQL into a container, with wal_dir: how long to wait for recovery to end (default 1800). A container that stops or restarts ends the wait at once."
                 }
-            ]
+            ],
+            "command_lines": {
+                "restore-full": "Restore step one on one engine: the full backup (on PostgreSQL the base backup chain combined).",
+                "restore-diff": "Restore step two on one engine: the differential (SQL Server) or incremental backup on top of the full.",
+                "restore-log": "Restore step three on one engine: the log backups, WAL or archived logs, to the latest or a point in time."
+            }
         },
         {
             "object": "input_remote_target",
@@ -27902,7 +27963,13 @@
                     "measured_against": "not a time value",
                     "purpose": "smb-credential: the host whose UNC paths the stored login opens."
                 }
-            ]
+            ],
+            "command_lines": {
+                "smb-list": "List every file under a folder of a Windows share, with its size and modified time.",
+                "smb-get": "Fetch one file from a Windows share to a local path.",
+                "smb-delete": "Delete one file on a Windows share - forced, one path, never a pattern.",
+                "smb-credential": "Store the login Windows uses for a host's share paths (cmdkey)."
+            }
         },
         {
             "object": "output_smb_list",
@@ -30678,7 +30745,11 @@
                     "measured_against": "not a time value",
                     "purpose": "Wait for the approval with no terminal - when a person reads this command's output (worker-run). Without it and without a terminal the command is refused."
                 }
-            ]
+            ],
+            "command_lines": {
+                "key-request": "Get this node a dbabrain key: an email sign-in on dbabrain.dev, the key kept in the encrypted store.",
+                "key-renew": "Renew this node's dbabrain key before it ends - the same sign-in, the new key replacing the old."
+            }
         },
         {
             "object": "input_key_status",
@@ -31086,7 +31157,10 @@
                     "measured_against": "not a time value",
                     "purpose": "json (default) | txt."
                 }
-            ]
+            ],
+            "command_lines": {
+                "run-sql": "One SELECT on one server, checked before it runs and always rolled back."
+            }
         },
         {
             "object": "input_run_cmd",
@@ -33429,7 +33503,7 @@
                 }
             ],
             "legacy_fields": {},
-            "field_count": 20,
+            "field_count": 21,
             "required_field_count": 9,
             "fields": [
                 {
@@ -33697,6 +33771,20 @@
                     },
                     "measured_against": "not a time value",
                     "purpose": "Input and output entries: the common.cli commands this request or answer belongs to. Each command has exactly one of each."
+                },
+                {
+                    "field": "command_lines",
+                    "type": "object",
+                    "required": false,
+                    "default": "{}",
+                    "range_text": "an object",
+                    "constraint": {
+                        "kind": "object",
+                        "nullable": true,
+                        "free_form": true
+                    },
+                    "measured_against": "not a time value",
+                    "purpose": "Input entries shared by several commands: each command's own first sentence, the one its MCP tool description opens with instead of one_line - two tools opening alike cannot be told apart by an agent."
                 },
                 {
                     "field": "parsers",

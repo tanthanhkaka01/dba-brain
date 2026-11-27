@@ -78,7 +78,9 @@ def test_every_command_that_takes_something_away_is_marked_destructive(tmp_path)
     assert [name for name in sorted(must) if not tools[name]["destructive"]] == []
     assert all(not tools[name]["read_only"] for name in must)
     assert tools["list-databases"]["read_only"] and not tools["list-databases"]["destructive"]
-    assert "Changes or removes" in tools["kill-spid"]["description"] and "confirm" in tools["kill-spid"]["description"]
+    # That it changes something is the tool's destructive hint; that an emergency operation takes `confirm` and a
+    # `reason` is said once, in the server's instructions (test_every_mcp_tool_says_what_it_alone_does.py).
+    assert "`confirm`" in S.INSTRUCTIONS
 
 
 def test_a_switched_off_tool_is_not_offered_and_refuses_when_called_anyway(tmp_path, logged):

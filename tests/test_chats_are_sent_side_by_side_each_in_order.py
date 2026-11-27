@@ -72,7 +72,7 @@ def test_every_chat_s_rows_arrive_in_the_order_they_were_written(recorder):
     counts = send_queue.send_pending_messages(sqlite_path="x", bot_token="t", send_threads=10)
 
     assert counts == {"read": 30, "sent": 30, "failed": 0, "deferred": 0, "paused_chats": 0,
-                      "requeued": 0, "errors": 0}
+                      "requeued": 0, "errors": 0, "unreachable": 0}
     for chat in range(6):
         own = [number for chat_id, number in recorder.sent if chat_id == f"-100{chat}"]
         assert own == sorted(own) and len(own) == 5
@@ -133,7 +133,7 @@ def test_a_rate_limit_stops_only_its_own_chat(recorder, tmp_path):
                                               now=lambda: 1000.0)
 
     assert counts == {"read": 9, "sent": 7, "failed": 0, "deferred": 2, "paused_chats": 1,
-                      "requeued": 0, "errors": 0}
+                      "requeued": 0, "errors": 0, "unreachable": 0}
     assert [n for c, n in recorder.sent if c == "-1001"] == [100]
     assert json.loads(pauses.read_text(encoding="utf-8")) == {"-1001": 1030.0}
 

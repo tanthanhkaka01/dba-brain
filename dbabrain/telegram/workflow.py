@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from dbabrain.telegram.api import TelegramUnreachable
 from dbabrain.telegram.command_processor import check_cli_background_tasks, process_pending_command_messages, process_pending_conversation_messages
 from dbabrain.telegram.commands import save_command_messages_from_messages
 from dbabrain.telegram.send_queue import send_pending_messages
@@ -33,16 +34,23 @@ def run_bot_workflow(
     budget_started_at: float | None = None,
     save_offset: Callable[[Any], None] | None = None,
 ) -> dict[str, Any]:
-    updates_result = fetch_and_save_updates(
-        bot_token=bot_token,
-        api_url=api_url,
-        timeout_seconds=timeout_seconds,
-        offset=offset,
-        limit=limit,
-        allowed_updates=allowed_updates,
-        data_dir=data_dir,
-        sqlite_path=sqlite_path,
-    )
+    try:
+        updates_result = fetch_and_save_updates(
+            bot_token=bot_token,
+            api_url=api_url,
+            timeout_seconds=timeout_seconds,
+            offset=offset,
+            limit=limit,
+            allowed_updates=allowed_updates,
+            data_dir=data_dir,
+            sqlite_path=sqlite_path,
+        )
+    except TelegramUnreachable as exc:
+        # Telegram's gateway or the road to it failed this second. The commands already in the store are still
+        # answered and the queue still sent - a send that meets the same road puts its row back - and the
+        # offset stays where it was, so the next pass fetches these updates (2026-11-26: the run used to end
+        # here, an error, and the daemon waited its retry interval before the bot listened again).
+        updates_result = {"unreachable": str(exc), "next_update_offset": None}
     if save_offset is not None:
         # Now, not when the workflow returns. The messages are in the store, so Telegram need not
         # send them again; waiting for the end meant any later step that raised - or the daemon

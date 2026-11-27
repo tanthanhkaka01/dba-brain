@@ -105,7 +105,7 @@ def resolve_target_instance(spec: str, *, data_dir: str | Path | None = None) ->
             if str(instance.get("server_id", "")).strip() == server_id:
                 return dict(instance)
         raise TargetResolveError(
-            f"Unknown server_id: {server_id}. Use /spbot_list_server_id to see valid ids."
+            f"Unknown server_id: {server_id}. list-targets (MCP or common.cli) or /spbot_list_server_id lists the valid ids."
         )
 
     db_type = parsed["db_type"]
@@ -122,7 +122,7 @@ def resolve_target_instance(spec: str, *, data_dir: str | Path | None = None) ->
 
     where = f"{db_type} {ip}" + (f" {port}" if port is not None else "")
     raise TargetResolveError(
-        f"No target matches: {where}. Use /spbot_list_server_id to see valid targets."
+        f"No target matches: {where}. list-targets (MCP or common.cli) or /spbot_list_server_id lists the valid targets."
     )
 
 
@@ -159,7 +159,7 @@ def resolve_sql_target_fields(
         known = sorted({str(item.get("server_id") or "").strip() for item in instances} - {""})
         hint = f" Known: {', '.join(known[:8])}" if known else ""
         raise TargetResolveError(
-            f"Unknown server_id: {server_id}. Use /spbot_list_server_id to list targets.{hint}"
+            f"Unknown server_id: {server_id}. list-targets (MCP or common.cli) or /spbot_list_server_id lists them.{hint}"
         )
     if len(matches) > 1:
         detail = ", ".join(

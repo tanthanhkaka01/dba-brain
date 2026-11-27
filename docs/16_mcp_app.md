@@ -27,7 +27,18 @@ Package `dbabrain/mcp/` (`cli.py`, `server.py`, `catalogue/mcp_tools.json`); rul
   for: `list-targets`, `db-status`, `list-databases`, `run-sql`, `host-facts`, `file-checksum`,
   `trace-session`, ... (`dbabrain mcp tools` lists them). The list is read from the reference, so a new
   command is a new tool with nothing written here. A tool takes `request` - the command's own JSON
-  request - and its description is the reference's: what the command does and each field.
+  request. Its description opens with what that command alone does - the input entry's `command_lines`
+  where several commands share it, else its `one_line` - so no two tools open alike (Glama scored the
+  shared openings 1 of 5, 2026-11-26). Its input schema is the request's fields from the reference
+  (`lib.mcp_tools.request_schema`): type, allowed values, bounds, purpose, required. Left out: what the
+  node fills (connection, host login, policy, rules, secrets), what a request is refused for (a secret,
+  `sql_access`); `server_id` leads. The description no longer lists the fields.
+  What every tool shares - `server_id` names the server and the node completes its login; an emergency
+  operation takes `confirm` and a `reason` - is said once, in the server's instructions, not in each tool:
+  said in each it was two of a tool's three sentences, and `disable-job` read 97% like `start-job`.
+- **`dbabrain mcp call` and `mcp tools` print any character** (1.2.0): piped or redirected, the answer leaves
+  as UTF-8, as common.cli's does; a console keeps its code page and shows `?` for what it cannot draw. A
+  redirected `store_query` died at the first ✅ of a job's message on Windows (2026-11-26).
 - **`server_id` is enough.** Where a command needs a connection or a host login, the request is
   completed from the node's inventory and secret store (`lib.data_sources.request_fill`) - the way
   `run-sql-adhoc` and `run-cmd-adhoc` complete theirs. Claude never sees or writes a password.

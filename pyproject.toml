@@ -23,7 +23,7 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Trieu Tan Thanh" }]
 keywords = ["dba", "dba-tool", "database", "database-tools", "sqlserver", "sql-server", "oracle", "postgresql", "mysql",
             "monitoring", "backup", "restore", "operations", "mcp", "mcp-server", "ai-agents", "claude"]
-version = "1.1.0"
+version = "1.2.0"
 
 # Measured 2026-08-21, not guessed (D-05):
 #

@@ -94,6 +94,15 @@ READ_ONLY_COMMANDS = frozenset({"due-check", "key-status", "read-file", "self-st
 #: under the command's own name - one statement held to ``lib.read_only_sql``, never committed - and
 #: this one, which runs SQL that changes data, kept only when its request says ``commit``.
 SQL_WRITE_TOOL = "run-sql-write"
+#: ``run-sql``'s paragraph on whose rights it runs with - not ``run-sql-write``'s, which says it changes data.
+RUN_SQL_RIGHTS = ("Runs with the rights of the login this node stores for the server (users.json: the instance's "
+                  "default_credential_name, or credential_name): what that login may do, this may do - DML and DDL "
+                  "included. The statement is checked to be one SELECT and the batch is rolled back, but the check reads "
+                  "text and does not bound what the login can do; a login with read rights only is what keeps it to "
+                  "reading. ")
+#: ``run-sql-write``'s first line: its own, so it does not open as ``run-sql`` does.
+SQL_WRITE_OPENING = ("dbabrain common.cli `run-sql` (writing): One statement that changes data on one server, kept only "
+                     "when the request says `commit` (or `autocommit`) true - otherwise rolled back.\n")
 
 #: The SQL each engine reads - a custom query tool names its language's reference (review criteria).
 SQL_REFERENCES = ("SQL Server T-SQL https://learn.microsoft.com/sql/t-sql/language-reference, "
@@ -356,19 +365,85 @@ def operation_commands(catalogue: dict[str, Any]) -> set[str]:
     return {str(name).split(" (", 1)[0].strip() for name in (catalogue.get("operations") or {})}
 
 
-def describe(command: str, entry: dict[str, Any], *, fills: bool, destructive: bool, max_field_chars: int = 220
-             ) -> str:
-    """The text Claude reads for a command's tool: what it does, then each field of its request."""
-    lines = [f"dbabrain common.cli `{command}`: {entry.get('one_line') or ''}".strip()]
+#: The request fields an MCP call never states: the node fills each from its inventory and encrypted store, by the
+#: kind ``data_sources.request_fill.FILLS`` names - and one stated by the agent would carry the login itself.
+FILLED_FIELDS: dict[str, tuple[str, ...]] = {
+    "connection": ("connection",), "access": ("access",), "policy": ("policy",), "instance_policy": ("policy",),
+    "rules": ("rules",), "secrets": ("secrets",), "bridge_secrets": ("secrets",)}
+#: Commands whose fills reach two servers (``source`` / ``destination``), not one ``server_id``. ``metric-batch`` is
+#: not one: its ``target`` object of connection facts is what a ``server_id`` replaces (1.1.0, 1.415), and offering
+#: that object as required would lead an agent to write a login into it.
+FILLED_PER_SIDE = frozenset({"relay-file", "copy-schema"})
+_JSON_TYPES = frozenset({"string", "boolean", "object", "integer", "array", "number"})
+
+
+def request_schema(command: str, entry: dict[str, Any], *, fills: tuple[str, ...] = (),
+                   max_field_chars: int = 300) -> dict[str, Any]:
+    """The JSON schema of a command's ``request``, from its reference entry: each field's type, its allowed values
+    and bounds, what it is for, and which are required.
+
+    A tool took one ``request`` object with no properties, its fields listed only as prose: Glama's score of the
+    server (2026-11-26) read that as parameters left undocumented, and an agent had to parse a paragraph to build a
+    call. The fields the node fills are left out, and ``server_id`` leads instead - the agent names the server and
+    never sees, or sends, its login. So are the fields an MCP request is refused for carrying - a secret
+    (:data:`SECRET_KEYS`) and how a server is reached (``sql_access``, :data:`SQL_ACCESS_ROUTES`): a schema must not
+    offer what the call would refuse."""
+    hidden = {name for kind in fills for name in FILLED_FIELDS.get(kind, ())} | SECRET_KEYS | {"sql_access"}
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    names_a_server = bool(fills) and command not in FILLED_PER_SIDE
+    if names_a_server:
+        properties["server_id"] = {
+            "type": "string",
+            "description": "The server, as list-targets names it (or `target`); its login is completed from this "
+                           "node's inventory and encrypted secret store."}
+    for field in entry.get("fields") or []:
+        name = str(field.get("field") or "")
+        if not name or name in hidden or name in properties:
+            continue
+        kind = str(field.get("type") or "")
+        constraint = field.get("constraint") or {}
+        prop: dict[str, Any] = {"type": kind} if kind in _JSON_TYPES else {}
+        if constraint.get("enum"):
+            prop["enum"] = list(constraint["enum"])
+        if kind in ("integer", "number"):
+            for key, word in (("min", "minimum"), ("max", "maximum")):
+                if isinstance(constraint.get(key), (int, float)) and not isinstance(constraint.get(key), bool):
+                    prop[word] = constraint[key]
+        if kind == "array" and constraint.get("item_kind") in _JSON_TYPES:
+            prop["items"] = {"type": constraint["item_kind"]}
+        purpose = " ".join(str(field.get("purpose") or "").split())
+        if len(purpose) > max_field_chars:
+            purpose = purpose[: max_field_chars - 3] + "..."
+        if purpose:
+            prop["description"] = purpose
+        properties[name] = prop
+        # `target` and `server_id` name the same server: either one is enough.
+        if field.get("required") and not (names_a_server and name == "target"):
+            required.append(name)
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def describe(command: str, entry: dict[str, Any], *, max_field_chars: int = 220, list_fields: bool = True) -> str:
+    """The text Claude reads for a command's tool: what it does, then each field of its request.
+
+    An input entry several commands share has one ``one_line`` for all of them, so their tools opened alike and an
+    agent could not tell ``table-info`` from ``query-plan`` (Glama's score of the server, 2026-11-26:
+    disambiguation 1/5). Such an entry's ``command_lines`` gives each command its own first sentence.
+
+    What every tool has in common - a server named by ``server_id`` with its login completed by the node, and an
+    emergency operation's ``confirm`` + ``reason`` - is said once, in the server's instructions. Said again in each
+    tool it was two of a tool's three sentences, so ``disable-job`` and ``start-job`` read 97% alike."""
+    own = (entry.get("command_lines") or {}).get(command)
+    lines = [f"dbabrain common.cli `{command}`: {own or entry.get('one_line') or ''}".strip()]
     if command == "run-sql":
-        lines.append("Runs with the rights of the login this node stores for the server (users.json: the instance's default_credential_name, or credential_name): what that login may do, this may do - DML and DDL included. The statement is checked to be one SELECT and the batch is rolled back, but the check reads text and does not bound what the login can do; a login with read rights only is what keeps it to reading. "
-                     f"The SQL is the target engine's: {SQL_REFERENCES}.")
-    if fills:
-        lines.append("`server_id` (or `target`) names the server; its connection or host login is completed from "
-                     "this node's inventory and encrypted secret store, so a request carries no password.")
-    if destructive:
-        lines.append("Changes or removes something. A command on the emergency-operations list takes `confirm`: "
-                     "\"yes\" and a `reason` in its request, as on the command line.")
+        lines.append(RUN_SQL_RIGHTS + f"The SQL is the target engine's: {SQL_REFERENCES}.")
+    if not list_fields:
+        # The tool's input schema carries every field (request_schema); the prose list would say it twice.
+        return "\n".join(lines)
     lines.append("Request fields (pass them as `request`):")
     for field in entry.get("fields") or []:
         name = str(field.get("field") or "")
@@ -379,13 +454,13 @@ def describe(command: str, entry: dict[str, Any], *, fills: bool, destructive: b
     return "\n".join(lines)
 
 
-def describe_sql_write(entry: dict[str, Any]) -> str:
-    """``run-sql-write``'s text: the write half of ``run-sql``."""
-    return describe("run-sql", entry, fills=True, destructive=True).replace(
-        "dbabrain common.cli `run-sql`:", "dbabrain common.cli `run-sql` (writing):", 1).replace(
-        "Runs with the rights of the login this node stores for the server (users.json: the instance's default_credential_name, or credential_name): what that login may do, this may do - DML and DDL included. The statement is checked to be one SELECT and the batch is rolled back, but the check reads text and does not bound what the login can do; a login with read rights only is what keeps it to reading. ", "") + (
-        f"\nRuns SQL that changes data; what it changed is kept only when the request says `commit` (or "
-        f"`autocommit`) true - otherwise rolled back. The SQL is the target engine's: {SQL_REFERENCES}.")
+def describe_sql_write(entry: dict[str, Any], *, list_fields: bool = True) -> str:
+    """``run-sql-write``'s text: the write half of ``run-sql``. It opens with a sentence of its own - opening with
+    ``run-sql``'s would leave the two tools alike to an agent choosing between them - and leaves out ``run-sql``'s
+    paragraph on its SELECT check, which is not this tool's."""
+    text = describe("run-sql", entry, list_fields=list_fields)
+    rest = text.split("\n", 1)[1] if "\n" in text else ""
+    return SQL_WRITE_OPENING + rest.replace(RUN_SQL_RIGHTS, "")
 
 
 def capped(text: str, max_chars: int) -> str:

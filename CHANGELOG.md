@@ -11,6 +11,25 @@ longer form they were released with.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-27
+
+### Changed
+
+- MCP: each tool's description opens with what that tool alone does - tools that share a request, such as
+  `table-info` and `query-plan` or the `smb-*` tools, no longer open with the same sentence.
+- MCP: a tool's input schema states its request's fields - type, allowed values, bounds, what each is for,
+  which are required - and `server_id` leads; the description no longer lists them.
+- MCP: a tool's description is its own sentence only; how a server is named and what an emergency operation
+  takes are said once, in the server's instructions.
+- An unknown `server_id` names `list-targets` beside `/spbot_list_server_id`, so an MCP client is pointed at a
+  tool it has.
+
+### Fixed
+
+- Telegram: a 5xx, a timeout, a reset or a TLS failure no longer marks a queued message failed - the row
+  goes back to the queue and the next pass sends it; the bot's run says Telegram was not reached.
+- `dbabrain mcp call` and `mcp tools` print any character on Windows: a redirected answer is UTF-8.
+
 ## [1.1.0] - 2026-11-25
 
 ### Upgrading
@@ -4344,7 +4363,8 @@ the documentation names one, it says so.
   metric definitions, the Telegram support commands, the runtime log, the schema export directory
   and the working directory of two subprocess calls. All of them now share the one resolution.
 
-[Unreleased]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.41.0...v1.0.0
 [0.41.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.39.0...v0.41.0

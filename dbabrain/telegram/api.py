@@ -3,6 +3,7 @@ from __future__ import annotations
 from dbabrain.lib import errors
 from dbabrain.lib.telegram_text import TELEGRAM_MESSAGE_LIMIT  # noqa: F401 - one definition, see that module
 
+import http.client
 import json
 import logging
 import mimetypes
@@ -55,6 +56,29 @@ class TelegramRateLimited(errors.Refused):
         # How many leading parts of a multi-part message Telegram already has (send_message sets it).
         self.parts_delivered = 0
         self.retry_after = float(retry_after)
+
+
+class TelegramUnreachable(errors.Unreachable):
+    """The way to Telegram failed this time - its gateway answered 5xx, or the connection timed out, was reset
+    or lost its TLS session - and not the request.
+
+    Read on the worker, 2026-11-26: in 14 days the bot's run failed 835 times this way (HTTP 502 484, a read
+    timing out 184, a reset 95, a TLS handshake timing out 61), and in 30 days 69 queued messages - alerts and
+    replies - were marked failed for it and never sent. A read timing out and a connection closed without a
+    response were not even wrapped: they came out of ``response.read()`` as bare errors. Nothing is wrong with
+    the message, so the queue keeps the row for the next pass instead of ending it.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        # How many leading parts of a multi-part message Telegram already has (send_message sets it).
+        self.parts_delivered = 0
+
+
+#: What a failed way to Telegram raises from inside a request: a socket timeout, a reset or a TLS failure is an
+#: ``OSError``, a connection closed mid-response an ``http.client.HTTPException``. Caught only around the
+#: request itself, where no file is read - a document missing on disk is not Telegram being unreachable.
+_TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
 
 
 def _retry_after_seconds(body: str) -> float:
@@ -116,9 +140,13 @@ def call_telegram_api(
         if exc.code == 429:
             raise TelegramRateLimited(
                 f"Telegram HTTP 429: {body}", _retry_after_seconds(body)) from exc
+        if exc.code >= 500:
+            raise TelegramUnreachable(f"Telegram HTTP {exc.code}: {body}") from exc
         raise errors.OperationFailed(f"Telegram HTTP {exc.code}: {body}") from exc
     except error.URLError as exc:
-        raise errors.Unreachable(f"Telegram request failed: {exc.reason}") from exc
+        raise TelegramUnreachable(f"Telegram request failed: {exc.reason}") from exc
+    except _TRANSPORT_ERRORS as exc:
+        raise TelegramUnreachable(f"Telegram request failed: {exc}") from exc
 
     result = json.loads(body)
     if not result.get("ok"):
@@ -210,7 +238,7 @@ def send_message(
                 chat_id=str(chat_id),
                 wait=wait_before_first_part or index > start_part,
             )
-        except TelegramRateLimited as exc:
+        except (TelegramRateLimited, TelegramUnreachable) as exc:
             # Telegram has parts 1..index. Saying so lets the queue resume at this part: a pass
             # that started again from part 1 showed the chat the delivered parts twice (B1.2).
             exc.parts_delivered = index
@@ -344,9 +372,13 @@ def call_telegram_multipart_api(
         if exc.code == 429:
             raise TelegramRateLimited(
                 f"Telegram HTTP 429: {response_body}", _retry_after_seconds(response_body)) from exc
+        if exc.code >= 500:
+            raise TelegramUnreachable(f"Telegram HTTP {exc.code}: {response_body}") from exc
         raise errors.OperationFailed(f"Telegram HTTP {exc.code}: {response_body}") from exc
     except error.URLError as exc:
-        raise errors.Unreachable(f"Telegram request failed: {exc.reason}") from exc
+        raise TelegramUnreachable(f"Telegram request failed: {exc.reason}") from exc
+    except _TRANSPORT_ERRORS as exc:
+        raise TelegramUnreachable(f"Telegram request failed: {exc}") from exc
 
     result = json.loads(response_body)
     if not result.get("ok"):
@@ -449,9 +481,13 @@ def get_file_bytes(
             data = response.read() if max_bytes is None else response.read(max_bytes + 1)
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        if exc.code >= 500:
+            raise TelegramUnreachable(f"Telegram file HTTP {exc.code}: {body}") from exc
         raise errors.OperationFailed(f"Telegram file HTTP {exc.code}: {body}") from exc
     except error.URLError as exc:
-        raise errors.Unreachable(f"Telegram file download failed: {exc.reason}") from exc
+        raise TelegramUnreachable(f"Telegram file download failed: {exc.reason}") from exc
+    except _TRANSPORT_ERRORS as exc:
+        raise TelegramUnreachable(f"Telegram file download failed: {exc}") from exc
     if max_bytes is not None and len(data) > max_bytes:
         raise errors.Refused(f"Telegram file exceeds {max_bytes} bytes.")
     return data

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -15,6 +16,7 @@ from dbabrain.telegram.api import (
     DEFAULT_RATE_LIMIT_WAIT_SECONDS,
     MAX_RATE_LIMIT_WAIT_SECONDS,
     TelegramRateLimited,
+    TelegramUnreachable,
     send_document,
     send_message,
 )
@@ -117,7 +119,11 @@ def send_pending_messages(
         "paused_chats": 0,
         "requeued": requeued,
         "errors": 0,
+        # Rows put back because Telegram could not be reached (TelegramUnreachable); every other chat then
+        # starts no row this pass - they share the one way out.
+        "unreachable": 0,
     }
+    unreachable = threading.Event()
 
     by_chat: dict[str, list[Any]] = {}
     for row in rows:
@@ -128,12 +134,12 @@ def send_pending_messages(
 
     def send_chat(chat_id: str, chat_rows: list[Any]) -> tuple[dict[str, int], float | None]:
         """One chat's rows in order; stops at the first 429 and says how long to pause."""
-        chat_counts = {"sent": 0, "failed": 0, "deferred": 0}
+        chat_counts = {"sent": 0, "failed": 0, "deferred": 0, "unreachable": 0}
         if chat_id in pauses:
             chat_counts["deferred"] = len(chat_rows)
             return chat_counts, None
         for index, row in enumerate(chat_rows):
-            if out_of_budget():
+            if out_of_budget() or unreachable.is_set():
                 # Left at send_status 0, untouched: the next pass takes them first, in order.
                 chat_counts["deferred"] += len(chat_rows) - index
                 break
@@ -153,6 +159,11 @@ def send_pending_messages(
                     f"telegram.send_queue chat {chat_id} paused {wait:.0f}s by Telegram's rate limit; "
                     f"its rows stay queued (send_tlgmsg_id={result['send_tlgmsg_id']} first)"))
                 return chat_counts, wait
+            if result.get("status") == "unreachable":
+                unreachable.set()
+                chat_counts["unreachable"] += 1
+                chat_counts["deferred"] += len(chat_rows) - index - 1
+                return chat_counts, None
             if result["sent"] == 1:
                 chat_counts["sent"] += 1
             elif result["failed"] == 1:
@@ -260,6 +271,8 @@ def send_one_message(
     # terminal, a rate limit is a deferral.
     rate_limited = False
     retry_after = 0.0
+    # The way to Telegram failed, not the message (TelegramUnreachable): a deferral too, never a terminal -1.
+    unreachable = False
     # Parts of this row an earlier pass delivered before a rate limit stopped it: the send resumes
     # there instead of showing the chat parts 1..n again (review 0.25.0, B1.2).
     stored = metadata_from_json(str(row["metadata_json"] or "{}"))
@@ -332,6 +345,15 @@ def send_one_message(
             if not wait_on_rate_limit:
                 break
             time.sleep(min(exc.retry_after, float(MAX_RATE_LIMIT_WAIT_SECONDS)))
+        except TelegramUnreachable as exc:
+            # A gateway's 502, a timeout, a reset: the next attempt a moment later meets the same road, and
+            # spending the attempts on it is what marked 69 rows failed in 30 days (2026-11-26). The row goes
+            # back to the queue at once and the next pass - a second later - tries again. A read that timed
+            # out may have reached the chat: sending it again is the price, a lost alert the alternative.
+            last_error = str(exc)
+            unreachable = True
+            parts_delivered = max(parts_delivered, int(getattr(exc, "parts_delivered", 0) or 0))
+            break
         except Exception as exc:  # noqa: BLE001 - retry path.
             last_error = str(exc)
             rate_limited = False
@@ -366,6 +388,17 @@ def send_one_message(
                 f"send_tlgmsg_id={send_tlgmsg_id} chat={row['tlgchat_id']} error={last_error}"))
         return {"send_tlgmsg_id": send_tlgmsg_id, "sent": 0, "failed": 0, "status": "rate_limited",
                 "retry_after": retry_after}
+
+    if unreachable:
+        kept: dict[str, Any] = {"parts_delivered": parts_delivered} if parts_delivered else {}
+        if document_delivered:
+            kept.update(document_delivered=True, document_message_id=document_message_id)
+        store.reset_telegram_send_message_pending(
+            send_tlgmsg_id=send_tlgmsg_id, fail_text=last_error, extra=kept or None)
+        log_event(logger, level="warning", message=(
+            f"telegram.send_queue Telegram unreachable, requeued: send_tlgmsg_id={send_tlgmsg_id} "
+            f"chat={row['tlgchat_id']} error={last_error}"))
+        return {"send_tlgmsg_id": send_tlgmsg_id, "sent": 0, "failed": 0, "status": "unreachable"}
 
     if document_delivered:
         # The file is in the chat; what failed is the text after it. The row is failed either way -

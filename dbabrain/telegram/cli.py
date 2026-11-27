@@ -37,6 +37,7 @@ from dbabrain.telegram.command_permissions import set_command_level
 from dbabrain.telegram.updates import add_group, migrate_group_record, set_group_level, set_user_level
 from dbabrain.telegram.updates import fetch_and_save_updates
 from dbabrain.telegram.workflow import run_bot_workflow
+from dbabrain.telegram.api import TelegramRateLimited, TelegramUnreachable
 from dbabrain.logging_ops.runtime_stdout import patch_stdout
 
 
@@ -474,6 +475,19 @@ def main(argv: list[str]) -> int:
         result = call_telegram_function(telegram_function=args.telegram_function, args=args, config=config, config_path=config_path)
         if args.command in ("save-updates", "run-workflow"):
             save_next_update_offset(config_path, result.get("next_update_offset"))
+    except (TelegramUnreachable, TelegramRateLimited) as exc:
+        if args.command not in ("save-updates", "run-workflow"):
+            if logger:
+                log_function_error(logger, function_name=f"telegram.{args.command}", error_text=str(exc))
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        # The polling pass met Telegram's gateway down, the road to it cut, or its rate limit: a state of this
+        # second, said and left to the next pass. As an error it cost the bot the daemon's retry interval each
+        # time - 835 times in 14 days on the worker (2026-11-26) - and no row is lost: the queue puts back what
+        # it could not send.
+        print(json.dumps({"skipped": True, "reason": f"Telegram not reached this pass: {exc}",
+                          "next": "the next pass tries again"}, ensure_ascii=False, indent=2))
+        return 0
     except Exception as exc:  # noqa: BLE001 - command-line failure path.
         if logger:
             log_function_error(logger, function_name=f"telegram.{args.command}", error_text=str(exc))
