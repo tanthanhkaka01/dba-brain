@@ -11,6 +11,32 @@ longer form they were released with.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-27
+
+### Upgrading
+
+- An MCP client that names tools - an allow list, a prompt, a `disabled_tools` entry - uses the new names:
+  `restore`, `list-objects`, `check-config`, `sqlserver-cu-check`, `store-schema`, `store-query`. An old name
+  in `disabled_tools` still switches its tool off; a call by an old name answers the new one.
+
+### Changed
+
+- MCP: `delete-verified-file`, `delete-empty-folder` and `key-renew` are no longer tools of their own - their
+  plurals take a one-item list and `key-request` renews; a call names the tool that does it. `prune-backup-files`
+  is marked read-only: it only answers a plan.
+- MCP: commands too alike are one tool with one field choosing - `restore` (`step`), `list-objects` (`kind`),
+  `check-config` (`check`), `sqlserver-cu-check` (`check`), `list-backup-files` (`action`). A call by a
+  command's own name answers the tool and the value; an old name in `disabled_tools` still switches it off.
+- MCP: `store_schema` / `store_query` are `store-schema` / `store-query`. `add-sql` is not a tool (use
+  `sql-command-add` + `sql-target-add`), nor are `ask` and `authorize`, which need a person at a terminal.
+- MCP: each tool's description is its own text - what it does, then which sibling to use instead; the
+  `dbabrain common.cli` prefix is gone. 94 tools, down from 108.
+
+### Fixed
+
+- Offload: the repository check no longer fails on files another offload of the same server wrote while the
+  folder was being listed - it waits for the next pass, as it does when that offload was already running.
+
 ## [1.2.0] - 2026-11-27
 
 ### Changed
@@ -4363,7 +4389,8 @@ the documentation names one, it says so.
   metric definitions, the Telegram support commands, the runtime log, the schema export directory
   and the working directory of two subprocess calls. All of them now share the one resolution.
 
-[Unreleased]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/tanthanhkaka01/dba-brain/compare/v0.41.0...v1.0.0

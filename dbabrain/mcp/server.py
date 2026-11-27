@@ -48,7 +48,8 @@ INSTRUCTIONS = (
     "named by its `server_id` (list-targets lists them) - the connection and the host login are completed from "
     "this node's inventory and encrypted secret store. run-sql and run-sql-write run with the rights of the login "
     "the node stores for that server - DML and DDL included where the login has them; run-sql checks for one "
-    "SELECT and rolls back, run-sql-write keeps what it changed only with commit. store_schema and store_query read dbabrain's own runtime store (job runs, metrics, "
+    "SELECT and rolls back, run-sql-write keeps what it changed only with commit. store-schema and store-query read "
+    "dbabrain's own runtime store (job runs, metrics, "
     "the backup catalog, SLA). A tool marked destructive changes something; an emergency operation takes "
     "`confirm`: \"yes\" and a `reason` in its request. On a node without a dbabrain key the tools that only read "
     "answer, and a tool marked destructive answers how to get a key."
@@ -161,10 +162,12 @@ def call_tool(node: Node, tool: str, arguments: dict[str, Any] | None) -> str:
     server_id = ""
     ok = False
     try:
+        if M.not_an_mcp_tool(tool):
+            raise McpToolError(M.not_an_mcp_tool(tool))
         if not node.settings.offers(tool):
             raise McpToolError(f"the tool {tool} is switched off in {M.FILE_NAME}"
                                + ("" if node.settings.enabled else " (enabled is false)") + ".")
-        if M.needs_key(tool, node.operations):
+        if M.needs_key(M.member_command(tool), node.operations):
             # 1.1.0, 1.425: the server starts with no key; the line is per call - a tool that only reads answers,
             # one marked destructive needs the key, and nothing of it runs without one.
             decision = node.key_decision()
@@ -179,7 +182,7 @@ def call_tool(node: Node, tool: str, arguments: dict[str, Any] | None) -> str:
             if not isinstance(request, dict):
                 raise McpToolError("`request` is the command's JSON request - an object.")
             server_id = str(request.get("server_id") or request.get("target") or "")
-            answer, ok = _command_tool(node, tool, request)
+            answer, ok = _command_tool(node, *_grouped_command(tool, request))
     except Exception as exc:  # noqa: BLE001 - the model reads why; nothing escapes the call
         answer = {"success": False, "tool": tool, "error": f"{type(exc).__name__}: {exc}"}
     text = json.dumps(answer, ensure_ascii=False, indent=1, default=str)
@@ -188,6 +191,18 @@ def call_tool(node: Node, tool: str, arguments: dict[str, Any] | None) -> str:
         _log(node, tool=tool, server_id=server_id, ok=ok, started_at=started_at,
              duration_ms=int((time.monotonic() - clock) * 1000), text=text)
     return text
+
+
+def _grouped_command(tool: str, request: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """A grouped tool is several commands, one field naming which (1.3.0, 1.439); any other tool as given."""
+    if tool not in M.GROUPED_TOOLS:
+        return tool, request
+    field, choices, _text = M.GROUPED_TOOLS[tool]
+    request = dict(request)
+    value = request.pop(field, None)
+    if value not in choices:
+        raise McpToolError(f"{tool} takes `{field}`: {', '.join(choices)} - got {value!r}.")
+    return choices[value], request
 
 
 def _command_tool(node: Node, command: str, request: dict[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -284,7 +299,7 @@ def _store_tool(node: Node, tool: str, arguments: dict[str, Any]) -> dict[str, A
 
     target = StoreTarget.from_config(node.config())
     settings = node.settings
-    if tool == "store_schema":
+    if tool == "store-schema":
         return store_schema(target, table=str(arguments.get("table") or ""),
                             blocked_tables=settings.store_blocked_tables)
     asked = arguments.get("max_rows") or settings.store_query_max_rows
@@ -320,25 +335,31 @@ def tool_list(node: Node) -> list[dict[str, Any]]:
 
     tools = []
     for command, entry in node.commands().items():
-        if not node.settings.offers(command) or M.takes_a_secret_only(
+        grouped = M.grouped_in(command)
+        offered = grouped[0] if grouped else command
+        if not node.settings.offers(offered) or M.takes_a_secret_only(
                 command, entry, filled=request_fill.FILLS.get(command, ())):
             continue
         # One of the two hints on every tool (the directory's rule): what does not only read, changes.
         read_only = M.is_read_only(command, node.operations)
         fills = request_fill.FILLS.get(command, ())
         schema = M.request_schema(command, entry, fills=fills)
-        tools.append({"name": command, "kind": "command", "destructive": not read_only, "read_only": read_only,
-                      "needs_key": M.needs_key(command, node.operations),
-                      "description": M.describe(command, entry, list_fields=False),
-                      "request_schema": schema})
+        tool = {"name": command, "kind": "command", "destructive": not read_only, "read_only": read_only,
+                "needs_key": M.needs_key(command, node.operations),
+                "description": M.describe(command, entry, list_fields=False), "request_schema": schema}
+        if grouped:
+            # A group's commands are one tool (1.439), listed where the first of them is.
+            if command == M.member_command(offered):
+                tools.append({**tool, "name": offered, "description": M.describe(offered, entry, list_fields=False),
+                              "request_schema": M.grouped_schema(offered, schema)})
+            continue
+        tools.append(tool)
         if command == "run-sql" and node.settings.offers(M.SQL_WRITE_TOOL):
             tools.append({"name": M.SQL_WRITE_TOOL, "kind": "command", "destructive": True, "read_only": False,
                           "needs_key": True, "description": M.describe_sql_write(entry, list_fields=False),
                           "request_schema": schema})
-    for name, text in (("store_schema", "dbabrain's runtime store: every table and its columns, or one table's "
-                                        "columns with their types (`table`)."),
-                       ("store_query", "One read-only SELECT on dbabrain's runtime store (`sql`), always rolled "
-                                       "back; `max_rows` up to the node's cap. Tables: store_schema.")):
+    for name in M.STORE_TOOLS:
+        text = M.TOOL_TEXT[name]
         if node.settings.offers(name):
             tools.append({"name": name, "kind": "store", "destructive": False, "read_only": True,
                           "needs_key": False, "description": text})
@@ -348,11 +369,11 @@ def tool_list(node: Node) -> list[dict[str, Any]]:
 def _tool_function(node: Node, name: str) -> Any:
     """The function the SDK registers for one tool - its parameters are the tool's input schema, so
     nothing else may be one (a bound name as a default argument would be offered to the model)."""
-    if name == "store_schema":
+    if name == "store-schema":
         def store_schema_tool(table: str = "") -> str:
             return call_tool(node, name, {"table": table})
         return store_schema_tool
-    if name == "store_query":
+    if name == "store-query":
         def store_query_tool(sql: str, max_rows: int = 0) -> str:
             return call_tool(node, name, {"sql": sql, "max_rows": max_rows})
         return store_query_tool

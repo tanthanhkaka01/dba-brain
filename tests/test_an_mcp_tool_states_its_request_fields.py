@@ -102,5 +102,5 @@ def test_the_sdk_advertises_the_schema_and_the_description_no_longer_lists_field
     assert request["type"] == "object" and "object" in request["properties"] and "connection" not in request["properties"]
     assert set(tools["table-info"].input_schema["properties"]) == {"request"}
     assert all("Request fields" not in tool.description for tool in tools.values() if tool.name not in
-               ("store_schema", "store_query"))
+               ("store-schema", "store-query"))
     assert tools[M.SQL_WRITE_TOOL].input_schema == tools["run-sql"].input_schema

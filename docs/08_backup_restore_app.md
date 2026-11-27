@@ -1011,7 +1011,12 @@ copy whose delete did not happen), a proven copy **missing** or of **other bytes
 the run; its error event reaches the entry's `notify` - the backup/restore group, not a critical. A
 listing truncated is not a check and fails too. Each entry of a server checks the same folder, so
 two entries of one server each say it. It runs when the pass has something to do - every backup
-gives it some.
+gives it some. **It never judges a folder another entry of the server is writing into**: an offload of
+the server running when the check starts skips it (2026-11-11), and when the listing found anything,
+the run table is asked again - an offload of the server running then, or started since the check
+began, skips it too, its findings kept as `found` (1.3.0, 1.438: on 2026-11-26 a DIFF pass listed
+~7000 files while its server's LOG offload started and sealed four `.age` files there). The next
+pass checks it.
 
 **A sealed instance bundle the configuration puts there is not a stray** (0.40.0, 1.384; the operator,
 2026-11-16: *anywhere, and the check knows it*): `instance_bundle.json` and `instance_bundle.tar.age` at

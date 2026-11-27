@@ -75,9 +75,12 @@ def _call(node, tool, request):
     {"method": "subprocess", "python_exe": "/x"}, {"method": "API", "bridge_url": "http://192.0.2.1/"},
     {"secret_ref": "A"}, {"method": "direct", "connect_ref": "A"}, [["method", "subprocess"]], "api",
 ])
-@pytest.mark.parametrize("tool", ["run-sql", M.SQL_WRITE_TOOL, "list-databases", "list-jobs", "list-schemas"])
+@pytest.mark.parametrize("tool", ["run-sql", M.SQL_WRITE_TOOL, "list-objects:databases", "list-objects:jobs",
+                                  "list-objects:schemas"])
 def test_no_tool_takes_a_way_in_from_the_request(tmp_path, ran, tool, stated):
-    answer = _call(_node(tmp_path), tool, {"server_id": "SRV", "sql_text": "SELECT 1", "sql_access": stated})
+    tool, _, kind = tool.partition(":")
+    answer = _call(_node(tmp_path), tool, {"server_id": "SRV", "sql_text": "SELECT 1", "sql_access": stated,
+                                           **({"kind": kind} if kind else {})})
 
     assert answer["success"] is False and "inventory" in answer["error"]
     assert ran.calls == []
@@ -310,6 +313,10 @@ READ_ONLY_TOOLS = {
                          "timeout_seconds wal_segments",
     "list-databases": "connection credential_name database_name enabled_only include_system key key_base64 sql_access "
                       "target timeout_seconds",
+    # 1.3.0, 1.435: list-backup-files' own request; `delete: true` is refused by the command since 0.38.0
+    # (common/cli_backup_files.py), so what it answers is a plan, and `host` / `target` logins are the node's.
+    "prune-backup-files": "after before cleanup_retention database_name db_type delete host kinds latest mode path "
+                          "target timeout_seconds wal_segments",
     "list-files": "folder host max_files timeout_seconds with_folders",
     "list-jobs": "connection credential_name database_name enabled_only include_system key key_base64 sql_access target "
                  "timeout_seconds",

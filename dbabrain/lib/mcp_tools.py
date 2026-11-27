@@ -4,7 +4,7 @@ The operator, 2026-11-11 (translated): *let MCP run every common cli, SQL includ
 dbabrain store.* So the server (``dbabrain mcp serve``) offers **one tool per ``common.cli``
 command** - the list read from the reference (``shared_config_objects.json``), where every command
 already has its ``input_`` entry, so a new command is a new tool with nothing written here - and two
-tools of its own on the runtime store, ``store_schema`` and ``store_query`` (one SELECT, read-only,
+tools of its own on the runtime store, ``store-schema`` and ``store-query`` (one SELECT, read-only,
 rolled back). That replaced the sheet's first plan (read-only tools only, 1.315); what keeps it safe
 is unchanged from the CLI:
 
@@ -29,13 +29,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from dbabrain.lib import errors
+from dbabrain.lib.mcp_tool_text import SQL_WRITE_TEXT, TOOL_TEXT
 from dbabrain.lib.read_only_sql import ReadOnlyRefusal, read_only_sql
 from dbabrain.lib.sql_text import expand_sqlplus_defines
 
 FILE_NAME = "mcp_tools.json"
 
-#: The two tools on the runtime store - not common.cli commands, the server's own.
-STORE_TOOLS = ("store_schema", "store_query")
+#: The two tools on the runtime store - not common.cli commands, the server's own. Named ``store_schema`` and
+#: ``store_query`` until 1.3.0 (1.439): the only snake_case names among kebab-case ones (Glama's review of 1.2.0).
+STORE_TOOLS = ("store-schema", "store-query")
 
 #: Every field is stated (R50); ``upgrade-config`` writes these where one is missing.
 DEFAULTS: dict[str, Any] = {
@@ -80,8 +82,83 @@ SECRET_KEYS = frozenset({"password", "sudo_password", "encryption_password", "pa
 #: Commands whose purpose is a secret the caller gives - ``value`` is it.
 SECRET_VALUE_COMMANDS = frozenset({"secret-set", "secret-remove", "ai-key"})
 
+#: Commands the MCP server does not offer because another tool does the same (1.3.0, 1.434): a one-item list
+#: is the singular, and renewing a key is requesting one again - the same sign-in, the new key replacing
+#: the old. Glama's review of 1.1.0 named these pairs as tools an agent could not choose between. The
+#: commands stay in common.cli; over MCP a call to one is refused, naming the tool that does it.
+COVERED_TOOLS = {"delete-verified-file": "delete-verified-files", "delete-empty-folder": "delete-empty-folders",
+                 "key-renew": "key-request",
+                 # 1.439: "the older add-sql" - a script and its target in one call; the two newer ones do it.
+                 "add-sql": "sql-command-add + sql-target-add"}
+
+#: Commands that ask a person at the node's terminal (1.3.0, 1.439): over MCP there is none, so the call could only
+#: wait or be refused. The client's own approval prompt is the person an MCP call is shown to.
+TERMINAL_TOOLS = frozenset({"ask", "authorize"})
+
+#: MCP tools that are several common.cli commands, one field choosing which (1.3.0, 1.439). Each group's commands
+#: share one request entry and one hint, and the choice is one enum field - the grouping the operator allows
+#: (2026-11-27: *group a few tools that are too alike*; the plan of that morning, 108 -> 97). Glama's review of 1.2.0
+#: named *numerous backup/restore variants*. The commands stay as they are in common.cli; a call by a command's own
+#: name answers which tool and which value. ``{tool: (field, {value: command}, what the field says)}``.
+GROUPED_TOOLS: dict[str, tuple[str, dict[str, str], str]] = {
+    "restore": ("step", {"full": "restore-full", "diff": "restore-diff", "log": "restore-log"},
+                "Which restore step: full, then diff (if any), then log - one call each."),
+    "list-objects": ("kind", {"databases": "list-databases", "schemas": "list-schemas", "jobs": "list-jobs"},
+                     "What to list: the instance's databases, one database's schemas, or the scheduler's jobs."),
+    "check-config": ("check", {"objects": "check-objects", "references": "check-references",
+                               "credentials": "check-credentials"},
+                     "Which check: objects (fields against the reference), references (pointers between files), "
+                     "credentials (every target resolves a login)."),
+    "sqlserver-cu-check": ("check", {"precheck": "sqlserver-precheck", "build": "sqlserver-verify-build"},
+                           "precheck before a cumulative update is applied, build after it."),
+    "list-backup-files": ("action", {"list": "list-backup-files", "prune-plan": "prune-backup-files"},
+                          "list: the files the directory holds; prune-plan: which of them a retention rule would "
+                          "remove (nothing is deleted)."),
+}
+
+
+def grouped_in(command: str) -> tuple[str, str] | None:
+    """``(tool, value)`` when ``command`` is offered as one value of a grouped tool."""
+    for tool, (_field, choices, _text) in GROUPED_TOOLS.items():
+        for value, member in choices.items():
+            if member == command:
+                return tool, value
+    return None
+
+
+def member_command(tool: str) -> str:
+    """The command whose hints a tool carries - a grouped tool's first (they share one hint)."""
+    return next(iter(GROUPED_TOOLS[tool][1].values())) if tool in GROUPED_TOOLS else tool
+
+
+#: Tools renamed over MCP, and what each was called; a call by the old name answers the new one.
+RENAMED_TOOLS = {"store_schema": "store-schema", "store_query": "store-query"}
+
+#: A tool and the names it was offered under before: switched off in ``disabled_tools`` under ANY of them, it stays
+#: off - a node that switched ``restore-log`` off is not handed every restore step by a rename.
+FORMER_NAMES: dict[str, tuple[str, ...]] = {**{tool: tuple(choices.values()) for tool, (_f, choices, _t)
+                                               in GROUPED_TOOLS.items()},
+                                            "store-schema": ("store_schema",), "store-query": ("store_query",)}
+
+
+def not_an_mcp_tool(tool: str) -> str:
+    """Why ``tool`` - a common.cli command or a former name - is not called over MCP; "" when it may be."""
+    if tool in COVERED_TOOLS:
+        return f"{tool} is not an MCP tool - {COVERED_TOOLS[tool]} does the same."
+    if tool in TERMINAL_TOOLS:
+        return (f"{tool} asks a person at the node's terminal, and an MCP call has none - not an MCP tool. Your "
+                "client's own approval prompt is that person.")
+    grouped = grouped_in(tool)
+    if grouped and grouped[0] != tool:
+        return f"{tool} is the MCP tool {grouped[0]} with {GROUPED_TOOLS[grouped[0]][0]} {grouped[1]!r}."
+    if tool in RENAMED_TOOLS:
+        return f"{tool} is called {RENAMED_TOOLS[tool]} since 1.3.0."
+    return ""
+
 #: Commands that only read, whose names say otherwise.
 READ_ONLY_COMMANDS = frozenset({"due-check", "key-status", "read-file", "self-status", "smb-list",
+                                # 1.3.0, 1.435: a retention rule's plan - its `delete` is refused since 0.38.0.
+                                "prune-backup-files",
                                 # 1.1.0, 1.421: SQL of their own, the request's names written as literals;
                                 # query-plan's statement is compiled with SHOWPLAN / EXPLAIN, never run.
                                 "table-info", "object-source", "db-activity", "query-plan",
@@ -100,10 +177,6 @@ RUN_SQL_RIGHTS = ("Runs with the rights of the login this node stores for the se
                   "included. The statement is checked to be one SELECT and the batch is rolled back, but the check reads "
                   "text and does not bound what the login can do; a login with read rights only is what keeps it to "
                   "reading. ")
-#: ``run-sql-write``'s first line: its own, so it does not open as ``run-sql`` does.
-SQL_WRITE_OPENING = ("dbabrain common.cli `run-sql` (writing): One statement that changes data on one server, kept only "
-                     "when the request says `commit` (or `autocommit`) true - otherwise rolled back.\n")
-
 #: The SQL each engine reads - a custom query tool names its language's reference (review criteria).
 SQL_REFERENCES = ("SQL Server T-SQL https://learn.microsoft.com/sql/t-sql/language-reference, "
                   "PostgreSQL https://www.postgresql.org/docs/current/sql-commands.html, "
@@ -150,7 +223,8 @@ class McpSettings:
     disabled_tools: tuple[str, ...]
 
     def offers(self, tool: str) -> bool:
-        return self.enabled and tool not in self.disabled_tools
+        off = {tool, *FORMER_NAMES.get(tool, ())} & set(self.disabled_tools)
+        return self.enabled and not off and not not_an_mcp_tool(tool)
 
 
 def _int(document: dict[str, Any], field: str, *, low: int) -> int:
@@ -217,7 +291,10 @@ def command_entries(reference: list[dict[str, Any]]) -> dict[str, dict[str, Any]
 
 
 def is_destructive(command: str, operations: set[str]) -> bool:
-    """True for a command the emergency-operations catalogue prices, or one whose name takes away."""
+    """True for a command the emergency-operations catalogue prices, or one whose name takes away - unless it
+    is one of the READ_ONLY_COMMANDS whose name says otherwise (``prune-backup-files`` only plans)."""
+    if command in READ_ONLY_COMMANDS and command not in operations:
+        return False
     return command in operations or command.startswith(DESTRUCTIVE_PREFIXES)
 
 
@@ -437,8 +514,10 @@ def describe(command: str, entry: dict[str, Any], *, max_field_chars: int = 220,
     What every tool has in common - a server named by ``server_id`` with its login completed by the node, and an
     emergency operation's ``confirm`` + ``reason`` - is said once, in the server's instructions. Said again in each
     tool it was two of a tool's three sentences, so ``disable-job`` and ``start-job`` read 97% alike."""
-    own = (entry.get("command_lines") or {}).get(command)
-    lines = [f"dbabrain common.cli `{command}`: {own or entry.get('one_line') or ''}".strip()]
+    # 1.439: the tool's own text (lib.mcp_tool_text) - what it does, a verb first, and which sibling to take
+    # instead; no "dbabrain common.cli `x`:" before it, which pushed that out of the first words an agent reads.
+    own = TOOL_TEXT.get(command) or (entry.get("command_lines") or {}).get(command)
+    lines = [str(own or entry.get("one_line") or "").strip()]
     if command == "run-sql":
         lines.append(RUN_SQL_RIGHTS + f"The SQL is the target engine's: {SQL_REFERENCES}.")
     if not list_fields:
@@ -454,13 +533,21 @@ def describe(command: str, entry: dict[str, Any], *, max_field_chars: int = 220,
     return "\n".join(lines)
 
 
+def grouped_schema(tool: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """A grouped tool's request: its commands' own (one entry for all of them), with the choosing field first."""
+    field, choices, text = GROUPED_TOOLS[tool]
+    chooser = {"type": "string", "enum": list(choices), "description": text}
+    return {**schema, "properties": {field: chooser, **(schema.get("properties") or {})},
+            "required": [field, *[name for name in schema.get("required") or [] if name != field]]}
+
+
 def describe_sql_write(entry: dict[str, Any], *, list_fields: bool = True) -> str:
     """``run-sql-write``'s text: the write half of ``run-sql``. It opens with a sentence of its own - opening with
     ``run-sql``'s would leave the two tools alike to an agent choosing between them - and leaves out ``run-sql``'s
     paragraph on its SELECT check, which is not this tool's."""
     text = describe("run-sql", entry, list_fields=list_fields)
     rest = text.split("\n", 1)[1] if "\n" in text else ""
-    return SQL_WRITE_OPENING + rest.replace(RUN_SQL_RIGHTS, "")
+    return SQL_WRITE_TEXT + "\n" + rest.replace(RUN_SQL_RIGHTS, "")
 
 
 def capped(text: str, max_chars: int) -> str:

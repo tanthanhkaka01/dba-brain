@@ -64,29 +64,36 @@ def test_every_command_the_reference_describes_is_a_tool_and_the_store_has_two(t
     # 0.39.0: a command that over MCP could only be refused - its purpose is a secret, or one it cannot
     # run without - is not offered (no secret enters through MCP); every other one is a tool.
     commands = {name for name, entry in entries.items() if not M.takes_a_secret_only(name, entry)}
-    assert commands and commands <= names, "a command without its tool"
-    assert {"run-sql", "db-status", "list-targets", "host-facts", "store_schema", "store_query"} <= names
-    assert names - commands == set(M.STORE_TOOLS) | {M.SQL_WRITE_TOOL}
+    # 1.3.0: a command another tool does the same as is not one of its own (test_an_mcp_tool_another_does_is_not_offered).
+    commands -= set(M.COVERED_TOOLS) | M.TERMINAL_TOOLS
+    # 1.3.0, 1.439: a grouped tool is its commands, one field choosing (test_an_mcp_tool_another_does_is_not_offered).
+    grouped = {command for _field, choices, _text in M.GROUPED_TOOLS.values() for command in choices.values()}
+    assert commands - grouped and commands - grouped <= names, "a command without its tool"
+    assert set(M.GROUPED_TOOLS) <= names and not (grouped - set(M.GROUPED_TOOLS)) & names
+    assert {"run-sql", "db-status", "list-targets", "host-facts", "store-schema", "store-query"} <= names
+    assert names - commands == set(M.STORE_TOOLS) | {M.SQL_WRITE_TOOL} | (set(M.GROUPED_TOOLS) - commands)
 
 
 def test_every_command_that_takes_something_away_is_marked_destructive(tmp_path):
     tools = {tool["name"]: tool for tool in S.tool_list(_node(tmp_path))}
     must = {name for name in _operations() if name in tools}
-    must |= {name for name in tools if name.startswith(("delete-", "prune-", "kill-", "shrink-", "rotate-"))}
+    # prune-backup-files only plans since 0.38.0 - its name is the one exception (1.435).
+    must |= {name for name in tools if name.startswith(("delete-", "prune-", "kill-", "shrink-", "rotate-"))
+             and name not in M.READ_ONLY_COMMANDS}
     must |= {name for name in ("run-cmd", "run-sqlcmd", "copy-backup-dir", "smb-delete") if name in tools}
     assert must, "the catalogue names no command - the check would pass on nothing"
     assert [name for name in sorted(must) if not tools[name]["destructive"]] == []
     assert all(not tools[name]["read_only"] for name in must)
-    assert tools["list-databases"]["read_only"] and not tools["list-databases"]["destructive"]
+    assert tools["list-objects"]["read_only"] and not tools["list-objects"]["destructive"]
     # That it changes something is the tool's destructive hint; that an emergency operation takes `confirm` and a
     # `reason` is said once, in the server's instructions (test_every_mcp_tool_says_what_it_alone_does.py).
     assert "`confirm`" in S.INSTRUCTIONS
 
 
 def test_a_switched_off_tool_is_not_offered_and_refuses_when_called_anyway(tmp_path, logged):
-    node = _node(tmp_path, disabled_tools=["run-cmd", "store_query"])
+    node = _node(tmp_path, disabled_tools=["run-cmd", "store-query"])
     names = {tool["name"] for tool in S.tool_list(node)}
-    assert "run-cmd" not in names and "store_query" not in names and "run-sql" in names
+    assert "run-cmd" not in names and "store-query" not in names and "run-sql" in names
     answer = json.loads(S.call_tool(node, "run-cmd", {"request": {"server_id": "X"}}))
     assert answer["success"] is False and "switched off" in answer["error"]
     assert S.tool_list(_node(tmp_path, enabled=False)) == []
@@ -176,10 +183,10 @@ def store(tmp_path, monkeypatch):
 
 def test_the_store_is_read_capped_and_never_written(tmp_path, store, logged):
     node = _node(tmp_path, store_query_max_rows=3)
-    answer = json.loads(S.call_tool(node, "store_query", {"sql": "SELECT job_code FROM job_runs ORDER BY log_id",
+    answer = json.loads(S.call_tool(node, "store-query", {"sql": "SELECT job_code FROM job_runs ORDER BY log_id",
                                                          "max_rows": 50}))
     assert answer["rows"] == [["JOB0"], ["JOB1"], ["JOB2"]] and answer["truncated"] is True
-    refused = json.loads(S.call_tool(node, "store_query", {"sql": "DELETE FROM job_runs"}))
+    refused = json.loads(S.call_tool(node, "store-query", {"sql": "DELETE FROM job_runs"}))
     assert refused["success"] is False and "ReadOnlyRefusal" in refused["error"]
     with sqlite3.connect(store) as conn:
         assert conn.execute("SELECT COUNT(*) FROM job_runs").fetchone()[0] == 10
@@ -187,9 +194,9 @@ def test_the_store_is_read_capped_and_never_written(tmp_path, store, logged):
 
 def test_a_blocked_table_is_neither_listed_nor_read(tmp_path, store, logged):
     node = _node(tmp_path)
-    tables = json.loads(S.call_tool(node, "store_schema", {}))["tables"]
+    tables = json.loads(S.call_tool(node, "store-schema", {}))["tables"]
     assert "job_runs" in tables and "web_users" not in tables
-    assert "not readable" in json.loads(S.call_tool(node, "store_query", {"sql": "SELECT * FROM web_users"}))["error"]
+    assert "not readable" in json.loads(S.call_tool(node, "store-query", {"sql": "SELECT * FROM web_users"}))["error"]
 
 
 # --------------------------------------------------------------------------- #
@@ -231,9 +238,9 @@ def test_the_sdk_server_offers_each_tool_with_its_hints_and_only_its_own_paramet
     server = S.build_server(_node(tmp_path))
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
     assert tools["kill-spid"].annotations.destructive_hint is True
-    assert tools["list-databases"].annotations.read_only_hint is True
+    assert tools["list-objects"].annotations.read_only_hint is True
     assert set(tools["run-sql"].input_schema["properties"]) == {"request"}
-    assert set(tools["store_query"].input_schema["properties"]) == {"sql", "max_rows"}
+    assert set(tools["store-query"].input_schema["properties"]) == {"sql", "max_rows"}
 
 
 # --------------------------------------------------------------------------- #
@@ -309,7 +316,7 @@ def test_a_node_answers_each_frame_with_the_sdks_own_server_and_says_who_asked(t
     pytest.importorskip("mcp")
     from dbabrain.mcp import relay
 
-    # store_query opens the node's config.json before its read-only check; in the operator's checkout
+    # store-query opens the node's config.json before its read-only check; in the operator's checkout
     # that was the operator's own file in the working directory, and a public checkout has none.
     home = tmp_path / "home"
     home.mkdir()
@@ -321,7 +328,7 @@ def test_a_node_answers_each_frame_with_the_sdks_own_server_and_says_who_asked(t
             "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}}),
         _frame("b", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
         _frame("c", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                     "params": {"name": "store_query", "arguments": {"sql": "DELETE FROM job_runs"}}}),
+                     "params": {"name": "store-query", "arguments": {"sql": "DELETE FROM job_runs"}}}),
         json.dumps({"type": "ping"})])
     asyncio.run(relay.serve(_node(tmp_path), server="https://relay.example", token="t",
                             connect=lambda *_a, **_k: socket, once=True))
@@ -331,7 +338,7 @@ def test_a_node_answers_each_frame_with_the_sdks_own_server_and_says_who_asked(t
     assert len(json.loads(replies["b"]["body"])["result"]["tools"]) > 90
     assert "ReadOnlyRefusal" in replies["c"]["body"]
     assert {"type": "pong"} in socket.sent
-    assert logged[-1]["tool"] == "store_query"
+    assert logged[-1]["tool"] == "store-query"
 
 
 def test_a_refused_node_token_stops_the_node_with_the_sentence_that_says_so(tmp_path):
@@ -476,11 +483,11 @@ def test_a_call_through_a_node_is_recorded_with_the_account_the_worker_named(tmp
             "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}},
                user="owner@example.com"),
         _frame("b", {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                     "params": {"name": "store_query", "arguments": {"sql": "DELETE FROM job_runs"}}},
+                     "params": {"name": "store-query", "arguments": {"sql": "DELETE FROM job_runs"}}},
                user="owner@example.com")])
 
     asyncio.run(relay.serve(_node(tmp_path), server="https://relay.example", token="t",
                             connect=lambda *_a, **_k: socket, once=True))
 
-    assert recorded == [("store_query", "owner@example.com")]
+    assert recorded == [("store-query", "owner@example.com")]
     assert S.ASKED_BY.get() == ""

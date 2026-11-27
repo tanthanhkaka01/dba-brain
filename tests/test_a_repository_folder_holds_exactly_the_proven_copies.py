@@ -539,8 +539,11 @@ class _RunTable:
 
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
-        self.db.execute("CREATE TABLE job_runs (job_code TEXT, status TEXT, metadata_json TEXT)")
-        self.db.executemany("INSERT INTO job_runs VALUES (?, ?, ?)", rows)
+        self.db.execute("CREATE TABLE job_runs (job_code TEXT, status TEXT, metadata_json TEXT, started_at TEXT)")
+        self.add(*rows)
+
+    def add(self, *rows):
+        self.db.executemany("INSERT INTO job_runs VALUES (?, ?, ?, ?)", rows)
 
     def connect(self):
         import contextlib
@@ -548,8 +551,8 @@ class _RunTable:
         return contextlib.nullcontext(self.db)
 
 
-def _running(backup_id, server_id, status="RUNNING"):
-    return (f"backup_restore.offload_job.{backup_id}", status, json.dumps({"server_id": server_id}))
+def _running(backup_id, server_id, status="RUNNING", started_at="2026-11-10T00:00:00Z"):
+    return (f"backup_restore.offload_job.{backup_id}", status, json.dumps({"server_id": server_id}), started_at)
 
 
 def test_a_pass_beside_another_offload_of_its_server_does_not_judge_the_folder_mid_copy(catalog, repo, one_run,
@@ -561,7 +564,7 @@ def test_a_pass_beside_another_offload_of_its_server_does_not_judge_the_folder_m
     repo.files["/mnt/nas/SRV-01/APPDB/FULL/APPDB_FULL_2.bak.dbabrain_partial"] = b"half"
     store = _RunTable([_running("SRV01_FULL", "SRV-01")])
     real = O.offloads_running_beside
-    monkeypatch.setattr(O, "offloads_running_beside", lambda _store, e: real(store, e))
+    monkeypatch.setattr(O, "offloads_running_beside", lambda _store, e, **k: real(store, e, **k))
     repo.calls.clear()
 
     answer = one_run.run(entry)
@@ -577,6 +580,66 @@ def test_only_another_entry_of_the_same_server_running_now_holds_the_check_back(
                        _running("OTHER_FULL", "SRV-02"), _running("SRV01_DIFF", "SRV-01", status="DONE")])
     assert O.offloads_running_beside(store, entry) == ["SRV01_FULL"]
     assert O.offloads_running_beside(None, entry) == [], "a store that cannot say does not skip the check"
+
+
+def _a_sibling_writes_while_the_folder_is_listed(repo, store, *, status):
+    """The 2026-11-26 race (1.438): nothing of the server is running when the check asks, and while the
+    folder is listed its LOG offload starts and seals its files there."""
+    from dbabrain.db.store import utc_now_text
+
+    listing = repo.run
+
+    def run(command, request, **k):
+        if command == "list-files":
+            store.add(_running("SRV01_LOG", "SRV-01", status=status, started_at=utc_now_text()))
+            repo.files["/mnt/nas/SRV-01/APPDB/LOG/APPDB_LOG_2.trn.age"] = b"sealed while listed"
+        return listing(command, request, **k)
+    return run
+
+
+@pytest.mark.parametrize("status", ["RUNNING", "DONE"])
+def test_an_offload_of_the_server_that_wrote_while_the_folder_was_listed_holds_the_verdict_back(
+        catalog, repo, one_run, monkeypatch, status):
+    """Still running when the listing ends, or started and ended within it: either way its files were
+    listed before they were proven, so the check waits for the next pass - never a stray."""
+    entry = _entry()
+    _one_proven_copy(catalog, repo, entry)
+    store = _RunTable([_running("SRV01_DIFF", "SRV-01", status="DONE")])
+    real = O.offloads_running_beside
+    monkeypatch.setattr(O, "offloads_running_beside", lambda _store, e, **k: real(store, e, **k))
+    monkeypatch.setattr(O.common_cli, "run", _a_sibling_writes_while_the_folder_is_listed(repo, store, status=status))
+
+    answer = one_run.run(entry)
+
+    assert answer["status"] == "done" and answer["repository_check"]["skipped"] is True
+    assert "SRV01_LOG" in answer["repository_check"]["message"]
+    assert "not in the catalog" in answer["repository_check"]["found"], "what was listed travels with the run"
+    assert "repository check: next pass" in one_run.events[-1]["message"]
+    assert "was writing into it" in one_run.finished[-1]["message"]
+
+
+def test_a_stray_with_no_offload_of_the_server_since_the_check_began_still_fails_the_run(catalog, repo, one_run,
+                                                                                         monkeypatch):
+    entry = _entry()
+    _one_proven_copy(catalog, repo, entry)
+    repo.files["/mnt/nas/SRV-01/APPDB/LOG/stray.trn"] = b"stray"
+    # Ended before the check began, and another server's started during it: neither excuses a stray.
+    store = _RunTable([_running("SRV01_DIFF", "SRV-01", status="DONE", started_at="2026-11-10T00:00:00Z"),
+                       _running("OTHER_LOG", "SRV-02", status="DONE", started_at="2999-01-01T00:00:00Z")])
+    real = O.offloads_running_beside
+    monkeypatch.setattr(O, "offloads_running_beside", lambda _store, e, **k: real(store, e, **k))
+
+    answer = one_run.run(entry)
+
+    assert answer["status"] == "error" and "stray.trn" in answer["repository_check"]["message"]
+
+
+def test_since_adds_the_runs_of_the_server_that_started_at_or_after_it():
+    entry = SimpleNamespace(backup_id="SRV01_LOG", server_id="SRV-01")
+    store = _RunTable([_running("SRV01_FULL", "SRV-01", status="DONE", started_at="2026-11-26T20:19:25Z"),
+                       _running("SRV01_DIFF", "SRV-01", status="DONE", started_at="2026-11-26T20:11:07Z")])
+    assert O.offloads_running_beside(store, entry) == []
+    assert O.offloads_running_beside(store, entry, since="2026-11-26T20:19:25Z") == ["SRV01_FULL"]
 
 
 # --------------------------------------------------------------------------- #

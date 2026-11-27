@@ -24,18 +24,50 @@ Package `dbabrain/mcp/` (`cli.py`, `server.py`, `catalogue/mcp_tools.json`); rul
 *let MCP run every common cli, SQL included, and read the dbabrain store.*
 
 - **Command tools** - every command the reference (`shared_config_objects.json`) has an `input_` entry
-  for: `list-targets`, `db-status`, `list-databases`, `run-sql`, `host-facts`, `file-checksum`,
-  `trace-session`, ... (`dbabrain mcp tools` lists them). The list is read from the reference, so a new
-  command is a new tool with nothing written here. A tool takes `request` - the command's own JSON
-  request. Its description opens with what that command alone does - the input entry's `command_lines`
-  where several commands share it, else its `one_line` - so no two tools open alike (Glama scored the
-  shared openings 1 of 5, 2026-11-26). Its input schema is the request's fields from the reference
+  for: `list-targets`, `db-status`, `run-sql`, `host-facts`, `file-checksum`, `trace-session`, ...
+  (`dbabrain mcp tools` lists them; 94 in 1.3.0). The list is read from the reference, so a new command is a
+  new tool. A tool takes `request` - the command's own JSON request. **Its description is the tool's own text**
+  (`lib.mcp_tool_text`, 1.3.0): what it does, a verb first, and in a family - file transfer, deletion, SQL,
+  restore - which sibling to take instead (`fetch-file`: *for a packed backup archive use pull-file*); no
+  `dbabrain common.cli `x`:` before it. A command with no text there falls back to its entry's
+  `command_lines` or `one_line`, and a test holds every offered tool to having one (Glama scored shared openings
+  1 of 5 on 2026-11-26, and on 2026-11-27 the families an agent picks wrongly in). Its input schema is the request's fields from the reference
   (`lib.mcp_tools.request_schema`): type, allowed values, bounds, purpose, required. Left out: what the
   node fills (connection, host login, policy, rules, secrets), what a request is refused for (a secret,
   `sql_access`); `server_id` leads. The description no longer lists the fields.
   What every tool shares - `server_id` names the server and the node completes its login; an emergency
   operation takes `confirm` and a `reason` - is said once, in the server's instructions, not in each tool:
   said in each it was two of a tool's three sentences, and `disable-job` read 97% like `start-job`.
+- **A command another tool does is not a tool of its own** (1.3.0): `delete-verified-file` and
+  `delete-empty-folder` are their plurals with a one-item list, and `key-renew` is `key-request` again - the same
+  sign-in, the new key replacing the old (`lib.mcp_tools.COVERED_TOOLS`). Over MCP they are not listed, and a call
+  to one answers which tool does it; the commands stay in common.cli. A plural is no wider than its singular: each
+  item states its own path (absolute, no wildcard) and `must_be_under`, a verified file also its name, bytes and
+  sha256, and one bad or repeated item refuses the whole list before the host is reached.
+  `prune-backup-files` is marked read-only: it answers a retention rule's plan and refuses `delete` (0.38.0).
+  `add-sql` is not a tool either (1.439): it is the older one-call form of `sql-command-add` + `sql-target-add`. **`ask` and
+  `authorize` are not tools**: they ask a person at the node's terminal, which an MCP call does not have - the
+  client's own approval prompt is that person (`TERMINAL_TOOLS`).
+- **Commands too alike are one tool, one field choosing** (1.3.0, 1.439; the operator, 2026-11-27: *group a few
+  tools that are too alike*) - only where the commands share one request entry and one hint, the choice is one enum
+  field and none is an emergency operation (`lib.mcp_tools.GROUPED_TOOLS`):
+
+  | Tool | Field | Commands |
+  | --- | --- | --- |
+  | `restore` | `step`: full, diff, log | `restore-full`, `restore-diff`, `restore-log` |
+  | `list-objects` | `kind`: databases, schemas, jobs | `list-databases`, `list-schemas`, `list-jobs` |
+  | `check-config` | `check`: objects, references, credentials | `check-objects`, `check-references`, `check-credentials` |
+  | `sqlserver-cu-check` | `check`: precheck, build | `sqlserver-precheck`, `sqlserver-verify-build` |
+  | `list-backup-files` | `action`: list, prune-plan | `list-backup-files`, `prune-backup-files` |
+
+  The field leads the tool's input schema and is required; the call runs the command it names, without the
+  field. The commands stay as they are in common.cli; over MCP a call by a command's own name answers the tool
+  and the value. **A tool switched off under any name it had stays off** (`FORMER_NAMES`): `disabled_tools`
+  naming `restore-log` keeps `restore` off, and `prune-backup-files` keeps `list-backup-files` off.
+- **`store-schema` / `store-query`** are the store tools' names since 1.3.0 (`store_schema` / `store_query`
+  before - the only snake_case names); a call by the old name answers the new one, and an old name in
+  `disabled_tools` still switches the tool off. The settings `store_query_max_rows` /
+  `store_query_timeout_seconds` keep their names.
 - **`dbabrain mcp call` and `mcp tools` print any character** (1.2.0): piped or redirected, the answer leaves
   as UTF-8, as common.cli's does; a console keeps its code page and shows `?` for what it cannot draw. A
   redirected `store_query` died at the first ✅ of a job's message on Windows (2026-11-26).
@@ -45,7 +77,7 @@ Package `dbabrain/mcp/` (`cli.py`, `server.py`, `catalogue/mcp_tools.json`); rul
 - **What is inside a database** (1.1.0): `table-info` (columns, indexes, size), `object-source` (a procedure's,
   view's or trigger's text), `db-activity` (running now, blocking, waits, top queries), `query-plan` (the estimated
   plan, compiled and never run) - read before a query is written ([13](./13_common.md)).
-- **`store_schema` / `store_query`** - dbabrain's runtime store: its tables, and one SELECT
+- **`store-schema` / `store-query`** - dbabrain's runtime store: its tables, and one SELECT
   (`db.read_only_query`: `lib.read_only_sql`, a read-only transaction, a statement timeout, always
   rolled back, capped at `store_query_max_rows`). `web_users`, `web_sessions` and
   `web_login_attempts` are blocked (`store_blocked_tables`).

@@ -52,8 +52,7 @@ def test_a_sentence_belongs_to_a_command_of_its_entry(entries):
 
 
 def test_no_two_tools_open_with_the_same_sentence(entries):
-    first = {command: M.describe(command, entry).split("\n", 1)[0]
-                      .split(":", 1)[1].strip() for command, entry in entries.items()}
+    first = {command: M.describe(command, entry).split("\n", 1)[0].strip() for command, entry in entries.items()}
     repeated = [line for line, count in Counter(first.values()).items() if count > 1]
     assert not repeated, "\n".join(f"{line!r}: {sorted(c for c, f in first.items() if f == line)}" for line in repeated)
 
@@ -67,14 +66,18 @@ def test_no_two_offered_tools_open_alike_run_sql_write_included(tmp_path):
     catalogue = json.loads((root / "dbabrain/common/catalogue/emergency_operations.json").read_text(encoding="utf-8"))
     node = S.Node(data_dir=tmp_path, config_path=None, settings=M.parse_mcp_tools(dict(M.DEFAULTS)),
                   reference=shared_objects.load(), operations=M.operation_commands(catalogue))
-    first = Counter(tool["description"].split("\n", 1)[0].split(":", 1)[-1].strip() for tool in S.tool_list(node))
+    first = Counter(tool["description"].split("\n", 1)[0].strip() for tool in S.tool_list(node))
     assert [line for line, count in first.items() if count > 1] == []
 
 
 def test_a_tool_opens_with_its_own_sentence(entries):
+    """Its own text (lib.mcp_tool_text, 1.3.0) - and nothing before it: "dbabrain common.cli `x`:" pushed what the
+    tool does out of the first words an agent reads."""
+    from dbabrain.lib.mcp_tool_text import TOOL_TEXT
+
     entry = entries["query-plan"]
     text = M.describe("query-plan", entry)
-    assert text.startswith(f"dbabrain common.cli `query-plan`: {entry['command_lines']['query-plan']}")
+    assert text.startswith(TOOL_TEXT["query-plan"]) and "common.cli" not in text.split("\n", 1)[0]
     assert entry["one_line"] not in text.split("\n", 1)[0]
 
 

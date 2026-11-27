@@ -1086,16 +1086,19 @@ def _merge_encrypt(on_the_way: dict[str, Any] | None, after: dict[str, Any]) -> 
     return merged
 
 
-def offloads_running_beside(store: Any, entry: _Entry) -> list[str]:
+def offloads_running_beside(store: Any, entry: _Entry, *, since: str = "") -> list[str]:
     """The other entries of ``entry``'s server whose offload is running now - read from the run table,
-    where each offload run states its server_id. Unreadable is none: the check then runs as before."""
+    where each offload run states its server_id. With ``since`` (``utc_now_text``), also those that
+    started at or after it: one that started and ended while the folder was being listed wrote into the
+    listing all the same. Unreadable is none: the check then runs as before."""
     import json
 
     prefix = schedule.OFFLOAD_JOB_PREFIX + "."
+    started = " OR started_at >= ?" if since else ""
     try:
         with store.connect() as conn:
-            rows = conn.execute("SELECT job_code, metadata_json FROM job_runs WHERE status = 'RUNNING' "
-                                "AND job_code LIKE ?", (prefix + "%",)).fetchall()
+            rows = conn.execute(f"SELECT job_code, metadata_json FROM job_runs WHERE (status = 'RUNNING'{started}) "
+                                "AND job_code LIKE ?", ((since,) if since else ()) + (prefix + "%",)).fetchall()
     except Exception:  # noqa: BLE001 - a store that cannot say is not a reason to skip the check
         return []
     busy = []
@@ -1346,13 +1349,26 @@ def check_folder(entry: _Entry, *, store: Any, catalog: BackupCatalogStore, app_
                  hosts: _Hosts) -> dict[str, Any]:
     """The repository folder checked once a pass, last - or skipped, said why, while another entry of
     the server is writing into it (2026-11-11, a LOG pass beside its server's FULL failed on its
-    partial and not-yet-recorded files): checked by the next pass, never judged mid-copy."""
+    partial and not-yet-recorded files): checked by the next pass, never judged mid-copy.
+
+    Asked again after the listing, when it found anything (1.438): on 2026-11-26 a DIFF pass found
+    nothing running, then listed ~7000 files for half a minute while its server's LOG offload started
+    and sealed four ``.age`` files there - *4 not in the catalog*, clean on the next pass."""
+    began = utc_now_text()
     busy = offloads_running_beside(store, entry)
     if busy:
         return {"clean": True, "skipped": True,
                 "message": f"repository folder not checked this pass - {', '.join(busy)} "
                            "of this server is offloading into it now"}
-    return check_repository(entry, catalog=catalog, app_config=app_config, hosts=hosts)
+    checked = check_repository(entry, catalog=catalog, app_config=app_config, hosts=hosts)
+    if checked.get("clean"):
+        return checked
+    during = offloads_running_beside(store, entry, since=began)
+    if during:
+        return {"clean": True, "skipped": True, "found": checked.get("message"),
+                "message": f"repository folder not checked this pass - {', '.join(during)} "
+                           "of this server offloaded into it while it was listed"}
+    return checked
 
 
 def finish_offload_run(entry: _Entry, *, store: Any, log_id: int, started: float, result: dict[str, Any],
@@ -1373,7 +1389,7 @@ def finish_offload_run(entry: _Entry, *, store: Any, log_id: int, started: float
                   f"repository (key {encrypted_now.get('key_id')})" if encrypted_now.get("rows") else "")
                + (f", {released.get('deleted', 0)} released on {entry.server_id}" if released else "")
                + (f", {expired.get('expired', 0)} expired on the repository" if expired else "")
-               + (f", {checked['message'].split(' - ')[0]} (another offload of this server is running)"
+               + (f", {checked['message'].split(' - ')[0]} (another offload of this server was writing into it)"
                   if checked.get("skipped") else
                   f", repository folder checked ({checked.get('files', 0)} file(s))" if checked.get("clean") else "")
                + (f" - {error or '; '.join(problems[:3])}"[:600] if status != "done" else ""))

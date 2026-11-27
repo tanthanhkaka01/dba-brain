@@ -71,16 +71,16 @@ def test_a_tool_needs_a_key_exactly_when_the_client_is_told_it_changes_something
     for tool in tools:
         assert tool["needs_key"] is (not tool["read_only"]), tool["name"]
     by_name = {tool["name"]: tool for tool in tools}
-    assert not by_name["list-databases"]["needs_key"] and not by_name["store_query"]["needs_key"]
+    assert not by_name["list-objects"]["needs_key"] and not by_name["store-query"]["needs_key"]
     assert by_name["run-sql"]["needs_key"] and by_name["run-sql-write"]["needs_key"]
     assert by_name["run-cmd"]["needs_key"] and by_name["backup-database"]["needs_key"]
 
 
 def test_without_a_key_a_tool_that_only_reads_answers(node, ran):
-    answer = json.loads(S.call_tool(node, "list-databases", {"request": {"server_id": "SRV-1"}}))
+    answer = json.loads(S.call_tool(node, "list-objects", {"request": {"server_id": "SRV-1", "kind": "databases"}}))
     assert answer == {"success": True}
-    assert json.loads(S.call_tool(node, "store_query", {"sql": "select 1"})) == {"rows": []}
-    assert ran == ["list-databases", "store_query"]
+    assert json.loads(S.call_tool(node, "store-query", {"sql": "select 1"})) == {"rows": []}
+    assert ran == ["list-databases", "store-query"]
 
 
 @pytest.mark.parametrize("tool", ["run-sql", "run-sql-write", "run-cmd", "backup-database"])
@@ -116,7 +116,7 @@ def test_serve_starts_without_a_key_and_says_so_once(node, monkeypatch, capsys):
 
 def test_call_on_a_node_without_a_key_reaches_the_tool_and_the_tool_decides(node, ran, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_node", lambda home: node)
-    assert cli.main(["call", "list-databases", '{"request": {"server_id": "SRV-1"}}']) == 0
+    assert cli.main(["call", "list-objects", '{"request": {"server_id": "SRV-1", "kind": "databases"}}']) == 0
     assert ran == ["list-databases"]
     capsys.readouterr()
     assert cli.main(["call", "run-sql", '{"request": {"server_id": "SRV-1", "sql_text": "select 1"}}']) == 0
